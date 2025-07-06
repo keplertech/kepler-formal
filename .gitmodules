@@ -1,0 +1,3 @@
+[submodule "thirdparty/naja"]
+	path = thirdparty/naja
+	url = https://github.com/najaeda/naja.git
