@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Create a static library target
 add_library(kepler_clauses STATIC
-    NajaClause.cpp
+    SNLTruthTableMerger.cpp
 )
 
 # Make headers accessible to other targets

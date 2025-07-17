@@ -9,10 +9,10 @@ class SNLTruthTable;
 
 namespace KEPLER_FORMAL {
 
-class NajaClause {
+class SNLTruthTableMerger {
  public:
 
-  NajaClause(const std::vector<const naja::NL::SNLTruthTable*>& inputsToMerge,
+  SNLTruthTableMerger(const std::vector<const naja::NL::SNLTruthTable*>& inputsToMerge,
                    const naja::NL::SNLTruthTable& base) : inputsToMerge_(inputsToMerge), base_(base) {}
 
   naja::NL::SNLTruthTable mergeTruthTables(const std::vector<const naja::NL::SNLTruthTable*>&,

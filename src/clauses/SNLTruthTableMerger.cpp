@@ -1,5 +1,5 @@
 #include "SNLTruthTable.h"
-#include "NajaClause.h"
+#include "SNLTruthTableMerger.h"
 #include <vector>
 #include <stdexcept>
 #include <cstdint>
@@ -16,7 +16,7 @@ using namespace KEPLER_FORMAL;
 /// - The resulting TT has input count = sum(parentTT[i].size()).
 /// - If the new input‐count ≤ 6, we pack into a uint64_t mask; otherwise
 ///   we build a vector<bool> mask.
-SNLTruthTable mergeTruthTables(const std::vector<const naja::NL::SNLTruthTable*>& inputsToMerge,
+SNLTruthTable SNLTruthTableMerger::mergeTruthTables(const std::vector<const naja::NL::SNLTruthTable*>& inputsToMerge,
                    const naja::NL::SNLTruthTable& base)
 {
   // 1) Sanity check
