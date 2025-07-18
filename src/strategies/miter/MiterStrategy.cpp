@@ -112,7 +112,7 @@ void MiterStrategy::build() {
   outputs_ = collectOutputs();
   
   for (auto out : outputs_) {
-    SNLLogicCloud cloud(out);
+    SNLLogicCloud cloud(out, inputs_);
     cloud.compute();
     std::vector<std::string> varNames;
     for (auto input : inputs_) {

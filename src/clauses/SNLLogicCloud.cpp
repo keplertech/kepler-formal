@@ -8,7 +8,7 @@ using namespace KEPLER_FORMAL;
 using namespace naja::DNL;
 
 bool SNLLogicCloud::isInput(naja::DNL::DNLID termID) {
-  return dnl_.getDNLTerminalFromID(termID).isTopPort();
+  return std::find(PIs_.begin(), PIs_.end(), termID) != PIs_.end();
 }
 
 void SNLLogicCloud::compute() {
