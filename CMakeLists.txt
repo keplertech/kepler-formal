@@ -3,6 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.21)
+# tell CMake to pretend any cmake_minimum_required(VERSION X) with X<3.5
+# is OK.  Mirrors the -DCMAKE_POLICY_VERSION_MINIMUM=3.5 hack.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE INTERNAL
+    "Allow parsing of subprojects that require CMake < 3.5")
+
+set(GLUCOSE_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/glucose)
 
 message(STATUS "CMake version: ${CMAKE_VERSION}")
 

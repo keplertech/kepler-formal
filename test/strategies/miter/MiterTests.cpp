@@ -18,6 +18,7 @@
 #include "SNLDesignTruthTable.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
+#include "SNLPath.h"
 
 using namespace naja;
 using namespace naja::NL;
@@ -583,6 +584,38 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElementsFormal) {
     MiterStrategy MiterS(top, topClone);
     EXPECT_FALSE(MiterS.run());
   }
+  // Use the PrimaryOutputClauses to get all outputs
+        BuildPrimaryOutputClauses miter;
+        miter.build();
+        for (const auto& po : miter.getOutputs()) {
+          // Get DNLFullTerminals of po
+            naja::DNL::DNLTerminalFull dnlFullTerminal = naja::DNL::get()->getDNLTerminalFromID(po);
+            std::vector<std::string> path;
+            DNLInstanceFull currentInstance = dnlFullTerminal.getDNLInstance();
+            while (currentInstance.isTop() == false) {
+            path.push_back(currentInstance.getSNLInstance()->getName().getString());
+            currentInstance = currentInstance.getParentInstance();
+            }
+            std::reverse(path.begin(), path.end());
+            naja::NL::SNLPath snlPath(top, 
+                path);
+            SNLNetComponentOccurrence occurrence(snlPath, dnlFullTerminal.getSnlBitTerm());
+            std::cout << "Output DNL ID: " << po << ", SNL Bit Term: "
+                        << occurrence.getString() << std::endl;
+            SNLEquipotential equipotential(occurrence);
+                          std::cout << "Equipotential: " << equipotential.getString() << std::endl;
+            std::string dotFileName(
+            std::string(std::string("./") + dnlFullTerminal.getSnlBitTerm()->getName().getString() + std::string(".dot")));
+            std::string svgFileName(
+                std::string(std::string("./") + dnlFullTerminal.getSnlBitTerm()->getName().getString() + std::string(".svg")));
+            SnlVisualiser snl(top, true, &equipotential);
+            snl.process();
+            snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
+            executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
+                                    std::string(" -o ") + svgFileName)
+                            .c_str());
+
+        }
 }
 
 // Required main function for Google Test

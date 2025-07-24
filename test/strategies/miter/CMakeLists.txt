@@ -12,6 +12,7 @@ include_directories(${GTEST_INCLUDE_DIRS})
 add_executable(runTests MiterTests.cpp)
 
 target_link_libraries(runTests
+    naja_nl
     ${GTEST_LIBRARIES}
     naja_opt
     naja_snl_visual
@@ -20,8 +21,6 @@ target_link_libraries(runTests
     formal_structures
     naja_bne
     naja_dnl
-    naja_nl
-    naja_core
     pthread
 )
 

@@ -13,6 +13,8 @@ class BuildPrimaryOutputClauses {
   void build();
 
   const std::vector<std::shared_ptr<BoolExpr>>& getPOs() const { return POs_; }
+  const std::vector<naja::DNL::DNLID>& getInputs() const { return inputs_; }
+  const std::vector<naja::DNL::DNLID>& getOutputs() const { return outputs_; }
 
  private:
 
