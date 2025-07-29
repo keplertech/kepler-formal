@@ -1,0 +1,19 @@
+# Autotools generated files
+/Makefile
+/Makefile.in
+/aclocal.m4
+/autom4te.cache/
+/compile
+/config.log
+/config.status
+/configure
+/configure~
+/install-sh
+/missing
+/COPYING
+/INSTALL
+*.tar.gz
+
+# Build directories
+build/
+_build/
