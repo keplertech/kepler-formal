@@ -23,6 +23,10 @@ jobs:
     - uses: actions/checkout@v4
       with:
         submodules: true
+    - name: Install GoogleTest
+      run: sudo apt-get update && sudo apt-get install -y libgtest-dev cmake
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
     # install dependencies
     - name: Install dependencies
       run: brew install cmake doxygen capnp tbb bison flex boost
