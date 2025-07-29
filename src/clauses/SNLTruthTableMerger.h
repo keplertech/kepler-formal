@@ -12,7 +12,7 @@ namespace KEPLER_FORMAL {
 class SNLTruthTableMerger {
  public:
 
-  SNLTruthTableMerger(const std::vector<const naja::NL::SNLTruthTable>& inputsToMerge,
+  SNLTruthTableMerger(const std::vector<naja::NL::SNLTruthTable>& inputsToMerge,
                    const naja::NL::SNLTruthTable& base) : inputsToMerge_(inputsToMerge), base_(base) {}
 
   void computeMerged() {
@@ -24,10 +24,10 @@ class SNLTruthTableMerger {
   }
 
  private:
-  naja::NL::SNLTruthTable mergeTruthTables(const std::vector<const naja::NL::SNLTruthTable>& inputsToMerge,
+  naja::NL::SNLTruthTable mergeTruthTables(const std::vector<naja::NL::SNLTruthTable>& inputsToMerge,
                    const naja::NL::SNLTruthTable& base);
 
-  const std::vector<const naja::NL::SNLTruthTable>& inputsToMerge_;
+  const std::vector<naja::NL::SNLTruthTable>& inputsToMerge_;
   const naja::NL::SNLTruthTable& base_;
   naja::NL::SNLTruthTable mergedTable_;
 };

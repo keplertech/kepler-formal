@@ -96,7 +96,7 @@ void SNLLogicCloud::compute() {
     DEBUG_LOG("Truth table: %s\n", table_.getString().c_str());
     assert(currentIterationInputs_.size() == table_.size());
 
-    std::vector<const naja::NL::SNLTruthTable> inputsToMerge;
+    std::vector<naja::NL::SNLTruthTable> inputsToMerge;
     for (auto input : currentIterationInputs_) {
       if (isInput(input) || isOutput(input)) {
         SNLTruthTable tt(1, 2);
