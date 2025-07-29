@@ -1,0 +1,15 @@
+# Autotools generated files
+aclocal.m4
+autom4te.cache/
+compile
+config.log
+config.status
+configure
+configure~
+install-sh
+missing
+Makefile
+Makefile.in
+COPYING
+INSTALL
+*.tar.gz
