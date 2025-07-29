@@ -1,0 +1,14 @@
+# Autotools generated files - should not be committed
+/configure
+/Makefile
+/Makefile.in
+/aclocal.m4
+/autom4te.cache/
+/compile
+/config.log
+/config.status
+/install-sh
+/missing
+/COPYING
+/INSTALL
+*.tar.gz
