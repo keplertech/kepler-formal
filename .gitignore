@@ -11,4 +11,6 @@
 /missing
 /COPYING
 /INSTALL
-*.tar.gzconfigure~
+*.tar.gz
+configure~
+*~configure~
