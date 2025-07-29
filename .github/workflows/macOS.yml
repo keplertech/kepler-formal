@@ -30,6 +30,8 @@ jobs:
       run: git submodule update --init --recursive
     - name: Install boost & capnproto
       run: brew install boost capnp ninja clang tbb flex
+    - name: Install clay
+      run: brew install --cask clay
     - name: Configure CMake
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DCMAKE_C_COMPILER=clang -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
     - name: Build
