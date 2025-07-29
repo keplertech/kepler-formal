@@ -13,10 +13,5 @@
 /COPYING
 /INSTALL
 
-# Required GNU standard files for autotools
-/AUTHORS
-/ChangeLog
-/NEWS
-
 # CMake build directories
 /build/
