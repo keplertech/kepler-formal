@@ -123,15 +123,54 @@ bool MiterStrategy::run() {
   univ->setTopDesign(top0_);
   builder.build();
   auto POs0 = builder.getPOs();
+  auto inputs2inputsIDs0 = builder.getInputs2InputsIDs();
+  auto outputs2outputsIDs0 = builder.getOutputs2OutputsIDs();
 
   univ->setTopDesign(top1_);
   builder.build();
   auto POs1 = builder.getPOs();
+  auto inputs2inputsIDs1 = builder.getInputs2InputsIDs();
+  auto outputs2outputsIDs1 = builder.getOutputs2OutputsIDs();
 
   univ->setTopDesign(topInit);
 
   if (POs0.empty() || POs1.empty())
     return false;
+  
+  // Check if both sets inputs are the same
+  if (inputs2inputsIDs0.size() != inputs2inputsIDs1.size() ||
+      outputs2outputsIDs0.size() != outputs2outputsIDs1.size()) {
+    printf("Miter inputs/outputs must match in size: %zu vs %zu\n",
+           inputs2inputsIDs0.size(), inputs2inputsIDs1.size());
+    return false;
+  }
+
+  for (const auto& [id0, ids0] : inputs2inputsIDs0) {
+    auto it = inputs2inputsIDs1.find(id0);
+    if (it == inputs2inputsIDs1.end() ||
+        it->second.first != ids0.first ||
+        it->second.second != ids0.second) {
+      printf("Miter inputs must match in IDs: %lu\n", id0);
+      return false;
+    }
+  }
+
+  // Check if both sets outputs are the same
+  if (outputs2outputsIDs0.size() != outputs2outputsIDs1.size()) {
+    printf("Miter outputs must match in size: %zu vs %zu\n",
+           outputs2outputsIDs0.size(), outputs2outputsIDs1.size());
+    return false;
+  }
+
+  for (const auto& [id0, ids0] : outputs2outputsIDs0) {
+    auto it = outputs2outputsIDs1.find(id0);
+    if (it == outputs2outputsIDs1.end() ||
+        it->second.first != ids0.first ||
+        it->second.second != ids0.second) {
+      printf("Miter outputs must match in IDs: %lu\n", id0);
+      return false;
+    }
+  }
 
   // build the Boolean‐miter expression
   auto miter = buildMiter(POs0, POs1);

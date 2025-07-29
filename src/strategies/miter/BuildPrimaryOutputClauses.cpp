@@ -186,3 +186,37 @@ void BuildPrimaryOutputClauses::build() {
   }
   destroy();  // Clean up DNL instance
 }
+
+void BuildPrimaryOutputClauses::setInputs2InputsIDs() {
+  inputs2inputsIDs_.clear();
+  for (const auto& input : inputs_) {
+      std::vector<NLID::DesignObjectID> path;
+      DNLInstanceFull currentInstance = get()->getDNLTerminalFromID(input).getDNLInstance();
+      while (currentInstance.isTop() == false) {
+        path.push_back(currentInstance.getSNLInstance()->getID());
+        currentInstance = currentInstance.getParentInstance();
+      }
+      std::reverse(path.begin(), path.end());
+      std::vector<NLID::DesignObjectID> termIDs;
+      termIDs.push_back(get()->getDNLTerminalFromID(input).getSnlBitTerm()->getID());
+      termIDs.push_back(get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit());
+      inputs2inputsIDs_[input] = std::make_pair(path, termIDs);
+  }
+}
+
+void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
+  outputs2outputsIDs_.clear();
+  for (const auto& output : outputs_) {
+      std::vector<NLID::DesignObjectID> path;
+      DNLInstanceFull currentInstance = get()->getDNLTerminalFromID(output).getDNLInstance();
+      while (currentInstance.isTop() == false) {
+        path.push_back(currentInstance.getSNLInstance()->getID());
+        currentInstance = currentInstance.getParentInstance();
+      }
+      std::reverse(path.begin(), path.end());
+      std::vector<NLID::DesignObjectID> termIDs;
+      termIDs.push_back(get()->getDNLTerminalFromID(output).getSnlBitTerm()->getID());
+      termIDs.push_back(get()->getDNLTerminalFromID(output).getSnlBitTerm()->getBit());
+      outputs2outputsIDs_[output] = std::make_pair(path, termIDs);
+  }
+}
