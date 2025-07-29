@@ -19,7 +19,7 @@ project(kepler-formal
 
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 
 add_subdirectory(src)
 add_subdirectory(thirdparty)
