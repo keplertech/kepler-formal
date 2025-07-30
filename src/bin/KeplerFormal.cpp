@@ -32,13 +32,13 @@ int main(int argc, char** argv) {
   // --------------------------------------------------------------------------
   // 2. Load two netlists via Cap’n Proto
   // --------------------------------------------------------------------------
-  naja::NajaPerf::Scope scope("Parsing SNL format");
-  const auto t0 = steady_clock::now();
+  //naja::NajaPerf::Scope scope("Parsing SNL format");
+  //const auto t0 = steady_clock::now();
 
   auto db0 = SNLCapnP::load(inputPaths[0]);
   // get db0 top
   auto top0 = db0->getTopDesign();
-
+  db0->setID(db0->getID() + 1);  // Increment ID to avoid conflicts
   auto db1 = SNLCapnP::load(inputPaths[1]);
   // get db1 top
   auto top1 = db1->getTopDesign();

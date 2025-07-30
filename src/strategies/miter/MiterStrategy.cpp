@@ -131,8 +131,9 @@ bool MiterStrategy::run() {
   auto POs1 = builder.getPOs();
   auto inputs2inputsIDs1 = builder.getInputs2InputsIDs();
   auto outputs2outputsIDs1 = builder.getOutputs2OutputsIDs();
-
-  univ->setTopDesign(topInit);
+  if (topInit != nullptr) {
+    univ->setTopDesign(topInit);
+  }
 
   if (POs0.empty() || POs1.empty())
     return false;

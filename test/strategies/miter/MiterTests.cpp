@@ -19,6 +19,7 @@
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "SNLPath.h"
+#include "SNLCapnP.h"
 
 using namespace naja;
 using namespace naja::NL;
@@ -681,7 +682,11 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   // connect the and instance output to the top output
   instAnd->getInstTerm(andOut)->setNet(net3);
   topOut->setNet(net3);
-
+  {
+    // dump top to naja_if(CapProto)
+    std::filesystem::path outputPath("./top.capnp");
+    SNLCapnP::dump(db, outputPath);
+  }
   // clone the top design
   SNLDesign* topClone = top->clone(NLName("topClone"));
   // create an inverter instance in the clone
@@ -700,7 +705,16 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     MiterStrategy MiterS(top, topClone);
     EXPECT_FALSE(MiterS.run());
   }
+  {
+    // dump top to naja_if(CapProto)
+    std::filesystem::path outputPath("./topEdited.capnp");
+    SNLCapnP::dump(db, outputPath);
+  }
 
+  // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  executeCommand(
+      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited.capnp")
+          .c_str());  
   // chain another inverter to the first inverter
   SNLInstance* instInv2 = SNLInstance::create(top, inverterModel, NLName("inv2"));
   // connect the second inverter input to the first inverter output
@@ -716,6 +730,16 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     MiterStrategy MiterS(top, topClone);
     EXPECT_TRUE(MiterS.run());
   }
+  {
+    // dump top to naja_if(CapProto)
+    std::filesystem::path outputPath("./topEdited.capnp");
+    SNLCapnP::dump(db, outputPath);
+  }
+
+  // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  executeCommand(
+      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited.capnp")
+          .c_str());  
 }
 
 // Required main function for Google Test

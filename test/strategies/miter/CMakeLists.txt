@@ -24,6 +24,7 @@ target_link_libraries(miterTests
     naja_bne
     naja_dnl
     pthread
+    naja_snl_pyloader
 )
 
 GTEST_DISCOVER_TESTS(miterTests)
