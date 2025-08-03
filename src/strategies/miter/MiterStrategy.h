@@ -1,5 +1,6 @@
 #include <vector>
 #include "BoolExpr.h"
+#include "DNL.h"
 
 #pragma once
 
@@ -13,8 +14,8 @@ namespace KEPLER_FORMAL {
 
 class MiterStrategy {
  public:
-  MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1)
-      : top0_(top0), top1_(top1) {}
+  MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& prefix = "")
+      : top0_(top0), top1_(top1), prefix_(prefix) {}
 
   bool run();
 
@@ -27,7 +28,10 @@ class MiterStrategy {
   naja::NL::SNLDesign* top1_ = nullptr;
   std::vector<BoolExpr> POs0_;
   std::vector<BoolExpr> POs1_;
+  std::vector<naja::DNL::DNLID> failedPOs_;
   BoolExpr miterClause_;
+  std::string prefix_;
+  naja::NL::SNLDesign* topInit_ = nullptr;
 };
 
 }  // namespace KEPLER_FORMAL

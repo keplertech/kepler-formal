@@ -14,6 +14,7 @@
 #include "SNLCapnP.h"
 
 int main(int argc, char** argv) {
+  printf("KEPLER FORMAL: Run.\n");
   using namespace std::chrono;
 
   // --------------------------------------------------------------------------

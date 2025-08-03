@@ -139,7 +139,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 void BuildPrimaryOutputClauses::build() {
   POs_.clear();
   inputs_ = collectInputs();
+  sortInputs();
   outputs_ = collectOutputs();
+  sortOutputs();
 
   for (auto out : outputs_) {
     SNLLogicCloud cloud(out, inputs_, outputs_);

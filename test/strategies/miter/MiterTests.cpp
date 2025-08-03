@@ -572,7 +572,7 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElementsFormal) {
   naja::DNL::destroy();
   
   {
-    MiterStrategy MiterS(top, topClone);
+    MiterStrategy MiterS(top, topClone, "CaseA");
     EXPECT_TRUE(MiterS.run());
   }
   // changing the or model to see if the miter strategy locate it
@@ -583,7 +583,7 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElementsFormal) {
     for (const auto& po : miter.getPOs()) {
       std::cout << "PO: " << po->toString() << std::endl;
     }
-    MiterStrategy MiterS(top, topClone);
+    MiterStrategy MiterS(top, topClone, "CaseB");
     EXPECT_FALSE(MiterS.run());
   }
   // Use the PrimaryOutputClauses to get all outputs
@@ -702,18 +702,17 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
 
   // test the miter strategy
   {
-    MiterStrategy MiterS(top, topClone);
+    MiterStrategy MiterS(top, topClone, "CaseC");
     EXPECT_FALSE(MiterS.run());
   }
   {
     // dump top to naja_if(CapProto)
-    std::filesystem::path outputPath("./topEdited.capnp");
+    std::filesystem::path outputPath("./topEdited1.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-
   // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited.capnp")
+      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited1.capnp")
           .c_str());  
   // chain another inverter to the first inverter
   SNLInstance* instInv2 = SNLInstance::create(top, inverterModel, NLName("inv2"));
@@ -727,18 +726,18 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   topOut->setNet(net7);
   // test the miter strategy again
   {
-    MiterStrategy MiterS(top, topClone);
+    MiterStrategy MiterS(top, topClone, "CaseD");
     EXPECT_TRUE(MiterS.run());
   }
   {
     // dump top to naja_if(CapProto)
-    std::filesystem::path outputPath("./topEdited.capnp");
+    std::filesystem::path outputPath("./topEdited2.capnp");
     SNLCapnP::dump(db, outputPath);
   }
 
   // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited.capnp")
+      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited2.capnp")
           .c_str());  
 }
 
