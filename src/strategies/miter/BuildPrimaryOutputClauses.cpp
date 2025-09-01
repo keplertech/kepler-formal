@@ -8,7 +8,7 @@
 //#define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
-#define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#define DEBUG_LOG(fmt, ...) //printf(fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_LOG(fmt, ...)
 #endif
@@ -143,8 +143,10 @@ void BuildPrimaryOutputClauses::build() {
   sortInputs();
   outputs_ = collectOutputs();
   sortOutputs();
-
+  size_t processedOutputs = 0;
   for (auto out : outputs_) {
+    printf("Procssing output %zu/%zu: %s\n", ++processedOutputs, outputs_.size(),
+           get()->getDNLTerminalFromID(out).getSnlBitTerm()->getName().getString().c_str());
     SNLLogicCloud cloud(out, inputs_, outputs_);
     cloud.compute();
 
@@ -185,11 +187,11 @@ void BuildPrimaryOutputClauses::build() {
     // }
 
     //DEBUG_LOG("Truth table: %s\n", cloud.getTruthTable().getString().c_str());
-    cloud.getTruthTable().print();
-    printf("BuildPrimaryOutputClauses VarNames size: %zu\n", varNames.size());
+    //cloud.getTruthTable().print();
+    //printf("BuildPrimaryOutputClauses VarNames size: %zu\n", varNames.size());
     std::shared_ptr<BoolExpr> expr = Tree2BoolExpr::convert(cloud.getTruthTable(), varNames);
-    printf("done\n");
-    /*printf("Output term %s(%zu) expression: %s\n",
+    //printf("done\n");
+    /*//printf("Output term %s(%zu) expression: %s\n",
            get()->getDNLTerminalFromID(out).getSnlBitTerm()->getName().getString().c_str(),
            out, expr->toString().c_str());*/
     POs_.push_back(Tree2BoolExpr::convert(cloud.getTruthTable(), varNames));

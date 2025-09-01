@@ -3,7 +3,7 @@
 #include "SNLTruthTableMerger.h"
 #include <cassert>
 
-#define DEBUG_PRINTS
+//#define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
 #define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
@@ -96,11 +96,16 @@ void SNLLogicCloud::compute() {
   while (!reachedPIs) {
     DEBUG_LOG("---iter---\n");
     DEBUG_LOG("Current iteration inputs: %lu\n", newIterationInputs.size());
+    printf("term %lu: newIterationInputs size: %zu\n", seedOutputTerm_, newIterationInputs.size());
     currentIterationInputs_ = newIterationInputs;
+    for (auto input : currentIterationInputs_) {
+      DEBUG_LOG("Input: %s\n",
+                dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());
+    }
     newIterationInputs.clear();
     //DEBUG_LOG("Truth table: %s\n", table_.getString().c_str());
-    printf("Truth table size: %zu\n", table_.size());
-    printf("Current iteration inputs size: %zu\n", currentIterationInputs_.size());
+    //printf("Truth table size: %zu\n", table_.size());
+    //printf("Current iteration inputs size: %zu\n", currentIterationInputs_.size());
     assert(currentIterationInputs_.size() == table_.size());
 
     std::vector<naja::NL::SNLTruthTable> inputsToMerge;
@@ -146,8 +151,8 @@ void SNLLogicCloud::compute() {
       if (!SNLDesignModeling::getTruthTable(inst.getSNLModel(),
         dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getID()).isInitialized())
       {
-        printf("Truth table for instance %s is not initialized\n",
-                  inst.getSNLModel()->getName().getString().c_str());
+        //printf("Truth table for instance %s is not initialized\n",
+          //        inst.getSNLModel()->getName().getString().c_str());
         assert(SNLDesignModeling::getTruthTable(inst.getSNLModel(),
           dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getID()).isInitialized() &&
              "Truth table for instance is not initialized");
@@ -185,10 +190,5 @@ void SNLLogicCloud::compute() {
       }
     }
   }
-
   currentIterationInputs_ = newIterationInputs;
-  for (auto input : currentIterationInputs_) {
-    DEBUG_LOG("Input: %s\n",
-              dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());
-  }
 }

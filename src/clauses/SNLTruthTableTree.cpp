@@ -217,7 +217,7 @@ void SNLTruthTableTree::concat(size_t borderIndex, SNLTruthTable table)
 void SNLTruthTableTree::concatFull(std::vector<SNLTruthTable> tables)
 {   
     size_t newNumInptuts = numExternalInputs_;
-    printf("--- concatFull: current numExternalInputs = %zu\n", newNumInptuts);
+    //printf("--- concatFull: current numExternalInputs = %zu\n", newNumInptuts);
     updateBorderLeaves();
     size_t n = tables.size();
     if (n > borderLeaves_.size()) {
@@ -228,14 +228,14 @@ void SNLTruthTableTree::concatFull(std::vector<SNLTruthTable> tables)
     for (size_t i = 0; i < n; ++i) {
         concatBody(i, std::move(tables[i]));
         
-        printf("Truth table: %s\n", tables[i].getString().c_str());
-        printf("tables[%zu].size() = %zu\n", i, tables[i].size());
-        //printf("tables[%zu].size() - 1 = %zu\n", i, tables[i].size() - 1);
+        //printf("Truth table: %s\n", tables[i].getString().c_str());
+        //printf("tables[%zu].size() = %zu\n", i, tables[i].size());
+        ////printf("tables[%zu].size() - 1 = %zu\n", i, tables[i].size() - 1);
         newNumInptuts =  newNumInptuts + tables[i].size() - 1;
-        printf("After concatBody %zu: current numExternalInputs = %zu\n", i, newNumInptuts);
+        //printf("After concatBody %zu: current numExternalInputs = %zu\n", i, newNumInptuts);
     }
     numExternalInputs_ = newNumInptuts;
-    printf("--- concatFull: current numExternalInputs = %zu\n", newNumInptuts);
+    //printf("--- concatFull: current numExternalInputs = %zu\n", newNumInptuts);
     updateBorderLeaves();
 }
 
@@ -265,7 +265,7 @@ bool SNLTruthTableTree::isInitialized() const
 void SNLTruthTableTree::print() const
 {
     if (!root_) {
-        printf("<empty tree>\n");
+        //printf("<empty tree>\n");
         return;
     }
 
@@ -282,22 +282,22 @@ void SNLTruthTableTree::print() const
         stk.pop_back();
 
         for (size_t i = 0; i < f.depth; ++i) {
-            printf("  ");
+            //printf("  ");
         }
 
         if (auto inp = dynamic_cast<InputNode*>(f.node)) {
-            printf("InputNode(%zu)\n", inp->inputIndex);
+            //printf("InputNode(%zu)\n", inp->inputIndex);
         }
         else if (auto tbl = dynamic_cast<TableNode*>(f.node)) {
-            printf("TableNode(size=%u, bits=%s)\n",
-                   tbl->table.size(),
-                   tbl->table.getString().c_str());
+            //printf("TableNode(size=%u, bits=%s)\n",
+                   //tbl->table.size(),
+                   //tbl->table.getString().c_str());
             for (size_t i = tbl->children.size(); i-- > 0; ) {
                 stk.push_back({ tbl->children[i].get(), f.depth + 1 });
             }
         }
         else {
-            printf("Unknown ITTNode subtype\n");
+            //printf("Unknown ITTNode subtype\n");
         }
     }
 }

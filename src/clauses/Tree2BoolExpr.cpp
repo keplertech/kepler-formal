@@ -53,9 +53,9 @@ buildExpr(NodeKey node,
 
     // 2) InputNode -> variable
     if (auto in = dynamic_cast<const InputNode*>(node)) {
-        printf("%p: InputNode %zu\n", (void*)node, in->inputIndex);
-        printf("varNames.size() = %zu\n", varNames.size());
-        printf("InputNode %zu -> var %s\n", in->inputIndex, varNames[in->inputIndex].c_str());
+        //printf("%p: InputNode %zu\n", (void*)node, in->inputIndex);
+        //printf("varNames.size() = %zu\n", varNames.size());
+        //printf("InputNode %zu -> var %s\n", in->inputIndex, varNames[in->inputIndex].c_str());
         result = BoolExpr::Var(varNames[in->inputIndex]);
     }
     // 3) TableNode -> build local DNF
