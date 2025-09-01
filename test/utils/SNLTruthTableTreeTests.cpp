@@ -2,6 +2,7 @@
 
 #include "SNLTruthTableTree.h"
 #include <gtest/gtest.h>
+#include <bitset>
 #include <memory>
 #include <vector>
 #include <stdexcept>
@@ -231,6 +232,7 @@ TEST(TableNodePyramidTest, EightInputAndPyramid) {
 #include "SNLTruthTableTree.h"
 #include "SNLTruthTable.h"
 #include <gtest/gtest.h>
+#include <bitset>
 #include <bitset>
 
 using namespace naja::NL;
