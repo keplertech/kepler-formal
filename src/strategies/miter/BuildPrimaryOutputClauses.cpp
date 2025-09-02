@@ -5,10 +5,10 @@
 #include "SNLTruthTable2BoolExpr.h"
 #include "Tree2BoolExpr.h"
 
-// #define DEBUG_PRINTS
+#define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
-#define DEBUG_LOG(fmt, ...)  // printf(fmt, ##__VA_ARGS__)
+#define DEBUG_LOG(fmt, ...)  printf(fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_LOG(fmt, ...)
 #endif
@@ -73,10 +73,25 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         inputs.push_back(termId);
       }
     }
-
-    if (!isSequential)
+    if (!isSequential) {
+      for (DNLID termId = instance.getTermIndexes().first;
+          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
+          termId++) {
+        const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
+        if (term.getSnlBitTerm()->getDirection() !=
+            SNLBitTerm::Direction::Input) {
+          auto deps = SNLDesignModeling::getCombinatorialInputs(
+              term.getSnlBitTerm());
+          if (deps.empty()) {
+            inputs.push_back(termId);
+            DEBUG_LOG("Collecting input %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+          }
+        }
+      }
       continue;
-
+    }
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
@@ -87,8 +102,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
     }
   }
 
-  std::sort(inputs.begin(), inputs.end());
-  inputs.erase(std::unique(inputs.begin(), inputs.end()), inputs.end());
+  std::set<DNLID> inputSet(inputs.begin(), inputs.end());
+  inputs.clear();
+  inputs.assign(inputSet.begin(), inputSet.end());
   DEBUG_LOG("Collected %zu inputs\n", inputs.size());
   return inputs;
 }
@@ -104,12 +120,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input)
       outputs.push_back(termId);
   }
-
   for (DNLID leaf : dnl->getLeaves()) {
     DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
     bool isSequential = false;
     std::vector<SNLBitTerm*> seqBitTerms;
-
+    
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
@@ -125,8 +140,24 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
       }
     }
 
-    if (!isSequential)
+    if (!isSequential) {
+      for (DNLID termId = instance.getTermIndexes().first;
+          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
+          termId++) {
+        const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
+        if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
+          auto deps = SNLDesignModeling::getCombinatorialOutputs(
+              term.getSnlBitTerm());
+          if (deps.empty()) {
+            outputs.push_back(termId);
+            DEBUG_LOG("Collecting output %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+          }
+        }
+      }
       continue;
+    }
 
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
@@ -138,8 +169,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
 
-  std::sort(outputs.begin(), outputs.end());
-  outputs.erase(std::unique(outputs.begin(), outputs.end()), outputs.end());
+  std::set<DNLID> outputSet(outputs.begin(), outputs.end());
+  outputs.clear();
+  outputs.assign(outputSet.begin(), outputSet.end());
   return outputs;
 }
 
@@ -171,8 +203,8 @@ void BuildPrimaryOutputClauses::build() {
                         }
 
                         assert(cloud.getTruthTable().isInitialized());
-                        DEBUG_LOG("Truth Table: %s\n",
-                                  cloud.getTruthTable().getString().c_str());
+                        //DEBUG_LOG("Truth Table: %s\n",
+                        //          cloud.getTruthTable().print().c_str());
                         std::shared_ptr<BoolExpr> expr = Tree2BoolExpr::convert(
                             cloud.getTruthTable(), varNames);
                         POs_.push_back(Tree2BoolExpr::convert(
