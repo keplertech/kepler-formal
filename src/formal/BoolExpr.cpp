@@ -4,7 +4,7 @@
 namespace KEPLER_FORMAL {
 
 // static definitions
-std::unordered_map<BoolExpr::Key,
+tbb::concurrent_unordered_map<BoolExpr::Key,
                    std::weak_ptr<BoolExpr>,
                    BoolExpr::KeyHash,
                    BoolExpr::KeyEq>
@@ -43,7 +43,6 @@ BoolExpr::createNode(Key const& k) {
 
 std::shared_ptr<BoolExpr> BoolExpr::Var(size_t id) {
     Key k{Op::VAR, id, nullptr, nullptr};
-    std::lock_guard<std::mutex> lock(tableMutex_);
     return createNode(k);
 }
 
@@ -55,7 +54,6 @@ std::shared_ptr<BoolExpr> BoolExpr::Not(std::shared_ptr<BoolExpr> a) {
     if (a->op_ == Op::NOT)
         return a->left_;
     Key k{Op::NOT, 0, a.get(), nullptr};
-    std::lock_guard<std::mutex> lock(tableMutex_);
     return createNode(k);
 }
 
@@ -76,7 +74,6 @@ std::shared_ptr<BoolExpr> BoolExpr::And(
     // canonical order
     if (b.get() < a.get()) std::swap(a, b);
     Key k{Op::AND, 0, a.get(), b.get()};
-    std::lock_guard<std::mutex> lock(tableMutex_);
     return createNode(k);
 }
 
@@ -95,7 +92,6 @@ std::shared_ptr<BoolExpr> BoolExpr::Or(
 
     if (b.get() < a.get()) std::swap(a, b);
     Key k{Op::OR, 0, a.get(), b.get()};
-    std::lock_guard<std::mutex> lock(tableMutex_);
     return createNode(k);
 }
 
@@ -111,7 +107,6 @@ std::shared_ptr<BoolExpr> BoolExpr::Xor(
 
     if (b.get() < a.get()) std::swap(a, b);
     Key k{Op::XOR, 0, a.get(), b.get()};
-    std::lock_guard<std::mutex> lock(tableMutex_);
     return createNode(k);
 }
 

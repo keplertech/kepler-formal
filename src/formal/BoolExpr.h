@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <functional>
 #include <mutex>
+#include "tbb/concurrent_unordered_map.h"
 
 namespace KEPLER_FORMAL {
 
@@ -94,11 +95,10 @@ private:
 
     // Global weak-map: Key → shared instance
     // guarded by tableMutex_ on every access
-    static std::unordered_map<Key,
+    static tbb::concurrent_unordered_map<Key,
                               std::weak_ptr<BoolExpr>,
                               KeyHash,
                               KeyEq> table_;
-    static std::mutex tableMutex_;
 
     // Interning constructor (caller must lock tableMutex_)
     static std::shared_ptr<BoolExpr> createNode(Key const& k);
