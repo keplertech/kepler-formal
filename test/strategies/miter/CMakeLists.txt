@@ -1,7 +1,7 @@
 include(GoogleTest)
 
 cmake_minimum_required(VERSION 3.10)
-project(HelloTest)
+project(MiterTests)
 
 # Enable testing
 enable_testing()

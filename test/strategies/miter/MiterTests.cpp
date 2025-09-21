@@ -15,7 +15,7 @@
 #include "NetlistGraph.h"
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
-#include "SNLDesignTruthTable.h"
+#include "SNLDesignModeling.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "SNLPath.h"
@@ -88,8 +88,8 @@ TEST_F(MiterTests, TestMiterAND) {
   // add output to logic0
   auto logic1Out =
       SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
-  SNLDesignTruthTable::setTruthTable(logic0, SNLTruthTable(0, 0));
-  SNLDesignTruthTable::setTruthTable(logic1, SNLTruthTable(0, 1));
+  SNLDesignModeling::setTruthTable(logic0, SNLTruthTable(0, 0));
+  SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
   NLLibraryTruthTables::construct(library);
   // 5. create a logic_0 instace in top
   SNLInstance* inst1 = SNLInstance::create(top, logic0, NLName("logic0"));
@@ -110,7 +110,7 @@ TEST_F(MiterTests, TestMiterAND) {
   SNLInstance* inst3 = SNLInstance::create(top, andModel, NLName("and"));
   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
   // set truth table for and model
-  SNLDesignTruthTable::setTruthTable(andModel, SNLTruthTable(2, 8));
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("logic_0_net"));
   net1->setType(SNLNet::Type::Assign0);
@@ -217,7 +217,7 @@ TEST_F(MiterTests, TestMiterANDNonConstant) {
   SNLInstance* inst3 = SNLInstance::create(top, andModel, NLName("and"));
   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
   // set truth table for and model
-  SNLDesignTruthTable::setTruthTable(andModel, SNLTruthTable(2, 8));
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("top_in1_net"));
   SNLNet* net2 = SNLScalarNet::create(top, NLName("top_in2_net"));
@@ -342,7 +342,7 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   SNLInstance* inst3 = SNLInstance::create(top, andModel, NLName("and"));
   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
   // set truth table for and model
-  SNLDesignTruthTable::setTruthTable(andModel, SNLTruthTable(2, 8));
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("top_in1_net"));
   SNLNet* net2 = SNLScalarNet::create(top, NLName("top_in2_net"));
@@ -488,8 +488,8 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElementsFormal) {
   SNLInstance* inst3 = SNLInstance::create(top, andModel, NLName("and"));
   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
   // set truth table for and model
-  SNLDesignTruthTable::setTruthTable(andModel, SNLTruthTable(2, 8));
-  SNLDesignTruthTable::setTruthTable(orModel, SNLTruthTable(2, 14));
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  SNLDesignModeling::setTruthTable(orModel, SNLTruthTable(2, 14));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("top_in1_net"));
   SNLNet* net2 = SNLScalarNet::create(top, NLName("top_in2_net"));
@@ -637,10 +637,17 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   univ->setTopDesign(top);
   auto topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+  auto topOut2 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
   auto topIn1 =
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In1"));
   auto topIn2 =
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In2"));
+  // add another 2 inputs
+  auto topIn3 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In3"));
+  auto topIn4 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In4"));
   NLLibraryTruthTables::construct(library);
   // 7. create a and model
   SNLDesign* andModel =
@@ -655,7 +662,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
                                       NLName("out"));
 
   // set truth table for and model
-  SNLDesignTruthTable::setTruthTable(andModel, SNLTruthTable(2, 8));
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 8. create an inverter model
   SNLDesign* inverterModel =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
@@ -664,7 +671,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
       SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
   auto invOut =
       SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
-  SNLDesignTruthTable::setTruthTable(inverterModel, SNLTruthTable(1, 1));
+  SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
 
   // create and instance in top
   SNLInstance* instAnd = SNLInstance::create(top, andModel, NLName("and"));
@@ -682,10 +689,43 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   // connect the and instance output to the top output
   instAnd->getInstTerm(andOut)->setNet(net3);
   topOut->setNet(net3);
+
+  // add another and instance in top at the same manner
+  SNLInstance* instAnd2 = SNLInstance::create(top, andModel, NLName("and2"));
+  // connect the and instance inputs
+  // connect inputs 2 and 3 to the top instance
+  // create needed nets
+  SNLNet* net4In1 = SNLScalarNet::create(top, NLName("top_in3_net"));
+  SNLNet* net4In2 = SNLScalarNet::create(top, NLName("top_in4_net"));
+  topIn3->setNet(net4In1);
+  topIn4->setNet(net4In2);
+  // connect the and instance inputs
+  instAnd2->getInstTerm(andIn1)->setNet(net4In1);
+  instAnd2->getInstTerm(andIn2)->setNet(net4In2);
+
+  // connect the and instance output to the top output
+  SNLNet* net4Out = SNLScalarNet::create(top, NLName("and2_output_net_out"));
+  instAnd2->getInstTerm(andOut)->setNet(net4Out);
+  topOut2->setNet(net4Out);
+
+
   {
     // dump top to naja_if(CapProto)
     std::filesystem::path outputPath("./top.capnp");
     SNLCapnP::dump(db, outputPath);
+  }
+  // Dump visual
+  {
+    std::string dotFileName(
+        std::string(std::string("./beforeEdit") + std::string(".dot")));
+    std::string svgFileName(
+        std::string(std::string("./beforeEdit") + std::string(".svg")));
+    SnlVisualiser snl(top);
+    snl.process();
+    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
+    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
+                               std::string(" -o ") + svgFileName)
+                       .c_str());
   }
   // clone the top design
   SNLDesign* topClone = top->clone(NLName("topClone"));
@@ -699,6 +739,20 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   SNLNet* net5 = SNLScalarNet::create(top, NLName("top_output_net_clone"));
   instInv->getInstTerm(invOut)->setNet(net5);
   topOut->setNet(net5);
+
+  // dump visual
+  {
+    std::string dotFileName(
+        std::string(std::string("./afterEdit") + std::string(".dot")));
+    std::string svgFileName(
+        std::string(std::string("./afterEdit") + std::string(".svg")));
+    SnlVisualiser snl(top);
+    snl.process();
+    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
+    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
+                               std::string(" -o ") + svgFileName)
+                       .c_str());
+  }
 
   // test the miter strategy
   {

@@ -1,6 +1,7 @@
 #include <vector>
 #include "BoolExpr.h"
 #include "DNL.h"
+#include <tbb/concurrent_vector.h>
 
 #pragma once
 
@@ -21,13 +22,13 @@ class MiterStrategy {
 
  private:
   std::shared_ptr<BoolExpr> buildMiter(
-      const std::vector<std::shared_ptr<BoolExpr>>& A,
-      const std::vector<std::shared_ptr<BoolExpr>>& B) const;
+      const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
+      const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const;
 
   naja::NL::SNLDesign* top0_ = nullptr;
   naja::NL::SNLDesign* top1_ = nullptr;
-  std::vector<BoolExpr> POs0_;
-  std::vector<BoolExpr> POs1_;
+  tbb::concurrent_vector<BoolExpr> POs0_;
+  tbb::concurrent_vector<BoolExpr> POs1_;
   std::vector<naja::DNL::DNLID> failedPOs_;
   BoolExpr miterClause_;
   std::string prefix_;

@@ -80,6 +80,7 @@
         "ranges": "cpp",
         "__hash_table": "cpp",
         "unordered_set": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "cassert": "cpp"
     }
 }

@@ -1,6 +1,7 @@
 #include <vector>
 #include "BoolExpr.h"
 #include "DNL.h"
+#include <tbb/concurrent_vector.h>
 
 #pragma once
 
@@ -12,7 +13,7 @@ class BuildPrimaryOutputClauses {
 
   void build();
 
-  const std::vector<std::shared_ptr<BoolExpr>>& getPOs() const { return POs_; }
+  const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& getPOs() const { return POs_; }
   const std::vector<naja::DNL::DNLID>& getInputs() const { return inputs_; }
   const std::vector<naja::DNL::DNLID>& getOutputs() const { return outputs_; }
   const std::map<naja::DNL::DNLID, std::pair<std::vector<naja::NL::NLID::DesignID>, std::vector<naja::NL::NLID::DesignID>>>& getInputs2InputsIDs() const { return inputs2inputsIDs_; }
@@ -27,7 +28,7 @@ class BuildPrimaryOutputClauses {
   void setOutputs2OutputsIDs();
   void sortOutputs();
   
-  std::vector<std::shared_ptr<BoolExpr>> POs_;
+  tbb::concurrent_vector<std::shared_ptr<BoolExpr>> POs_;
   std::vector<naja::DNL::DNLID> inputs_;
   std::vector<naja::DNL::DNLID> outputs_;
   std::map<naja::DNL::DNLID, std::pair<std::vector<naja::NL::NLID::DesignID>, std::vector<naja::NL::NLID::DesignID>>> inputs2inputsIDs_;

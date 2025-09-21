@@ -1,5 +1,5 @@
 #include "DNL.h"
-#include "SNLTruthTable.h"
+#include "SNLTruthTableTree.h"
 
 namespace KEPLER_FORMAL {
 
@@ -8,21 +8,29 @@ class SNLLogicCloud {
   SNLLogicCloud(naja::DNL::DNLID seedOutputTerm, 
                 const std::vector<naja::DNL::DNLID>& PIs, 
                 const std::vector<naja::DNL::DNLID>& POs)
-      : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()), 
-      PIs_(PIs), POs_(POs) {}
+      : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()) {
+        PIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
+        for (auto pi : PIs) {
+          PIs_[pi] = true;
+        }
+        POs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
+        for (auto po : POs) {
+          POs_[po] = true;
+        }
+      }
   void compute();
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);
-  const SNLTruthTable& getTruthTable() const { return table_; }
+  const SNLTruthTableTree& getTruthTable() const { return table_; }
   const std::vector<naja::DNL::DNLID>& getInputs() const { return currentIterationInputs_; }
 
  private:
   naja::DNL::DNLID seedOutputTerm_;
   std::vector<naja::DNL::DNLID> currentIterationInputs_;
-  naja::NL::SNLTruthTable table_;
+  SNLTruthTableTree table_;
   const naja::DNL::DNLFull& dnl_;
-  const std::vector<naja::DNL::DNLID>& PIs_;
-  const std::vector<naja::DNL::DNLID>& POs_;
+  std::vector<bool> PIs_;
+  std::vector<bool> POs_;
 };
 
 }  // namespace KEPLER_FORMAL

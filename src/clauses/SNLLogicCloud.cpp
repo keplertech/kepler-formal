@@ -1,5 +1,5 @@
 #include "SNLLogicCloud.h"
-#include "SNLDesignTruthTable.h"
+#include "SNLDesignModeling.h"
 #include "SNLTruthTableMerger.h"
 #include <cassert>
 
@@ -15,11 +15,11 @@ using namespace KEPLER_FORMAL;
 using namespace naja::DNL;
 
 bool SNLLogicCloud::isInput(naja::DNL::DNLID termID) {
-  return std::find(PIs_.begin(), PIs_.end(), termID) != PIs_.end();
+  return PIs_[termID];
 }
 
 bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
-  return std::find(POs_.begin(), POs_.end(), termID) != POs_.end();
+  return POs_[termID];
 }
 
 void SNLLogicCloud::compute() {
@@ -35,8 +35,7 @@ void SNLLogicCloud::compute() {
     auto inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     if (isInput(driver)) {
       currentIterationInputs_.push_back(driver);
-      SNLTruthTable tt(1, 2);
-      table_ = tt;
+      table_ = SNLTruthTableTree(SNLTruthTableTree::Node::Type::P);
       return;
     }
     DEBUG_LOG("Instance name: %s\n",
@@ -50,7 +49,10 @@ void SNLLogicCloud::compute() {
     }
     DEBUG_LOG("model name: %s\n",
               inst.getSNLModel()->getName().getString().c_str());
-    table_ = SNLDesignTruthTable::getTruthTable(inst.getSNLModel());
+    table_ = SNLTruthTableTree(inst.getID(), driver);
+    assert(SNLDesignModeling::getTruthTable(inst.getSNLModel(),
+        dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getID()).isInitialized() &&
+           "Truth table is not initialized");
     assert(table_.isInitialized() &&
            "Truth table for seed output term is not initialized");
   } else {
@@ -64,7 +66,7 @@ void SNLLogicCloud::compute() {
     }
     DEBUG_LOG("model name: %s\n",
               inst.getSNLModel()->getName().getString().c_str());
-    table_ = SNLDesignTruthTable::getTruthTable(inst.getSNLModel());
+    table_ = SNLTruthTableTree(inst.getID(), seedOutputTerm_);
     assert(table_.isInitialized() &&
            "Truth table for seed output term is not initialized");
   }
@@ -89,21 +91,30 @@ void SNLLogicCloud::compute() {
   }
 
   while (!reachedPIs) {
+    //printf("size of truth table tree: %zu\n", table_.size());
     DEBUG_LOG("---iter---\n");
     DEBUG_LOG("Current iteration inputs: %lu\n", newIterationInputs.size());
+    //printf("term %lu: newIterationInputs size: %zu\n", seedOutputTerm_, newIterationInputs.size());
     currentIterationInputs_ = newIterationInputs;
+    for (auto input : currentIterationInputs_) {
+      DEBUG_LOG("Input: %s\n",
+                dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());
+    }
     newIterationInputs.clear();
-    DEBUG_LOG("Truth table: %s\n", table_.getString().c_str());
+    //DEBUG_LOG("Truth table: %s\n", table_.getString().c_str());
+    //printf("Truth table size: %zu\n", table_.size());
+    //printf("Current iteration inputs size: %zu\n", currentIterationInputs_.size());
+    DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n", table_.size(), currentIterationInputs_.size());
     assert(currentIterationInputs_.size() == table_.size());
 
-    std::vector<naja::NL::SNLTruthTable> inputsToMerge;
+    std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>> inputsToMerge;
     for (auto input : currentIterationInputs_) {
       if (isInput(input) || isOutput(input)) {
-        SNLTruthTable tt(1, 2);
+        //SNLTruthTable tt(1, 2);
         newIterationInputs.push_back(input);
         DEBUG_LOG("Adding input: %s\n",
                   dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());
-        inputsToMerge.push_back(tt);
+        inputsToMerge.push_back({naja::DNL::DNLID_MAX, naja::DNL::DNLID_MAX}); // Placeholder for PI/PO
         continue;
       }
 
@@ -130,16 +141,25 @@ void SNLLogicCloud::compute() {
         newIterationInputs.push_back(driver);
         DEBUG_LOG("Adding top input: %s\n",
                   dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getName().getString().c_str());
-        inputsToMerge.push_back(tt);
+        inputsToMerge.push_back({naja::DNL::DNLID_MAX, naja::DNL::DNLID_MAX}); // Placeholder for PI/PO
         continue;
       }
 
       auto inst = dnl_.getDNLInstanceFromID(
           dnl_.getDNLTerminalFromID(driver).getDNLInstance().getID());
-      assert(SNLDesignTruthTable::getTruthTable(inst.getSNLModel()).isInitialized() &&
+      if (!SNLDesignModeling::getTruthTable(inst.getSNLModel(),
+        dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getID()).isInitialized())
+      {
+        //printf("#####Truth table for instance %s is not initialized\n",
+        //          inst.getSNLModel()->getName().getString().c_str());
+        assert(SNLDesignModeling::getTruthTable(inst.getSNLModel(),
+          dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getID()).isInitialized() &&
              "Truth table for instance is not initialized");
-
-      inputsToMerge.push_back(SNLDesignTruthTable::getTruthTable(inst.getSNLModel()));
+      }
+      
+      DEBUG_LOG("Instance name: %s\n",
+                inst.getSNLInstance()->getName().getString().c_str());
+      inputsToMerge.push_back({inst.getID(), driver});
 
       for (DNLID termID = inst.getTermIndexes().first;
            termID <= inst.getTermIndexes().second; termID++) {
@@ -158,12 +178,8 @@ void SNLLogicCloud::compute() {
     }
 
     DEBUG_LOG("Merging truth tables with %zu inputs\n", inputsToMerge.size());
-    DEBUG_LOG("Truth table %s\n", table_.getString().c_str());
-
-    SNLTruthTableMerger merger(inputsToMerge, table_);
-    merger.computeMerged();
-    table_ = merger.getMergedTable();
-
+    //DEBUG_LOG("Truth table %s\n", table_.getString().c_str());
+    table_.concatFull(inputsToMerge);
     reachedPIs = true;
     for (auto input : newIterationInputs) {
       if (!isInput(input) && !isOutput(input)) {
@@ -172,10 +188,5 @@ void SNLLogicCloud::compute() {
       }
     }
   }
-
   currentIterationInputs_ = newIterationInputs;
-  for (auto input : currentIterationInputs_) {
-    DEBUG_LOG("Input: %s\n",
-              dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());
-  }
 }
