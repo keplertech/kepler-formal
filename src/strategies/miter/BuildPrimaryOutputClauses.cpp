@@ -202,12 +202,19 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 
 void BuildPrimaryOutputClauses::collect() {
   inputs_ = collectInputs();
-  outputs_ = collectOutputs();
   sortInputs();
+  for (const auto& input : inputs_) {
+    inputsMap_[naja::DNL::get()->getDNLTerminalFromID(input).getFullPathIDs()] = input;
+  }
+  outputs_ = collectOutputs();
   sortOutputs();
+  for (const auto& output : outputs_) {
+    outputsMap_[naja::DNL::get()->getDNLTerminalFromID(output).getFullPathIDs()] = output;
+  }
 }
 
 void BuildPrimaryOutputClauses::build() {
+  naja::DNL::get();
   POs_.clear();
   POs_ = tbb::concurrent_vector<std::shared_ptr<BoolExpr>>(outputs_.size());
   // inputs_ = collectInputs();
@@ -231,8 +238,36 @@ void BuildPrimaryOutputClauses::build() {
                         cloud.compute();
 
                         std::vector<std::string> varNames;
+                        size_t index = 2; // 0,1 are constants
                         for (auto input : cloud.getInputs()) {
-                          varNames.push_back(std::to_string(input));
+                          DNLTerminalFull term = get()->getDNLTerminalFromID(input);
+                          if (term.getSnlTerm() != nullptr) {
+                            auto net = term.getSnlTerm()->getNet();
+                            if (net != nullptr) {
+                              if (net->isConstant0()) {
+                                varNames.push_back("0");
+                                continue;
+                              } else if (net->isConstant1()) {
+                                varNames.push_back("1");
+                                continue;
+                              }
+                            }
+                            auto model = const_cast<SNLDesign*>(
+                                term.getSnlBitTerm()->getDesign());
+                            auto tt = model->getTruthTable(term.getSnlBitTerm()->getOrderID());
+                            if (tt.isInitialized()) {
+                              if (tt.all0()) {
+                                varNames.push_back("0");
+                                continue;
+                              } else if (tt.all1()) {
+                                varNames.push_back("1");
+                                continue;
+                              }
+                            }
+                          }
+                          
+                          varNames.push_back(std::to_string(index));
+                          index++;
                         }
 
                         assert(cloud.getTruthTable().isInitialized());

@@ -18,7 +18,10 @@ class BuildPrimaryOutputClauses {
   const std::vector<naja::DNL::DNLID>& getOutputs() const { return outputs_; }
   const std::map<naja::DNL::DNLID, std::pair<std::vector<naja::NL::NLID::DesignID>, std::vector<naja::NL::NLID::DesignID>>>& getInputs2InputsIDs() const { return inputs2inputsIDs_; }
   const std::map<naja::DNL::DNLID, std::pair<std::vector<naja::NL::NLID::DesignID>, std::vector<naja::NL::NLID::DesignID>>>& getOutputs2OutputsIDs() const { return outputs2outputsIDs_; }
-  
+  void setInputs(const std::vector<naja::DNL::DNLID>& inputs) { inputs_ = inputs; sortInputs(); setInputs2InputsIDs(); }
+  void setOutputs(const std::vector<naja::DNL::DNLID>& outputs) { outputs_ = outputs; sortOutputs(); setOutputs2OutputsIDs(); }
+  const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& getInputsMap() const { return inputsMap_; }
+  const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& getOutputsMap() const { return outputsMap_; }
  private:
 
   std::vector<naja::DNL::DNLID> collectInputs();
@@ -31,6 +34,8 @@ class BuildPrimaryOutputClauses {
   tbb::concurrent_vector<std::shared_ptr<BoolExpr>> POs_;
   std::vector<naja::DNL::DNLID> inputs_;
   std::vector<naja::DNL::DNLID> outputs_;
+  std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID> inputsMap_;
+  std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID> outputsMap_;
   std::map<naja::DNL::DNLID, std::pair<std::vector<naja::NL::NLID::DesignID>, std::vector<naja::NL::NLID::DesignID>>> inputs2inputsIDs_;
   std::map<naja::DNL::DNLID, std::pair<std::vector<naja::NL::NLID::DesignID>, std::vector<naja::NL::NLID::DesignID>>> outputs2outputsIDs_;
 };

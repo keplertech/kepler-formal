@@ -38,6 +38,7 @@ net = None
 for input in top.get_input_bit_terms():
     net = input.get_lower_net()
     input.disconnect_lower_net()
+    print(input)
     break
 
 out = None
