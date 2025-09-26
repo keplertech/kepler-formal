@@ -417,12 +417,15 @@ bool MiterStrategy::run() {
           std::string svgFileNameEquis(
               std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" + std::to_string(j) + std::string(".svg")));
           SnlVisualiser snl2(topModels[j], cone.getEquipotentials());
+          for (const auto& equi : cone.getEquipotentials()) {
+            printf("Equipotential: %s\n", equi.getString().c_str());
+          }
           snl2.process();
           snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
-          // executeCommand(std::string(std::string("dot -Tsvg ") +
-          //                            dotFileNameEquis + std::string(" -o ") +
-          //                            svgFileNameEquis)
-          //                    .c_str());
+           executeCommand(std::string(std::string("dot -Tsvg ") +
+                                      dotFileNameEquis + std::string(" -o ") +
+                                      svgFileNameEquis)
+                              .c_str());
           printf("svg file name: %s\n", svgFileNameEquis.c_str());
         }
       }

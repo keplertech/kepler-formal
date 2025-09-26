@@ -36,6 +36,8 @@ void SNLLogicCloud::compute() {
     if (isInput(driver)) {
       currentIterationInputs_.push_back(driver);
       table_ = SNLTruthTableTree(SNLTruthTableTree::Node::Type::P);
+      //printf("Driver %s is a primary input, returning\n",
+      //       dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getName().getString().c_str());
       return;
     }
     DEBUG_LOG("Instance name: %s\n",
@@ -85,17 +87,18 @@ void SNLLogicCloud::compute() {
     }
   }
 
-  for (auto input : newIterationInputs) {
-    DEBUG_LOG("newIterationInputs Input: %s(%s)\n",
-              dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),
-              dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getDesign()->getName().getString().c_str());
-  }
+  
 
   while (!reachedPIs) {
     //printf("size of truth table tree: %zu\n", table_.size());
     DEBUG_LOG("---iter---\n");
     DEBUG_LOG("Current iteration inputs: %lu\n", newIterationInputs.size());
     //printf("term %lu: newIterationInputs size: %zu\n", seedOutputTerm_, newIterationInputs.size());
+    // for (auto input : newIterationInputs) {
+    //   DEBUG_LOG("newIterationInputs Input: %s(%s)\n",
+    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),
+    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getDesign()->getName().getString().c_str());
+    // }
     currentIterationInputs_ = newIterationInputs;
     for (auto input : currentIterationInputs_) {
       DEBUG_LOG("Input: %s\n",
@@ -111,7 +114,7 @@ void SNLLogicCloud::compute() {
     std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>> inputsToMerge;
     for (auto input : currentIterationInputs_) {
       if (isInput(input) || isOutput(input)) {
-        //SNLTruthTable tt(1, 2);
+        SNLTruthTable tt(1, 2); // uncommented
         newIterationInputs.push_back(input);
         DEBUG_LOG("Adding input: %s\n",
                   dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());

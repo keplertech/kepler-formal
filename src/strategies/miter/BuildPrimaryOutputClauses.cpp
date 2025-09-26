@@ -53,6 +53,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input)
           inputs.push_back(termId);
+          DEBUG_LOG("Collecting input %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
       }
       continue;
     }
@@ -70,7 +73,13 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         for (auto bitTerm : related) {
           seqBitTerms.push_back(bitTerm);
         }
-        inputs.push_back(termId);
+        if (term.getSnlBitTerm()->getDirection() !=
+            SNLBitTerm::Direction::Input) {
+          inputs.push_back(termId);
+          DEBUG_LOG("Collecting seq input %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+        }
       }
     }
     if (!isSequential) {
@@ -96,12 +105,17 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
       const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
-      if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
-                    term.getSnlBitTerm()) != seqBitTerms.end())
-        inputs.push_back(termId);
+      if (term.getSnlBitTerm()->getDirection() !=
+            SNLBitTerm::Direction::Input) {
+        if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
+                      term.getSnlBitTerm()) != seqBitTerms.end())
+          inputs.push_back(termId);
+          DEBUG_LOG("Collecting seq input %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+      }
     }
   }
-
   std::set<DNLID> inputSet(inputs.begin(), inputs.end());
   inputs.clear();
   inputs.assign(inputSet.begin(), inputSet.end());
@@ -111,14 +125,19 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
 
 std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   std::vector<DNLID> outputs;
+  std::set<DNLID> outputsSet;
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
 
   for (DNLID termId = top.getTermIndexes().first;
        termId != DNLID_MAX && termId <= top.getTermIndexes().second; termId++) {
     const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
-    if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input)
-      outputs.push_back(termId);
+    if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
+      outputsSet.insert(termId);
+      DEBUG_LOG("Collecting top output %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+    }
   }
   for (DNLID leaf : dnl->getLeaves()) {
     DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
@@ -136,7 +155,13 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
         for (auto bitTerm : related) {
           seqBitTerms.push_back(bitTerm);
         }
-        outputs.push_back(termId);
+        if (term.getSnlBitTerm()->getDirection() !=
+            SNLBitTerm::Direction::Output) {
+          outputsSet.insert(termId);
+          DEBUG_LOG("Collecting seq output %s of model %s\n",
+                        term.getSnlBitTerm()->getName().getString().c_str(), 
+                        term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+        }
       }
     }
 
@@ -173,8 +198,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
               break;
             }
           }
-          if (deps.empty() || !termInTTDeps) {
-            outputs.push_back(termId);
+          if (deps.empty() && !termInTTDeps) {
+            outputsSet.insert(termId);
             DEBUG_LOG("Collecting output %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(), 
                       term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
@@ -183,20 +208,22 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
       }
       continue;
     }
-
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
       const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
-      if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
-                    term.getSnlBitTerm()) != seqBitTerms.end())
-        outputs.push_back(termId);
+      if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
+        if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
+                      term.getSnlBitTerm()) != seqBitTerms.end())
+          outputsSet.insert(termId);
+          DEBUG_LOG("Collecting seq output %s of model %s\n",
+                      term.getSnlBitTerm()->getName().getString().c_str(), 
+                      term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+      }
     }
   }
-
-  std::set<DNLID> outputSet(outputs.begin(), outputs.end());
   outputs.clear();
-  outputs.assign(outputSet.begin(), outputSet.end());
+  outputs.assign(outputsSet.begin(), outputsSet.end());
   return outputs;
 }
 
@@ -238,7 +265,6 @@ void BuildPrimaryOutputClauses::build() {
                         cloud.compute();
 
                         std::vector<std::string> varNames;
-                        size_t index = 2; // 0,1 are constants
                         for (auto input : cloud.getInputs()) {
                           DNLTerminalFull term = get()->getDNLTerminalFromID(input);
                           if (term.getSnlTerm() != nullptr) {
@@ -265,9 +291,11 @@ void BuildPrimaryOutputClauses::build() {
                               }
                             }
                           }
-                          
-                          varNames.push_back(std::to_string(index));
-                          index++;
+                          // find the index of input in inputs_
+                          auto it = std::find(inputs_.begin(), inputs_.end(), input);
+                          assert(it != inputs_.end());
+                          size_t index = std::distance(inputs_.begin(), it);
+                          varNames.push_back(std::to_string(index + 2)); // +2 to avoid 0 and 1 which are reserved for constants
                         }
 
                         assert(cloud.getTruthTable().isInitialized());
