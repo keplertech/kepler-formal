@@ -137,7 +137,7 @@ Tree2BoolExpr::convert(
             }
         } else {
             // post-visit for Table / P
-            auto tbl  = node->getTruthTable();
+            const auto& tbl  = node->getTruthTable();
             uint32_t k = tbl.size();
             uint64_t rows = uint64_t{1} << k;
 
