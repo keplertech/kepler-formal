@@ -1,8 +1,8 @@
 #include "BoolExprCache.h"
-#include "BoolExpr.h"
-#include <tbb/concurrent_unordered_map.h>
+#include <tbb/concurrent_vector.h>
 #include <memory>
 #include <type_traits>
+#include "BoolExpr.h"
 
 namespace KEPLER_FORMAL {
 
@@ -14,14 +14,15 @@ struct OpHash {
   }
 };
 
-// define NodeID to match BoolExpr::nodeID type (use size_t here; change if different)
+// define NodeID to match BoolExpr::nodeID type (use size_t here; change if
+// different)
 using NodeID = size_t;
 
 // clearer nested aliases: final value is std::shared_ptr<BoolExpr>
-using Level4 = tbb::concurrent_unordered_map<NodeID, std::shared_ptr<BoolExpr>, std::hash<NodeID>, std::equal_to<NodeID>>;
-using Level3 = tbb::concurrent_unordered_map<NodeID, Level4, std::hash<NodeID>, std::equal_to<NodeID>>;
-using Level2 = tbb::concurrent_unordered_map<size_t, Level3, std::hash<size_t>, std::equal_to<size_t>>;
-using NotTable = tbb::concurrent_unordered_map<Op, Level2, OpHash, std::equal_to<Op>>;
+using Level4 = tbb::concurrent_vector<std::shared_ptr<BoolExpr>>;
+using Level3 = tbb::concurrent_vector<Level4>;
+using Level2 = tbb::concurrent_vector<Level3>;
+using NotTable = tbb::concurrent_vector<Level2>;
 
 struct BoolExprCache::Impl {
   NotTable notTable;
@@ -36,39 +37,59 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
   NodeID lid = k.l ? k.l->getId() : NodeID{0};
   NodeID rid = k.r ? k.r->getId() : NodeID{0};
 
-  auto &tbl = impl().notTable;
+  auto& tbl = impl().notTable;
 
   // 1) find Op
-  auto it1 = tbl.find(k.op);
-  if (it1 != tbl.end()) {
-    auto &lvl2 = it1->second; // Level2
-    auto it2 = lvl2.find(k.varId);
-    if (it2 != lvl2.end()) {
-      auto &lvl3 = it2->second; // Level3
-      auto it3 = lvl3.find(lid);
-      if (it3 != lvl3.end()) {
-        auto &lvl4 = it3->second; // Level4
-        auto it4 = lvl4.find(rid);
-        if (it4 != lvl4.end()) {
+  if ((size_t)k.op < tbl.size()) {
+    auto& lvl2 = tbl.at((size_t)k.op);  // Level2
+    if ((size_t)k.varId < lvl2.size()) {
+      auto& lvl3 = lvl2.at((size_t)k.varId);  // Level3
+      if ((size_t)lid < lvl3.size()) {
+        auto& lvl4 = lvl3.at((size_t)lid);  // Level4
+        if ((size_t)rid < lvl4.size()) {
           // it4->second is std::shared_ptr<BoolExpr>
-          return it4->second;
+          if (lvl4.at((size_t)rid).get() == nullptr) {
+            // Replace entry with new node
+            std::shared_ptr<BoolExpr> L =
+                k.l ? k.l->shared_from_this() : nullptr;
+            std::shared_ptr<BoolExpr> R =
+                k.r ? k.r->shared_from_this() : nullptr;
+            lvl4.at((size_t)rid) = std::shared_ptr<BoolExpr>(
+                new BoolExpr(k.op, k.varId, std::move(L), std::move(R)));
+          }
+          return lvl4.at((size_t)rid);
         }
       }
     }
   }
   std::shared_ptr<BoolExpr> L = k.l ? k.l->shared_from_this() : nullptr;
   std::shared_ptr<BoolExpr> R = k.r ? k.r->shared_from_this() : nullptr;
+  for (size_t i = tbl.size(); i <= static_cast<size_t>(k.op); ++i) {
+    tbl.push_back(Level2());
+  }
+  auto& lvl2 = tbl.at((size_t) k.op);
+  for (size_t i = lvl2.size(); i <= k.varId; ++i) {
+    lvl2.push_back(Level3());
+  }
+  auto& lvl3 = lvl2.at(k.varId);
+  for (size_t i = lvl3.size(); i <= lid; ++i) {
+    lvl3.push_back(Level4());
+  }
+  auto& lvl4 = lvl3.at(lid);
+  for (size_t i = lvl4.size(); i <= rid; ++i) {
+    lvl4.push_back(nullptr);
+  }
   // not found: create via the declared factory that takes Key
-  // createNode is declared as: static std::shared_ptr<BoolExpr> createNode(BoolExprCache::Key const& k);
-  // ensure BoolExpr grants friendship to BoolExprCache or createNode is public
+  // createNode is declared as: static std::shared_ptr<BoolExpr>
+  // createNode(BoolExprCache::Key const& k); ensure BoolExpr grants friendship
+  // to BoolExprCache or createNode is public
   auto ptr = std::shared_ptr<BoolExpr>(
-        new BoolExpr(k.op, k.varId, std::move(L), std::move(R))
-    );
+      new BoolExpr(k.op, k.varId, std::move(L), std::move(R)));
 
   // insert into nested maps (operator[] will create missing intermediate maps)
-  impl().notTable[k.op][k.varId][lid][rid] = ptr;
+  impl().notTable.at((size_t)k.op).at(k.varId).at(lid).at(rid) = ptr;
 
   return ptr;
 }
 
-} // namespace KEPLER_FORMAL
+}  // namespace KEPLER_FORMAL
