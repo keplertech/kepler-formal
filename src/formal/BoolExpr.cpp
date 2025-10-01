@@ -4,7 +4,7 @@
 namespace KEPLER_FORMAL {
 
 // static definitions
-tbb::concurrent_unordered_map<BoolExpr::Key,
+tbb::concurrent_unordered_map<BoolExprCache::Key,
                    std::weak_ptr<BoolExpr>,
                    BoolExpr::KeyHash,
                    BoolExpr::KeyEq>
@@ -19,13 +19,13 @@ BoolExpr::BoolExpr(Op op, size_t id,
 
 /// Intern+construct a new node if needed
 std::shared_ptr<BoolExpr>
-BoolExpr::createNode(Key const& k) {
+BoolExpr::createNode(BoolExprCache::Key const& k) {
     // Caller already holds lock on tableMutex_
     // print the size in GB of table_
     //printf("BoolExpr table size: %.2f GB\n",
     //       (table_.size() * (sizeof(Key) + sizeof(std::weak_ptr<BoolExpr>))) / (1024.0*1024.0*1024.0));
 
-    auto it = table_.find(k);
+    /*auto it = table_.find(k);
     if (it != table_.end()) {
         if (auto existing = it->second.lock())
             return existing;
@@ -38,13 +38,14 @@ BoolExpr::createNode(Key const& k) {
         new BoolExpr(k.op, k.varId, std::move(L), std::move(R))
     );
     table_.emplace(k, ptr);
-    return ptr;
+    return ptr;*/
+    return BoolExprCache::getExpression(k);
 }
 
 // Factory methods with eager folding & sharing
 
 std::shared_ptr<BoolExpr> BoolExpr::Var(size_t id) {
-    Key k{Op::VAR, id, nullptr, nullptr};
+    BoolExprCache::Key k{Op::VAR, id, nullptr, nullptr};
     return createNode(k);
 }
 
@@ -55,7 +56,7 @@ std::shared_ptr<BoolExpr> BoolExpr::Not(std::shared_ptr<BoolExpr> a) {
     // double negation
     if (a->op_ == Op::NOT)
         return a->left_;
-    Key k{Op::NOT, 0, a.get(), nullptr};
+    BoolExprCache::Key k{Op::NOT, 0, a.get(), nullptr};
     return createNode(k);
 }
 
@@ -75,7 +76,7 @@ std::shared_ptr<BoolExpr> BoolExpr::And(
 
     // canonical order
     if (b.get() < a.get()) std::swap(a, b);
-    Key k{Op::AND, 0, a.get(), b.get()};
+    BoolExprCache::Key k{Op::AND, 0, a.get(), b.get()};
     return createNode(k);
 }
 
@@ -93,7 +94,7 @@ std::shared_ptr<BoolExpr> BoolExpr::Or(
     if (b->op_==Op::NOT && b->left_.get()==a.get()) return Var(1);
 
     if (b.get() < a.get()) std::swap(a, b);
-    Key k{Op::OR, 0, a.get(), b.get()};
+    BoolExprCache::Key k{Op::OR, 0, a.get(), b.get()};
     return createNode(k);
 }
 
@@ -108,7 +109,7 @@ std::shared_ptr<BoolExpr> BoolExpr::Xor(
     if (a.get() == b.get())                  return Var(0);
 
     if (b.get() < a.get()) std::swap(a, b);
-    Key k{Op::XOR, 0, a.get(), b.get()};
+    BoolExprCache::Key k{Op::XOR, 0, a.get(), b.get()};
     return createNode(k);
 }
 
@@ -152,7 +153,7 @@ std::string BoolExpr::toString() const     {
     Print(oss);
     return oss.str();
 }
-bool BoolExpr::evaluate(const std::unordered_map<size_t,bool>& env) const { /* … */ }
+//bool BoolExpr::evaluate(const std::unordered_map<size_t,bool>& env) const { /* … */ }
 std::string BoolExpr::OpToString(Op op) { 
     switch (op) {
         case Op::VAR: return "VAR";

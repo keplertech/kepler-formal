@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include "tbb/concurrent_unordered_map.h"
+#include "BoolExprCache.h"
 
 namespace KEPLER_FORMAL {
 
@@ -16,6 +17,7 @@ enum class Op { VAR, AND, OR, NOT, XOR };
 /// A hash-consed Boolean expression DAG with eager constant-folding,
 /// now protected for concurrent calls.
 class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
+    friend class BoolExprCache;
 public:
     // Convenient constants
     static std::shared_ptr<BoolExpr> createFalse() { return Var(0); }
@@ -66,14 +68,6 @@ private:
 
     static std::string OpToString(Op);
 
-    // Interning key
-    struct Key {
-        Op        op;
-        size_t    varId;
-        BoolExpr* l;
-        BoolExpr* r;
-    };
-
     static constexpr uint64_t HASH_SEED = 0x9e3779b97f4a7c15ULL;
 
     static inline uint64_t splitmix64(uint64_t x) noexcept {
@@ -83,7 +77,7 @@ private:
     return x ^ (x >> 31);
     }
     struct KeyHash {
-        size_t operator()(Key const& k) const noexcept {
+        size_t operator()(BoolExprCache::Key const& k) const noexcept {
             const uint64_t s = HASH_SEED;
             uint64_t a = splitmix64(uint64_t(std::hash<int>()(int(k.op))) + s);
             uint64_t b = splitmix64(uint64_t(std::hash<size_t>()(k.varId)) ^ (s<<1));
@@ -97,7 +91,7 @@ private:
         }
     };
     struct KeyEq {
-        bool operator()(Key const& a, Key const& b) const noexcept {
+        bool operator()(BoolExprCache::Key const& a, BoolExprCache::Key const& b) const noexcept {
             return a.op    == b.op
                 && a.varId == b.varId
                 && a.l     == b.l
@@ -105,15 +99,15 @@ private:
         }
     };
 
-    // Global weak-map: Key → shared instance
+    // Global weak-map: BoolExprCache::Key → shared instance
     // guarded by tableMutex_ on every access
-    static tbb::concurrent_unordered_map<Key,
+    static tbb::concurrent_unordered_map<BoolExprCache::Key,
                               std::weak_ptr<BoolExpr>,
                               KeyHash,
                               KeyEq> table_;
 
     // Interning constructor (caller must lock tableMutex_)
-    static std::shared_ptr<BoolExpr> createNode(Key const& k);
+    static std::shared_ptr<BoolExpr> createNode(BoolExprCache::Key const& k);
 };
 
 } // namespace KEPLER_FORMAL

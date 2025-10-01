@@ -305,7 +305,9 @@ void BuildPrimaryOutputClauses::build() {
   // outputs_ = collectOutputs();
   // sortOutputs();
   size_t processedOutputs = 0;
-  tbb::task_arena arena(20);
+  //tbb::task_arena arena(20);
+  // init arena with automatic number of threads
+  tbb::task_arena arena;
   auto processOutput = [&](size_t i) {
     DNLID out = outputs_[i];
     printf("Procssing output %zu/%zu: %s\n",
