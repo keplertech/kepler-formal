@@ -20,6 +20,17 @@ class MiterStrategy {
 
   bool run();
 
+  void normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
+                       std::vector<naja::DNL::DNLID>& inputs1,
+                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs0Map,
+                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs1Map);
+
+  void normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
+                        std::vector<naja::DNL::DNLID>& outputs1,
+                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& outputs0Map,
+                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& outputs1Map);
+  
+
  private:
   std::shared_ptr<BoolExpr> buildMiter(
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,

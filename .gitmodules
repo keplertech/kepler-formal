@@ -1,6 +1,6 @@
-[submodule "thirdparty/naja"]
-	path = thirdparty/naja
-	url = https://github.com/najaeda/naja.git
 [submodule "thirdparty/glucose"]
 	path = thirdparty/glucose
 	url = https://github.com/audemard/glucose.git
+[submodule "thirdparty/naja"]
+	path = thirdparty/naja
+	url = https://github.com/nanocoh/naja.git

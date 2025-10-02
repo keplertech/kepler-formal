@@ -14,7 +14,7 @@ class Tree2BoolExpr {
     public:
     static std::shared_ptr<BoolExpr>
     convert(const SNLTruthTableTree& tree,
-                const std::vector<std::string>&     varNames);
+                const std::vector<size_t>&     varNames);
 };
 
 } // namespace KEPLER_FORMAL

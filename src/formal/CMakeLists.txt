@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(formal_structures STATIC
     BoolExpr.cpp
     CompressedBoolExpr.cpp
+    BoolExprCache.cpp
     #SimpleSatSolver.cpp
 )
 

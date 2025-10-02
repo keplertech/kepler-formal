@@ -81,6 +81,9 @@
         "__hash_table": "cpp",
         "unordered_set": "cpp",
         "chrono": "cpp",
-        "cassert": "cpp"
+        "cassert": "cpp",
+        "execution": "cpp",
+        "complex": "cpp",
+        "shared_mutex": "cpp"
     }
 }
