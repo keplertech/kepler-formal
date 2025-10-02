@@ -60,7 +60,7 @@ public:
     bool eval(const std::vector<bool>& extInputs) const;
 
     // add a child, detect cycles, set child's parent
-    void addChild(std::shared_ptr<Node> child);
+    void addChild(const std::shared_ptr<Node>& child);
 
     // get the table, only valid for Table and P nodes
     const SNLTruthTable& getTruthTable() const;

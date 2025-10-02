@@ -22,9 +22,10 @@ const SNLTruthTable SNLTruthTableTree::PtableHolder_ = SNLTruthTable(1,2);
 //----------------------------------------------------------------------
 // Node::addChild
 //----------------------------------------------------------------------
-void SNLTruthTableTree::Node::addChild(std::shared_ptr<Node> child) {
+void SNLTruthTableTree::Node::addChild(const std::shared_ptr<Node>& child) {
   // cycle detection walking parent chain
   auto self = shared_from_this();
+  #ifdef DEBUG_CHECKS
   for (auto node = self; node; node = node->parent.lock()) {
     if (node->type == Type::Table
         && node->dnlid == child->dnlid
@@ -34,6 +35,7 @@ void SNLTruthTableTree::Node::addChild(std::shared_ptr<Node> child) {
       throw std::invalid_argument("addChild: cycle detected");
     }
   }
+  #endif
 
   // attach
   children.push_back(std::move(child));
