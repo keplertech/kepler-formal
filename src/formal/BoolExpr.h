@@ -61,8 +61,8 @@ public:
 private:
     // Private ctor: use factory methods
     BoolExpr(Op op, size_t id,
-             std::shared_ptr<BoolExpr> l,
-             std::shared_ptr<BoolExpr> r);
+             const std::shared_ptr<BoolExpr>& l,
+             const std::shared_ptr<BoolExpr>& r);
 
     Op     op_;
     size_t varID_;

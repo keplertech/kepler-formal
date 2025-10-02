@@ -80,8 +80,8 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
   }
 
   // construct new BoolExpr. We need shared_ptr owners for children if they exist.
-  std::shared_ptr<BoolExpr> L = lptr ? lptr->shared_from_this() : nullptr;
-  std::shared_ptr<BoolExpr> R = rptr ? rptr->shared_from_this() : nullptr;
+  const std::shared_ptr<BoolExpr>& L = lptr ? lptr->shared_from_this() : nullptr;
+  const std::shared_ptr<BoolExpr>& R = rptr ? rptr->shared_from_this() : nullptr;
 
   // use new because constructor may be non-public
   auto newptr = std::shared_ptr<BoolExpr>(new BoolExpr(k.op, k.varId, std::move(L), std::move(R)));

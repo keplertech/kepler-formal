@@ -47,7 +47,7 @@ void clearTermsETS() {
     getTErmsETS().second = 0;
 }
 
-void pushBackTermsETS(std::shared_ptr<BoolExpr> term) {
+void pushBackTermsETS(const std::shared_ptr<BoolExpr>& term) {
     auto& vec = getTErmsETS().first;
     auto& sz = getTErmsETS().second;
     if (vec.size() > sz) {
@@ -167,7 +167,7 @@ void clearMemoETS() {
     getMemoETS().second = 0;
 }
 
-void pushBackMemoETS(std::shared_ptr<BoolExpr> expr) {
+void pushBackMemoETS(const std::shared_ptr<BoolExpr>& expr) {
     auto& vec = getMemoETS().first;
     auto& sz = getMemoETS().second;
     if (vec.size() > sz) {
@@ -192,7 +192,7 @@ void reserveMemoETS(size_t n) {
     vec.assign(n, nullptr);
 }
 
-void setMemoETS(size_t i, std::shared_ptr<BoolExpr> expr) {
+void setMemoETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
     if (i >= getMemoETS().second) {
        assert(false && "setMemoETS: index out of range");
     }
@@ -235,7 +235,7 @@ void clearChildFETS() {
     getChildFETS().second = 0;
 }
 
-void pushBackChildFETS(std::shared_ptr<BoolExpr> expr) {
+void pushBackChildFETS(const std::shared_ptr<BoolExpr>& expr) {
     auto& vec = getChildFETS().first;
     auto& sz = getChildFETS().second;
     if (vec.size() > sz) {
@@ -267,7 +267,7 @@ const std::shared_ptr<BoolExpr>& getChildFETS(size_t i) {
     return getChildFETS().first[i];
 }
 
-void setChildFETS(size_t i, std::shared_ptr<BoolExpr> expr) {
+void setChildFETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
     if (i >= getChildFETS().second) {
        assert(false && "setChildFETS: index out of range");
     }

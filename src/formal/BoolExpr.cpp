@@ -12,8 +12,8 @@ tbb::concurrent_unordered_map<BoolExprCache::Key,
 
 /// Private ctor
 BoolExpr::BoolExpr(Op op, size_t id,
-                   std::shared_ptr<BoolExpr> l,
-                   std::shared_ptr<BoolExpr> r)
+                   const std::shared_ptr<BoolExpr>& l,
+                   const std::shared_ptr<BoolExpr>& r)
   : op_(op), varID_(id), left_(std::move(l)), right_(std::move(r))
 {}
 
