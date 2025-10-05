@@ -51,7 +51,7 @@ void executeCommand(const std::string& command) {
 
 Glucose::Lit tseitinEncode(
     Glucose::SimpSolver& S,
-    const std::shared_ptr<BoolExpr>& root,
+    BoolExpr* root,
     std::unordered_map<const BoolExpr*, int>& node2var,
     std::unordered_map<std::string, int>& varName2idx)
 {
@@ -72,7 +72,7 @@ Glucose::Lit tseitinEncode(
     };
 
     struct Frame {
-        std::shared_ptr<BoolExpr> expr;
+        BoolExpr* expr;
         bool visited = false;
         Glucose::Lit leftLit, rightLit;
     };
@@ -83,7 +83,7 @@ Glucose::Lit tseitinEncode(
 
     while (!stk.empty()) {
         Frame& fr = stk.top();
-        BoolExpr* e = fr.expr.get();
+        BoolExpr* e = fr.expr;
 
         // If already encoded, reuse
         if (node2var.count(e)) {
@@ -119,8 +119,8 @@ Glucose::Lit tseitinEncode(
         }
 
         // Children have been processed; retrieve their lits
-        if (e->getLeft())  fr.leftLit  = result[e->getLeft().get()];
-        if (e->getRight()) fr.rightLit = result[e->getRight().get()];
+        if (e->getLeft())  fr.leftLit  = result[e->getLeft()];
+        if (e->getRight()) fr.rightLit = result[e->getRight()];
 
         // Create fresh var for this gate
         int v = S.newVar();
@@ -158,7 +158,7 @@ Glucose::Lit tseitinEncode(
         stk.pop();
     }
 
-    return result.at(root.get());
+    return result.at(root);
 }
 
 }  // namespace
@@ -168,8 +168,13 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs0Map,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs1Map) {
     // find the intersection of inputs0 and inputs1 based on the getFullPathIDs of DNLTerminal and the diffs
+    std::set<std::vector<NLID::DesignObjectID>> paths0;
     std::set<std::vector<NLID::DesignObjectID>> paths1;
     std::set<std::vector<NLID::DesignObjectID>> pathsCommon;
+    
+    for (const auto& [path0, input0] : inputs0Map) {
+      paths0.insert(path0);
+    }
     for (const auto& [path1, input1] : inputs1Map) {
       paths1.insert(path1);
     }
@@ -184,12 +189,22 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
     for (const auto& [path0, input0] : inputs0Map) {
       if (pathsCommon.find(path0) == pathsCommon.end()) {
         diff0.push_back(input0);
+        auto pathInstance = path0;
+        pathInstance.pop_back(); // removing bit ID
+        pathInstance.pop_back(); // removing terminal ID
+        naja::NL::SNLPath p = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), pathInstance);
+        printf("diff0 input: %s\n", p.getString().c_str());
       }
     }
     std::vector<naja::DNL::DNLID> diff1;
     for (const auto& [path1, input1] : inputs1Map) {
       if (pathsCommon.find(path1) == pathsCommon.end()) {
         diff1.push_back(input1);
+        auto pathInstance = path1;
+        pathInstance.pop_back(); // removing bit ID
+        pathInstance.pop_back(); // removing terminal ID
+        naja::NL::SNLPath p = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), pathInstance);
+        printf("diff1 input: %s\n", p.getString().c_str());
       }
     }
     inputs0.clear();
@@ -202,6 +217,9 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
       inputs1.push_back(inputs1Map.at(path));
     }
     inputs1.insert(inputs1.end(), diff1.begin(), diff1.end());
+    printf("size of common inputs: %lu\n", pathsCommon.size());
+    printf("size of diff0 inputs: %lu\n", diff0.size());
+    printf("size of diff1 inputs: %lu\n", diff1.size());
 }
 
 void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
@@ -243,6 +261,47 @@ void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
       outputs1.push_back(outputs1Map.at(path));
     }
     outputs1.insert(outputs1.end(), diff1.begin(), diff1.end());
+    printf("size of common outputs: %lu\n", pathsCommon.size());
+    printf("size of diff0 outputs: %lu\n", diff0.size());
+    printf("size of diff1 outputs: %lu\n", diff1.size());
+    if (outputs0.size() == outputs1.size()) {
+      if (outputs0 != outputs1) {
+        // build the paths vector for outputs0 and outputs1
+        std::vector<std::vector<NLID::DesignObjectID>> paths0;
+        std::vector<std::vector<NLID::DesignObjectID>> paths1;
+        for (const auto& output0 : outputs0) {
+          std::vector<NLID::DesignObjectID> path;
+          for (const auto& [path0, output0m] : outputs0Map) {
+            if (output0m == output0) {
+              path = path0;
+              break;
+            }
+          }
+          paths0.push_back(path);
+        }
+        for (const auto& output1 : outputs1) {
+          std::vector<NLID::DesignObjectID> path;
+          for (const auto& [path1, output1m] : outputs1Map) {
+            if (output1m == output1) {
+              path = path1;
+              break;
+            }
+          }
+          paths1.push_back(path);
+        }
+        if (paths0 != paths1) {
+          printf("Miter outputs must match in order:\n");
+          for (size_t i = 0; i < paths0.size(); ++i) {
+            naja::NL::SNLPath p0 = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), paths0[i]);
+            naja::NL::SNLPath p1 = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), paths1[i]);
+            throw std::runtime_error(
+                "Output " + std::to_string(i) + " mismatch: " + p0.getString() + " vs " + p1.getString());
+
+          }
+          assert(false && "Miter outputs must match in order");
+        }
+      }
+    }
 }
 
 bool MiterStrategy::run() {
@@ -269,6 +328,7 @@ bool MiterStrategy::run() {
   printf("size of outputs1: %lu\n", outputs1sort.size());
   normalizeInputs(inputs0sort, inputs1sort, builder0.getInputsMap(), builder1.getInputsMap());
   normalizeOutputs(outputs0sort, outputs1sort, builder0.getOutputsMap(), builder1.getOutputsMap());
+  //return false;
   builder0.setInputs(inputs0sort);
   builder1.setInputs(inputs1sort);
   builder0.setOutputs(outputs0sort);
@@ -371,9 +431,9 @@ bool MiterStrategy::run() {
   if (sat) {
     printf("Miter failed: analyzing individual POs\n");
     for (size_t i = 0; i < POs0.size(); ++i) {
-      tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs0S;
+      tbb::concurrent_vector<BoolExpr*> singlePOs0S;
       singlePOs0S.push_back(POs0[i]);
-      tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs1S;
+      tbb::concurrent_vector<BoolExpr*> singlePOs1S;
       singlePOs1S.push_back(POs1[i]);
       auto singleMiter = buildMiter(singlePOs0S, singlePOs1S);
       
@@ -391,13 +451,13 @@ bool MiterStrategy::run() {
       singleSolver.addClause(singleRootLit);
       if (singleSolver.solve()) {
         // print singleMitter
-        printf("------ PO failed for %zu mitter: %s\n", i,
-             singleMiter->toString().c_str());
+        // printf("------ PO failed for %zu mitter: %s\n", i,
+        //      singleMiter->toString().c_str());
 
 
-        printf("------ PO failed for %zu: %s vs %s\n", i,
-             singlePOs0S[0]->toString().c_str(),
-             singlePOs1S[0]->toString().c_str());
+        // printf("------ PO failed for %zu: %s vs %s\n", i,
+        //      singlePOs0S[0]->toString().c_str(),
+        //      singlePOs1S[0]->toString().c_str());
         failedPOs_.push_back(outputs0[i]);
         // If UNSAT, print the single miter
         printf("Check failed for PO: %zu\n", i);
@@ -407,6 +467,10 @@ bool MiterStrategy::run() {
         std::vector<std::vector<naja::DNL::DNLID>> PIs;
         PIs.push_back(PIs0);
         PIs.push_back(PIs1);
+        naja::NL::SNLEquipotential::Terms terms0;
+        naja::NL::SNLEquipotential::Terms terms1;
+        naja::NL::SNLEquipotential::InstTermOccurrences insTerms0;
+        naja::NL::SNLEquipotential::InstTermOccurrences insTerms1;
         for (size_t j = 0; j < topModels.size(); ++j) {
           DNL::destroy();
           NLUniverse::get()->setTopDesign(topModels[j]);
@@ -418,16 +482,129 @@ bool MiterStrategy::run() {
               std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" + std::to_string(j) + std::string(".svg")));
           SnlVisualiser snl2(topModels[j], cone.getEquipotentials());
           for (const auto& equi : cone.getEquipotentials()) {
-            printf("Equipotential: %s\n", equi.getString().c_str());
+            for (const auto& term : equi.getTerms()) {
+              if (j == 0) {
+                terms0.insert(term);
+              } else {
+                terms1.insert(term);
+              }
+            }
+            for (const auto& termOcc : equi.getInstTermOccurrences()) {
+              if (j == 0) {
+                insTerms0.insert(termOcc);
+              } else {
+                insTerms1.insert(termOcc);
+              }
+            }
           }
-          snl2.process();
-          snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
-           executeCommand(std::string(std::string("dot -Tsvg ") +
-                                      dotFileNameEquis + std::string(" -o ") +
-                                      svgFileNameEquis)
-                              .c_str());
-          printf("svg file name: %s\n", svgFileNameEquis.c_str());
+          
+          //snl2.process();
+          //snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
+          //  executeCommand(std::string(std::string("dot -Tsvg ") +
+          //                             dotFileNameEquis + std::string(" -o ") +
+          //                             svgFileNameEquis)
+          //                     .c_str());
+          //printf("svg file name: %s\n", svgFileNameEquis.c_str());
         }
+        // find intersection and diff of terms0 and terms1
+        naja::NL::SNLEquipotential::Terms termsCommon;
+        naja::NL::SNLEquipotential::Terms termsDiff;
+        for (const auto& term0 : terms0) {
+          bool found = false;
+          for (const auto& term1 : terms1) {
+            if (term0->getID() == term1->getID() && term0->getBit() == term1->getBit()) {
+              found = true;
+              break;
+            }
+          }
+          if (found) {
+            termsCommon.insert(term0);
+          } else {
+            termsDiff.insert(term0);
+          }
+        }
+        for (const auto& term1 : terms1) {
+          bool found = false;
+          for (const auto& term0 : terms0) {
+            if (term0->getID() == term1->getID() && term0->getBit() == term1->getBit()) {
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            termsDiff.insert(term1);
+          }
+        }
+        // print termsDiff
+        for (const auto& term : termsDiff) {
+          if (term->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
+            continue;
+          }
+          printf("Diff term: %s\n",
+                 term->getString().c_str());
+        }
+        // find intersection aprintf("size of intersend diff of insTerms0 and insTerms1
+        naja::NL::SNLEquipotential::InstTermOccurrences insTermsCommon;
+        naja::NL::SNLEquipotential::InstTermOccurrences insTermsDiff;
+        for (const auto& term0 : insTerms0) {
+          bool found = false;
+          for (const auto& term1 : insTerms1) {
+            if (term0.getPath().getPathIDs() == term1.getPath().getPathIDs() && 
+                term0.getInstTerm()->getInstance()->getID() == term1.getInstTerm()->getInstance()->getID() &&
+                term0.getInstTerm()->getBitTerm()->getID() == term1.getInstTerm()->getBitTerm()->getID() &&
+                term0.getInstTerm()->getBitTerm()->getBit() == term1.getInstTerm()->getBitTerm()->getBit()) {
+              found = true;
+              break;
+            }
+          }
+          if (found) {
+            insTermsCommon.insert(term0);
+          } else {
+            insTermsDiff.insert(term0);
+            if (term0.getInstTerm()->getDirection() == naja::NL::SNLInstTerm::Direction::Input || 
+              !term0.getInstTerm()->getInstance()->getModel()->getInstances().empty()) {
+              continue;
+            }
+            printf("Diff 0 inst term %s with direction %s\n",
+                  term0.getString().c_str(), term0.getInstTerm()->getDirection().getString().c_str());
+          }
+        }
+        for (const auto& term1 : insTerms1) {
+          bool found = false;
+          for (const auto& term0 : insTerms0) {
+            if (term0.getPath().getPathIDs() == term1.getPath().getPathIDs() && 
+                term0.getInstTerm()->getInstance()->getID() == term1.getInstTerm()->getInstance()->getID() &&
+                term0.getInstTerm()->getBitTerm()->getID() == term1.getInstTerm()->getBitTerm()->getID() &&
+                term0.getInstTerm()->getBitTerm()->getBit() == term1.getInstTerm()->getBitTerm()->getBit()) {
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            insTermsDiff.insert(term1);
+            if (term1.getInstTerm()->getDirection() == naja::NL::SNLInstTerm::Direction::Input || 
+              !term1.getInstTerm()->getInstance()->getModel()->getInstances().empty()) {
+              continue;
+            }
+            printf("Diff 1 inst term %s with direction %s\n",
+                  term1.getString().c_str(), term1.getInstTerm()->getDirection().getString().c_str());
+          }
+        }
+        // print insTermsDiff
+        // for (const auto& term : insTermsDiff) {
+        //   // static cast to SNLInstTerm
+        //   //naja::NL::SNLInstTerm* instTerm = static_cast<naja::NL::SNLInstTerm*>(term.getInstTerm());
+        //   if (term.getInstTerm()->getDirection() == naja::NL::SNLInstTerm::Direction::Input || 
+        //     !term.getInstTerm()->getInstance()->getModel()->getInstances().empty()) {
+        //     continue;
+        //   }
+        //   printf("Diff inst term %s\n",
+        //          term.getString().c_str());
+        // }
+        printf("size of intersection of terms: %zu\n", termsCommon.size());
+        printf("size of diff of terms: %zu\n", termsDiff.size());
+        printf("size of intersection of inst terms: %zu\n", insTermsCommon.size());
+        printf("size of diff of inst terms: %zu\n", insTermsDiff.size());
       }
     }
   }
@@ -439,9 +616,9 @@ bool MiterStrategy::run() {
   return !sat;
 }
 
-std::shared_ptr<BoolExpr> MiterStrategy::buildMiter(
-    const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
-    const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const {
+BoolExpr* MiterStrategy::buildMiter(
+    const tbb::concurrent_vector<BoolExpr*>& A,
+    const tbb::concurrent_vector<BoolExpr*>& B) const {
   // if (A.size() != B.size()) {
   //   printf("Miter inputs must match in length: %zu vs %zu\n", A.size(),
   //          B.size());

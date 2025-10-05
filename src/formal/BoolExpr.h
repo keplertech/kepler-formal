@@ -13,25 +13,24 @@
 
 namespace KEPLER_FORMAL {
 
-
 /// A hash-consed Boolean expression DAG with eager constant-folding,
 /// now protected for concurrent calls.
 class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
     friend class BoolExprCache;
 public:
     // Convenient constants
-    static std::shared_ptr<BoolExpr> createFalse() { return Var(0); }
-    static std::shared_ptr<BoolExpr> createTrue()  { return Var(1); }
+    static BoolExpr* createFalse() { return Var(0); }
+    static BoolExpr* createTrue()  { return Var(1); }
 
     // Factory methods (canonical, fold constants, share structure)
-    static std::shared_ptr<BoolExpr> Var(size_t id);
-    static std::shared_ptr<BoolExpr> Not(std::shared_ptr<BoolExpr> a);
-    static std::shared_ptr<BoolExpr> And(std::shared_ptr<BoolExpr> a,
-                                         std::shared_ptr<BoolExpr> b);
-    static std::shared_ptr<BoolExpr> Or(std::shared_ptr<BoolExpr> a,
-                                        std::shared_ptr<BoolExpr> b);
-    static std::shared_ptr<BoolExpr> Xor(std::shared_ptr<BoolExpr> a,
-                                         std::shared_ptr<BoolExpr> b);
+    static BoolExpr* Var(size_t id);
+    static BoolExpr* Not(BoolExpr* a);
+    static BoolExpr* And(BoolExpr* a,
+                                         BoolExpr* b);
+    static BoolExpr* Or(BoolExpr* a,
+                                        BoolExpr* b);
+    static BoolExpr* Xor(BoolExpr* a,
+                                         BoolExpr* b);
 
     // Print and stringify
     void Print(std::ostream& out) const;
@@ -43,8 +42,8 @@ public:
     // Accessors
     Op getOp()    const { return op_; }
     size_t getId() const { return varID_; }
-    const std::shared_ptr<BoolExpr>& getLeft()  const { return left_; }
-    const std::shared_ptr<BoolExpr>& getRight() const { return right_; }
+    BoolExpr* getLeft()  const { return left_; }
+    BoolExpr* getRight() const { return right_; }
         std::string getName() const {
         if (op_ != Op::VAR)
             throw std::logic_error("getName: not a variable");
@@ -61,12 +60,13 @@ public:
 private:
     // Private ctor: use factory methods
     BoolExpr(Op op, size_t id,
-             std::shared_ptr<BoolExpr> l,
-             std::shared_ptr<BoolExpr> r);
+             BoolExpr* l,
+             BoolExpr* r);
 
     Op     op_;
     size_t varID_;
-    std::shared_ptr<BoolExpr> left_, right_;
+    BoolExpr* left_;
+    BoolExpr* right_;
     size_t index_ = (size_t) -1;
 
     static std::string OpToString(Op);
@@ -110,7 +110,7 @@ private:
                               KeyEq> table_;
 
     // Interning constructor (caller must lock tableMutex_)
-    static std::shared_ptr<BoolExpr> createNode(BoolExprCache::Key const& k);
+    static BoolExpr* createNode(BoolExprCache::Key const& k);
 };
 
 } // namespace KEPLER_FORMAL

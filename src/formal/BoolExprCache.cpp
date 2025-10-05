@@ -35,7 +35,7 @@ struct TupleKeyEq {
   bool operator()(TupleKey const& a, TupleKey const& b) const noexcept { return a == b; }
 };
 
-using ValueT = std::shared_ptr<BoolExpr>;
+using ValueT = BoolExpr*;
 using PairT = std::pair<const TupleKey, ValueT>;
 using TbbAlloc = tbb::tbb_allocator<PairT>;
 
@@ -63,7 +63,7 @@ static inline TupleKey make_tuple_key(Op op, size_t varId, BoolExpr* lptr, BoolE
   };
 }
 
-std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
+BoolExpr* BoolExprCache::getExpression(Key const& k) {
   BoolExpr* lptr = k.l;
   BoolExpr* rptr = k.r;
   TupleKey tk = make_tuple_key(k.op, k.varId, lptr, rptr);
@@ -75,16 +75,16 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
   if (it != tbl.end()) {
     size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;
     it->second->setIndex(id);
-    assert(it->second.get() != nullptr);
+    assert(it->second != nullptr);
     return it->second;
   }
 
   // construct new BoolExpr. We need shared_ptr owners for children if they exist.
-  std::shared_ptr<BoolExpr> L = lptr ? lptr->shared_from_this() : nullptr;
-  std::shared_ptr<BoolExpr> R = rptr ? rptr->shared_from_this() : nullptr;
+  BoolExpr* L = lptr ? lptr : nullptr;
+  BoolExpr* R = rptr ? rptr : nullptr;
 
   // use new because constructor may be non-public
-  auto newptr = std::shared_ptr<BoolExpr>(new BoolExpr(k.op, k.varId, std::move(L), std::move(R)));
+  auto newptr = new BoolExpr(k.op, k.varId, std::move(L), std::move(R));
 
   // assign id atomically
   size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;

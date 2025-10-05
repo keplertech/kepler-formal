@@ -34,7 +34,7 @@ struct CompressedBoolExpr {
 
     /// Build a compressed form from a shared_ptr<BoolExpr> tree.
     static CompressedBoolExpr compress(
-        const std::shared_ptr<BoolExpr>& expr);
+        BoolExpr* expr);
 
     /// Serialize in a simple text format:
     ///   <N> <root>

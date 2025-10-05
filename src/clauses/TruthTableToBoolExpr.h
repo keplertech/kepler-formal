@@ -14,7 +14,7 @@ namespace KEPLER_FORMAL {
 struct TruthTableToBoolExpr {
     /// @param tree     The merged‐tree to convert
     /// @param varNames Name for each of the external inputs (size == tree.size())
-    static std::shared_ptr<BoolExpr> convert(
+    static BoolExpr* convert(
         const SNLTruthTableTree& tree,
         const std::vector<std::string>& varNames);
 };

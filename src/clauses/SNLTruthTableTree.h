@@ -28,7 +28,7 @@ public:
     // for Table nodes
     naja::DNL::DNLID dnlid    = naja::DNL::DNLID_MAX;
     naja::DNL::DNLID termid   = naja::DNL::DNLID_MAX;
-    std::vector<std::shared_ptr<Node>> children;
+    std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>> children;
 
     // parent pointer as weak_ptr to break cycles
     std::weak_ptr<Node> parent;     
@@ -60,7 +60,7 @@ public:
     bool eval(const std::vector<bool>& extInputs) const;
 
     // add a child, detect cycles, set child's parent
-    void addChild(std::shared_ptr<Node> child);
+    void addChild(const std::shared_ptr<Node>& child);
 
     // get the table, only valid for Table and P nodes
     const SNLTruthTable& getTruthTable() const;
@@ -99,7 +99,7 @@ private:
 
   std::shared_ptr<Node>   root_;
   size_t                  numExternalInputs_ = 0;
-  std::vector<BorderLeaf> borderLeaves_;
+  std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> borderLeaves_;
   size_t                  lastID_ = 2;       // for debug
   static const SNLTruthTable      PtableHolder_; // dummy table for P nodes
 };

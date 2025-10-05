@@ -26,7 +26,7 @@ struct SigEq {
 };
 
 CompressedBoolExpr
-CompressedBoolExpr::compress(const std::shared_ptr<BoolExpr>& expr) {
+CompressedBoolExpr::compress(BoolExpr* expr) {
     CompressedBoolExpr out;
 
     // map a BoolExpr* to its node‐index in nodes_
@@ -38,9 +38,9 @@ CompressedBoolExpr::compress(const std::shared_ptr<BoolExpr>& expr) {
     intern.reserve(1024);
 
     // recursive post‐order
-    std::function<size_t(const std::shared_ptr<BoolExpr>&)> dfs;
+    std::function<size_t(BoolExpr*)> dfs;
     dfs = [&](auto const& bexpr) -> size_t {
-        const BoolExpr* raw = bexpr.get();
+        const BoolExpr* raw = bexpr;
 
         // already processed?
         auto itv = visited.find(raw);

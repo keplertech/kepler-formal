@@ -23,7 +23,7 @@ public:
   using Key = BoolExprCacheKey;
 
   // Lookup-or-create API
-  static std::shared_ptr<BoolExpr> getExpression(Key const& k);
+  static BoolExpr* getExpression(Key const& k);
 
 private:
   struct Impl;

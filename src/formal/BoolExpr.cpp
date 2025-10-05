@@ -12,13 +12,13 @@ tbb::concurrent_unordered_map<BoolExprCache::Key,
 
 /// Private ctor
 BoolExpr::BoolExpr(Op op, size_t id,
-                   std::shared_ptr<BoolExpr> l,
-                   std::shared_ptr<BoolExpr> r)
-  : op_(op), varID_(id), left_(std::move(l)), right_(std::move(r))
+                   BoolExpr* l,
+                   BoolExpr* r)
+  : op_(op), varID_(id), left_(l) , right_(r)
 {}
 
 /// Intern+construct a new node if needed
-std::shared_ptr<BoolExpr>
+BoolExpr*
 BoolExpr::createNode(BoolExprCache::Key const& k) {
     // Caller already holds lock on tableMutex_
     // print the size in GB of table_
@@ -31,10 +31,10 @@ BoolExpr::createNode(BoolExprCache::Key const& k) {
             return existing;
     }
     // retrieve shared_ptr to children via non-const shared_from_this()
-    std::shared_ptr<BoolExpr> L = k.l ? k.l->shared_from_this() : nullptr;
-    std::shared_ptr<BoolExpr> R = k.r ? k.r->shared_from_this() : nullptr;
+    BoolExpr* L = k.l ? k.l->shared_from_this() : nullptr;
+    BoolExpr* R = k.r ? k.r->shared_from_this() : nullptr;
 
-    auto ptr = std::shared_ptr<BoolExpr>(
+    auto ptr = BoolExpr*(
         new BoolExpr(k.op, k.varId, std::move(L), std::move(R))
     );
     table_.emplace(k, ptr);
@@ -44,25 +44,25 @@ BoolExpr::createNode(BoolExprCache::Key const& k) {
 
 // Factory methods with eager folding & sharing
 
-std::shared_ptr<BoolExpr> BoolExpr::Var(size_t id) {
+BoolExpr* BoolExpr::Var(size_t id) {
     BoolExprCache::Key k{Op::VAR, id, nullptr, nullptr};
     return createNode(k);
 }
 
-std::shared_ptr<BoolExpr> BoolExpr::Not(std::shared_ptr<BoolExpr> a) {
+BoolExpr* BoolExpr::Not(BoolExpr* a) {
     // constant-fold
     if (a->op_ == Op::VAR && a->varID_ < 2)
         return Var(1 - a->varID_);
     // double negation
     if (a->op_ == Op::NOT)
         return a->left_;
-    BoolExprCache::Key k{Op::NOT, 0, a.get(), nullptr};
+    BoolExprCache::Key k{Op::NOT, 0, a, nullptr};
     return createNode(k);
 }
 
-std::shared_ptr<BoolExpr> BoolExpr::And(
-    std::shared_ptr<BoolExpr> a,
-    std::shared_ptr<BoolExpr> b)
+BoolExpr* BoolExpr::And(
+    BoolExpr* a,
+    BoolExpr* b)
 {
     // constant-fold
     if ((a->op_ == Op::VAR && a->varID_ == 0) ||
@@ -70,46 +70,46 @@ std::shared_ptr<BoolExpr> BoolExpr::And(
         return Var(0);
     if (a->op_ == Op::VAR && a->varID_ == 1) return b;
     if (b->op_ == Op::VAR && b->varID_ == 1) return a;
-    if (a.get() == b.get())              return a;
-    if (a->op_==Op::NOT && a->left_.get()==b.get()) return Var(0);
-    if (b->op_==Op::NOT && b->left_.get()==a.get()) return Var(0);
+    if (a == b)              return a;
+    if (a->op_==Op::NOT && a->left_==b) return Var(0);
+    if (b->op_==Op::NOT && b->left_==a) return Var(0);
 
     // canonical order
-    if (b.get() < a.get()) std::swap(a, b);
-    BoolExprCache::Key k{Op::AND, 0, a.get(), b.get()};
+    if (b < a) std::swap(a, b);
+    BoolExprCache::Key k{Op::AND, 0, a, b};
     return createNode(k);
 }
 
-std::shared_ptr<BoolExpr> BoolExpr::Or(
-    std::shared_ptr<BoolExpr> a,
-    std::shared_ptr<BoolExpr> b)
+BoolExpr* BoolExpr::Or(
+    BoolExpr* a,
+    BoolExpr* b)
 {
     if ((a->op_ == Op::VAR && a->varID_ == 1) ||
         (b->op_ == Op::VAR && b->varID_ == 1))
         return Var(1);
     if (a->op_ == Op::VAR && a->varID_ == 0) return b;
     if (b->op_ == Op::VAR && b->varID_ == 0) return a;
-    if (a.get() == b.get())             return a;
-    if (a->op_==Op::NOT && a->left_.get()==b.get()) return Var(1);
-    if (b->op_==Op::NOT && b->left_.get()==a.get()) return Var(1);
+    if (a == b)             return a;
+    if (a->op_==Op::NOT && a->left_==b) return Var(1);
+    if (b->op_==Op::NOT && b->left_==a) return Var(1);
 
-    if (b.get() < a.get()) std::swap(a, b);
-    BoolExprCache::Key k{Op::OR, 0, a.get(), b.get()};
+    if (b < a) std::swap(a, b);
+    BoolExprCache::Key k{Op::OR, 0, a, b};
     return createNode(k);
 }
 
-std::shared_ptr<BoolExpr> BoolExpr::Xor(
-    std::shared_ptr<BoolExpr> a,
-    std::shared_ptr<BoolExpr> b)
+BoolExpr* BoolExpr::Xor(
+    BoolExpr* a,
+    BoolExpr* b)
 {
     if (a->op_ == Op::VAR && a->varID_ == 0)     return b;
     if (b->op_ == Op::VAR && b->varID_ == 0)     return a;
     if (a->op_ == Op::VAR && a->varID_ == 1)     return Not(b);
     if (b->op_ == Op::VAR && b->varID_ == 1)     return Not(a);
-    if (a.get() == b.get())                  return Var(0);
+    if (a == b)                  return Var(0);
 
-    if (b.get() < a.get()) std::swap(a, b);
-    BoolExprCache::Key k{Op::XOR, 0, a.get(), b.get()};
+    if (b < a) std::swap(a, b);
+    BoolExprCache::Key k{Op::XOR, 0, a, b};
     return createNode(k);
 }
 

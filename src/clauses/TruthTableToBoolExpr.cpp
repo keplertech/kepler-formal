@@ -5,7 +5,7 @@
 using namespace KEPLER_FORMAL;
 using namespace naja::NL;
 
-std::shared_ptr<BoolExpr> TruthTableToBoolExpr::convert(
+BoolExpr* TruthTableToBoolExpr::convert(
     const SNLTruthTableTree& tree,
     const std::vector<std::string>& varNames)
 {
@@ -28,7 +28,7 @@ std::shared_ptr<BoolExpr> TruthTableToBoolExpr::convert(
     uint64_t rows = 1ULL << n;
     std::vector<bool> inputPattern(n);
 
-    std::vector<std::shared_ptr<BoolExpr>> cubes;
+    std::vector<BoolExpr*> cubes;
     cubes.reserve(rows / 2); // guess half the rows may be 1
 
     // build one cube for each row where tree.eval(...) == true
@@ -42,7 +42,7 @@ std::shared_ptr<BoolExpr> TruthTableToBoolExpr::convert(
             continue;
 
         // form the AND-cube for this row
-        std::shared_ptr<BoolExpr> cube;
+        BoolExpr* cube;
         for (size_t b = 0; b < n; ++b) {
             auto var = BoolExpr::Var(varNames[b]);
             auto lit = inputPattern[b] ? var : BoolExpr::Not(var);

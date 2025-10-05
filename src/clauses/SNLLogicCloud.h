@@ -22,7 +22,7 @@ class SNLLogicCloud {
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);
   const SNLTruthTableTree& getTruthTable() const { return table_; }
-  const std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& getInputs() const { return currentIterationInputs_; }
+  const std::vector<naja::DNL::DNLID>& getInputs() const { return currentIterationInputs_; }
   // Get all inputs from the tree SNLTruthTableTree directly
   std::vector<naja::DNL::DNLID> getAllInputs() const {
     std::vector<naja::DNL::DNLID> allInputs;
@@ -46,7 +46,7 @@ class SNLLogicCloud {
 
  private:
   naja::DNL::DNLID seedOutputTerm_;
-  std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>> currentIterationInputs_;
+  std::vector<naja::DNL::DNLID> currentIterationInputs_;
   SNLTruthTableTree table_;
   const naja::DNL::DNLFull& dnl_;
   std::vector<bool> PIs_;
