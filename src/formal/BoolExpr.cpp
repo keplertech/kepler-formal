@@ -12,10 +12,23 @@ tbb::concurrent_unordered_map<BoolExprCache::Key,
 
 /// Private ctor
 BoolExpr::BoolExpr(Op op, size_t id,
-                   BoolExpr* l,
-                   BoolExpr* r)
-  : op_(op), varID_(id), left_(l) , right_(r)
-{}
+                   BoolExpr* a,
+                   BoolExpr* b)
+  : op_(op), varID_(id)/*, left_(l) , right_(r)*/ {
+    if (b == nullptr) {
+        if (a == nullptr && op != Op::VAR) {
+            throw std::invalid_argument("BoolExpr: non-VAR with null children");
+        }
+        right_ = nullptr;
+        left_  = a;
+    } else if (*b <= *a) {
+        left_  = b;
+        right_ = a;
+    } else {
+        left_  = a;
+        right_ = b;
+    }
+}
 
 /// Intern+construct a new node if needed
 BoolExpr*

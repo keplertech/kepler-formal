@@ -67,6 +67,21 @@ BoolExpr* BoolExprCache::getExpression(Key const& k) {
   BoolExpr* lptr = k.l;
   BoolExpr* rptr = k.r;
   TupleKey tk = make_tuple_key(k.op, k.varId, lptr, rptr);
+  if (k.l == nullptr || k.r == nullptr) {
+    if (k.l == nullptr) {
+      tk = make_tuple_key(k.op, k.varId, rptr, nullptr);
+    } else if (k.r == nullptr) {
+      tk = make_tuple_key(k.op, k.varId, lptr, nullptr);
+    } else {
+      // both null
+      tk = make_tuple_key(k.op, k.varId, nullptr, nullptr);
+    }
+  } else if (*k.l <= *k.r) {
+    // enforce canonical order for commutative ops
+    tk = make_tuple_key(k.op, k.varId, rptr, lptr);
+  } else {
+    tk = make_tuple_key(k.op, k.varId, lptr, rptr);
+  }
 
   auto &tbl = impl().table;
 

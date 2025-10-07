@@ -427,16 +427,16 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
     }
     printf("%s\n", pc.getPOs()[0]->toString().c_str());
     //EXPECT_TRUE(miter.getPOs()[0]->toString() == std::string("((6 ∧ 6) ∧ 2)"));
-    EXPECT_TRUE(pc.getPOs()[0]->toString() == std::string("3 AND 2"));
+    EXPECT_TRUE(pc.getPOs()[0]->toString() == std::string("2 AND 4"));
     printf("%s\n", pc.getPOs()[1]->toString().c_str());
     //EXPECT_TRUE(miter.getPOs()[1]->toString() == std::string("(6 ∧ 6)"));
-    EXPECT_TRUE(pc.getPOs()[1]->toString() == std::string("3 AND 2"));
+    EXPECT_TRUE(pc.getPOs()[1]->toString() == std::string("4"));
     printf("%s\n", pc.getPOs()[2]->toString().c_str());
     //EXPECT_TRUE(miter.getPOs()[2]->toString() == std::string("2"));
     EXPECT_TRUE(pc.getPOs()[2]->toString() == std::string("2"));
     printf("%s\n", pc.getPOs()[3]->toString().c_str());
     //EXPECT_TRUE(miter.getPOs()[3]->toString() == std::string("3"));
-    EXPECT_TRUE(pc.getPOs()[3]->toString() == std::string("2"));
+    EXPECT_TRUE(pc.getPOs()[3]->toString() == std::string("3"));
   }
 }
 
@@ -638,180 +638,180 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
 //         }
 // }
 
-// // 1. create a circuit of 2 inputs that drives and AND gate that drives top output
-// // 2. clone the the top and chain an inverter to the AND output
-// // 3. verify that the miter strategy detects the difference
-// TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
-//   // 1. Create SNL
-//   NLUniverse* univ = NLUniverse::create();
-//   NLDB* db = NLDB::create(univ);
-//   NLLibrary* library =
-//       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
-//   NLLibrary* libraryDesigns =
-//       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-//   // 2. Create a top model with one output
-//   SNLDesign* top = SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
-//                                      NLName("top"));
-//   univ->setTopDesign(top);
-//   auto topOut =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
-//   auto topOut2 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
-//   auto topIn1 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In1"));
-//   auto topIn2 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In2"));
-//   // add another 2 inputs
-//   auto topIn3 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In3"));
-//   auto topIn4 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In4"));
-//   NLLibraryTruthTables::construct(library);
-//   // 7. create a and model
-//   SNLDesign* andModel =
-//       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
+// 1. create a circuit of 2 inputs that drives and AND gate that drives top output
+// 2. clone the the top and chain an inverter to the AND output
+// 3. verify that the miter strategy detects the difference
+TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
+  // 1. Create SNL
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  // 2. Create a top model with one output
+  SNLDesign* top = SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                                     NLName("top"));
+  univ->setTopDesign(top);
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+  auto topOut2 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
+  auto topIn1 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In1"));
+  auto topIn2 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In2"));
+  // add another 2 inputs
+  auto topIn3 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In3"));
+  auto topIn4 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In4"));
+  NLLibraryTruthTables::construct(library);
+  // 7. create a and model
+  SNLDesign* andModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
 
-//   // add 2 inputs and 1 output to and
-//   auto andIn1 =
-//       SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in1"));
-//   auto andIn2 =
-//       SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in2"));
-//   auto andOut = SNLScalarTerm::create(andModel, SNLTerm::Direction::Output,
-//                                       NLName("out"));
+  // add 2 inputs and 1 output to and
+  auto andIn1 =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in1"));
+  auto andIn2 =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in2"));
+  auto andOut = SNLScalarTerm::create(andModel, SNLTerm::Direction::Output,
+                                      NLName("out"));
 
-//   // set truth table for and model
-//   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
-//   // 8. create an inverter model
-//   SNLDesign* inverterModel =
-//       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
-//   // set truth table for inverter model
-//   auto invIn =
-//       SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
-//   auto invOut =
-//       SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
-//   SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
+  // set truth table for and model
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  // 8. create an inverter model
+  SNLDesign* inverterModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
+  // set truth table for inverter model
+  auto invIn =
+      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
+  auto invOut =
+      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
 
-//   // create and instance in top
-//   SNLInstance* instAnd = SNLInstance::create(top, andModel, NLName("and"));
+  // create and instance in top
+  SNLInstance* instAnd = SNLInstance::create(top, andModel, NLName("and"));
 
-//   // connect inputs to the and instance
-//   SNLNet* net1 = SNLScalarNet::create(top, NLName("top_in1_net"));
-//   SNLNet* net2 = SNLScalarNet::create(top, NLName("top_in2_net"));
-//   SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
-//   // connect inputs to the top instance
-//   topIn1->setNet(net1);
-//   topIn2->setNet(net2);
-//   // connect the and instance inputs
-//   instAnd->getInstTerm(andIn1)->setNet(net1);
-//   instAnd->getInstTerm(andIn2)->setNet(net2);
-//   // connect the and instance output to the top output
-//   instAnd->getInstTerm(andOut)->setNet(net3);
-//   topOut->setNet(net3);
+  // connect inputs to the and instance
+  SNLNet* net1 = SNLScalarNet::create(top, NLName("top_in1_net"));
+  SNLNet* net2 = SNLScalarNet::create(top, NLName("top_in2_net"));
+  SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
+  // connect inputs to the top instance
+  topIn1->setNet(net1);
+  topIn2->setNet(net2);
+  // connect the and instance inputs
+  instAnd->getInstTerm(andIn1)->setNet(net1);
+  instAnd->getInstTerm(andIn2)->setNet(net2);
+  // connect the and instance output to the top output
+  instAnd->getInstTerm(andOut)->setNet(net3);
+  topOut->setNet(net3);
 
-//   // add another and instance in top at the same manner
-//   SNLInstance* instAnd2 = SNLInstance::create(top, andModel, NLName("and2"));
-//   // connect the and instance inputs
-//   // connect inputs 2 and 3 to the top instance
-//   // create needed nets
-//   SNLNet* net4In1 = SNLScalarNet::create(top, NLName("top_in3_net"));
-//   SNLNet* net4In2 = SNLScalarNet::create(top, NLName("top_in4_net"));
-//   topIn3->setNet(net4In1);
-//   topIn4->setNet(net4In2);
-//   // connect the and instance inputs
-//   instAnd2->getInstTerm(andIn1)->setNet(net4In1);
-//   instAnd2->getInstTerm(andIn2)->setNet(net4In2);
+  // add another and instance in top at the same manner
+  SNLInstance* instAnd2 = SNLInstance::create(top, andModel, NLName("and2"));
+  // connect the and instance inputs
+  // connect inputs 2 and 3 to the top instance
+  // create needed nets
+  SNLNet* net4In1 = SNLScalarNet::create(top, NLName("top_in3_net"));
+  SNLNet* net4In2 = SNLScalarNet::create(top, NLName("top_in4_net"));
+  topIn3->setNet(net4In1);
+  topIn4->setNet(net4In2);
+  // connect the and instance inputs
+  instAnd2->getInstTerm(andIn1)->setNet(net4In1);
+  instAnd2->getInstTerm(andIn2)->setNet(net4In2);
 
-//   // connect the and instance output to the top output
-//   SNLNet* net4Out = SNLScalarNet::create(top, NLName("and2_output_net_out"));
-//   instAnd2->getInstTerm(andOut)->setNet(net4Out);
-//   topOut2->setNet(net4Out);
+  // connect the and instance output to the top output
+  SNLNet* net4Out = SNLScalarNet::create(top, NLName("and2_output_net_out"));
+  instAnd2->getInstTerm(andOut)->setNet(net4Out);
+  topOut2->setNet(net4Out);
 
 
-//   {
-//     // dump top to naja_if(CapProto)
-//     std::filesystem::path outputPath("./top.capnp");
-//     SNLCapnP::dump(db, outputPath);
-//   }
-//   // Dump visual
-//   {
-//     std::string dotFileName(
-//         std::string(std::string("./beforeEdit") + std::string(".dot")));
-//     std::string svgFileName(
-//         std::string(std::string("./beforeEdit") + std::string(".svg")));
-//     SnlVisualiser snl(top);
-//     snl.process();
-//     snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-//     executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-//                                std::string(" -o ") + svgFileName)
-//                        .c_str());
-//   }
-//   // clone the top design
-//   SNLDesign* topClone = top->clone(NLName("topClone"));
-//   // create an inverter instance in the clone
-//   SNLInstance* instInv = SNLInstance::create(top, inverterModel, NLName("inv"));
-//   // connect the inverter input to the and output
-//   SNLNet* net4 = SNLScalarNet::create(top, NLName("and_output_net_clone"));
-//   instAnd->getInstTerm(andOut)->setNet(net4);
-//   instInv->getInstTerm(invIn)->setNet(net4);
-//   // connect the inverter output to the top output
-//   SNLNet* net5 = SNLScalarNet::create(top, NLName("top_output_net_clone"));
-//   instInv->getInstTerm(invOut)->setNet(net5);
-//   topOut->setNet(net5);
+  {
+    // dump top to naja_if(CapProto)
+    std::filesystem::path outputPath("./top.capnp");
+    SNLCapnP::dump(db, outputPath);
+  }
+  // Dump visual
+  {
+    std::string dotFileName(
+        std::string(std::string("./beforeEdit") + std::string(".dot")));
+    std::string svgFileName(
+        std::string(std::string("./beforeEdit") + std::string(".svg")));
+    SnlVisualiser snl(top);
+    snl.process();
+    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
+    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
+                               std::string(" -o ") + svgFileName)
+                       .c_str());
+  }
+  // clone the top design
+  SNLDesign* topClone = top->clone(NLName("topClone"));
+  // create an inverter instance in the clone
+  SNLInstance* instInv = SNLInstance::create(top, inverterModel, NLName("inv"));
+  // connect the inverter input to the and output
+  SNLNet* net4 = SNLScalarNet::create(top, NLName("and_output_net_clone"));
+  instAnd->getInstTerm(andOut)->setNet(net4);
+  instInv->getInstTerm(invIn)->setNet(net4);
+  // connect the inverter output to the top output
+  SNLNet* net5 = SNLScalarNet::create(top, NLName("top_output_net_clone"));
+  instInv->getInstTerm(invOut)->setNet(net5);
+  topOut->setNet(net5);
 
-//   // dump visual
-//   {
-//     std::string dotFileName(
-//         std::string(std::string("./afterEdit") + std::string(".dot")));
-//     std::string svgFileName(
-//         std::string(std::string("./afterEdit") + std::string(".svg")));
-//     SnlVisualiser snl(top);
-//     snl.process();
-//     snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-//     executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-//                                std::string(" -o ") + svgFileName)
-//                        .c_str());
-//   }
+  // dump visual
+  {
+    std::string dotFileName(
+        std::string(std::string("./afterEdit") + std::string(".dot")));
+    std::string svgFileName(
+        std::string(std::string("./afterEdit") + std::string(".svg")));
+    SnlVisualiser snl(top);
+    snl.process();
+    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
+    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
+                               std::string(" -o ") + svgFileName)
+                       .c_str());
+  }
 
-//   // test the miter strategy
-//   {
-//     MiterStrategy MiterS(top, topClone, "CaseC");
-//     EXPECT_FALSE(MiterS.run());
-//   }
-//   {
-//     // dump top to naja_if(CapProto)
-//     std::filesystem::path outputPath("./topEdited1.capnp");
-//     SNLCapnP::dump(db, outputPath);
-//   }
-//   // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
-//   executeCommand(
-//       std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited1.capnp")
-//           .c_str());  
-//   // chain another inverter to the first inverter
-//   SNLInstance* instInv2 = SNLInstance::create(top, inverterModel, NLName("inv2"));
-//   // connect the second inverter input to the first inverter output
-//   SNLNet* net6 = SNLScalarNet::create(top, NLName("inv_output_net_clone"));
-//   instInv->getInstTerm(invOut)->setNet(net6);
-//   instInv2->getInstTerm(invIn)->setNet(net6);
-//   // connect the second inverter output to the top output
-//   SNLNet* net7 = SNLScalarNet::create(top, NLName("top_output_net_clone2"));
-//   instInv2->getInstTerm(invOut)->setNet(net7);
-//   topOut->setNet(net7);
-//   // test the miter strategy again
-//   {
-//     MiterStrategy MiterS(top, topClone, "CaseD");
-//     EXPECT_TRUE(MiterS.run());
-//   }
-//   {
-//     // dump top to naja_if(CapProto)
-//     std::filesystem::path outputPath("./topEdited2.capnp");
-//     SNLCapnP::dump(db, outputPath);
-//   }
+  // test the miter strategy
+  {
+    MiterStrategy MiterS(top, topClone, "CaseC");
+    EXPECT_FALSE(MiterS.run());
+  }
+  // {
+  //   // dump top to naja_if(CapProto)
+  //   std::filesystem::path outputPath("./topEdited1.capnp");
+  //   SNLCapnP::dump(db, outputPath);
+  // }
+  // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  // executeCommand(
+  //     std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited1.capnp")
+  //         .c_str());  
+  // chain another inverter to the first inverter
+  SNLInstance* instInv2 = SNLInstance::create(top, inverterModel, NLName("inv2"));
+  // connect the second inverter input to the first inverter output
+  SNLNet* net6 = SNLScalarNet::create(top, NLName("inv_output_net_clone"));
+  instInv->getInstTerm(invOut)->setNet(net6);
+  instInv2->getInstTerm(invIn)->setNet(net6);
+  // connect the second inverter output to the top output
+  SNLNet* net7 = SNLScalarNet::create(top, NLName("top_output_net_clone2"));
+  instInv2->getInstTerm(invOut)->setNet(net7);
+  topOut->setNet(net7);
+  // test the miter strategy again
+  {
+    MiterStrategy MiterS(top, topClone, "CaseD");
+    EXPECT_TRUE(MiterS.run());
+  }
+  // {
+  //   // dump top to naja_if(CapProto)
+  //   std::filesystem::path outputPath("./topEdited2.capnp");
+  //   SNLCapnP::dump(db, outputPath);
+  // }
 
-//   // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
-//   executeCommand(
-//       std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited2.capnp")
-//           .c_str());  
-// }
+  // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  // executeCommand(
+  //     std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited2.capnp")
+  //         .c_str());  
+}
 
 // Required main function for Google Test
 int main(int argc, char** argv) {
