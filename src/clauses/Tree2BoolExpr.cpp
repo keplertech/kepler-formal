@@ -476,19 +476,20 @@ Tree2BoolExpr::convert(
                     for (uint64_t m = 0; m < rows; ++m) {
                         if (!tbl.bits().bit(m)) continue;
 
-                        BoolExpr* term;
+                        BoolExpr* term = nullptr;
                         bool firstLit = true;
-                        BoolExpr* lit;
+                        BoolExpr* lit = nullptr;
                         for (uint32_t j : relIdx) {
                             bool bit1 = ((m >> j) & 1) != 0;
                             lit = bit1
                                       ? /*childF[j]*/ getChildFETS(j)
                                       : /*BoolExpr::Not(childF[j])*/ BoolExpr::Not(getChildFETS(j));
-
                             if (firstLit) {
                                 term = lit;
                                 firstLit = false;
                             } else {
+                                assert(term != nullptr);
+                                assert(lit != nullptr);
                                 term = BoolExpr::And(term, lit);
                             }
                         }

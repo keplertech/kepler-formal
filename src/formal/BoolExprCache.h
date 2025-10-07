@@ -8,7 +8,7 @@ namespace KEPLER_FORMAL {
 
 class BoolExpr;
 
-enum class Op { VAR, AND, OR, NOT, XOR };
+enum class Op { VAR, AND, OR, NOT, XOR, NONE };
 
 // Minimal POD representing the cache query. Use raw pointers for children to avoid inclusion cycles.
 struct BoolExprCacheKey {

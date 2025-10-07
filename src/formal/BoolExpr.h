@@ -57,16 +57,41 @@ public:
     BoolExpr() = default;
     void setIndex(size_t idx) { index_ = idx; }
     size_t getIndex() const { assert(index_ != (size_t) -1); return index_; }
+
+    // comparator based on values
+    bool operator==(const BoolExpr& other) const {
+        return op_     == other.op_
+            && varID_  == other.varID_
+            && left_   == other.left_
+            && right_  == other.right_;
+    }
+    bool operator!=(const BoolExpr& other) const {
+        return !(*this == other);
+    }
+    bool operator<(const BoolExpr& other) const {
+        if (left_ != other.left_) {
+            return left_ < other.left_;
+        } else if (right_ != other.right_) {
+            return right_ < other.right_;
+        } else if (op_ != other.op_) {
+            return op_ < other.op_;
+        }
+        return varID_ < other.varID_;
+    }
+    bool operator<=(const BoolExpr& other) const {
+        return *this < other || *this == other;
+    }
+
 private:
     // Private ctor: use factory methods
     BoolExpr(Op op, size_t id,
-             BoolExpr* l,
-             BoolExpr* r);
+             BoolExpr* a,
+             BoolExpr* b);
 
-    Op     op_;
-    size_t varID_;
-    BoolExpr* left_;
-    BoolExpr* right_;
+    Op     op_ = Op::NONE;
+    size_t varID_ = (size_t) -1; // only for VAR
+    BoolExpr* left_ = nullptr;
+    BoolExpr* right_ = nullptr;
     size_t index_ = (size_t) -1;
 
     static std::string OpToString(Op);
