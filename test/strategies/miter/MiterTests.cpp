@@ -56,6 +56,7 @@ class MiterTests : public ::testing::Test {
     // Destroy the SNL
     naja::DNL::destroy();
     NLUniverse::get()->destroy();
+    KEPLER_FORMAL::BoolExprCache::destroy();
   }
 };
 

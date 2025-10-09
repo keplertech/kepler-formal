@@ -99,7 +99,7 @@ BoolExpr* BoolExprCache::getExpression(Key const& k) {
   BoolExpr* R = rptr ? rptr : nullptr;
 
   // use new because constructor may be non-public
-  auto newptr = new BoolExpr(k.op, k.varId, std::move(L), std::move(R));
+  BoolExpr* newptr = new BoolExpr(k.op, k.varId, L, R);
 
   // assign id atomically
   size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -107,18 +107,19 @@ BoolExpr* BoolExprCache::getExpression(Key const& k) {
 
   // insert; if another thread inserted concurrently, use that one
   auto pr = tbl.insert({tk, newptr});
-  if (!pr.second) { 
+  if (!pr.second) {
     delete newptr;
     return pr.first->second;
   }
   return newptr;
 }
 
-BoolExprCache::~BoolExprCache() {
+void BoolExprCache::destroy() {
   // delete all stored BoolExpr*
   for (auto& kv : impl().table) {
     delete kv.second;
   }
+  impl().table.clear();
 }
 
 } // namespace KEPLER_FORMAL

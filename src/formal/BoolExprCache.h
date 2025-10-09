@@ -24,13 +24,11 @@ public:
 
   // Lookup-or-create API
   static BoolExpr* getExpression(Key const& k);
-
+  static void destroy();
 private:
   struct Impl;
   static Impl& impl();
   // destructor that will delete all stored BoolExpr*
-  ~BoolExprCache();
-
   static std::atomic<size_t> lastID_;
 };
 
