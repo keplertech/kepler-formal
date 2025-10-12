@@ -28,6 +28,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
     if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
       DEBUG_LOG("Collecting input %s\n",
                 term.getSnlBitTerm()->getName().getString().c_str());
+      assert(termId < naja::DNL::get()->getDNLTerms().size());
       inputs.push_back(termId);
     }
   }
@@ -51,11 +52,13 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
            termId++) {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
-            SNLBitTerm::Direction::Input)
+            SNLBitTerm::Direction::Input) {
+          assert(termId < naja::DNL::get()->getDNLTerms().size());
           inputs.push_back(termId);
           DEBUG_LOG("Collecting input %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(), 
                       term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+        }
       }
       continue;
     }
@@ -75,6 +78,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         }
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input) {
+          assert(termId < naja::DNL::get()->getDNLTerms().size());
           inputs.push_back(termId);
           DEBUG_LOG("Collecting seq input %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(), 
@@ -92,6 +96,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
           auto deps = SNLDesignModeling::getCombinatorialInputs(
               term.getSnlBitTerm());
           if (/*deps.empty() ||*/ !(term.getSnlBitTerm()->getDesign()->getTruthTable(term.getSnlBitTerm()->getOrderID()).isInitialized())) {
+            assert(termId < naja::DNL::get()->getDNLTerms().size());
             inputs.push_back(termId);
             DEBUG_LOG("Collecting input %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(), 
@@ -99,6 +104,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
           }
           if (term.getSnlBitTerm()->getDesign()->getTruthTable(term.getSnlBitTerm()->getOrderID()).all0()
           ||  term.getSnlBitTerm()->getDesign()->getTruthTable(term.getSnlBitTerm()->getOrderID()).all1()) {
+              assert(termId < naja::DNL::get()->getDNLTerms().size());
               inputs.push_back(termId);
               DEBUG_LOG("Collecting constant input %s of model %s\n",
                         term.getSnlBitTerm()->getName().getString().c_str(), 
@@ -115,11 +121,13 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
       if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input) {
         if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
-                      term.getSnlBitTerm()) != seqBitTerms.end())
+                      term.getSnlBitTerm()) != seqBitTerms.end()) {
+          assert(termId < naja::DNL::get()->getDNLTerms().size());
           inputs.push_back(termId);
           DEBUG_LOG("Collecting seq input %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(), 
                       term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+        }
       }
     }
   }
@@ -431,6 +439,9 @@ void BuildPrimaryOutputClauses::setInputs2InputsIDs() {
   inputs2inputsIDs_.clear();
   for (const auto& input : inputs_) {
     std::vector<NLID::DesignObjectID> path;
+    if (get()->getDNLTerminalFromID(input).isNull()) {
+      throw std::runtime_error("Input terminal is null");
+    }
     DNLInstanceFull currentInstance =
         get()->getDNLTerminalFromID(input).getDNLInstance();
     while (currentInstance.isTop() == false) {

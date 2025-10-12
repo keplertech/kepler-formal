@@ -100,9 +100,9 @@ size_t sizeOfNewIterationInputsETS() {
 
 void copyNewIterationInputsETStoCurrent() {
   clearCurrentIterationInputsETS();
-  auto& current = getNewIterationInputsETS();
-  for (size_t i = 0; i < current.second; i++) {
-    pushBackCurrentIterationInputsETS(current.first[i]);
+  auto& newIterationInputs = getNewIterationInputsETS();
+  for (size_t i = 0; i < newIterationInputs.second; i++) {
+    pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
   }
   assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
 }
