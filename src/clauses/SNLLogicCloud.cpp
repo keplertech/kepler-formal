@@ -66,12 +66,12 @@ size_t sizeOfCurrentIterationInputsETS() {
   return getCurrentIterationInputsETS().second;
 }
 
-std::vector<naja::DNL::DNLID> copyCurrentIterationInputsETS() {
-  std::vector<naja::DNL::DNLID> res;
-  for (size_t i = 0; i < getCurrentIterationInputsETS().second; i++) {
-    res.push_back(getCurrentIterationInputsETS().first[i]);
+void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID>& res) {
+  res.clear();
+  auto & current = getCurrentIterationInputsETS();
+  for (size_t i = 0; i < current.second; i++) {
+    res.push_back(current.first[i]);
   }
-  return res;
 }
 
 void clearNewIterationInputsETS() {
@@ -100,8 +100,9 @@ size_t sizeOfNewIterationInputsETS() {
 
 void copyNewIterationInputsETStoCurrent() {
   clearCurrentIterationInputsETS();
-  for (size_t i = 0; i < getNewIterationInputsETS().second; i++) {
-    pushBackCurrentIterationInputsETS(getNewIterationInputsETS().first[i]);
+  auto& newIterationInputs = getNewIterationInputsETS();
+  for (size_t i = 0; i < newIterationInputs.second; i++) {
+    pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
   }
   assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
 }
@@ -345,7 +346,7 @@ void SNLLogicCloud::compute() {
     }
   }
   copyNewIterationInputsETStoCurrent();
-  currentIterationInputs_ = copyCurrentIterationInputsETS();
+  copyCurrentIterationInputsETS(currentIterationInputs_);
   assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
   // Assert all currentIterationInputs_ are PIs
   for (auto input : currentIterationInputs_) {

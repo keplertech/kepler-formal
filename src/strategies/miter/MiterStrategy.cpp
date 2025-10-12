@@ -329,9 +329,13 @@ bool MiterStrategy::run() {
   normalizeInputs(inputs0sort, inputs1sort, builder0.getInputsMap(), builder1.getInputsMap());
   normalizeOutputs(outputs0sort, outputs1sort, builder0.getOutputsMap(), builder1.getOutputsMap());
   //return false;
+  naja::DNL::destroy();
+  univ->setTopDesign(top0_);
   builder0.setInputs(inputs0sort);
-  builder1.setInputs(inputs1sort);
   builder0.setOutputs(outputs0sort);
+  naja::DNL::destroy();
+  univ->setTopDesign(top1_);
+  builder1.setInputs(inputs1sort);
   builder1.setOutputs(outputs1sort);
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
