@@ -24,20 +24,63 @@
 #include <cstdlib>
 #include <stack>
 
+// spdlog
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_sinks.h> // ensure console sink is available
+
 using namespace naja;
 using namespace naja::NL;
 using namespace KEPLER_FORMAL;
 
 namespace {
 
-void executeCommand(const std::string& command) {
-  int result = system(command.c_str());
-  if (result != 0) {
-    std::cerr << "Command execution failed." << std::endl;
+static std::shared_ptr<spdlog::logger> logger;
+
+void ensureLoggerInitialized() {
+  if (!logger) {
+    try {
+      // to choose the right name, search for what mitter_log_x.txt files already exist and then
+      // crete mitter_log_(x+1).txt
+      int logIndex = 0;
+      while (true) {
+        std::string logFileName = "miter_log_" + std::to_string(logIndex) + ".txt";
+        std::ifstream infile(logFileName);
+        if (infile.good()) {
+          logIndex++;
+        } else {
+          break;
+        }
+      }
+      std::string logFileName = "miter_log_" + std::to_string(logIndex) + ".txt";
+      auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logFileName, true);
+      logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+      logger->set_level(spdlog::level::debug);
+      logger->flush_on(spdlog::level::info);
+      spdlog::register_logger(logger);
+    } catch (const spdlog::spdlog_ex& ex) {
+      // Fallback: create a simple stdout logger explicitly
+      auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+      logger = std::make_shared<spdlog::logger>("miter_logger_fallback", console_sink);
+      logger->set_level(spdlog::level::debug);
+      spdlog::register_logger(logger);
+      logger->error("spdlog initialization failed for file sink: {}", ex.what());
+    }
   }
 }
+
+void executeCommand(const std::string& command) {
+  ensureLoggerInitialized();
+  int result = system(command.c_str());
+  if (result != 0) {
+    logger->error("Command execution failed: {} (exit code {})", command, result);
+  } else {
+    logger->debug("Command executed successfully: {}", command);
+  }
+}
+
 //
-// A tiny Tseitin‐translator from BoolExpr→Glucose CNF.
+// A tiny Tseitin-translator from BoolExpr -> Glucose CNF.
 //
 // Returns a Glucose::Lit that stands for `e`, and adds
 // all necessary clauses to S so that Lit ↔ (e) holds.
@@ -46,20 +89,21 @@ void executeCommand(const std::string& command) {
 // varName2idx   coalesces all inputs of the same name to one var.
 //
 
-// Assume BoolExpr, Op, getLeft(), getRight(), getOp(), getName() are defined 
-// as in your original code.
-
 Glucose::Lit tseitinEncode(
     Glucose::SimpSolver& S,
     BoolExpr* root,
     std::unordered_map<const BoolExpr*, int>& node2var,
     std::unordered_map<std::string, int>& varName2idx)
 {
+    ensureLoggerInitialized();
+    logger->debug("Starting Tseitin encode for root expr");
+
     auto getOrCreateVar = [&](const std::string& key) -> int {
         auto it = varName2idx.find(key);
         if (it != varName2idx.end()) return it->second;
         int v = S.newVar();
         varName2idx[key] = v;
+        logger->trace("Created new var {} for key '{}'", v, key);
         return v;
     };
 
@@ -68,6 +112,7 @@ Glucose::Lit tseitinEncode(
         int v = getOrCreateVar(key);
         Glucose::Lit lv = Glucose::mkLit(v);
         S.addClause(value ? lv : ~lv);
+        logger->trace("Added constant clause for {} as var {}", value, v);
         return lv;
     };
 
@@ -128,6 +173,8 @@ Glucose::Lit tseitinEncode(
         node2var[e] = v;
         result[e] = lit_v;
 
+        logger->trace("Encoding node op={} as var {}", static_cast<int>(e->getOp()), v);
+
         // Emit Tseitin clauses
         switch (e->getOp()) {
             case Op::NOT:
@@ -151,13 +198,14 @@ Glucose::Lit tseitinEncode(
                 S.addClause( lit_v,  fr.leftLit, ~fr.rightLit);
                 break;
             default:
-                // Handle other operators if needed
+                logger->warn("Unhandled operator in tseitinEncode: {}", static_cast<int>(e->getOp()));
                 break;
         }
 
         stk.pop();
     }
 
+    logger->debug("Finished Tseitin encode");
     return result.at(root);
 }
 
@@ -167,6 +215,9 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs0Map,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs1Map) {
+    ensureLoggerInitialized();
+    logger->debug("normalizeInputs: starting");
+
     // find the intersection of inputs0 and inputs1 based on the getFullPathIDs of DNLTerminal and the diffs
     std::set<std::vector<NLID::DesignObjectID>> paths0;
     std::set<std::vector<NLID::DesignObjectID>> paths1;
@@ -180,7 +231,6 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
     }
     size_t index = 0;
     for (const auto& [path0, input0] : inputs0Map) {
-      //printf("input %zu from %lu\n", index++, inputs0Map.size());
       if (paths1.find(path0) != paths1.end()) {
         pathsCommon.insert(path0);
       }
@@ -193,7 +243,7 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
         pathInstance.pop_back(); // removing bit ID
         pathInstance.pop_back(); // removing terminal ID
         naja::NL::SNLPath p = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), pathInstance);
-        printf("diff0 input: %s\n", p.getString().c_str());
+        logger->debug("diff0 input: {}", p.getString());
       }
     }
     std::vector<naja::DNL::DNLID> diff1;
@@ -204,7 +254,7 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
         pathInstance.pop_back(); // removing bit ID
         pathInstance.pop_back(); // removing terminal ID
         naja::NL::SNLPath p = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), pathInstance);
-        printf("diff1 input: %s\n", p.getString().c_str());
+        logger->debug("diff1 input: {}", p.getString());
       }
     }
     inputs0.clear();
@@ -217,15 +267,18 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
       inputs1.push_back(inputs1Map.at(path));
     }
     inputs1.insert(inputs1.end(), diff1.begin(), diff1.end());
-    printf("size of common inputs: %lu\n", pathsCommon.size());
-    printf("size of diff0 inputs: %lu\n", diff0.size());
-    printf("size of diff1 inputs: %lu\n", diff1.size());
+    logger->info("size of common inputs: {}", pathsCommon.size());
+    logger->info("size of diff0 inputs: {}", diff0.size());
+    logger->info("size of diff1 inputs: {}", diff1.size());
 }
 
 void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
                         std::vector<naja::DNL::DNLID>& outputs1,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& outputs0Map,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& outputs1Map) {
+    ensureLoggerInitialized();
+    logger->debug("normalizeOutputs: starting");
+
     // find the intersection of outputs0 and outputs1 based on the getFullPathIDs of DNLTerminal and the diffs
     std::set<std::vector<NLID::DesignObjectID>> paths1;
     std::set<std::vector<NLID::DesignObjectID>> pathsCommon;
@@ -234,7 +287,6 @@ void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
     }
     size_t index = 0;
     for (const auto& [path0, output0] : outputs0Map) {
-      //printf("output %zu from %lu\n", index++, outputs0Map.size());
       if (paths1.find(path0) != paths1.end()) {
         pathsCommon.insert(path0);
       }
@@ -261,9 +313,9 @@ void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
       outputs1.push_back(outputs1Map.at(path));
     }
     outputs1.insert(outputs1.end(), diff1.begin(), diff1.end());
-    printf("size of common outputs: %lu\n", pathsCommon.size());
-    printf("size of diff0 outputs: %lu\n", diff0.size());
-    printf("size of diff1 outputs: %lu\n", diff1.size());
+    logger->info("size of common outputs: {}", pathsCommon.size());
+    logger->info("size of diff0 outputs: {}", diff0.size());
+    logger->info("size of diff1 outputs: {}", diff1.size());
     if (outputs0.size() == outputs1.size()) {
       if (outputs0 != outputs1) {
         // build the paths vector for outputs0 and outputs1
@@ -290,13 +342,12 @@ void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
           paths1.push_back(path);
         }
         if (paths0 != paths1) {
-          printf("Miter outputs must match in order:\n");
+          logger->error("Miter outputs must match in order");
           for (size_t i = 0; i < paths0.size(); ++i) {
             naja::NL::SNLPath p0 = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), paths0[i]);
             naja::NL::SNLPath p1 = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), paths1[i]);
             throw std::runtime_error(
                 "Output " + std::to_string(i) + " mismatch: " + p0.getString() + " vs " + p1.getString());
-
           }
           assert(false && "Miter outputs must match in order");
         }
@@ -305,6 +356,9 @@ void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
 }
 
 bool MiterStrategy::run() {
+  ensureLoggerInitialized();
+  logger->info("MiterStrategy::run starting");
+
   // build both sets of POs
   topInit_ = NLUniverse::get()->getTopDesign();
   NLUniverse* univ = NLUniverse::get();
@@ -322,10 +376,10 @@ bool MiterStrategy::run() {
   auto inputs1sort = builder1.getInputs();
   auto outputs0sort = builder0.getOutputs();
   auto outputs1sort = builder1.getOutputs();
-  printf("size of inputs0: %lu\n", inputs0sort.size());
-  printf("size of inputs1: %lu\n", inputs1sort.size());
-  printf("size of outputs0: %lu\n", outputs0sort.size());
-  printf("size of outputs1: %lu\n", outputs1sort.size());
+  logger->info("size of inputs0: {}", inputs0sort.size());
+  logger->info("size of inputs1: {}", inputs1sort.size());
+  logger->info("size of outputs0: {}", outputs0sort.size());
+  logger->info("size of outputs1: {}", outputs1sort.size());
   normalizeInputs(inputs0sort, inputs1sort, builder0.getInputsMap(), builder1.getInputsMap());
   normalizeOutputs(outputs0sort, outputs1sort, builder0.getOutputsMap(), builder1.getOutputsMap());
   //return false;
@@ -361,57 +415,11 @@ bool MiterStrategy::run() {
   }
 
   if (POs0.empty() || POs1.empty()) {
+    logger->warn("No primary outputs found on one of the designs; aborting run");
     return false;
   }
-  // if (outputs0 != outputs1) {
-  //   for (size_t i = 0; i < outputs0.size(); ++i) {
-  //     printf("Output %zu: %lu vs %lu\n", i, outputs0[i], outputs1[i]);
-  //   }
-  //   assert(outputs0 == outputs1);
-  // }
-  // print POs0 and POs1 in 2 separate for loops
-  // for (size_t i = 0; i < POs0.size(); ++i) {
-  //   printf("POs0[%zu]: %s\n", i, POs0[i]->toString().c_str());
-  // }
-  // for (size_t i = 0; i < POs1.size(); ++i) {
-  //   printf("POs1[%zu]: %s\n", i, POs1[i]->toString().c_str());
-  // }
-  
 
-  // Check if both sets inputs are the same
-  // if (inputs2inputsIDs0.size() != inputs2inputsIDs1.size() ||
-  //     outputs2outputsIDs0.size() != outputs2outputsIDs1.size()) {
-  //   printf("Miter inputs/outputs must match in size: %zu vs %zu\n",
-  //          inputs2inputsIDs0.size(), inputs2inputsIDs1.size());
-  //   return false;
-  // }
-
-  // for (const auto& [id0, ids0] : inputs2inputsIDs0) {
-  //   auto it = inputs2inputsIDs1.find(id0);
-  //   if (it == inputs2inputsIDs1.end() || it->second.first != ids0.first ||
-  //       it->second.second != ids0.second) {
-  //     printf("Miter inputs must match in IDs: %lu\n", id0);
-  //     return false;
-  //   }
-  // }
-
-  // // Check if both sets outputs are the same
-  // if (outputs2outputsIDs0.size() != outputs2outputsIDs1.size()) {
-  //   printf("Miter outputs must match in size: %zu vs %zu\n",
-  //          outputs2outputsIDs0.size(), outputs2outputsIDs1.size());
-  //   return false;
-  // }
-
-  // for (const auto& [id0, ids0] : outputs2outputsIDs0) {
-  //   auto it = outputs2outputsIDs1.find(id0);
-  //   if (it == outputs2outputsIDs1.end() || it->second.first != ids0.first ||
-  //       it->second.second != ids0.second) {
-  //     printf("Miter outputs must match in IDs: %lu\n", id0);
-  //     return false;
-  //   }
-  // }
-
-  // build the Boolean‐miter expression
+  // build the Boolean-miter expression
   auto miter = buildMiter(POs0, POs1);
 
   // Now SAT check via Glucose
@@ -421,19 +429,19 @@ bool MiterStrategy::run() {
   std::unordered_map<const BoolExpr*, int> node2var;
   std::unordered_map<std::string, int> varName2idx;
 
-  // Tseitin‐encode & get the literal for the root
+  // Tseitin-encode & get the literal for the root
   Glucose::Lit rootLit = tseitinEncode(solver, miter, node2var, varName2idx);
 
   // Assert root == true
   solver.addClause(rootLit);
 
   // solve with no assumptions
-  printf("Started Glucose solving\n");
+  logger->info("Started Glucose solving");
   bool sat = solver.solve();
-  printf("Finished Glucose solving: %s\n", sat ? "SAT" : "UNSAT");
+  logger->info("Finished Glucose solving: {}", sat ? "SAT" : "UNSAT");
 
   if (sat) {
-    printf("Miter failed: analyzing individual POs\n");
+    logger->warn("Miter failed: analyzing individual POs");
     for (size_t i = 0; i < POs0.size(); ++i) {
       tbb::concurrent_vector<BoolExpr*> singlePOs0S;
       singlePOs0S.push_back(POs0[i]);
@@ -443,28 +451,15 @@ bool MiterStrategy::run() {
       
       std::unordered_map<const BoolExpr*, int> singleNode2var;
       std::unordered_map<std::string, int> singleVarName2idx;
-      // Tseitin‐encode the single miter
+      // Tseitin-encode the single miter
       Glucose::SimpSolver singleSolver;
       Glucose::Lit singleRootLit = tseitinEncode(
           singleSolver, singleMiter, singleNode2var, singleVarName2idx);
-      // print singleMiter
-      //printf("Single miter for PO %zu: %s\n", i,
-      //     singleMiter->toString().c_str());
-      
 
       singleSolver.addClause(singleRootLit);
       if (singleSolver.solve()) {
-        // print singleMitter
-        // printf("------ PO failed for %zu mitter: %s\n", i,
-        //      singleMiter->toString().c_str());
-
-
-        // printf("------ PO failed for %zu: %s vs %s\n", i,
-        //      singlePOs0S[0]->toString().c_str(),
-        //      singlePOs1S[0]->toString().c_str());
         failedPOs_.push_back(outputs0[i]);
-        // If UNSAT, print the single miter
-        printf("Check failed for PO: %zu\n", i);
+        logger->error("Check failed for PO: {}", i);
         std::vector<naja::NL::SNLDesign*> topModels;
         topModels.push_back(top0_);
         topModels.push_back(top1_);
@@ -504,12 +499,12 @@ bool MiterStrategy::run() {
           
           //snl2.process();
           //snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
-          //  executeCommand(std::string(std::string("dot -Tsvg ") +
-          //                             dotFileNameEquis + std::string(" -o ") +
-          //                             svgFileNameEquis)
-          //                     .c_str());
-          //printf("svg file name: %s\n", svgFileNameEquis.c_str());
+          //executeCommand(std::string(std::string("dot -Tsvg ") +
+          //                           dotFileNameEquis + std::string(" -o ") +
+          //                           svgFileNameEquis).c_str());
+          //logger->debug("svg file name: {}", svgFileNameEquis);
         }
+
         // find intersection and diff of terms0 and terms1
         naja::NL::SNLEquipotential::Terms termsCommon;
         naja::NL::SNLEquipotential::Terms termsDiff;
@@ -544,10 +539,9 @@ bool MiterStrategy::run() {
           if (term->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
             continue;
           }
-          printf("Diff term: %s\n",
-                 term->getString().c_str());
+          logger->info("Diff term: {}", term->getString());
         }
-        // find intersection aprintf("size of intersend diff of insTerms0 and insTerms1
+        // find intersection and diff of insTerms0 and insTerms1
         naja::NL::SNLEquipotential::InstTermOccurrences insTermsCommon;
         naja::NL::SNLEquipotential::InstTermOccurrences insTermsDiff;
         for (const auto& term0 : insTerms0) {
@@ -569,8 +563,7 @@ bool MiterStrategy::run() {
               !term0.getInstTerm()->getInstance()->getModel()->getInstances().empty()) {
               continue;
             }
-            printf("Diff 0 inst term %s with direction %s\n",
-                  term0.getString().c_str(), term0.getInstTerm()->getDirection().getString().c_str());
+            logger->info("Diff 0 inst term {} with direction {}", term0.getString(), term0.getInstTerm()->getDirection().getString());
           }
         }
         for (const auto& term1 : insTerms1) {
@@ -590,25 +583,14 @@ bool MiterStrategy::run() {
               !term1.getInstTerm()->getInstance()->getModel()->getInstances().empty()) {
               continue;
             }
-            printf("Diff 1 inst term %s with direction %s\n",
-                  term1.getString().c_str(), term1.getInstTerm()->getDirection().getString().c_str());
+            logger->info("Diff 1 inst term {} with direction {}", term1.getString(), term1.getInstTerm()->getDirection().getString());
           }
         }
-        // print insTermsDiff
-        // for (const auto& term : insTermsDiff) {
-        //   // static cast to SNLInstTerm
-        //   //naja::NL::SNLInstTerm* instTerm = static_cast<naja::NL::SNLInstTerm*>(term.getInstTerm());
-        //   if (term.getInstTerm()->getDirection() == naja::NL::SNLInstTerm::Direction::Input || 
-        //     !term.getInstTerm()->getInstance()->getModel()->getInstances().empty()) {
-        //     continue;
-        //   }
-        //   printf("Diff inst term %s\n",
-        //          term.getString().c_str());
-        // }
-        printf("size of intersection of terms: %zu\n", termsCommon.size());
-        printf("size of diff of terms: %zu\n", termsDiff.size());
-        printf("size of intersection of inst terms: %zu\n", insTermsCommon.size());
-        printf("size of diff of inst terms: %zu\n", insTermsDiff.size());
+
+        logger->info("size of intersection of terms: {}", termsCommon.size());
+        logger->info("size of diff of terms: {}", termsDiff.size());
+        logger->info("size of intersection of inst terms: {}", insTermsCommon.size());
+        logger->info("size of diff of inst terms: {}", insTermsDiff.size());
       }
     }
   }
@@ -616,38 +598,35 @@ bool MiterStrategy::run() {
     univ->setTopDesign(topInit_);
   }
   // if UNSAT → miter can never be true → outputs identical
-  printf("Circuits are %s\n", sat ? "DIFFERENT" : "IDENTICAL");
+  logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
   return !sat;
 }
 
 BoolExpr* MiterStrategy::buildMiter(
     const tbb::concurrent_vector<BoolExpr*>& A,
     const tbb::concurrent_vector<BoolExpr*>& B) const {
-  // if (A.size() != B.size()) {
-  //   printf("Miter inputs must match in length: %zu vs %zu\n", A.size(),
-  //          B.size());
-  //   assert(false && "Miter inputs must match in length");
-  // }
+  ensureLoggerInitialized();
+  logger->debug("buildMiter: A.size={} B.size={}", A.size(), B.size());
 
-  // Empty miter = always‐false (no outputs to compare)
+  // Empty miter = always-false (no outputs to compare)
   if (A.empty()) {
+    logger->error("buildMiter called with empty A");
     assert(false);
     return BoolExpr::createFalse();
   }
-  //printf("A[0]: %s\n", A[0]->toString().c_str());
-  //printf("B[0]: %s\n", B[0]->toString().c_str());
+
   // Start with the first XOR
   auto miter = BoolExpr::Xor(A[0], B[0]);
-  //printf("Initial miter: %s\n", miter->toString().c_str());
+
   // OR in the rest
   for (size_t i = 1; i < A.size(); ++i) {
     if (B.size() <= i) {
-      //printf("Miter different number of outputs: %zu vs %zu\n", A.size(),
-      //       B.size());
+      logger->warn("Miter different number of outputs: {} vs {}", A.size(), B.size());
       break;
     }
     auto diff = BoolExpr::Xor(A[i], B[i]);
     miter = BoolExpr::Or(miter, diff);
   }
+  logger->trace("buildMiter produced expression: {}", miter->toString());
   return miter;
 }

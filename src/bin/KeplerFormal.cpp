@@ -44,23 +44,28 @@ int main(int argc, char** argv) {
   //const auto t0 = steady_clock::now();
   // Load liberty
   NLUniverse::create();
-  auto db0 = NLDB::create(NLUniverse::get());
+  NLDB* db0 = nullptr;
+  bool primitivesAreLoaded = false;
   if (inputPaths.size() > 2) {
+    db0 = NLDB::create(NLUniverse::get());
     auto primitivesLibrary = NLLibrary::create(db0, NLLibrary::Type::Primitives,
                                                NLName("PRIMS"));
     SNLLibertyConstructor constructor(primitivesLibrary);
     for (size_t i = 2; i < inputPaths.size(); ++i) {
       constructor.construct(inputPaths[i]);
     }
+    primitivesAreLoaded = true;
   }
-  db0 = SNLCapnP::load(inputPaths[0], true);
+  db0 = SNLCapnP::load(inputPaths[0], primitivesAreLoaded);
   // get db0 top
   auto top0 = db0->getTopDesign();
   db0->setID(2);  // Increment ID to avoid conflicts
-  auto db1 = NLDB::create(NLUniverse::get());
+  NLDB* db1 = nullptr;
   
-  db1->setID(1);  // Increment ID to avoid conflicts
+    // Increment ID to avoid conflicts
   if (inputPaths.size() > 2) {
+    db1 = NLDB::create(NLUniverse::get());
+    db1->setID(1);
     auto primitivesLibrary = NLLibrary::create(db1, NLLibrary::Type::Primitives,
                                                NLName("PRIMS"));
     SNLLibertyConstructor constructor(primitivesLibrary);
@@ -68,7 +73,7 @@ int main(int argc, char** argv) {
       constructor.construct(inputPaths[i]);
     }
   }
-  db1 = SNLCapnP::load(inputPaths[1], true);
+  db1 = SNLCapnP::load(inputPaths[1], primitivesAreLoaded);
   // get db1 top
   auto top1 = db1->getTopDesign();
 
