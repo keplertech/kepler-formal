@@ -51,14 +51,14 @@ jobs:
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        build/src/bin/kepler-formal \
-          example/tinyrocket_naja.if \
-          example/tinyrocket_naja.if \
-          example/NangateOpenCellLibrary_typical.lib \
-          example/fakeram45_1024x32.lib \
-          example/fakeram45_64x32.lib \
-          > regress-output/run.log 2>&1 || (cat regress-output/run.log && exit 1)
-        echo "Run completed; logs at regress-output/run.log"
+        ./build/src/bin/kepler-formal \
+          ./example/tinyrocket_naja.if \
+          ./example/tinyrocket_naja.if \
+          ./example/NangateOpenCellLibrary_typical.lib \
+          ./example/fakeram45_1024x32.lib \
+          ./example/fakeram45_64x32.lib \
+          > ./regress-output/run.log 2>&1 || (cat ./regress-output/run.log && exit 1)
+        echo "Run completed; logs at ./regress-output/run.log"
 
     - name: Upload regress logs
       uses: actions/upload-artifact@v4
