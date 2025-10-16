@@ -3,12 +3,6 @@ name: regress
 
 on:
   push:
-  pull_request:
-
-name: asan-build
-
-on:
-  push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
