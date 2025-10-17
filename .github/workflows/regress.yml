@@ -1,0 +1,59 @@
+# GitHub Actions workflow to build kepler-formal and run it on the example inputs
+name: regress
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    # The CMake configure and build commands are platform agnostic and should work equally
+    # well on Windows or Mac.  You can convert this to a matrix build if you need
+    # cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    # install dependencies
+    - name: Install GoogleTest
+      run: sudo apt-get update && sudo apt-get install -y libgtest-dev cmake
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+    - name: Install boost & capnproto
+      run: sudo apt-get update && sudo apt-get install -yq libboost-dev libfl-dev capnproto libcapnp-dev ninja-build clang libtbb-dev
+      
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DCMAKE_C_COMPILER=clang -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
+    - name: Build
+      # Build your program with the given configuration
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      env:
+        PYTHONMALLOC: malloc
+      # Execute tests defined by the CMake configuration.  
+      # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
+      run: ctest -VV -E ".*[p|P]ython.*" -C ${{env.BUILD_TYPE}}
+
+    - name: Run regress test with example files
+      working-directory: ${{github.workspace}}
+      run: |
+        mkdir -p regress-output
+        # Run kepler-formal on the example files (files are in example/)
+        ./build/src/bin/kepler_formal \
+          ./example/tinyrocket_naja.if \
+          ./example/tinyrocket_naja.if \
+          ./example/NangateOpenCellLibrary_typical.lib \
+          ./example/fakeram45_1024x32.lib \
+          ./example/fakeram45_64x32.lib 

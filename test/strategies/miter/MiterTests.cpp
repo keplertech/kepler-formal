@@ -441,204 +441,6 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   }
 }
 
-// TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElementsFormal) {
-//   // 1. Create SNL
-//   NLUniverse* univ = NLUniverse::create();
-//   NLDB* db = NLDB::create(univ);
-//   NLLibrary* library =
-//       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
-//   NLLibrary* libraryDesigns =
-//       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-//   // 2. Create a top model with one output
-//   SNLDesign* top = SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
-//                                      NLName("top"));
-//   univ->setTopDesign(top);
-//   auto topOut =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
-//   auto topOut2 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
-//   auto topIn1 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In1"));
-//   auto topIn2 =
-//       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In2"));
-//   NLLibraryTruthTables::construct(library);
-//   // 7. create a and model
-//   SNLDesign* andModel =
-//       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
-
-//   // add 2 inputs and 1 output to and
-//   auto andIn1 =
-//       SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in1"));
-//   auto andIn2 =
-//       SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in2"));
-//   auto andOut = SNLScalarTerm::create(andModel, SNLTerm::Direction::Output,
-//                                       NLName("out"));
-//   // 8. create an or model
-//     SNLDesign* orModel =
-//         SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("OR"));
-//     // add 2 inputs and 1 output to or
-
-//     auto orIn1 =
-//         SNLScalarTerm::create(orModel, SNLTerm::Direction::Input, NLName("in1"));
-//     auto orIn2 =
-//         SNLScalarTerm::create(orModel, SNLTerm::Direction::Input, NLName("in2"));
-//     auto orOut = SNLScalarTerm::create(orModel, SNLTerm::Direction::Output,
-//                                        NLName("out"));
-
-//   // Create an FF
-//   SNLDesign* ffModel =
-//       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("FF"));
-//   // add D, CLK and Q
-//   auto ffD =
-//       SNLScalarTerm::create(ffModel, SNLTerm::Direction::Input, NLName("D"));
-//   auto ffCLK =
-//       SNLScalarTerm::create(ffModel, SNLTerm::Direction::Input, NLName("CLK"));
-//   auto ffQ =
-//       SNLScalarTerm::create(ffModel, SNLTerm::Direction::Output, NLName("Q"));
-//   // Set sequential dependecies to CLK
-//   SNLDesignModeling::addInputsToClockArcs({ffD}, {ffCLK});
-//   SNLDesignModeling::addClockToOutputsArcs({ffCLK}, {ffQ});
-
-//   // Create ff instance under top
-//   SNLInstance* instFF = SNLInstance::create(top, ffModel, NLName("ff0"));
-
-//   // 8. create a and instance in top
-//   SNLInstance* inst3 = SNLInstance::create(top, andModel, NLName("and"));
-//   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
-//   // set truth table for and model
-//   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
-//   SNLDesignModeling::setTruthTable(orModel, SNLTruthTable(2, 14));
-//   // 9. connect all instances inputs
-//   SNLNet* net1 = SNLScalarNet::create(top, NLName("top_in1_net"));
-//   SNLNet* net2 = SNLScalarNet::create(top, NLName("top_in2_net"));
-//   SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
-//   SNLNet* net4 = SNLScalarNet::create(top, NLName("and2_output_net"));
-//   SNLNet* net5 = SNLScalarNet::create(top, NLName("ffD"));
-//   SNLNet* net6 = SNLScalarNet::create(top, NLName("ffCLK"));
-//   // connect logic0 to and
-//   topIn1->setNet(net1);
-
-//   inst4->getInstTerm(andIn1)->setNet(net2);
-//   inst4->getInstTerm(andIn2)->setNet(net2);
-//   // connect logic1 to and
-//   instFF->getInstTerm(ffQ)->setNet(net2);
-//   instFF->getInstTerm(ffD)->setNet(net1);
-//   instFF->getInstTerm(ffCLK)->setNet(net6);
-//   inst3->getInstTerm(andIn2)->setNet(net1);
-//   inst3->getInstTerm(andIn1)->setNet(net4);
-//   // connect the and instance output to the top output
-//   inst3->getInstTerm(andOut)->setNet(net3);
-//   topOut->setNet(net3);
-//   inst4->getInstTerm(andOut)->setNet(net4);
-//   topOut2->setNet(net4);
-//   topIn1->setNet(net1);
-//   topIn2->setNet(net6);
-//   // 11. create DNL
-//   get();
-//   // 12. create a constant propagation object
-//   {
-//     std::string dotFileName(
-//         std::string(std::string("./beforeCP") + std::string(".dot")));
-//     std::string svgFileName(
-//         std::string(std::string("./beforeCP") + std::string(".svg")));
-//     SnlVisualiser snl(top);
-//     snl.process();
-//     snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-//     executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-//                                std::string(" -o ") + svgFileName)
-//                        .c_str());
-//   }
-//   // Copy current top to back it up through the clone api
-//   SNLDesign* topClone = top->clone(NLName("topClone"));
-//   ConstantPropagation cp;
-//   // 13. collect the constants
-//   // cp.collectConstants();
-//   // 14. run the constant propagation
-//   {
-//     BuildPrimaryOutputClauses miter;
-//     miter.build();
-//     for (const auto& po : miter.getPOs()) {
-//       std::cout << "PO: " << po->toString() << std::endl;
-//     }
-//   }
-
-//   cp.run();
-//   // 15. check the output value of the top instance
-//   {
-//     std::string dotFileName(
-//         std::string(std::string("./afterCP") + std::string(".dot")));
-//     std::string svgFileName(
-//         std::string(std::string("./afterCP") + std::string(".svg")));
-//     SnlVisualiser snl(top);
-//     snl.process();
-//     snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-//     executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-//                                std::string(" -o ") + svgFileName)
-//                        .c_str());
-//   }
-//   {
-//     BuildPrimaryOutputClauses miter;
-//     miter.build();
-//     for (const auto& po : miter.getPOs()) {
-//       std::cout << "PO: " << po->toString() << std::endl;
-//     }
-//     printf("%s\n", miter.getPOs()[0]->toString().c_str());
-//     EXPECT_TRUE(miter.getPOs()[0]->toString() == std::string("((6 ∧ 6) ∧ 2)"));
-//     EXPECT_TRUE(miter.getPOs()[1]->toString() == std::string("(6 ∧ 6)"));
-//     EXPECT_TRUE(miter.getPOs()[2]->toString() == std::string("2"));
-//     EXPECT_TRUE(miter.getPOs()[3]->toString() == std::string("3"));
-//   }
-//   naja::DNL::destroy();
-  
-//   {
-//     MiterStrategy MiterS(top, topClone, "CaseA");
-//     EXPECT_TRUE(MiterS.run());
-//   }
-//   // changing the or model to see if the miter strategy locate it
-//   inst3->setModel(orModel);
-//   {
-//     BuildPrimaryOutputClauses miter;
-//     miter.build();
-//     for (const auto& po : miter.getPOs()) {
-//       std::cout << "PO: " << po->toString() << std::endl;
-//     }
-//     MiterStrategy MiterS(top, topClone, "CaseB");
-//     EXPECT_FALSE(MiterS.run());
-//   }
-//   // Use the PrimaryOutputClauses to get all outputs
-//         BuildPrimaryOutputClauses miter;
-//         miter.build();
-//         for (const auto& po : miter.getOutputs()) {
-//           // Get DNLFullTerminals of po
-//             naja::DNL::DNLTerminalFull dnlFullTerminal = naja::DNL::get()->getDNLTerminalFromID(po);
-//             std::vector<std::string> path;
-//             DNLInstanceFull currentInstance = dnlFullTerminal.getDNLInstance();
-//             while (currentInstance.isTop() == false) {
-//             path.push_back(currentInstance.getSNLInstance()->getName().getString());
-//             currentInstance = currentInstance.getParentInstance();
-//             }
-//             std::reverse(path.begin(), path.end());
-//             naja::NL::SNLPath snlPath(top, 
-//                 path);
-//             SNLNetComponentOccurrence occurrence(snlPath, dnlFullTerminal.getSnlBitTerm());
-//             std::cout << "Output DNL ID: " << po << ", SNL Bit Term: "
-//                         << occurrence.getString() << std::endl;
-//             SNLEquipotential equipotential(occurrence);
-//                           std::cout << "Equipotential: " << equipotential.getString() << std::endl;
-//             std::string dotFileName(
-//             std::string(std::string("./") + dnlFullTerminal.getSnlBitTerm()->getName().getString() + std::string(".dot")));
-//             std::string svgFileName(
-//                 std::string(std::string("./") + dnlFullTerminal.getSnlBitTerm()->getName().getString() + std::string(".svg")));
-//             SnlVisualiser snl(top, true, &equipotential);
-//             snl.process();
-//             snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-//             executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-//                                     std::string(" -o ") + svgFileName)
-//                             .c_str());
-
-//         }
-// }
-
 // 1. create a circuit of 2 inputs that drives and AND gate that drives top output
 // 2. clone the the top and chain an inverter to the AND output
 // 3. verify that the miter strategy detects the difference
@@ -778,15 +580,30 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     MiterStrategy MiterS(top, topClone, "CaseC");
     EXPECT_FALSE(MiterS.run());
   }
-  // {
-  //   // dump top to naja_if(CapProto)
-  //   std::filesystem::path outputPath("./topEdited1.capnp");
-  //   SNLCapnP::dump(db, outputPath);
-  // }
-  // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
-  // executeCommand(
-  //     std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited1.capnp")
-  //         .c_str());  
+  {
+    // dump top to naja_if(CapProto)
+    std::filesystem::path outputPath("./topEdited1.capnp");
+    SNLCapnP::dump(db, outputPath);
+  }
+  //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  executeCommand(
+      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited1.capnp")
+          .c_str());  
+  // look for "DIFFERENT" in the file ./miter_log_1.txt
+  // open the file  
+  std::ifstream miterLogFile("./miter_log_1.txt");
+  std::string line;
+  bool foundDifferent = false;
+  if (miterLogFile.is_open()) {
+    while (getline(miterLogFile, line)) {
+      if (line.find("DIFFERENT") != std::string::npos) {
+        foundDifferent = true;
+        break;
+      }
+    }
+    miterLogFile.close();
+  }
+  EXPECT_TRUE(foundDifferent);
   // chain another inverter to the first inverter
   SNLInstance* instInv2 = SNLInstance::create(top, inverterModel, NLName("inv2"));
   // connect the second inverter input to the first inverter output
@@ -802,16 +619,31 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     MiterStrategy MiterS(top, topClone, "CaseD");
     EXPECT_TRUE(MiterS.run());
   }
-  // {
-  //   // dump top to naja_if(CapProto)
-  //   std::filesystem::path outputPath("./topEdited2.capnp");
-  //   SNLCapnP::dump(db, outputPath);
-  // }
+  {
+    // dump top to naja_if(CapProto)
+    std::filesystem::path outputPath("./topEdited2.capnp");
+    SNLCapnP::dump(db, outputPath);
+  }
 
-  // Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
-  // executeCommand(
-  //     std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited2.capnp")
-  //         .c_str());  
+  //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  executeCommand(
+      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited2.capnp")
+          .c_str()); 
+  // look for "IDENTICAL" in the file ./miter_log_2.txt
+  // open the file
+  std::ifstream miterLogFile2("./miter_log_2.txt");
+  bool foundIdentical = false;
+  if (miterLogFile2.is_open()) {
+    while (getline(miterLogFile2, line)) {
+      if (line.find("IDENTICAL") != std::string::npos) {
+        foundIdentical = true;
+        break;
+      }
+    }
+    miterLogFile2.close();
+  }
+  EXPECT_TRUE(foundIdentical);
+  
 }
 
 // Required main function for Google Test

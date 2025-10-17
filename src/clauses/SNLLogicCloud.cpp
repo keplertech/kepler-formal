@@ -10,16 +10,17 @@ typedef std::pair<std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DN
 tbb::enumerable_thread_specific< IterationInputsETSPair> currentIterationInputsETS;
 tbb::enumerable_thread_specific< IterationInputsETSPair> newIterationInputsETS;
 
-tbb::concurrent_vector<IterationInputsETSPair*> currentIterationInputsETSvector;
+tbb::concurrent_vector<IterationInputsETSPair*> currentIterationInputsETSvector = tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
 
-tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector;
+tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector = tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
 
 void initCurrentIterationInputsETS() {
-  if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      currentIterationInputsETSvector.push_back(nullptr);
-    }
-  }
+  // if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+  //   for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+  //     currentIterationInputsETSvector.push_back(nullptr);
+  //   }
+  // }
+  assert(tbb::this_task_arena::current_thread_index() < currentIterationInputsETSvector.size());
   if (currentIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
     currentIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] = &currentIterationInputsETS.local();
   }
@@ -27,15 +28,17 @@ void initCurrentIterationInputsETS() {
 
 IterationInputsETSPair& getCurrentIterationInputsETS() {
   //initCurrentIterationInputsETS();
+  //assert(tbb::this_task_arena::current_thread_index() < currentIterationInputsETSvector.size());
   return *currentIterationInputsETSvector[tbb::this_task_arena::current_thread_index()];
 }
 
 void initNewIterationInputsETS() {
-  if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      newIterationInputsETSvector.push_back(nullptr);
-    }
-  }
+  // if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+  //   for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+  //     newIterationInputsETSvector.push_back(nullptr);
+  //   }
+  // }
+  assert(tbb::this_task_arena::current_thread_index() < newIterationInputsETSvector.size());
   if (newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
     newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] = &newIterationInputsETS.local();
   }
@@ -43,6 +46,7 @@ void initNewIterationInputsETS() {
 
 IterationInputsETSPair& getNewIterationInputsETS() {
   //initNewIterationInputsETS();
+  //assert(tbb::this_task_arena::current_thread_index() < newIterationInputsETSvector.size());
   return *newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()];
 }
 
@@ -66,12 +70,12 @@ size_t sizeOfCurrentIterationInputsETS() {
   return getCurrentIterationInputsETS().second;
 }
 
-std::vector<naja::DNL::DNLID> copyCurrentIterationInputsETS() {
-  std::vector<naja::DNL::DNLID> res;
-  for (size_t i = 0; i < getCurrentIterationInputsETS().second; i++) {
-    res.push_back(getCurrentIterationInputsETS().first[i]);
+void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID>& res) {
+  res.clear();
+  auto & current = getCurrentIterationInputsETS();
+  for (size_t i = 0; i < current.second; i++) {
+    res.push_back(current.first[i]);
   }
-  return res;
 }
 
 void clearNewIterationInputsETS() {
@@ -100,8 +104,9 @@ size_t sizeOfNewIterationInputsETS() {
 
 void copyNewIterationInputsETStoCurrent() {
   clearCurrentIterationInputsETS();
-  for (size_t i = 0; i < getNewIterationInputsETS().second; i++) {
-    pushBackCurrentIterationInputsETS(getNewIterationInputsETS().first[i]);
+  auto& newIterationInputs = getNewIterationInputsETS();
+  for (size_t i = 0; i < newIterationInputs.second; i++) {
+    pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
   }
   assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
 }
@@ -345,7 +350,7 @@ void SNLLogicCloud::compute() {
     }
   }
   copyNewIterationInputsETStoCurrent();
-  currentIterationInputs_ = copyCurrentIterationInputsETS();
+  copyCurrentIterationInputsETS(currentIterationInputs_);
   assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
   // Assert all currentIterationInputs_ are PIs
   for (auto input : currentIterationInputs_) {
