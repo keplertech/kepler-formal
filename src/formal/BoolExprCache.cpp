@@ -35,7 +35,7 @@ struct TupleKeyEq {
   bool operator()(TupleKey const& a, TupleKey const& b) const noexcept { return a == b; }
 };
 
-using ValueT = BoolExpr*;
+using ValueT = std::shared_ptr<BoolExpr>;
 using PairT = std::pair<const TupleKey, ValueT>;
 using TbbAlloc = tbb::tbb_allocator<PairT>;
 
@@ -91,7 +91,7 @@ BoolExpr* BoolExprCache::getExpression(Key const& k) {
     size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;
     it->second->setIndex(id);
     assert(it->second != nullptr);
-    return it->second;
+    return it->second.get();
   }
 
   // construct new BoolExpr. We need shared_ptr owners for children if they exist.
@@ -99,7 +99,7 @@ BoolExpr* BoolExprCache::getExpression(Key const& k) {
   BoolExpr* R = rptr ? rptr : nullptr;
 
   // use new because constructor may be non-public
-  BoolExpr* newptr = new BoolExpr(k.op, k.varId, L, R);
+  std::shared_ptr<BoolExpr> newptr(new BoolExpr(k.op, k.varId, L, R));
 
   // assign id atomically
   size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -108,17 +108,17 @@ BoolExpr* BoolExprCache::getExpression(Key const& k) {
   // insert; if another thread inserted concurrently, use that one
   auto pr = tbl.insert({tk, newptr});
   if (!pr.second) {
-    delete newptr;
-    return pr.first->second;
+    //delete newptr;
+    return pr.first->second.get();
   }
-  return newptr;
+  return newptr.get();
 }
 
 void BoolExprCache::destroy() {
   // delete all stored BoolExpr*
-  for (auto& kv : impl().table) {
-    delete kv.second;
-  }
+  // for (auto& kv : impl().table) {
+  //   delete kv.second;
+  // }
   impl().table.clear();
 }
 
