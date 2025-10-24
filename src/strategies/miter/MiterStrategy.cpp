@@ -267,9 +267,9 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
       inputs1.push_back(inputs1Map.at(path));
     }
     inputs1.insert(inputs1.end(), diff1.begin(), diff1.end());
-    logger->info("size of common inputs: {}", pathsCommon.size());
-    logger->info("size of diff0 inputs: {}", diff0.size());
-    logger->info("size of diff1 inputs: {}", diff1.size());
+    logger->debug("size of common inputs: {}", pathsCommon.size());
+    logger->debug("size of diff0 inputs: {}", diff0.size());
+    logger->debug("size of diff1 inputs: {}", diff1.size());
 }
 
 void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
@@ -313,9 +313,9 @@ void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
       outputs1.push_back(outputs1Map.at(path));
     }
     outputs1.insert(outputs1.end(), diff1.begin(), diff1.end());
-    logger->info("size of common outputs: {}", pathsCommon.size());
-    logger->info("size of diff0 outputs: {}", diff0.size());
-    logger->info("size of diff1 outputs: {}", diff1.size());
+    logger->debug("size of common outputs: {}", pathsCommon.size());
+    logger->debug("size of diff0 outputs: {}", diff0.size());
+    logger->debug("size of diff1 outputs: {}", diff1.size());
     if (outputs0.size() == outputs1.size()) {
       if (outputs0 != outputs1) {
         // build the paths vector for outputs0 and outputs1
@@ -376,10 +376,10 @@ bool MiterStrategy::run() {
   auto inputs1sort = builder1.getInputs();
   auto outputs0sort = builder0.getOutputs();
   auto outputs1sort = builder1.getOutputs();
-  logger->info("size of inputs0: {}", inputs0sort.size());
-  logger->info("size of inputs1: {}", inputs1sort.size());
-  logger->info("size of outputs0: {}", outputs0sort.size());
-  logger->info("size of outputs1: {}", outputs1sort.size());
+  logger->info("size of PIs in circuit 0: {}", inputs0sort.size());
+  logger->info("size of PIs in circuit 1: {}", inputs1sort.size());
+  logger->info("size of POs in circuit 0: {}", outputs0sort.size());
+  logger->info("size of POs in circuit 1: {}", outputs1sort.size());
   normalizeInputs(inputs0sort, inputs1sort, builder0.getInputsMap(), builder1.getInputsMap());
   normalizeOutputs(outputs0sort, outputs1sort, builder0.getOutputsMap(), builder1.getOutputsMap());
   //return false;
@@ -496,13 +496,12 @@ bool MiterStrategy::run() {
               }
             }
           }
-          
-          //snl2.process();
-          //snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
-          //executeCommand(std::string(std::string("dot -Tsvg ") +
-          //                           dotFileNameEquis + std::string(" -o ") +
-          //                           svgFileNameEquis).c_str());
-          //logger->debug("svg file name: {}", svgFileNameEquis);
+          // snl2.process();
+          // snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
+          // executeCommand(std::string(std::string("dot -Tsvg ") +
+          //                            dotFileNameEquis + std::string(" -o ") +
+          //                            svgFileNameEquis).c_str());
+          // logger->info("svg file name: {}", svgFileNameEquis);
         }
 
         // find intersection and diff of terms0 and terms1
@@ -587,10 +586,10 @@ bool MiterStrategy::run() {
           }
         }
 
-        logger->info("size of intersection of terms: {}", termsCommon.size());
-        logger->info("size of diff of terms: {}", termsDiff.size());
-        logger->info("size of intersection of inst terms: {}", insTermsCommon.size());
-        logger->info("size of diff of inst terms: {}", insTermsDiff.size());
+        logger->debug("size of intersection of terms: {}", termsCommon.size());
+        logger->debug("size of diff of terms: {}", termsDiff.size());
+        logger->debug("size of intersection of inst terms: {}", insTermsCommon.size());
+        logger->debug("size of diff of inst terms: {}", insTermsDiff.size());
       }
     }
   }
