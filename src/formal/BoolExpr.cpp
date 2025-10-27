@@ -1,5 +1,6 @@
 #include "BoolExpr.h"
 #include <cassert>
+#include <unordered_map>
 
 namespace KEPLER_FORMAL {
 
@@ -177,5 +178,102 @@ std::string BoolExpr::OpToString(Op op) {
         default:      return "UNKNOWN";
     }
 }
+
+// replace previous isConstFalse/isConstTrue and Simplify implementation with this:
+
+static inline bool isConstFalse(BoolExpr* e) {
+    return e->getOp() == Op::VAR && e->getId() == 0;
+}
+static inline bool isConstTrue(BoolExpr* e) {
+    return e->getOp() == Op::VAR && e->getId() == 1;
+}
+
+BoolExpr* BoolExpr::simplify(BoolExpr* e) {
+    if (!e) return nullptr;
+    if (e->getOp() == Op::VAR) return e;
+
+    std::unordered_map<BoolExpr*, BoolExpr*> memo;
+    std::vector<BoolExpr*> stack;
+    std::unordered_map<BoolExpr*, int> state;
+    std::vector<BoolExpr*> order;
+
+    stack.push_back(e);
+    while (!stack.empty()) {
+        BoolExpr* n = stack.back();
+        stack.pop_back();
+        auto itst = state.find(n);
+        if (itst == state.end()) {
+            state[n] = 1;
+            stack.push_back(n);
+            if (n->getRight()) stack.push_back(n->getRight());
+            if (n->getLeft())  stack.push_back(n->getLeft());
+        } else {
+            order.push_back(n);
+        }
+    }
+
+    for (BoolExpr* node : order) {
+        switch (node->getOp()) {
+        case Op::NOT: {
+            BoolExpr* a = memo.count(node->getLeft()) ? memo[node->getLeft()] : node->getLeft();
+            if (isConstFalse(a)) { memo[node] = Var(1); break; }
+            if (isConstTrue(a))  { memo[node] = Var(0); break; }
+            if (a->getOp() == Op::NOT) { memo[node] = a->getLeft(); break; }
+            memo[node] = Not(a);
+            break;
+        }
+        case Op::AND: {
+            BoolExpr* A = memo.count(node->getLeft()) ? memo[node->getLeft()] : node->getLeft();
+            BoolExpr* B = memo.count(node->getRight()) ? memo[node->getRight()] : node->getRight();
+
+            if (isConstFalse(A) || isConstFalse(B)) { memo[node] = Var(0); break; }
+            if (isConstTrue(A)) { memo[node] = B; break; }
+            if (isConstTrue(B)) { memo[node] = A; break; }
+            if (A == B) { memo[node] = A; break; }
+            if ((A->getOp() == Op::NOT && A->getLeft() == B) ||
+                (B->getOp() == Op::NOT && B->getLeft() == A)) {
+                memo[node] = Var(0); break;
+            }
+            // Factory will canonicalize order
+            memo[node] = And(A, B);
+            break;
+        }
+        case Op::OR: {
+            BoolExpr* A = memo.count(node->getLeft()) ? memo[node->getLeft()] : node->getLeft();
+            BoolExpr* B = memo.count(node->getRight()) ? memo[node->getRight()] : node->getRight();
+
+            if (isConstTrue(A) || isConstTrue(B)) { memo[node] = Var(1); break; }
+            if (isConstFalse(A)) { memo[node] = B; break; }
+            if (isConstFalse(B)) { memo[node] = A; break; }
+            if (A == B) { memo[node] = A; break; }
+            if ((A->getOp() == Op::NOT && A->getLeft() == B) ||
+                (B->getOp() == Op::NOT && B->getLeft() == A)) {
+                memo[node] = Var(1); break;
+            }
+            memo[node] = Or(A, B);
+            break;
+        }
+        case Op::XOR: {
+            BoolExpr* A = memo.count(node->getLeft()) ? memo[node->getLeft()] : node->getLeft();
+            BoolExpr* B = memo.count(node->getRight()) ? memo[node->getRight()] : node->getRight();
+
+            if (isConstFalse(A)) { memo[node] = B; break; }
+            if (isConstFalse(B)) { memo[node] = A; break; }
+            if (isConstTrue(A))  { memo[node] = Not(B); break; }
+            if (isConstTrue(B))  { memo[node] = Not(A); break; }
+            if (A == B) { memo[node] = Var(0); break; }
+            memo[node] = Xor(A, B);
+            break;
+        }
+        default:
+            memo[node] = node;
+            break;
+        }
+    }
+
+    return memo.count(e) ? memo[e] : e;
+}
+
+
 
 } // namespace KEPLER_FORMAL

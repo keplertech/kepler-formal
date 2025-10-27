@@ -44,7 +44,12 @@ size_t sizeOfTermsETS() {
 }
 
 void clearTermsETS() {
-    getTErmsETS().second = 0;
+    // If vector reach size larger than 1024, clear it to save memory
+    auto& termsLocal = getTErmsETS();
+    if (termsLocal.first.size() > 1024) {
+        termsLocal.first.clear();
+    }
+    termsLocal.second = 0;
 }
 
 void pushBackTermsETS(BoolExpr* term) {
@@ -97,7 +102,12 @@ size_t sizeOfRelevantETS() {
 }
 
 void clearRelevantETS() {
-    getRelevantETS().second = 0;
+    // If vector reach size larger than 1024, clear it to save memory
+    auto& relevantLocal = getRelevantETS();
+    if (relevantLocal.first.size() > 1024) {
+        relevantLocal.first.clear();
+    }
+    relevantLocal.second = 0;
 }
 
 void pushBackRelevantETS(bool b) {
@@ -170,7 +180,12 @@ size_t sizeOfMemoETS() {
 }
 
 void clearMemoETS() {
-    getMemoETS().second = 0;
+    // If vector reach size larger than 1024, clear it to save memory
+    auto& memoLocal = getMemoETS();
+    if (memoLocal.first.size() > 1024) {
+        memoLocal.first.clear();
+    }
+    memoLocal.second = 0;
 }
 
 void pushBackMemoETS(BoolExpr* expr) {
@@ -242,7 +257,12 @@ size_t sizeOfChildFETS() {
 }
 
 void clearChildFETS() {
-    getChildFETS().second = 0;
+    // If vector reach size larger than 1024, clear it to save memory
+    auto& childLocal = getChildFETS();
+    if (childLocal.first.size() > 1024) {
+        childLocal.first.clear();
+    }
+    childLocal.second = 0;
 }
 
 void pushBackChildFETS(BoolExpr* expr) {

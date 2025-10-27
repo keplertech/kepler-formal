@@ -81,7 +81,9 @@ public:
     bool operator<=(const BoolExpr& other) const {
         return *this < other || *this == other;
     }
-
+    // Simplify/optimize an expression DAG (returns interned canonical node)
+    // Memoized, safe on DAGs.
+    static BoolExpr* simplify(BoolExpr* e);
 private:
     // Private ctor: use factory methods
     BoolExpr(Op op, size_t id,

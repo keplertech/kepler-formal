@@ -51,12 +51,18 @@ IterationInputsETSPair& getNewIterationInputsETS() {
 }
 
 void clearCurrentIterationInputsETS() {
-  getCurrentIterationInputsETS().second = 0;
+  // If vector reach size larger than 1024, clear it to save memory
+  auto& currentIterationInputs = getCurrentIterationInputsETS();
+  if (currentIterationInputs.first.size() > 1024) {
+    currentIterationInputs.first.clear();
+  }
+  currentIterationInputs.second = 0;
 }
 
 void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
-  auto & vec = getCurrentIterationInputsETS().first;
-  auto & sz = getCurrentIterationInputsETS().second;
+  auto& currentIterationInputs = getCurrentIterationInputsETS();
+  auto & vec = currentIterationInputs.first;
+  auto & sz = currentIterationInputs.second;
   if (vec.size() > sz) {
     vec[sz] = input;
     sz++;
@@ -79,12 +85,18 @@ void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID>& res) {
 }
 
 void clearNewIterationInputsETS() {
-  getNewIterationInputsETS().second = 0;
+  // If vector reach size larger than 1024, clear it to save memory
+  auto& newIterationInputs = getNewIterationInputsETS();
+  if (newIterationInputs.first.size() > 1024) {
+    newIterationInputs.first.clear();
+  }
+  newIterationInputs.second = 0;
 }
 
 void pushBackNewIterationInputsETS(naja::DNL::DNLID input) {
-  auto & vec = getNewIterationInputsETS().first;
-  auto & sz = getNewIterationInputsETS().second;
+  auto& newIterationInputs = getNewIterationInputsETS();
+  auto & vec = newIterationInputs.first;
+  auto & sz = newIterationInputs.second;
   if (vec.size() > sz) {
     vec[sz] = input;
     sz++;
@@ -361,4 +373,6 @@ void SNLLogicCloud::compute() {
            getAllInputs().size(), currentIterationInputs_.size());
     assert(false && "Number of inputs in the truth table does not match the number of current iteration inputs");
   }
+  // Simplify the truth table
+  table_.simplify();
 }

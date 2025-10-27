@@ -389,3 +389,223 @@ void SNLTruthTableTree::print() const {
     }
   }
 }
+
+//----------------------------------------------------------------------
+// Collapse the tree based on simple, local constant/identity rules
+//----------------------------------------------------------------------
+// Conservative transforms only: identity unary-table removal, duplicate-child collapse,
+// and full-equal-children simplification where safe.
+void SNLTruthTableTree::simplify() {
+  if (!root_) return;
+
+  // Post-order traversal collect nodes
+  struct Frame { std::shared_ptr<Node> ptr; bool visited; };
+  std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
+  stack.reserve(256);
+  stack.push_back({root_, false});
+
+  std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>> order;
+  order.reserve(256);
+
+  while (!stack.empty()) {
+    auto fr = stack.back(); stack.pop_back();
+    if (!fr.ptr) continue;
+    if (fr.visited) {
+      order.push_back(fr.ptr);
+      continue;
+    }
+    // push again as visited then children
+    stack.push_back({fr.ptr, true});
+    if (fr.ptr->type == Node::Type::Table) {
+      for (auto &c : fr.ptr->children)
+        stack.push_back({c, false});
+    }
+  }
+
+  // Helper to replace child pointer in parent
+  auto replaceChildInParent = [&](const std::shared_ptr<Node>& target,
+                                  const std::shared_ptr<Node>& replacement) {
+    auto wp = target->parent;
+    if (wp.expired()) {
+      // target was root
+      root_ = replacement;
+      if (replacement) replacement->parent.reset();
+      return;
+    }
+    auto parent = wp.lock();
+    for (size_t i = 0; i < parent->children.size(); ++i) {
+      if (parent->children[i].get() == target.get()) {
+        parent->children[i] = replacement;
+        if (replacement) replacement->parent = parent;
+        return;
+      }
+    }
+  };
+
+  // Process nodes bottom-up
+  for (auto &node_shared : order) {
+    Node* node = node_shared.get();
+    if (node->type != Node::Type::Table) continue;
+
+    // retrieve table
+    const SNLTruthTable &tbl = node->getTruthTable();
+    const uint32_t arity = tbl.size();
+
+    // safety: arity should match children count; skip otherwise
+    if (node->children.size() != arity) continue;
+
+    // 1) Unary identity removal:
+    // If arity==1 and table behaves as identity on its single boolean input:
+    // table.bits()[0] == 0 and table.bits()[1] == 1  (i.e., bit(0)==0, bit(1)==1)
+    if (arity == 1) {
+      bool b0 = tbl.bits().bit(0);
+      bool b1 = tbl.bits().bit(1);
+      if (b0 == false && b1 == true) {
+        // identity: replace node by its single child
+        auto child = node->children[0];
+        replaceChildInParent(node_shared, child);
+        // parent ownership updated by replaceChildInParent; no further action needed.
+        continue;
+      }
+      // Note: if unary negation (b0==1 && b1==0) we'd need a NOT node representation;
+      // skipping that because tree does not have unary NOT wrapper type.
+    }
+
+    // 2) If all children pointers are identical (all reference same subnode),
+    //    try to reduce arity by reasoning on truth table as a function of single input.
+    bool all_equal = true;
+    for (size_t i = 1; i < node->children.size(); ++i) {
+      if (node->children[i].get() != node->children[0].get()) {
+        all_equal = false; break;
+      }
+    }
+    if (all_equal && arity >= 1) {
+      // When all children equal X, the table reduces to a unary function f(x) where:
+      // f(0) = table.bits().bit(0), f(1) = table.bits().bit((1<<arity)-1)
+      // If both outputs equal 0 => node is constant FALSE (cannot represent directly)
+      // If both outputs equal 1 => node is constant TRUE (cannot represent directly)
+      // If f is identity (0->0,1->1) we can replace node by child.
+      // If f is negation (0->1,1->0) we cannot represent without NOT wrapper, skip.
+      uint32_t idx0 = 0;
+      uint32_t idx1 = (1u << arity) - 1u;
+      bool out0 = tbl.bits().bit(idx0);
+      bool out1 = tbl.bits().bit(idx1);
+      if (!out0 && out1) {
+        // behaves as identity => replace with child
+        auto child = node->children[0];
+        replaceChildInParent(node_shared, child);
+        continue;
+      }
+      // if constant both 0 or both 1, we cannot create a constant leaf in this tree structure,
+      // so conservatively leave node untouched.
+    }
+
+    // 3) Duplicate-child elimination when possible:
+    //    If multiple children are identical and removing duplicates does not change table semantics,
+    //    perform collapse. This is conservative: attempt when removing duplicate columns yields
+    //    a table whose value for all remaining input combinations is consistent.
+    //    Implementation: build map from child pointer to vector of positions,
+    //    and if there exists at least one repeated child, test collapsing by remapping table.
+    //    Restrict collapse to small arities to keep it cheap.
+    if (arity > 1 && arity <= 8) { // limit complexity
+      // group positions by identical child pointer
+      std::unordered_map<Node*, std::vector<size_t>> posmap;
+      posmap.reserve(node->children.size()*2);
+      for (size_t i = 0; i < node->children.size(); ++i)
+        posmap[node->children[i].get()].push_back(i);
+
+      bool anyDup = false;
+      for (auto &ent : posmap) if (ent.second.size() > 1) { anyDup = true; break; }
+      if (anyDup) {
+        // Attempt collapse: create canonical ordering of unique children
+        std::vector<Node*> uniqueChildren;
+        std::vector<std::vector<size_t>> positions;
+        uniqueChildren.reserve(posmap.size());
+        positions.reserve(posmap.size());
+        for (auto &p : posmap) {
+          uniqueChildren.push_back(p.first);
+          positions.push_back(p.second);
+        }
+
+        size_t newArity = uniqueChildren.size();
+        // Build map from original index -> reduced index
+        std::vector<size_t> origToReduced(arity);
+        for (size_t r = 0; r < positions.size(); ++r)
+          for (size_t originalPos : positions[r])
+            origToReduced[originalPos] = r;
+
+        // Check that for every reduced input vector, all original input vectors that map to it
+        // produce identical table output.
+        bool collapseSafe = true;
+        size_t origRows = 1u << arity;
+        for (size_t origMask = 0; origMask < origRows && collapseSafe; ++origMask) {
+          // compute reduced mask
+          size_t redMask = 0;
+          for (size_t bit = 0; bit < arity; ++bit) {
+            if (origMask & (1u << bit))
+              redMask |= (1u << origToReduced[bit]);
+          }
+          // collect all original masks that map to same redMask; verify their outputs equal
+          bool expected = tbl.bits().bit((uint32_t)origMask);
+          // For efficiency, test only other masks with same redMask by flipping duplicated positions
+          // Approach: iterate over all origMask2 and compare when mapping equal
+          for (size_t origMask2 = 0; origMask2 < origRows; ++origMask2) {
+            // quick skip: if mapping differs, continue
+            size_t redMask2 = 0;
+            for (size_t bit = 0; bit < arity; ++bit)
+              if (origMask2 & (1u << bit))
+                redMask2 |= (1u << origToReduced[bit]);
+            if (redMask2 != redMask) continue;
+            if (tbl.bits().bit((uint32_t)origMask2) != expected) {
+              collapseSafe = false;
+              break;
+            }
+          }
+        }
+
+        if (collapseSafe && newArity < arity && newArity >= 1) {
+          // Construct new node with uniqueChildren as children and reattach in place
+          // Create a temporary new Node sharing the same dnlid/termid, then replace
+          auto newNode = std::make_shared<Node>(this, node->dnlid, node->termid);
+          // attach unique children in same order as uniqueChildren vector
+          for (Node* cptr : uniqueChildren)
+            newNode->addChild(std::shared_ptr<Node>(cptr->shared_from_this()));
+          // Reattach into parent
+          replaceChildInParent(node_shared, newNode);
+          // Note: numExternalInputs_ may change if we removed Input leaves; we'll recompute below
+          continue;
+        }
+      }
+    }
+
+    // No local simplification applied for this node
+  } // end for order
+
+  // Recompute border leaves and numExternalInputs_ conservatively.
+  // We cannot accurately track numExternalInputs_ deltas in all cases during transformations above,
+  // so recalc from root.
+  // Rebuild numExternalInputs_ by scanning leaves for Type::Input and finding max index +1
+  size_t maxInput = 0;
+  bool anyInput = false;
+  struct F2 { Node* n; };
+  std::vector<F2, tbb::tbb_allocator<F2>> stk;
+  if (root_) stk.push_back({root_.get()});
+  while (!stk.empty()) {
+    auto f = stk.back(); stk.pop_back();
+    if (f.n->type == Node::Type::Table) {
+      for (auto &c : f.n->children) stk.push_back({c.get()});
+    } else if (f.n->type == Node::Type::Input) {
+      anyInput = true;
+      if (f.n->inputIndex > maxInput) maxInput = f.n->inputIndex;
+    } else if (f.n->type == Node::Type::P) {
+      // P nodes contain one Input child originally, nothing to do
+      for (auto &c : f.n->children) stk.push_back({c.get()});
+    }
+  }
+  if (anyInput) numExternalInputs_ = maxInput + 1;
+  else numExternalInputs_ = 0;
+
+  // update borders from new tree structure
+  updateBorderLeaves();
+}
+

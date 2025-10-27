@@ -84,6 +84,7 @@ public:
   const Node* getRoot() const { return root_.get(); }
   bool isInitialized() const;
   void print() const;
+  void simplify();
 
 private:
   struct BorderLeaf {
