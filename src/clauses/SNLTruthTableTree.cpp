@@ -11,6 +11,8 @@
 
 using namespace KEPLER_FORMAL;
 
+//#define DEBUG_CHECKS
+
 // Init Ptable holder
 const SNLTruthTable SNLTruthTableTree::PtableHolder_ = SNLTruthTable(1,2);
 
@@ -25,9 +27,10 @@ static std::atomic<size_t> g_live_nodes{0};
 // Node ctors / dtor
 //----------------------------------------------------------------------
 SNLTruthTableTree::Node::Node(uint32_t idx, SNLTruthTableTree* t)
-  : type(Type::Input), inputIndex(idx), /*nodeID(0),*/ nodeID(SNLTruthTableTree::kInvalidId),
-    tree(t), termid(naja::DNL::DNLID_MAX), parentId(SNLTruthTableTree::kInvalidId)
+  : type(Type::Input), /*nodeID(0),*/ nodeID(SNLTruthTableTree::kInvalidId),
+    tree(t), parentId(SNLTruthTableTree::kInvalidId)
 {
+  data.inputIndex = idx;
   if (tree && tree->lastID_ == std::numeric_limits<unsigned>::max()) {
     throw std::overflow_error("Node ID overflow");
   }
@@ -38,9 +41,10 @@ SNLTruthTableTree::Node::Node(SNLTruthTableTree* t,
                               naja::DNL::DNLID instid,
                               naja::DNL::DNLID term,
                               Type type_)
-  : type(type_), inputIndex(std::numeric_limits<uint32_t>::max()), /*nodeID(0),*/ nodeID(SNLTruthTableTree::kInvalidId),
-    tree(t), termid(term), parentId(SNLTruthTableTree::kInvalidId)
+  : type(type_), /*nodeID(0),*/ nodeID(SNLTruthTableTree::kInvalidId),
+    tree(t), parentId(SNLTruthTableTree::kInvalidId)
 {
+  data.termid = term;
   if (tree && tree->lastID_ == std::numeric_limits<unsigned>::max()) {
     throw std::overflow_error("Node ID overflow");
   }
@@ -58,9 +62,9 @@ SNLTruthTableTree::Node::~Node() {
 //----------------------------------------------------------------------
 const SNLTruthTable& SNLTruthTableTree::Node::getTruthTable() const {
   if (type == Type::Table) {
-    auto* model = const_cast<SNLDesign*>(naja::DNL::get()->getDNLTerminalFromID(termid).getDNLInstance().getSNLModel());
+    auto* model = const_cast<SNLDesign*>(naja::DNL::get()->getDNLTerminalFromID(data.termid).getDNLInstance().getSNLModel());
     return model->getTruthTable(
-      naja::DNL::get()->getDNLTerminalFromID(termid)
+      naja::DNL::get()->getDNLTerminalFromID(data.termid)
                    .getSnlBitTerm()->getOrderID());
   }
   else if (type == Type::P || type == Type::Input) {
@@ -110,7 +114,7 @@ bool SNLTruthTableTree::Node::eval(const std::vector<bool>& extInputs) const
     auto childSp = tree->nodeFromId(cid);
     if (!childSp) throw std::logic_error("Null child node");
     if (childSp->type == Type::Input) {
-      size_t inx = childSp->inputIndex;
+      size_t inx = childSp->data.inputIndex;
       if (inx >= extInputs.size()) throw std::out_of_range("Input index out of range");
       bit = extInputs[inx];
     } else {
@@ -127,12 +131,14 @@ bool SNLTruthTableTree::Node::eval(const std::vector<bool>& extInputs) const
 void SNLTruthTableTree::Node::addChildId(uint32_t childId) {
   if (childId == kInvalidId) throw std::invalid_argument("addChildId: invalid id");
   uint32_t cur = this->parentId;
+  #ifdef DEBUG_CHECKS
   while (cur != SNLTruthTableTree::kInvalidId) {
     if (cur == childId) throw std::invalid_argument("addChildId: cycle detected");
     auto p = tree->nodeFromId(cur);
     if (!p) break;
     cur = p->parentId;
   }
+  #endif
 
   childrenIds.push_back(childId);
 
@@ -174,7 +180,7 @@ void SNLTruthTableTree::updateBorderLeaves() {
         BorderLeaf bl;
         bl.parentId = nid;
         bl.childPos = i;
-        bl.extIndex = ch->inputIndex;
+        bl.extIndex = ch->data.inputIndex;
         borderLeaves_.push_back(bl);
       } else {
         stk.push_back(cid);
@@ -349,7 +355,7 @@ void SNLTruthTableTree::concatFull(
         BorderLeaf bl;
         bl.parentId = insertedId;
         bl.childPos = j;
-        bl.extIndex = ch->inputIndex;
+        bl.extIndex = ch->data.inputIndex;
         newBorderLeaves.push_back(bl);
       } else {
         for (size_t k = 0; k < ch->childrenIds.size(); ++k) {
@@ -360,7 +366,7 @@ void SNLTruthTableTree::concatFull(
             BorderLeaf bl2;
             bl2.parentId = cid;
             bl2.childPos = k;
-            bl2.extIndex = cc->inputIndex;
+            bl2.extIndex = cc->data.inputIndex;
             newBorderLeaves.push_back(bl2);
           }
         }
@@ -405,11 +411,11 @@ void SNLTruthTableTree::print() const {
     auto n = nodeFromId(nid);
     if (!n) continue;
     if (n->type == Node::Type::Table) {
-      printf("term: %zu nodeID=%u id=%u\n", (size_t)n->termid, n->nodeID, n->nodeID);
+      printf("term: %zu nodeID=%u id=%u\n", (size_t)n->data.termid, n->nodeID, n->nodeID);
     } else if (n->type == Node::Type::P) {
       printf("P nodeID=%u id=%u\n", n->nodeID, n->nodeID);
     } else {
-      printf("Input node index=%u nodeID=%u id=%u\n", n->inputIndex, n->nodeID, n->nodeID);
+      printf("Input node index=%u nodeID=%u id=%u\n", n->data.inputIndex, n->nodeID, n->nodeID);
     }
     for (size_t i = 0; i < n->childrenIds.size(); ++i) {
       uint32_t cid = n->childrenIds[i];
@@ -417,7 +423,7 @@ void SNLTruthTableTree::print() const {
       if (!ch) {
         printf("  child[%zu] = null (childId=%u)\n", i, cid);
       } else if (ch->type == Node::Type::Input) {
-        printf("  child[%zu] = Input(%u) id=%u\n", i, ch->inputIndex, ch->nodeID);
+        printf("  child[%zu] = Input(%u) id=%u\n", i, ch->data.inputIndex, ch->nodeID);
       } else {
         printf("  child[%zu] = Node(id=%u)\n", i, cid);
         stk.push_back(cid);
@@ -536,7 +542,7 @@ void SNLTruthTableTree::simplify() {
       if (!ch) continue;
       if (ch->type == Node::Type::Input) {
         anyInput = true;
-        if (ch->inputIndex > maxInput) maxInput = ch->inputIndex;
+        if (ch->data.inputIndex > maxInput) maxInput = ch->data.inputIndex;
       } else {
         stk2.push_back(cid);
       }
@@ -703,7 +709,7 @@ void SNLTruthTableTree::finalize() {
       if (!ch) continue;
       if (ch->type == Node::Type::Input) {
         anyInput = true;
-        if (ch->inputIndex > maxInput) maxInput = ch->inputIndex;
+        if (ch->data.inputIndex > maxInput) maxInput = ch->data.inputIndex;
       } else {
         stk.push_back(cid);
       }

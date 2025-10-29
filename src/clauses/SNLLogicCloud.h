@@ -32,7 +32,7 @@ class SNLLogicCloud {
       auto f = stk.back(); stk.pop_back();
       //printf("Node type: %d\n", (int)f->type);
       if (f->type == SNLTruthTableTree::Node::Type::P) {
-        allInputs.push_back(f->termid);
+        allInputs.push_back(f->data.termid);
       }
       else if (f->type == SNLTruthTableTree::Node::Type::Table || 
                f->type == SNLTruthTableTree::Node::Type::Input) {

@@ -424,12 +424,12 @@ Tree2BoolExpr::convert(
                 assert(node->type == SNLTruthTableTree::Node::Type::Input);
                 auto parent = node->tree->nodeFromId(node->parentId);
                 assert(parent && parent->type == SNLTruthTableTree::Node::Type::P);
-                if (parent->termid >= varNames.size()) {
-                    printf("varNames size: %zu, parent termid: %zu\n",
-                           varNames.size(), (size_t)parent->termid);
-                    assert(parent->termid < varNames.size());
+                if (parent->data.termid >= varNames.size()) {
+                    printf("varNames size: %zu, parent data.termid: %zu\n",
+                           varNames.size(), (size_t)parent->data.termid);
+                    assert(parent->data.termid < varNames.size());
                 }
-                setMemoETS(id, BoolExpr::Var(varNames[parent->termid]));
+                setMemoETS(id, BoolExpr::Var(varNames[parent->data.termid]));
             }
         } else {
             // post-visit for Table / P

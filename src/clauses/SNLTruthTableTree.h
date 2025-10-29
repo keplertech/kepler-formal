@@ -19,21 +19,22 @@ namespace KEPLER_FORMAL {
 class SNLTruthTableTree {
 public:
   struct Node {
-    uint32_t inputIndex = std::numeric_limits<uint32_t>::max();
-    // debug counters
-    uint32_t nodeID = std::numeric_limits<uint32_t>::max();   // incremental debug id for diagnostics (unchanged)
-    //uint32_t id_   = std::numeric_limits<uint32_t>::max(); // actual id (index + kIdOffset)
-    uint32_t parentId = std::numeric_limits<uint32_t>::max();
+    // group 32-bit scalars first
+  uint32_t nodeID   = std::numeric_limits<uint32_t>::max();
+  uint32_t parentId = std::numeric_limits<uint32_t>::max();
 
-    // owner pointer for lookup convenience in Node methods
-    SNLTruthTableTree* tree = nullptr;
+  // put the 64-bit-aligned items next: union with 64-bit termid,
+  // then pointer and std::vector (both require 8-byte alignment)
+  union {
+    uint32_t inputIndex;
+    naja::DNL::DNLID termid; // 64-bit
+  } data;
 
-    naja::DNL::DNLID termid = naja::DNL::DNLID_MAX;
+  SNLTruthTableTree* tree = nullptr; // 8 bytes
+  std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> childrenIds; // typically 24 bytes on LP64
 
-    // canonical id-based topology: children ids and parent id
-    
-    std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> childrenIds;
-    enum class Type : uint8_t { Input = 0, Table = 1, P = 2 } type;
+  // small discriminator last to avoid introducing padding between large fields
+  enum class Type : uint8_t { Input = 0, Table = 1, P = 2 } type = Type::Table;
 
     explicit Node(uint32_t idx, SNLTruthTableTree* t);
     Node(SNLTruthTableTree* t,
@@ -105,6 +106,7 @@ private:
   std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> borderLeaves_;
   size_t lastID_ = 2;       // debug counter for nodeID assignment
   static const SNLTruthTable PtableHolder_;
+  std::unordered_map<naja::DNL::DNLID, uint32_t> termid2nodeid_;
 };
 
 } // namespace KEPLER_FORMAL
