@@ -14,8 +14,8 @@ enum class Op { VAR, AND, OR, NOT, XOR, NONE };
 struct BoolExprCacheKey {
   Op op;
   size_t varId;
-  BoolExpr* l;   // raw pointer — not owning; use index/ptr identity for the key
-  BoolExpr* r;   // raw pointer
+  std::shared_ptr<BoolExpr> l;   // raw pointer — not owning; use index/ptr identity for the key
+  std::shared_ptr<BoolExpr> r;   // raw pointer
 };
 
 class BoolExprCache {
@@ -23,13 +23,16 @@ public:
   using Key = BoolExprCacheKey;
 
   // Lookup-or-create API
-  static BoolExpr* getExpression(Key const& k);
+  static std::shared_ptr<BoolExpr> getExpression(Key const& k);
   static void destroy();
 private:
   struct Impl;
   static Impl& impl();
-  // destructor that will delete all stored BoolExpr*
+  // destructor that will delete all stored std::shared_ptr<BoolExpr>
   static std::atomic<size_t> lastID_;
+  static size_t numQuaries_;
+  static size_t numMiss_;
+  static size_t numHit_;
 };
 
 } // namespace KEPLER_FORMAL

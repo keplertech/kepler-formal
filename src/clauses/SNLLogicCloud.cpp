@@ -53,9 +53,9 @@ IterationInputsETSPair& getNewIterationInputsETS() {
 void clearCurrentIterationInputsETS() {
   // If vector reach size larger than 1024, clear it to save memory
   auto& currentIterationInputs = getCurrentIterationInputsETS();
-  if (currentIterationInputs.first.size() > 1024) {
-    currentIterationInputs.first.clear();
-  }
+  // if (currentIterationInputs.first.size() > 1024) {
+  //   currentIterationInputs.first.clear();
+  // }
   currentIterationInputs.second = 0;
 }
 
@@ -87,9 +87,9 @@ void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID>& res) {
 void clearNewIterationInputsETS() {
   // If vector reach size larger than 1024, clear it to save memory
   auto& newIterationInputs = getNewIterationInputsETS();
-  if (newIterationInputs.first.size() > 1024) {
-    newIterationInputs.first.clear();
-  }
+  // if (newIterationInputs.first.size() > 1024) {
+  //   newIterationInputs.first.clear();
+  // }
   newIterationInputs.second = 0;
 }
 
@@ -360,6 +360,15 @@ void SNLLogicCloud::compute() {
         break;
       }
     }
+    // if (table_.getNumNodes() > 1000000) {
+    //   printf("num of nodes in tree(%lu): %lu\n",tbb::this_task_arena::current_thread_index(),  table_.getNumNodes());
+    //   // for (size_t i = 0; i < sizeOfNewInputs; i++) {
+    //   //   printf("newIterationInputs Input(%lu): %s(%s)\n", i,
+    //   //             dnl_.getDNLTerminalFromID(getNewIterationInputsETS().first[i]).getSnlBitTerm()->getName().getString().c_str(),
+    //   //             dnl_.getDNLTerminalFromID(getNewIterationInputsETS().first[i]).getSnlBitTerm()->getDesign()->getName().getString().c_str());
+    //   // }
+    // }
+    //printf("size of tree(%lu): %lu\n",tbb::this_task_arena::current_thread_index(),  table_.size());
   }
   copyNewIterationInputsETStoCurrent();
   copyCurrentIterationInputsETS(currentIterationInputs_);

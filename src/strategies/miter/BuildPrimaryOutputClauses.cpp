@@ -322,7 +322,7 @@ void BuildPrimaryOutputClauses::initVarNames() {
 void BuildPrimaryOutputClauses::build() {
   naja::DNL::get();
   POs_.clear();
-  POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
+  POs_ = tbb::concurrent_vector<std::shared_ptr<BoolExpr>>(outputs_.size());
   initVarNames();
   // Init var names(counting on the fact that normalization happened before)
 
@@ -406,7 +406,7 @@ void BuildPrimaryOutputClauses::build() {
                         assert(cloud.getTruthTable().isInitialized());
                         //DEBUG_LOG("Truth Table: %s\n",
                         //          cloud.getTruthTable().print().c_str());
-                        /*BoolExpr* expr = Tree2BoolExpr::convert(
+                        /*std::shared_ptr<BoolExpr> expr = Tree2BoolExpr::convert(
                             cloud.getTruthTable(), varNames);*/
                         //BoolExpr::getMutex().lock();
                         // if (POs_.size() - 1 < i) {
@@ -415,8 +415,10 @@ void BuildPrimaryOutputClauses::build() {
                         //   }
                         // }
                         assert(POs_.size()  - 1 >= i);
+                        cloud.getTruthTable().finalize();
                         POs_[i] = Tree2BoolExpr::convert(
                             cloud.getTruthTable(), termDNLID2varID_);
+                        cloud.destroy();
                         //BoolExpr::getMutex().unlock();
                         //printf("size of expr: %lu\n", POs_.back()->size());
                       };
@@ -426,7 +428,7 @@ void BuildPrimaryOutputClauses::build() {
       processOutput(i);
     }
   } else {
-    tbb::parallel_for(tbb::blocked_range<DNLID>(0, outputs_.size()),
+    tbb::parallel_for(tbb::blocked_range<DNLID>(0, outputs_.size(), 100),
                       [&](const tbb::blocked_range<DNLID>& r) {
                         for (DNLID i = r.begin(); i < r.end(); ++i) {
                           processOutput(i);

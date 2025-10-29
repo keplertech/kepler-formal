@@ -21,12 +21,12 @@ class SNLLogicCloud {
   void compute();
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);
-  const SNLTruthTableTree& getTruthTable() const { return table_; }
+  SNLTruthTableTree& getTruthTable() { return table_; }
   const std::vector<naja::DNL::DNLID>& getInputs() const { return currentIterationInputs_; }
   // Get all inputs from the tree SNLTruthTableTree directly
   std::vector<naja::DNL::DNLID> getAllInputs() const {
     std::vector<naja::DNL::DNLID> allInputs;
-    std::vector<const SNLTruthTableTree::Node*> stk;
+    std::vector<std::shared_ptr<SNLTruthTableTree::Node>> stk;
     stk.push_back(table_.getRoot());
     while(!stk.empty()) {
       auto f = stk.back(); stk.pop_back();
@@ -36,13 +36,15 @@ class SNLLogicCloud {
       }
       else if (f->type == SNLTruthTableTree::Node::Type::Table || 
                f->type == SNLTruthTableTree::Node::Type::Input) {
-        for (auto& c : f->children)
-          stk.push_back(c.get());
+        for (auto& c : f->childrenIds)
+          stk.push_back(table_.nodeFromId(c));
       }
     }
     return allInputs;
   }
-  
+  void destroy() {
+    table_.destroy();
+  }
 
  private:
   naja::DNL::DNLID seedOutputTerm_;

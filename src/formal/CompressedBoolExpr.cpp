@@ -26,11 +26,11 @@ struct SigEq {
 };
 
 CompressedBoolExpr
-CompressedBoolExpr::compress(BoolExpr* expr) {
+CompressedBoolExpr::compress(std::shared_ptr<BoolExpr> expr) {
     CompressedBoolExpr out;
 
-    // map a BoolExpr* to its node‐index in nodes_
-    std::unordered_map<const BoolExpr*, size_t> visited;
+    // map a std::shared_ptr<BoolExpr> to its node‐index in nodes_
+    std::unordered_map<const std::shared_ptr<BoolExpr>, size_t> visited;
     visited.reserve(1024);
 
     // intern table: signature → unique node index
@@ -38,9 +38,9 @@ CompressedBoolExpr::compress(BoolExpr* expr) {
     intern.reserve(1024);
 
     // recursive post‐order
-    std::function<size_t(BoolExpr*)> dfs;
+    std::function<size_t(std::shared_ptr<BoolExpr>)> dfs;
     dfs = [&](auto const& bexpr) -> size_t {
-        const BoolExpr* raw = bexpr;
+        const std::shared_ptr<BoolExpr> raw = bexpr;
 
         // already processed?
         auto itv = visited.find(raw);

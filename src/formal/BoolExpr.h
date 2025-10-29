@@ -19,18 +19,18 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
     friend class BoolExprCache;
 public:
     // Convenient constants
-    static BoolExpr* createFalse() { return Var(0); }
-    static BoolExpr* createTrue()  { return Var(1); }
+    static std::shared_ptr<BoolExpr> createFalse() { return Var(0); }
+    static std::shared_ptr<BoolExpr> createTrue()  { return Var(1); }
 
     // Factory methods (canonical, fold constants, share structure)
-    static BoolExpr* Var(size_t id);
-    static BoolExpr* Not(BoolExpr* a);
-    static BoolExpr* And(BoolExpr* a,
-                                         BoolExpr* b);
-    static BoolExpr* Or(BoolExpr* a,
-                                        BoolExpr* b);
-    static BoolExpr* Xor(BoolExpr* a,
-                                         BoolExpr* b);
+    static std::shared_ptr<BoolExpr> Var(size_t id);
+    static std::shared_ptr<BoolExpr> Not(std::shared_ptr<BoolExpr> a);
+    static std::shared_ptr<BoolExpr> And(std::shared_ptr<BoolExpr> a,
+                                         std::shared_ptr<BoolExpr> b);
+    static std::shared_ptr<BoolExpr> Or(std::shared_ptr<BoolExpr> a,
+                                        std::shared_ptr<BoolExpr> b);
+    static std::shared_ptr<BoolExpr> Xor(std::shared_ptr<BoolExpr> a,
+                                         std::shared_ptr<BoolExpr> b);
 
     // Print and stringify
     void Print(std::ostream& out) const;
@@ -42,8 +42,8 @@ public:
     // Accessors
     Op getOp()    const { return op_; }
     size_t getId() const { return varID_; }
-    BoolExpr* getLeft()  const { return left_; }
-    BoolExpr* getRight() const { return right_; }
+    std::shared_ptr<BoolExpr> getLeft()  const { return left_; }
+    std::shared_ptr<BoolExpr> getRight() const { return right_; }
         std::string getName() const {
         if (op_ != Op::VAR)
             throw std::logic_error("getName: not a variable");
@@ -55,8 +55,8 @@ public:
     }
     // default constructor
     BoolExpr() = default;
-    void setIndex(size_t idx) { index_ = idx; }
-    size_t getIndex() const { assert(index_ != (size_t) -1); return index_; }
+    //void setIndex(size_t idx) { index_ = idx; }
+    //size_t getIndex() const { assert(index_ != (size_t) -1); return index_; }
 
     // comparator based on values
     bool operator==(const BoolExpr& other) const {
@@ -83,18 +83,18 @@ public:
     }
     // Simplify/optimize an expression DAG (returns interned canonical node)
     // Memoized, safe on DAGs.
-    static BoolExpr* simplify(BoolExpr* e);
+    static std::shared_ptr<BoolExpr> simplify(std::shared_ptr<BoolExpr> e);
 private:
     // Private ctor: use factory methods
     BoolExpr(Op op, size_t id,
-             BoolExpr* a,
-             BoolExpr* b);
+             std::shared_ptr<BoolExpr> a,
+             std::shared_ptr<BoolExpr> b);
 
     Op     op_ = Op::NONE;
     size_t varID_ = (size_t) -1; // only for VAR
-    BoolExpr* left_ = nullptr;
-    BoolExpr* right_ = nullptr;
-    size_t index_ = (size_t) -1;
+    std::shared_ptr<BoolExpr> left_ = nullptr;
+    std::shared_ptr<BoolExpr> right_ = nullptr;
+    //size_t index_ = (size_t) -1;
 
     static std::string OpToString(Op);
 
@@ -111,8 +111,8 @@ private:
             const uint64_t s = HASH_SEED;
             uint64_t a = splitmix64(uint64_t(std::hash<int>()(int(k.op))) + s);
             uint64_t b = splitmix64(uint64_t(std::hash<size_t>()(k.varId)) ^ (s<<1));
-            uint64_t c = splitmix64(uint64_t(std::uintptr_t(k.l)) + (s>>1));
-            uint64_t d = splitmix64(uint64_t(std::uintptr_t(k.r)) ^ (s<<2));
+            uint64_t c = splitmix64(uint64_t(std::uintptr_t(k.l.get())) + (s>>1));
+            uint64_t d = splitmix64(uint64_t(std::uintptr_t(k.r.get())) ^ (s<<2));
             uint64_t acc = a;
             acc = splitmix64(acc ^ (b + 0x9e3779b97f4a7c15ULL + (acc<<6) + (acc>>2)));
             acc ^= (c + 0x9e3779b97f4a7c15ULL + (acc<<6) + (acc>>2));
@@ -137,7 +137,7 @@ private:
                               KeyEq> table_;
 
     // Interning constructor (caller must lock tableMutex_)
-    static BoolExpr* createNode(BoolExprCache::Key const& k);
+    static std::shared_ptr<BoolExpr> createNode(BoolExprCache::Key const& k);
 };
 
 } // namespace KEPLER_FORMAL
