@@ -21,7 +21,8 @@ public:
   struct Node {
     // group 32-bit scalars first
   uint32_t nodeID   = std::numeric_limits<uint32_t>::max();
-  uint32_t parentId = std::numeric_limits<uint32_t>::max();
+  //uint32_t parentId = std::numeric_limits<uint32_t>::max();
+  std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> parentIds; // for multiple parents support
 
   // put the 64-bit-aligned items next: union with 64-bit termid,
   // then pointer and std::vector (both require 8-byte alignment)
@@ -81,7 +82,7 @@ public:
   size_t getNumNodes() const { return nodes_.size(); }
 
   // allocateNode guarantees id assignment before publishing node in nodes_
-  uint32_t allocateNode(const std::shared_ptr<Node>& np);
+  uint32_t allocateNode(std::shared_ptr<Node>& np);
 
   // finalize repairs and validates the tree; must be called once after build and before traversal
   // It will remap children/parent ids to canonical ids and throw on unresolved references

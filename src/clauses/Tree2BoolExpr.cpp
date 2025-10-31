@@ -422,7 +422,17 @@ Tree2BoolExpr::convert(
             }
             else {
                 assert(node->type == SNLTruthTableTree::Node::Type::Input);
-                auto parent = node->tree->nodeFromId(node->parentId);
+                if (node->parentIds.size() > 1) {
+                    for (const auto& pid : node->parentIds) {
+                        printf("%s\n", naja::DNL::get()->getDNLTerminalFromID(tree.nodeFromId(pid)->data.termid).getSnlBitTerm()->getString().c_str());
+                        printf("of model %s\n", naja::DNL::get()->getDNLTerminalFromID(tree.nodeFromId(pid)->data.termid).getDNLInstance().getSNLModel()->getString().c_str());
+                    }
+                }
+                if (node->parentIds.empty()) {
+                    throw std::runtime_error("Input node has no parent");
+                }
+                assert(node->parentIds.size() == 1);
+                auto parent = node->tree->nodeFromId(node->parentIds[0]);
                 assert(parent && parent->type == SNLTruthTableTree::Node::Type::P);
                 if (parent->data.termid >= varNames.size()) {
                     printf("varNames size: %zu, parent data.termid: %zu\n",
