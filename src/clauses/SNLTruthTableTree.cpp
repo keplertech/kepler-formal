@@ -391,6 +391,7 @@ void SNLTruthTableTree::concatFull(
   const std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
             tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>& tables)
 {
+  #ifdef DEBUG_CHECKS
   // print tables
   DEBUG_LOG("Tables in concatFull:\n");
   for (size_t i=0; i<tables.size();++i) {
@@ -485,7 +486,7 @@ void SNLTruthTableTree::concatFull(
     DEBUG_LOG("concatFull: too many tables %zu > %zu\n", tables.size(), borderLeaves_.size());
     throw std::invalid_argument("too many tables in concatFull");
   }
-
+#endif
 // FUNC START
 
   std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> newBorderLeaves;
@@ -577,6 +578,9 @@ void SNLTruthTableTree::concatFull(
   borderLeaves_ = std::move(newBorderLeaves);
   DEBUG_LOG("ConcatBody done, new numExternalInputs_: %zu\n", numExternalInputs_); 
   DEBUG_LOG("ConcatBody done, borderLeaves_ size: %zu\n", borderLeaves_.size());
+  // CHECKS
+
+  #ifdef DEBUG_CHECKS
   // count all inputs and pi nodes in the tree 
   std::stack<uint32_t> stk;
   stk.push(rootId_);
@@ -617,8 +621,6 @@ void SNLTruthTableTree::concatFull(
     DEBUG_LOG("2  border leaf parentId %u childPos %zu extIndex %zu\n",
       bl.parentId, bl.childPos, bl.extIndex);
   }
-  // CHECKS
-
   
   // assert all new border leaves are in table and in the right order
   size_t order = 0;
@@ -685,6 +687,7 @@ void SNLTruthTableTree::concatFull(
       }
     }
   }
+  #endif
 }
 
 //----------------------------------------------------------------------
