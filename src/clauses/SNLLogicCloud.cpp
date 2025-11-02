@@ -351,5 +351,5 @@ void SNLLogicCloud::compute() {
   //   assert(false && "Number of inputs in the truth table does not match the number of current iteration inputs");
   // }
   // Simplify the truth table
-  table_.simplify();
+  //table_.simplify();
 }

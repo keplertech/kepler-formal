@@ -172,6 +172,7 @@ uint32_t SNLTruthTableTree::allocateNode(std::shared_ptr<Node>& np) {
 //----------------------------------------------------------------------
 void SNLTruthTableTree::updateBorderLeaves() {
   borderLeaves_.clear();
+  size_t externalIndex = 0;
   if (rootId_ == kInvalidId) return;
   std::vector<uint32_t> stk;
   stk.reserve(64);
@@ -179,7 +180,7 @@ void SNLTruthTableTree::updateBorderLeaves() {
   std::set<uint32_t> visited;
   while (!stk.empty()) {
     uint32_t nid = stk.back(); stk.pop_back();
-    if (visited.find(nid) != visited.end() && nodeFromId(nid)->type != Node::Type::P) continue;
+    if (visited.find(nid) != visited.end()) continue;
     visited.insert(nid);
     auto nsp = nodeFromId(nid);
     if (!nsp) assert(false && "updateBorderLeaves: null node in tree");
@@ -190,9 +191,17 @@ void SNLTruthTableTree::updateBorderLeaves() {
       if (!ch) assert(false && "updateBorderLeaves: null child node in tree");
       if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
         BorderLeaf bl;
-        bl.parentId = (nid);
-        bl.childPos = i;
-        bl.extIndex = ch->data.inputIndex;
+        if (ch->type == Node::Type::P) {
+          bl.parentId = cid;
+          bl.childPos = 0;
+        } else {
+          bl.parentId = (nid); 
+          bl.childPos = i;
+        }
+        bl.extIndex = externalIndex;
+        printf("updateBorderLeaves: found border leaf parentId=%u childPos=%zu extIndex=%zu\n",
+               bl.parentId, bl.childPos, bl.extIndex);
+        externalIndex++;
         borderLeaves_.push_back(bl);
       } else {
         stk.push_back(cid);
@@ -540,7 +549,7 @@ void SNLTruthTableTree::concatFull(
           BorderLeaf bl;
           bl.parentId = (insertedId);
           bl.childPos = j;
-          bl.extIndex = ch->data.inputIndex;
+          bl.extIndex = ch->data.inputIndex; // Set correctly in concatBody
           newBorderLeaves.push_back(bl);
           printf("--- new border leaf extIndex %zu from inserted node id %u childPos %zu\n",
             bl.extIndex, insertedId, j);
@@ -560,8 +569,45 @@ void SNLTruthTableTree::concatFull(
   borderLeaves_ = std::move(newBorderLeaves);
   printf("ConcatBody done, new numExternalInputs_: %zu\n", numExternalInputs_); 
   printf("ConcatBody done, borderLeaves_ size: %zu\n", borderLeaves_.size());
-  //updateBorderLeaves();
+  // count all inputs and pi nodes in the tree 
+  std::stack<uint32_t> stk;
+  stk.push(rootId_);
+  std::set<uint32_t> inputs;
+  while (!stk.empty()) {
+    uint32_t nid = stk.top(); stk.pop();
+    auto nsp = nodeFromId(nid);
+    if (!nsp) assert(false && "concatFull: null node in tree during input count");
+    for (size_t i = 0; i < nsp->childrenIds.size(); ++i) {
+      uint32_t cid = nsp->childrenIds[i];
+      auto ch = nodeFromId(cid);
+      if (!ch) assert(false && "concatFull: null child node in tree during input count");
+      if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
+        inputs.insert(cid);
+      } else {
+        stk.push(cid);
+      }
+    }
+  }
+  printf("concatFull: counted inputs %zu vs numExternalInputs_ %zu after concatFull\n",
+    inputs.size(), numExternalInputs_);
   assert((borderLeaves_.size() == numExternalInputs_) && "concatFull: border leaves count mismatch after concatFull");
+  for (const auto& bl : borderLeaves_) {
+    printf("1  border leaf parentId %u childPos %zu extIndex %zu\n",
+      bl.parentId, bl.childPos, bl.extIndex);
+  }
+  assert(inputs.size() == numExternalInputs_ &&
+    "concatFull: counted inputs mismatch after concatFull");
+  // updateBorderLeaves(); <- not used as it changes the order and unsyncing the connection of tables and border leaves order
+  assert((borderLeaves_.size() == numExternalInputs_) && "concatFull: border leaves count mismatch after concatFull");
+  assert(inputs.size() == numExternalInputs_ &&
+    "concatFull: counted inputs mismatch after concatFull");
+  for (const auto& bl : borderLeaves_) {
+    printf("2  border leaf parentId %u childPos %zu extIndex %zu\n",
+      bl.parentId, bl.childPos, bl.extIndex);
+  }
+  // CHECKS
+
+  
   // assert all new border leaves are in table and in the right order
   size_t order = 0;
   printf("@@ Border leaves size after concatFull: %zu\n", borderLeaves_.size());
