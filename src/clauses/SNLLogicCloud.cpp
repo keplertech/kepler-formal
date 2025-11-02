@@ -123,7 +123,7 @@ void copyNewIterationInputsETStoCurrent() {
   assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
 }
 
-#define DEBUG_PRINTS
+//#define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
 #define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
@@ -148,7 +148,7 @@ void SNLLogicCloud::compute() {
   initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
-  printf("---- Beging!!\n");
+  DEBUG_LOG("---- Beging!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() || isOutput(seedOutputTerm_)) {
     auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
