@@ -186,6 +186,7 @@ TEST_F(MiterTests, TestMiterAND) {
 }
 
 TEST_F(MiterTests, TestMiterANDNonConstant) {
+  printf("[TEST] MiterTests.TestMiterANDNonConstant\n");
   // 1. Create NL universe and DB
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
@@ -290,6 +291,7 @@ TEST_F(MiterTests, TestMiterANDNonConstant) {
 
 
 TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
+  printf("[TEST] MiterTests.TestMiterANDNonConstantWithSequentialElements\n");
   // 1. Create SNL
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);

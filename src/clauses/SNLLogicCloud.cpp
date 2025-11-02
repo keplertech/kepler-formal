@@ -148,6 +148,7 @@ void SNLLogicCloud::compute() {
   initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
+  printf("---- Beging!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() || isOutput(seedOutputTerm_)) {
     auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
@@ -222,59 +223,26 @@ void SNLLogicCloud::compute() {
     }
   }
 
-  std::set<naja::DNL::DNLID> handledTerms;
+  std::set<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>> handledTerms;
   size_t iter = 0;
 
   while (!reachedPIs) {
     //DEBUG_LOG("size of truth table tree: %zu\n", table_.size());
-    DEBUG_LOG("---iter---\n");
+    DEBUG_LOG("---iter %lu---\n", iter);
     //DEBUG_LOG("Current iteration inputs: %lu\n", newIterationInputs.size());
     DEBUG_LOG("Current iteration inputs size: %zu\n", sizeOfNewIterationInputsETS());
-    //DEBUG_LOG("term %lu: newIterationInputs size: %zu\n", seedOutputTerm_, newIterationInputs.size());
-    // for (auto input : newIterationInputs) {
-    //   DEBUG_LOG("newIterationInputs Input: %s(%s)\n",
-    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),
-    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getDesign()->getName().getString().c_str());
-    // }
-    //currentIterationInputs_ = newIterationInputs;
-    copyNewIterationInputsETStoCurrent();
-    // for (auto input : currentIterationInputs_) {
-    //   DEBUG_LOG("Input: %s\n",
-    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str());
-    // }
-  #ifdef DEBUG_PRINTS
-    // for (size_t i = 0; i < sizeOfNewIterationInputsETS(); i++) {
-    //   DEBUG_LOG("Input: %s\n",
-    //             dnl_.getDNLTerminalFromID(currentIterationInputsETS.local().first[i]).getSnlBitTerm()->getName().getString().c_str());
-    // }
-  #endif
-    //newIterationInputs.clear();
-    clearNewIterationInputsETS();
-    //DEBUG_LOG("Truth table: %s\n", table_.getString().c_str());
-    //DEBUG_LOG("Truth table size: %zu\n", table_.size());
-    //DEBUG_LOG("Current iteration inputs size: %zu\n", currentIterationInputs_.size());
-    //DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n", table_.size(), currentIterationInputs_.size());
-    DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n", table_.size(), sizeOfCurrentIterationInputsETS());
-    //assert(currentIterationInputs_.size() == table_.size());
-    //assert(sizeOfCurrentIterationInputsETS() == table_.size());
+     copyNewIterationInputsETStoCurrent();
 
+    clearNewIterationInputsETS();
+     DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n", table_.size(), sizeOfCurrentIterationInputsETS());
+  
     std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
             tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>> inputsToMerge;
 
     //for (auto input : currentIterationInputs_) {
     size_t sizeOfCurrentInputs = sizeOfCurrentIterationInputsETS();
-    std::set<naja::DNL::DNLID> handledTermsNextIteration;
     for (size_t i = 0; i < sizeOfCurrentInputs; i++) {
       auto input = getCurrentIterationInputsETS().first[i];
-      if ((handledTerms.find(input) != handledTerms.end()
-        || handledTermsNextIteration.find(input) != handledTermsNextIteration.end()
-        ) && !isInput(input)) {
-        DEBUG_LOG("#### iter %lu 1 Term (%zu) %s of inst %s already handled, skipping\n", iter, input,
-          naja::DNL::get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),
-            naja::DNL::get()->getDNLTerminalFromID(input).getDNLInstance().getSNLModel()->getName().getString().c_str());
-        continue;
-      }
-      handledTermsNextIteration.insert(input);
       if (isInput(input)/*|| isOutput(input)*/) {
         //SNLTruthTable tt(1, 2); // uncommented
         //newIterationInputs.push_back(input);
@@ -305,12 +273,10 @@ void SNLLogicCloud::compute() {
 
       auto driver = iso.getDrivers().front();
       if (isInput(driver)/* || isOutput(driver)*/) {
-        //SNLTruthTable tt(1, 2);
-        //newIterationInputs.push_back(driver);
         pushBackNewIterationInputsETS(driver);
-        //DEBUG_LOG("Add input with id: %zu\n", driver);
-        DEBUG_LOG("Adding top input id: %zu %s\n", driver,
-                  dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getName().getString().c_str());
+               DEBUG_LOG("- %lu After analyzing input %s(%lu), addings driver %s(%lu) is a primary input\n", iter
+                  , dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),input,
+                  dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getName().getString().c_str(), driver);
         inputsToMerge.push_back({naja::DNL::DNLID_MAX, driver}); // Placeholder for PI/PO
         continue;
       }
@@ -321,8 +287,6 @@ void SNLLogicCloud::compute() {
       if (!model->getTruthTable(
         dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID()).isInitialized())
       {
-        //DEBUG_LOG("#####Truth table for instance %s is not initialized\n",
-        //          inst.getSNLModel()->getName().getString().c_str());
         DEBUG_LOG("#####Truth table for instance %s is not initialized\n",
                   inst.getSNLInstance()->getModel()->getName().getString().c_str());
         auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
@@ -331,8 +295,9 @@ void SNLLogicCloud::compute() {
              "Truth table for instance is not initialized");
       }
       
-      DEBUG_LOG("Instance name: %s\n",
-                inst.getSNLInstance()->getName().getString().c_str());
+      DEBUG_LOG("Adding driver id: %zu %s(%s)\n", driver,
+                dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getName().getString().c_str(),
+                dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getDesign()->getName().getString().c_str());
       inputsToMerge.push_back({inst.getID(), driver});
 
       for (DNLID termID = inst.getTermIndexes().first;
@@ -340,20 +305,17 @@ void SNLLogicCloud::compute() {
         const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
         if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
           //DEBUG_LOG("Add input with id: %zu\n", termID);
-          DEBUG_LOG("Adding input id: %zu %s(%s)\n", termID,
-                    term.getSnlBitTerm()->getName().getString().c_str(),
-                    term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
-          //newIterationInputs.push_back(termID);
-          // if (handledTerms.find(termID) != handledTerms.end()
-          //   || handledTermsNextIteration.find(termID) != handledTermsNextIteration.end()) {
-          //     DEBUG_LOG("#### 2 Term (%zu) %s  of model %s already handled, skipping\n", termID,
-          //   naja::DNL::get()->getDNLTerminalFromID(termID).getSnlBitTerm()->getName().getString().c_str(),
-          //   naja::DNL::get()->getDNLTerminalFromID(termID).getDNLInstance().getSNLModel()->getName().getString().c_str());
-          //   continue;
-          // }
-          //handledTermsNextIteration.insert(termID);
+          //DEBUG_LOG("Adding input id: %zu %s(%s)\n", termID,
+          //          term.getSnlBitTerm()->getName().getString().c_str(),
+          //          term.getSnlBitTerm()->getDesign()->getName().getString().c_str());
+          if (handledTerms.find({driver, termID}) != handledTerms.end()) {
+            DEBUG_LOG("#### iter %lu 1 Term (%zu) %s of inst %s already handled, skipping\n", iter, input,
+              naja::DNL::get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),
+                naja::DNL::get()->getDNLTerminalFromID(input).getDNLInstance().getSNLModel()->getName().getString().c_str());
+            continue;
+          }
+          handledTerms.insert({driver, termID});
           pushBackNewIterationInputsETS(termID);
-          //inputsToMerge.push_back({term.getDNLInstance().getID(), termID});
         }
       }
     }
@@ -363,22 +325,8 @@ void SNLLogicCloud::compute() {
     }
 
     DEBUG_LOG("--- Merging truth tables with %zu inputs\n", inputsToMerge.size());
-    //DEBUG_LOG("Truth table %s\n", table_.getString().c_str());
-    // print table 
-    // for (size_t i = 0; i < inputsToMerge.size(); i++) {
-    //   auto input = inputsToMerge[i].second;
-    //   DEBUG_LOG("Merging input %zu: %s(%s)\n", i,
-    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getName().getString().c_str(),
-    //             dnl_.getDNLTerminalFromID(input).getSnlBitTerm()->getDesign()->getName().getString().c_str());
-    // }
     table_.concatFull(inputsToMerge);
     reachedPIs = true;
-    // for (auto input : newIterationInputs) {
-    //   if (!isInput(input)/*&& !isOutput(input)*/) {
-    //     reachedPIs = false;
-    //     break;
-    //   }
-    // }
     size_t sizeOfNewInputs = sizeOfNewIterationInputsETS();
     for (size_t i = 0; i < sizeOfNewInputs; i++) {
       if (!isInput(getNewIterationInputsETS().first[i])) {
@@ -386,18 +334,8 @@ void SNLLogicCloud::compute() {
         break;
       }
     }
-    iter++;
     DEBUG_LOG("--- End of iteration %zu\n", iter);
-    handledTerms.insert(handledTermsNextIteration.begin(), handledTermsNextIteration.end());
-    // if (table_.getNumNodes() > 1000000) {
-    //   printf("num of nodes in tree(%lu): %lu\n",tbb::this_task_arena::current_thread_index(),  table_.getNumNodes());
-    //   // for (size_t i = 0; i < sizeOfNewInputs; i++) {
-    //   //   printf("newIterationInputs Input(%lu): %s(%s)\n", i,
-    //   //             dnl_.getDNLTerminalFromID(getNewIterationInputsETS().first[i]).getSnlBitTerm()->getName().getString().c_str(),
-    //   //             dnl_.getDNLTerminalFromID(getNewIterationInputsETS().first[i]).getSnlBitTerm()->getDesign()->getName().getString().c_str());
-    //   // }
-    // }
-    //printf("size of tree(%lu): %lu\n",tbb::this_task_arena::current_thread_index(),  table_.size());
+    iter++;
   } 
   
   copyNewIterationInputsETStoCurrent();
@@ -407,11 +345,11 @@ void SNLLogicCloud::compute() {
   for (auto input : currentIterationInputs_) {
     assert(isInput(input));
   }
-  if (getAllInputs().size() != currentIterationInputs_.size()) {
-    DEBUG_LOG("Number of inputs in the truth table: %zu, number of current iteration inputs: %zu\n",
-           getAllInputs().size(), currentIterationInputs_.size());
-    assert(false && "Number of inputs in the truth table does not match the number of current iteration inputs");
-  }
+  // if (getAllInputs().size() != currentIterationInputs_.size()) {
+  //   DEBUG_LOG("Number of inputs in the truth table: %zu, number of current iteration inputs: %zu\n",
+  //          getAllInputs().size(), currentIterationInputs_.size());
+  //   assert(false && "Number of inputs in the truth table does not match the number of current iteration inputs");
+  // }
   // Simplify the truth table
-  //table_.simplify();
+  table_.simplify();
 }

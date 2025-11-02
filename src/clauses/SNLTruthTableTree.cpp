@@ -153,7 +153,7 @@ void SNLTruthTableTree::Node::addChildId(uint32_t childId) {
 uint32_t SNLTruthTableTree::allocateNode(std::shared_ptr<Node>& np) {
   if (!np) throw std::invalid_argument("allocateNode: null");
   auto iter = termid2nodeid_.find(np->data.termid);
-  if (np->type != Node::Type::Input && iter != termid2nodeid_.end()) {
+  if (np->type == Node::Type::Table && iter != termid2nodeid_.end()) {
     np = nodeFromId(iter->second);
     return iter->second;
   }
@@ -161,7 +161,7 @@ uint32_t SNLTruthTableTree::allocateNode(std::shared_ptr<Node>& np) {
   np->nodeID = id;
   np->tree = this;
   nodes_.push_back(np);
-  if (np->type != Node::Type::Input) {
+  if (np->type == Node::Type::Table) {
     termid2nodeid_[np->data.termid] = id;
   }
   return id;
@@ -176,16 +176,19 @@ void SNLTruthTableTree::updateBorderLeaves() {
   std::vector<uint32_t> stk;
   stk.reserve(64);
   stk.push_back(rootId_);
-
+  std::set<uint32_t> visited;
   while (!stk.empty()) {
     uint32_t nid = stk.back(); stk.pop_back();
+    if (visited.find(nid) != visited.end() && nodeFromId(nid)->type != Node::Type::P) continue;
+    visited.insert(nid);
     auto nsp = nodeFromId(nid);
-    if (!nsp) continue;
+    if (!nsp) assert(false && "updateBorderLeaves: null node in tree");
+    assert(nsp->childrenIds.size() > 0);
     for (size_t i = 0; i < nsp->childrenIds.size(); ++i) {
       uint32_t cid = nsp->childrenIds[i];
       auto ch = nodeFromId(cid);
-      if (!ch) continue;
-      if (ch->type == Node::Type::Input) {
+      if (!ch) assert(false && "updateBorderLeaves: null child node in tree");
+      if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
         BorderLeaf bl;
         bl.parentId = (nid);
         bl.childPos = i;
@@ -196,7 +199,11 @@ void SNLTruthTableTree::updateBorderLeaves() {
       }
     }
   }
-
+  if (borderLeaves_.size() != numExternalInputs_) {
+    printf("updateBorderLeaves: mismatch in border leaves count %zu vs numExternalInputs %zu\n",
+           borderLeaves_.size(), numExternalInputs_);
+    assert(false && "border leaves count mismatch");
+  }
   std::sort(borderLeaves_.begin(),
             borderLeaves_.end(),
             [](auto const& a, auto const& b){
@@ -271,7 +278,7 @@ SNLTruthTableTree::concatBody(size_t borderIndex,
                               naja::DNL::DNLID termid)
 {
   if (borderIndex >= borderLeaves_.size()) throw std::out_of_range("concat: leafIndex out of range");
-  auto leaf = borderLeaves_[borderIndex];
+  const auto& leaf = borderLeaves_[borderIndex];
 
   uint32_t parentId = (leaf.parentId);
   auto parentSp = nodeFromId(parentId);
@@ -308,6 +315,7 @@ SNLTruthTableTree::concatBody(size_t borderIndex,
     arity = 1;
     newNodeSp = std::make_shared<Node>(this, instid, termid, Node::Type::P);
   }
+  
 
   uint32_t newNodeId = allocateNode(newNodeSp);
   
@@ -319,13 +327,17 @@ SNLTruthTableTree::concatBody(size_t borderIndex,
     assert(oldChildSp->type == Node::Type::Input);
     assert(oldChildSp->parentIds.size() == 1);
     oldChildSp->parentIds[0] = (newNodeId);
+    oldChildSp->data.inputIndex = numExternalInputs_;
+    numExternalInputs_++;
+    printf("concating with inputIndex %zu\n", oldChildSp->data.inputIndex);
   } else {
     throw std::logic_error("concat: null old child");
   }
 
   if (newNodeSp->type == Node::Type::Table) {
     for (uint32_t i = 1; i < arity; ++i) {
-      auto inNode = std::make_shared<Node>(numExternalInputs_ + (i - 1), this);
+      auto inNode = std::make_shared<Node>(numExternalInputs_, this);
+      numExternalInputs_++;
       uint32_t inId = allocateNode(inNode);
       newNodeSp->childrenIds.push_back(inId);
       inNode->parentIds.push_back(newNodeId);
@@ -335,6 +347,13 @@ SNLTruthTableTree::concatBody(size_t borderIndex,
 
   parentSp->childrenIds[leaf.childPos] = newNodeId;
   newNodeSp->parentIds.push_back(parentId);
+  if (!(newNodeSp->parentIds.size() == 1 || newNodeSp->type == Node::Type::Table)) {
+    printf("concat: new node parent count %zu\n", newNodeSp->parentIds.size());
+    printf("concat: new node type %s\n", 
+      newNodeSp->type == Node::Type::Table ? "Table" :
+      newNodeSp->type == Node::Type::P ? "P" : "Input");
+    assert(newNodeSp->parentIds.size() == 1 || newNodeSp->type == Node::Type::Table);
+  }
 
   return *newNodeSp;
 }
@@ -355,7 +374,25 @@ void SNLTruthTableTree::concatFull(
   const std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
             tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>& tables)
 {
-  int newInputs = (int)numExternalInputs_;
+  // print tables
+  printf("Tables in concatFull:\n");
+  for (size_t i=0; i<tables.size();++i) {
+    printf("  table %zu termid %zu %s %s\n", i, tables[i].second,
+      naja::DNL::get()->getDNLTerminalFromID(tables[i].second).getSnlBitTerm()->getName().getString().c_str(),
+      naja::DNL::get()->getDNLTerminalFromID(tables[i].second).getDNLInstance().getSNLModel()->getName().getString().c_str());
+  }
+  // print border leaves
+  printf("Border leaves in concatFull:\n");
+  for (const auto& bl : borderLeaves_) {
+    auto parentPtr = nodeFromId(bl.parentId);
+    if (!parentPtr) continue;
+    naja::DNL::DNLTerminalFull term = naja::DNL::get()->getDNLTerminalFromID(parentPtr->data.termid);
+    naja::DNL::DNLInstanceFull inst = naja::DNL::get()->getDNLTerminalFromID(parentPtr->data.termid).getDNLInstance();
+    printf("  border leaf instance %s %s\n",
+      term.getSnlBitTerm()->getName().getString().c_str(),
+      inst.getSNLModel()->getName().getString().c_str());
+  }
+  //int newInputs = (int)numExternalInputs_;
   std::set<naja::DNL::DNLID> BorderLeafInstances;
   std::set<naja::DNL::DNLID> BorderPIs;
   for (const auto& bl : borderLeaves_) {
@@ -364,15 +401,26 @@ void SNLTruthTableTree::concatFull(
       BorderPIs.insert(parentPtr->data.termid);
     }
     if (!parentPtr) assert(false);
+    if (parentPtr->type == Node::Type::P) {
+      // PI table, skip check
+      continue;
+    }
     naja::DNL::DNLInstanceFull inst = naja::DNL::get()->getDNLTerminalFromID(parentPtr->data.termid).getDNLInstance();
     BorderLeafInstances.insert(inst.getSNLInstance()->getID());
   }
   for (auto table : tables) {
+    if (table.first == naja::DNL::DNLID_MAX) {
+      // PI table, skip check
+      continue;
+    }
     auto iso = naja::DNL::get()->getDNLIsoDB().getIsoFromIsoIDconst(
         naja::DNL::get()->getDNLTerminalFromID(table.second).getIsoID());
     auto readers = iso.getReaders();
     bool drivingBorderLeaf = false;
     for (auto reader : readers) {
+      if (naja::DNL::get()->getDNLTerminalFromID(reader).getDNLInstance().getSNLInstance() == nullptr) {
+        continue;
+      }
       if (BorderLeafInstances.find(
             naja::DNL::get()->getDNLTerminalFromID(reader).getDNLInstance().getSNLInstance()->getID()
           ) != BorderLeafInstances.end()
@@ -415,64 +463,170 @@ void SNLTruthTableTree::concatFull(
     }
     printf("  tableTermIDs %zu\n", tableTermIDs.size());
     printf("  tables %zu\n", tables.size());
+    printf("  borderLeaves_ %zu\n", borderLeaves_.size());
     assert(tables.size() == tableTermIDs.size() && "concatFull: duplicate tables in input");
     printf("concatFull: too many tables %zu > %zu\n", tables.size(), borderLeaves_.size());
     throw std::invalid_argument("too many tables in concatFull");
   }
+
+// FUNC START
+
   std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> newBorderLeaves;
+  size_t newInputs = 0;
   size_t index = 0;
+  assert(tables.size() == borderLeaves_.size());
+  numExternalInputs_ = 0;
   for (size_t i=0; i<tables.size();++i) {
-    auto borderLeaf = borderLeaves_[i];
+    // For each entry in table to merge
+    assert(newBorderLeaves.size() == newInputs);
+    // Get the relevant border leaf based on order -> assuming identical order between tables and border leaves
+    const auto& borderLeaf = borderLeaves_[i];
+    // Get parent node of current border leaf
     auto parentPtr = nodeFromId(borderLeaf.parentId);
-    if (!parentPtr) {
-      index++;
-      newBorderLeaves.push_back(borderLeaf);
-      continue;
-    }
+    // if (!parentPtr) {
+    //   // No parent so it is the root
+    //   index++;
+    //   newBorderLeaves.push_back(borderLeaf);
+    //   printf("--- concatBody: null parent for border leaf index %zu\n", index-1);
+    //   newInputs += 1;
+    //   assert(newBorderLeaves.size() == newInputs);
+    //   assert(rootId_ == borderLeaf.parentId && "concatFull: null parent is not root");
+    //   continue;
+    // }
     if (parentPtr->type == Node::Type::P) {
+      // If it is a PI border leaf, keep the same leaf and continue, no need to chain PIs
       index++;
       newBorderLeaves.push_back(borderLeaf);
+      printf("--- concatBody: skipping PI border leaf index %zu\n", index-1);
+      newInputs += 1;
+      assert(newBorderLeaves.size() == newInputs);
       continue;
     }
-
     const auto& n = concatBody(index, tables[i].first, tables[i].second);
-    if (n.parentIds.size() <= 1) {
-      newInputs += (n.getTruthTable().size() - 1);
-
+    if (n.parentIds.size() <= 1 || n.type == Node::Type::P) {
+      // if new node is not reused, expand border leaves
+      printf("ConcatBody expanding border leaf index %zu termid %zu %s %s\n", index, tables[i].second,
+        naja::DNL::get()->getDNLTerminalFromID(tables[i].second).getSnlBitTerm()->getName().getString().c_str(),
+        naja::DNL::get()->getDNLTerminalFromID(tables[i].second).getDNLInstance().getSNLModel()->getName().getString().c_str());
+      // Now we will create new border leaves for each input of the newly inserted node
+      // It is in the place of the original border leaf
       uint32_t insertedId = parentPtr->childrenIds[borderLeaf.childPos];
+      // assert that insertedId is an input node
+      //assert(nodeFromId(insertedId)->type != Node::Type::Input &&
+      //  "concatFull: inserted node is input after concatBody");
       auto insertedSp = nodeFromId(insertedId);
-      if (!insertedSp) { index++; continue; }
-
+      assert(insertedSp->type != Node::Type::Input &&
+        "concatFull: inserted node is input after concatBody");
+      // assert the input node have only one parent
+      assert(insertedSp->parentIds.size() == 1 &&
+        "concatFull: inserted node has multiple parents after concatBody");
+      if (!insertedSp) { index++; assert(false); }
+      printf("insertedSP %s\n", 
+        naja::DNL::get()->getDNLTerminalFromID(insertedSp->data.termid).getSnlBitTerm()->getName().getString().c_str());
+      printf("children count: %zu\n", insertedSp->childrenIds.size());
+      // now next is to add border leaf on top of each input node of insertedSp
       for (size_t j = 0; j < insertedSp->childrenIds.size(); ++j) {
         uint32_t cid = insertedSp->childrenIds[j];
+        
+        
         auto ch = nodeFromId(cid);
-        if (!ch) continue;
+        assert(ch);
+        // assert that cid is an input node
+        assert(ch->type == Node::Type::Input &&
+          "concatFull: inserted node child is not input after concatBody");
+        
         if (ch->type == Node::Type::Input) {
+          // Now concat a border leaf for this input
           BorderLeaf bl;
           bl.parentId = (insertedId);
           bl.childPos = j;
           bl.extIndex = ch->data.inputIndex;
           newBorderLeaves.push_back(bl);
+          printf("--- new border leaf extIndex %zu from inserted node id %u childPos %zu\n",
+            bl.extIndex, insertedId, j);
+          printf("--- %s %s\n",
+            naja::DNL::get()->getDNLTerminalFromID(insertedSp->data.termid).getSnlBitTerm()->getName().getString().c_str(),
+            naja::DNL::get()->getDNLTerminalFromID(insertedSp->data.termid).getDNLInstance().getSNLModel()->getName().getString().c_str());
+          newInputs += 1;
+          assert(newBorderLeaves.size() == newInputs);
         } else {
-          for (size_t k = 0; k < ch->childrenIds.size(); ++k) {
-            uint32_t ccid = ch->childrenIds[k];
-            auto cc = nodeFromId(ccid);
-            if (!cc) continue;
-            if (cc->type == Node::Type::Input) {
-              BorderLeaf bl2;
-              bl2.parentId = (cid);
-              bl2.childPos = k;
-              bl2.extIndex = cc->data.inputIndex;
-              newBorderLeaves.push_back(bl2);
-            }
-          }
+          assert(false);
         }
       }
-    }
+    } else {}
     index++;
   }
   numExternalInputs_ = (size_t) newInputs;
   borderLeaves_ = std::move(newBorderLeaves);
+  printf("ConcatBody done, new numExternalInputs_: %zu\n", numExternalInputs_); 
+  printf("ConcatBody done, borderLeaves_ size: %zu\n", borderLeaves_.size());
+  //updateBorderLeaves();
+  assert((borderLeaves_.size() == numExternalInputs_) && "concatFull: border leaves count mismatch after concatFull");
+  // assert all new border leaves are in table and in the right order
+  size_t order = 0;
+  printf("@@ Border leaves size after concatFull: %zu\n", borderLeaves_.size());
+  for (size_t i=0; i<borderLeaves_.size();++i) {
+
+    printf("node id %u border leaf %zu extIndex %zu\n", borderLeaves_[i].parentId, i, borderLeaves_[i].extIndex);
+    assert(nodeFromId(borderLeaves_[i].parentId) && "concatFull: null border leaf parent after concatFull");
+    // assert that node is not an input
+    assert(nodeFromId(borderLeaves_[i].parentId)->type != Node::Type::Input &&
+      "concatFull: border leaf parent is input after concatFull");
+    naja::DNL::DNLID termid = naja::DNL::get()->getDNLTerminalFromID(
+      nodeFromId(borderLeaves_[i].parentId)->data.termid).getID();
+    size_t newOrder = 0;
+    printf("border leaf %zu termid %zu %s %s\n", i, termid,
+      naja::DNL::get()->getDNLTerminalFromID(termid).getSnlBitTerm()->getName().getString().c_str(),
+      naja::DNL::get()->getDNLTerminalFromID(termid).getDNLInstance().getSNLModel()->getName().getString().c_str());
+    bool PI = false;
+    for (size_t j=0; j<tables.size();++j) {
+      if (tables[j].first == naja::DNL::DNLID_MAX) {
+        // PI table
+        PI = true;
+      }
+      if (tables[j].second == termid) {
+        newOrder = j;
+        break;
+      }
+    }
+    if (PI) {
+      // skip PI tables in order check
+      continue;
+    }
+    if (newOrder == 0) {
+      if (nodeFromId(borderLeaves_[i].parentId)->parentIds.size() > 1) {
+        // reused node, skip
+        continue;
+      }
+    }
+    printf("newOrder %zu order %zu\n", newOrder, order);
+    assert(newOrder >= order && "concatFull: border leaves out of order after concatFull");
+    if (order < newOrder) {
+      order = newOrder;
+    } 
+  }
+  for (const auto& pair : tables) {
+    naja::DNL::DNLID termid = pair.second;
+    bool found = false;
+    for (size_t i=0; i<borderLeaves_.size();++i) {
+      naja::DNL::DNLID btermid = naja::DNL::get()->getDNLTerminalFromID(
+        nodeFromId(borderLeaves_[i].parentId)->data.termid).getID();
+      if (btermid == termid) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      printf("concatFull: table termid %zu %s %s not found in border leaves after concatFull\n", termid,
+        naja::DNL::get()->getDNLTerminalFromID(termid).getSnlBitTerm()->getName().getString().c_str(),
+        naja::DNL::get()->getDNLTerminalFromID(termid).getDNLInstance().getSNLModel()->getName().getString().c_str());
+      if (termid2nodeid_.find(termid) != termid2nodeid_.end()) {
+        printf("  termid %zu exists in termid2nodeid_\n", termid);
+      } else {
+        assert(false && "concatFull: table not found in border leaves after concatFull");
+      }
+    }
+  }
 }
 
 //----------------------------------------------------------------------
