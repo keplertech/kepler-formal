@@ -581,6 +581,10 @@ void SNLTruthTableTree::concatFull(
       uint32_t cid = nsp->childrenIds[i];
       auto ch = nodeFromId(cid);
       if (!ch) assert(false && "concatFull: null child node in tree during input count");
+      assert(std::find(ch->parentIds.begin(), ch->parentIds.end(), nid) != ch->parentIds.end() &&
+        "concatFull: child missing parent link during input count");
+      assert(std::find(nsp->childrenIds.begin(), nsp->childrenIds.end(), cid) != nsp->childrenIds.end() &&
+        "concatFull: parent missing child link during input count");
       if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
         inputs.insert(cid);
       } else {
@@ -1003,27 +1007,32 @@ void SNLTruthTableTree::finalize() {
 
   // Recompute numExternalInputs_ by scanning leaves
   size_t maxInput = 0;
+  numExternalInputs_ = 0;
   bool anyInput = false;
   std::vector<uint32_t> stk;
   if (rootId_ != kInvalidId) stk.push_back(rootId_);
+  std::set<uint32_t> visited;
   while (!stk.empty()) {
     uint32_t nid = stk.back(); stk.pop_back();
+    if (visited.count(nid)) continue;
+    visited.insert(nid);
     auto n = nodeFromId(nid);
     if (!n) continue;
     for (size_t k = 0; k < n->childrenIds.size(); ++k) {
       uint32_t cid = n->childrenIds[k];
       auto ch = nodeFromId(cid);
       if (!ch) continue;
-      if (ch->type == Node::Type::Input) {
+      if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
         anyInput = true;
-        if (ch->data.inputIndex > maxInput) maxInput = ch->data.inputIndex;
+        //if (ch->data.inputIndex > maxInput) maxInput = ch->data.inputIndex;
+        numExternalInputs_++;
       } else {
         stk.push_back(cid);
       }
     }
   }
-  if (anyInput) numExternalInputs_ = maxInput + 1;
-  else numExternalInputs_ = 0;
+  //if (anyInput) numExternalInputs_ = maxInput + 1;
+  //else numExternalInputs_ = 0;
 
   updateBorderLeaves();
 }
