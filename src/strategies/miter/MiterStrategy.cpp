@@ -496,7 +496,10 @@ bool MiterStrategy::run() {
           //   naja::DNL::get()->getDNLTerminalFromID(outputs1[i]).getSnlBitTerm()->getDesign()->getName().getString().c_str());
 
           // }
-          SNLLogicCone cone(j == 0 ? outputs0[i] : outputs1[i], PIs[j]);
+          if (dnls_.size() <= j) {
+            dnls_.push_back(*naja::DNL::get());
+          }
+          SNLLogicCone cone(j == 0 ? outputs0[i] : outputs1[i], PIs[j], &dnls_[j]);
           cone.run();
           // std::string dotFileNameEquis(
           //     std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" +std::to_string(j) + std::string(".dot")));

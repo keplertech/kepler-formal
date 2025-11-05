@@ -44,6 +44,7 @@ class MiterStrategy {
   BoolExpr miterClause_;
   std::string prefix_;
   naja::NL::SNLDesign* topInit_ = nullptr;
+  std::vector<naja::DNL::DNLFull> dnls_;
 };
 
 }  // namespace KEPLER_FORMAL

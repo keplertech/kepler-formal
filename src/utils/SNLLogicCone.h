@@ -15,6 +15,8 @@ class SNLLogicCone {
  public:
   SNLLogicCone(naja::DNL::DNLID seedOutputTerm, std::vector<naja::DNL::DNLID> pis) : 
     seedOutputTerm_(seedOutputTerm), PIs_(pis) { naja::DNL::destroy(); dnl_ = naja::DNL::get(); }
+  SNLLogicCone(naja::DNL::DNLID seedOutputTerm, std::vector<naja::DNL::DNLID> pis, naja::DNL::DNLFull* dnl) : 
+    seedOutputTerm_(seedOutputTerm), PIs_(pis) { naja::DNL::destroy(); dnl_ = dnl; }
   void run();
   std::vector<naja::NL::SNLEquipotential> getEquipotentials() const;
  private:
