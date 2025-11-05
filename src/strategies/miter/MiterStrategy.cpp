@@ -7,7 +7,6 @@
 #include "SNLDesignModeling.h"
 #include "SNLDesignModeling.h"
 #include "SNLLogicCloud.h"
-#include "SNLTruthTable2BoolExpr.h"
 
 // include Glucose headers (adjust path to your checkout)
 #include "core/Solver.h"

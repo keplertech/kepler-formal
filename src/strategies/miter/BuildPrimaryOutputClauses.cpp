@@ -2,7 +2,6 @@
 #include "DNL.h"
 #include "SNLDesignModeling.h"
 #include "SNLLogicCloud.h"
-#include "SNLTruthTable2BoolExpr.h"
 #include "Tree2BoolExpr.h"
 
 //#define DEBUG_PRINTS

@@ -8,9 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(kepler_clauses STATIC
     SNLTruthTableMerger.cpp
     SNLLogicCloud.cpp
-    #SNLTruthTable2BoolExpr.cpp
     SNLTruthTableTree.cpp
-    #TruthTableToBoolExpr.cpp
     Tree2BoolExpr.cpp
 )
 
