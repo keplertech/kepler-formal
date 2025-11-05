@@ -374,25 +374,27 @@ Tree2BoolExpr::convert(
         return nullptr;
 
     // 1) find maxID
-    size_t maxID = 0;
-    {
-        using NodePtr = const SNLTruthTableTree::Node*;
-        std::vector<NodePtr, tbb::tbb_allocator<NodePtr>> dfs;
-        dfs.reserve(128);
-        dfs.push_back(root.get());
-        while (!dfs.empty()) {
-            NodePtr n = dfs.back(); dfs.pop_back();
-            maxID = std::max(maxID, (size_t) n->nodeID);
-            if (n->type == SNLTruthTableTree::Node::Type::Table ||
-                n->type == SNLTruthTableTree::Node::Type::P)
-            {
-                for (const auto& c : n->childrenIds) {
-                    assert(n->tree->nodeFromId(c).get() != nullptr);
-                    dfs.push_back(n->tree->nodeFromId(c).get());
-                }
-            }
-        }
-    }
+    // size_t maxID = 0;
+    // {
+    //     using NodePtr = const SNLTruthTableTree::Node*;
+    //     std::vector<NodePtr, tbb::tbb_allocator<NodePtr>> dfs;
+    //     dfs.reserve(128);
+    //     dfs.push_back(root.get());
+    //     while (!dfs.empty()) {
+    //         NodePtr n = dfs.back(); dfs.pop_back();
+    //         maxID = std::max(maxID, (size_t) n->nodeID);
+    //         if (n->type == SNLTruthTableTree::Node::Type::Table ||
+    //             n->type == SNLTruthTableTree::Node::Type::P)
+    //         {
+    //             for (const auto& c : n->childrenIds) {
+    //                 assert(n->tree->nodeFromId(c).get() != nullptr);
+    //                 dfs.push_back(n->tree->nodeFromId(c).get());
+    //             }
+    //         }
+    //     }
+    // }
+
+    size_t maxID = tree.getMaxID();
 
     // 2) memo table
     clearMemoETS();
@@ -438,6 +440,9 @@ Tree2BoolExpr::convert(
                     printf("varNames size: %zu, parent data.termid: %zu\n",
                            varNames.size(), (size_t)parent->data.termid);
                     assert(parent->data.termid < varNames.size());
+                }
+                if (varNames[parent->data.termid] == (size_t) -1) {
+                    throw std::runtime_error("Input variable index is SIZE_MAX");
                 }
                 setMemoETS(id, BoolExpr::Var(varNames[parent->data.termid]));
             }

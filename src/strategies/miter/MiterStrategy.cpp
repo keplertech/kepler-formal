@@ -216,7 +216,7 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs0Map,
                         const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs1Map) {
     ensureLoggerInitialized();
-    logger->debug("normalizeInputs: starting");
+    logger->info("normalizeInputs: starting");
 
     // find the intersection of inputs0 and inputs1 based on the getFullPathIDs of DNLTerminal and the diffs
     std::set<std::vector<NLID::DesignObjectID>> paths0;
@@ -242,8 +242,9 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
         auto pathInstance = path0;
         pathInstance.pop_back(); // removing bit ID
         pathInstance.pop_back(); // removing terminal ID
+        assert(false); // need to change back to top 0 for the next line
         naja::NL::SNLPath p = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), pathInstance);
-        logger->debug("diff0 input: {}", p.getString());
+        logger->info("diff0 input: {}", p.getString());
       }
     }
     std::vector<naja::DNL::DNLID> diff1;
@@ -254,7 +255,7 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
         pathInstance.pop_back(); // removing bit ID
         pathInstance.pop_back(); // removing terminal ID
         naja::NL::SNLPath p = naja::NL::SNLPath(naja::DNL::get()->getTop().getSNLModel(), pathInstance);
-        logger->debug("diff1 input: {}", p.getString());
+        logger->info("diff1 input: {}", p.getString());
       }
     }
     inputs0.clear();
@@ -262,14 +263,20 @@ void MiterStrategy::normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
       inputs0.push_back(inputs0Map.at(path));
     }
     inputs0.insert(inputs0.end(), diff0.begin(), diff0.end());
+    for (size_t i = 0; i < inputs0.size(); ++i) {
+      logger->info("normalized input0[{}]: DNLID {}", i, inputs0[i]);
+    }
     inputs1.clear();
     for (const auto& path : pathsCommon) {
       inputs1.push_back(inputs1Map.at(path));
     }
     inputs1.insert(inputs1.end(), diff1.begin(), diff1.end());
-    logger->debug("size of common inputs: {}", pathsCommon.size());
-    logger->debug("size of diff0 inputs: {}", diff0.size());
-    logger->debug("size of diff1 inputs: {}", diff1.size());
+    for (size_t i = 0; i < inputs1.size(); ++i) {
+      logger->info("normalized input1[{}]: DNLID {}", i, inputs1[i]);
+    }
+    logger->info("size of common inputs: {}", pathsCommon.size());
+    logger->info("size of diff0 inputs: {}", diff0.size());
+    logger->info("size of diff1 inputs: {}", diff1.size());
 }
 
 void MiterStrategy::normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
@@ -443,6 +450,10 @@ bool MiterStrategy::run() {
   if (sat) {
     logger->warn("Miter failed: analyzing individual POs");
     for (size_t i = 0; i < POs0.size(); ++i) {
+      if (builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i)) != 
+        builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i))) {
+        throw std::runtime_error("Miter PO index " + std::to_string(i) + " DNLIDs do not match");
+      }
       tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs0S;
       singlePOs0S.push_back(POs0[i]);
       tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs1S;
@@ -458,8 +469,10 @@ bool MiterStrategy::run() {
 
       singleSolver.addClause(singleRootLit);
       if (singleSolver.solve()) {
-        failedPOs_.push_back(outputs0[i]);
+        failedPOs_.push_back(i);
         logger->info("Check failed for PO: {}", i);
+        //logger->info("Clause 0 {}", POs0[i]->toString());
+        //logger->info("Clause 1 {}", POs1[i]->toString());
         std::vector<naja::NL::SNLDesign*> topModels;
         topModels.push_back(top0_);
         topModels.push_back(top1_);
@@ -473,26 +486,41 @@ bool MiterStrategy::run() {
         for (size_t j = 0; j < topModels.size(); ++j) {
           DNL::destroy();
           NLUniverse::get()->setTopDesign(topModels[j]);
-          SNLLogicCone cone(outputs0[i], PIs[j]);
+          // if (j == 0) {
+          //   //logger->info("$$$ 0 term {} of model {}", 
+          //   naja::DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString().c_str(),
+          //   naja::DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getDesign()->getName().getString().c_str());
+          // } else {
+          //   //logger->info("### 0 term {} of model {}", 
+          //   naja::DNL::get()->getDNLTerminalFromID(outputs1[i]).getSnlBitTerm()->getName().getString().c_str(),
+          //   naja::DNL::get()->getDNLTerminalFromID(outputs1[i]).getSnlBitTerm()->getDesign()->getName().getString().c_str());
+
+          // }
+          SNLLogicCone cone(j == 0 ? outputs0[i] : outputs1[i], PIs[j]);
           cone.run();
-          std::string dotFileNameEquis(
-              std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" +std::to_string(j) + std::string(".dot")));
-          std::string svgFileNameEquis(
-              std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" + std::to_string(j) + std::string(".svg")));
-          SnlVisualiser snl2(topModels[j], cone.getEquipotentials());
+          // std::string dotFileNameEquis(
+          //     std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" +std::to_string(j) + std::string(".dot")));
+          // std::string svgFileNameEquis(
+          //     std::string(prefix_ + "_" + DNL::get()->getDNLTerminalFromID(outputs0[i]).getSnlBitTerm()->getName().getString() + std::to_string(outputs0[i]) + "_" + std::to_string(j) + std::string(".svg")));
+          // SnlVisualiser snl2(topModels[j], cone.getEquipotentials());
           for (const auto& equi : cone.getEquipotentials()) {
+            
             for (const auto& term : equi.getTerms()) {
               if (j == 0) {
                 terms0.insert(term);
+                //logger->info("$$$ Term 0: {}", term->getString().c_str());
               } else {
                 terms1.insert(term);
+                //logger->info("### Term 1: {}", term->getString().c_str());
               }
             }
             for (const auto& termOcc : equi.getInstTermOccurrences()) {
               if (j == 0) {
                 insTerms0.insert(termOcc);
+                //logger->info("$$$ Inst Term 0: {}", termOcc.getString().c_str());
               } else {
                 insTerms1.insert(termOcc);
+                //logger->info("### Inst Term 1: {}", termOcc.getString().c_str());
               }
             }
           }
@@ -519,6 +547,10 @@ bool MiterStrategy::run() {
             termsCommon.insert(term0);
           } else {
             termsDiff.insert(term0);
+            if (term0->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
+              continue;
+            }
+            logger->info("Diff 0 term: {}", term0->getString());
           }
         }
         for (const auto& term1 : terms1) {
@@ -531,15 +563,19 @@ bool MiterStrategy::run() {
           }
           if (!found) {
             termsDiff.insert(term1);
+            if (term1->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
+              continue;
+            }
+            logger->info("Diff 1 term: {}", term1->getString());
           }
         }
         // print termsDiff
-        for (const auto& term : termsDiff) {
-          if (term->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
-            continue;
-          }
-          logger->info("Diff term: {}", term->getString());
-        }
+        // for (const auto& term : termsDiff) {
+        //   if (term->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
+        //     continue;
+        //   }
+        //   logger->info("Diff term: {}", term->getString());
+        // }
         // find intersection and diff of insTerms0 and insTerms1
         naja::NL::SNLEquipotential::InstTermOccurrences insTermsCommon;
         naja::NL::SNLEquipotential::InstTermOccurrences insTermsDiff;

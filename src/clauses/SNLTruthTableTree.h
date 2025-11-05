@@ -88,6 +88,12 @@ public:
   // It will remap children/parent ids to canonical ids and throw on unresolved references
   void finalize();
 
+  // get the maximum node ID assigned in the tree after normalization(finalize)
+  uint32_t getMaxID() const {
+    if (nodes_.empty()) return kIdOffset - 1;
+    return static_cast<uint32_t>(nodes_.size() + kIdOffset - 1);
+  }
+
 private:
   struct BorderLeaf {
     uint32_t parentId;

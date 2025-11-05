@@ -6,6 +6,7 @@
 #include "Tree2BoolExpr.h"
 
 //#define DEBUG_PRINTS
+//#define DEBUG_CHECKS
 
 #ifdef DEBUG_PRINTS
 #define DEBUG_LOG(fmt, ...)  printf(fmt, ##__VA_ARGS__)
@@ -333,7 +334,7 @@ void BuildPrimaryOutputClauses::build() {
   size_t processedOutputs = 0;
   //tbb::task_arena arena(20);
   // init arena with automatic number of threads
-  tbb::task_arena arena(20);
+  tbb::task_arena arena(40);
   auto processOutput = [&](size_t i) {
     DNLID out = outputs_[i];
     printf("Procssing output %zu/%zu: %s\n",
@@ -402,8 +403,9 @@ void BuildPrimaryOutputClauses::build() {
                           size_t index = std::distance(inputs_.begin(), it);
                           varNames.push_back(std::to_string(index + 2)); // +2 to avoid 0 and 1 which are reserved for constants
                         }*/
-
+#ifdef DEBUG_CHECKS
                         assert(cloud.getTruthTable().isInitialized());
+#endif
                         //DEBUG_LOG("Truth Table: %s\n",
                         //          cloud.getTruthTable().print().c_str());
                         /*std::shared_ptr<BoolExpr> expr = Tree2BoolExpr::convert(
