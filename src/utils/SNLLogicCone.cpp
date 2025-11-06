@@ -25,26 +25,32 @@ void SNLLogicCone::run() {
       if (std::find(PIs_.begin(), PIs_.end(), driver) != PIs_.end()) {
         continue;  // Skip PIs and loops(?)
       }
-      DNLInstanceFull inst = dnl_->getDNLTerminalFromID(driver).getDNLInstance();
+      DNLInstanceFull inst =
+          dnl_->getDNLTerminalFromID(driver).getDNLInstance();
       for (DNLID termID = inst.getTermIndexes().first;
-           termID <= inst.getTermIndexes().second && termID != DNLID_MAX; termID++) {
+           termID <= inst.getTermIndexes().second && termID != DNLID_MAX;
+           termID++) {
         const DNLTerminalFull& term = dnl_->getDNLTerminalFromID(termID);
-        if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
+        if (term.getSnlBitTerm()->getDirection() !=
+            SNLBitTerm::Direction::Output) {
           if (std::find(coneIsos_.begin(), coneIsos_.end(), term.getIsoID()) ==
-                coneIsos_.end()) {
-                newIterationIsos.push_back(term.getIsoID());
-            }
+              coneIsos_.end()) {
+            newIterationIsos.push_back(term.getIsoID());
+          }
         }
-      }      
+      }
     }
   }
 }
 
-std::vector<naja::NL::SNLEquipotential> SNLLogicCone::getEquipotentials() const {
+std::vector<naja::NL::SNLEquipotential> SNLLogicCone::getEquipotentials()
+    const {
   std::vector<naja::NL::SNLEquipotential> equipotentials;
   for (const auto& isoID : coneIsos_) {
     equipotentials.push_back(
-       dnl_->getDNLTerminalFromID(dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID).getDrivers()[0]).getEquipotential());
+        dnl_->getDNLTerminalFromID(
+                dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID).getDrivers()[0])
+            .getEquipotential());
   }
   return equipotentials;
 }

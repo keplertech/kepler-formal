@@ -5,46 +5,46 @@ namespace KEPLER_FORMAL {
 
 class SNLLogicCloud {
  public:
-  SNLLogicCloud(naja::DNL::DNLID seedOutputTerm, 
-                const std::vector<naja::DNL::DNLID>& PIs, 
+  SNLLogicCloud(naja::DNL::DNLID seedOutputTerm,
+                const std::vector<naja::DNL::DNLID>& PIs,
                 const std::vector<naja::DNL::DNLID>& POs)
       : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()) {
-        PIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
-        for (auto pi : PIs) {
-          PIs_[pi] = true;
-        }
-        POs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
-        for (auto po : POs) {
-          POs_[po] = true;
-        }
-      }
+    PIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
+    for (auto pi : PIs) {
+      PIs_[pi] = true;
+    }
+    POs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
+    for (auto po : POs) {
+      POs_[po] = true;
+    }
+  }
   void compute();
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);
   SNLTruthTableTree& getTruthTable() { return table_; }
-  const std::vector<naja::DNL::DNLID>& getInputs() const { return currentIterationInputs_; }
+  const std::vector<naja::DNL::DNLID>& getInputs() const {
+    return currentIterationInputs_;
+  }
   // Get all inputs from the tree SNLTruthTableTree directly
   std::vector<naja::DNL::DNLID> getAllInputs() const {
     std::vector<naja::DNL::DNLID> allInputs;
     std::vector<std::shared_ptr<SNLTruthTableTree::Node>> stk;
     stk.push_back(table_.getRoot());
-    while(!stk.empty()) {
-      auto f = stk.back(); stk.pop_back();
-      //printf("Node type: %d\n", (int)f->type);
+    while (!stk.empty()) {
+      auto f = stk.back();
+      stk.pop_back();
+      // printf("Node type: %d\n", (int)f->type);
       if (f->type == SNLTruthTableTree::Node::Type::P) {
         allInputs.push_back(f->data.termid);
-      }
-      else if (f->type == SNLTruthTableTree::Node::Type::Table || 
-               f->type == SNLTruthTableTree::Node::Type::Input) {
+      } else if (f->type == SNLTruthTableTree::Node::Type::Table ||
+                 f->type == SNLTruthTableTree::Node::Type::Input) {
         for (auto& c : f->childrenIds)
           stk.push_back(table_.nodeFromId(c));
       }
     }
     return allInputs;
   }
-  void destroy() {
-    table_.destroy();
-  }
+  void destroy() { table_.destroy(); }
 
  private:
   naja::DNL::DNLID seedOutputTerm_;
