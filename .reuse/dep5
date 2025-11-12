@@ -7,6 +7,6 @@ Files: src/*
 Copyright: 2025 keplertech.io
 License: GPL-2.0
 
-FILES: example/*
+FILES: example/* .github/workflows/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
