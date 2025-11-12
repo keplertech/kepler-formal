@@ -1,6 +1,5 @@
-# SPDX-FileCopyrightText: 2023 The Naja authors <https://github.com/najaeda/naja/blob/main/AUTHORS>
-#
-# SPDX-License-Identifier: Apache-2.0
+# Copyright 2024-2025 keplertech.io
+# SPDX-License-Identifier: GPL-2.0
 
 add_executable(kepler_formal KeplerFormal.cpp)
 target_include_directories(kepler_formal SYSTEM BEFORE PUBLIC ${Boost_INCLUDE_DIR})

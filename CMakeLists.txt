@@ -1,6 +1,5 @@
-# SPDX-FileCopyrightText: 2023 The Naja authors <https://github.com/najaeda/naja/blob/main/AUTHORS>
-#
-# SPDX-License-Identifier: Apache-2.0
+# Copyright 2024-2025 keplertech.io
+# SPDX-License-Identifier: GPL-2.0
 
 cmake_minimum_required(VERSION 3.21)
 # tell CMake to pretend any cmake_minimum_required(VERSION X) with X<3.5
