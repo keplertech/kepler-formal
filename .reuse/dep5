@@ -5,7 +5,7 @@ Source: https://github.com/keplertech/kepler-formal
 
 Files: src/*
 Copyright: 2025 keplertech.io
-License: GPL-2.0
+License: GPL-3.0
 
 FILES: example/* .github/workflows/* .gitmodules README.md
 Copyright: 2025 keplertech.io
