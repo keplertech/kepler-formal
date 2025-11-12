@@ -176,9 +176,7 @@ void SNLLogicCloud::compute() {
               inst.getSNLModel()->getName().getString().c_str());
     table_ = SNLTruthTableTree(inst.getID(), driver);
     auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
-    assert(
-        model
-            ->getTruthTable(
+    assert(SNLDesignModeling::getTruthTable(model, 
                 dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID())
             .isInitialized() &&
         "Truth table is not initialized");
