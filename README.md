@@ -32,7 +32,7 @@ make
 
 contact@keplertech.io
 
-#### Dependencies
+## Dependencies
 
 Mandatory dependencies:
 
@@ -73,47 +73,5 @@ Ensure the versions of `bison` and `flex` installed via Homebrew take precedence
 
 ```bash
 export PATH="/opt/homebrew/opt/flex/bin:/opt/homebrew/opt/bison/bin:$PATH"
-```
-
-#### Building and Installing
-
-```bash
-#First define an env variable that points to the directory where you want naja to be installed:
-export NAJA_INSTALL=<path_to_installation_dir>
-# Create a build dir and go inside it
-mkdir build
-cd build
-cmake <path_to_naja_sources_dir> -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$NAJA_INSTALL
-#For instance: cmake ~/srcs/naja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$NAJA_INSTALL
-make
-make test
-make install
-```
-
-#### Building and Installing Documentation
-
-```bash
-#make sure that doxygen was available when launching the cmake command
-cd build
-make docs
-make install
-```
-
-Documentation will be installed in $NAJA_INSTALL/doc directory. Starting file to open in browser is: $NAJA_INSTALL/doc/html/index.html.
-
-<div align="right">[ <a href="#Introduction">↑ Back to top ↑</a> ]</div>
-
----
-
-### Use
-
-#### Environment
-
-After building and installing, start by setting up a runtime environment.
-
-```bash
-export NAJA_INSTALL=<path_to_installation_dir>
-#For Naja python interface and in particular primitives loading
-export PYTHONPATH=$PYTHONPATH:$NAJA_INSTALL/lib/python
 ```
 
