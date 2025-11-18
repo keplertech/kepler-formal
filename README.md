@@ -11,27 +11,6 @@ Kepler-Formal is a logic equivalence checking (LEC) tool that operates on the na
 
 This project is supported and funded by NLNet through the [NGI0 Entrust](https://nlnet.nl/entrust) Fund.
 
-## Build
-
-```bash
-git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
-cd kepler-formal
-mkdir build
-cd build
-cmake ..
-make
-```
-
-## Usage
-
-```bash
-"build/src/bin/kepler_formal <naja-if-dir-1> <naja-if-dir-2> [<liberty-file>...]"
-```
-
-## Contact
-
-contact@keplertech.io
-
 ## Dependencies
 
 Mandatory dependencies:
@@ -68,4 +47,23 @@ Ensure the versions of `bison` and `flex` installed via Homebrew take precedence
 ```bash
 export PATH="/opt/homebrew/opt/flex/bin:/opt/homebrew/opt/bison/bin:$PATH"
 ```
+## Build
 
+```bash
+git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
+cd kepler-formal
+mkdir build
+cd build
+cmake ..
+make
+```
+
+## Usage
+
+```bash
+"build/src/bin/kepler_formal <naja-if-dir-1> <naja-if-dir-2> [<liberty-file>...]"
+```
+
+## Contact
+
+contact@keplertech.io
