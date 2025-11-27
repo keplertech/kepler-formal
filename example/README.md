@@ -9,5 +9,5 @@ python edit.py
 # For naja_if
 ../build/src/bin/kepler_formal -naja_if tinyrocket_naja.if tinyrocket_naja_edited.if NangateOpenCellLibrary_typical.lib fakeram45_1024x32.lib fakeram45_64x32.lib
 # For verilog
-../build/src/bin/kepler_formal -verilog  tinyrocket.v tinyrocket.v NangateOpenCellLibrary_typical.lib fakeram45_1024x32.lib /example/fakeram45_64x32.lib 
+../build/src/bin/kepler_formal -verilog tinyrocket.v tinyrocket.v NangateOpenCellLibrary_typical.lib fakeram45_1024x32.lib /example/fakeram45_64x32.lib 
 ```
