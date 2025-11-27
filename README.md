@@ -44,7 +44,7 @@ make
 ## Usage
 
 ```bash
-"build/src/bin/kepler_formal <naja-if-dir-1> <naja-if-dir-2> [<liberty-file>...]"
+"build/src/bin/kepler_formal <-naja_if/-verilog> <netlist1> <netlist2> [<liberty-file>...]"
 ```
 
 ## Contact
