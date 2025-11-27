@@ -588,7 +588,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   }
   //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited1.capnp")
+      std::string("../../../src/bin/kepler_formal -snl ./top.capnp ./topEdited1.capnp")
           .c_str());  
   // look for "DIFFERENT" in the file ./miter_log_1.txt
   // open the file  
@@ -628,7 +628,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
 
   //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal ./top.capnp ./topEdited2.capnp")
+      std::string("../../../src/bin/kepler_formal -snl ./top.capnp ./topEdited2.capnp")
           .c_str()); 
   // look for "IDENTICAL" in the file ./miter_log_2.txt
   // open the file

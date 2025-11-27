@@ -22,6 +22,7 @@ liberty_files = list(map(lambda p:path.join(benchmarks, p), liberty_files))
     
 netlist.load_liberty(liberty_files)
 top = netlist.load_verilog('tinyrocket.v')
+netlist.get_top().dump_verilog('tinyrocket_pre_edited.v')
 netlist.dump_naja_if('tinyrocket.if')
 u = naja.NLUniverse.get()
 db = u.getTopDesign().getDB()
@@ -41,6 +42,10 @@ for input in top.get_input_bit_terms():
     if index == 2:
         net = input.get_lower_net()
         input.disconnect_lower_net()
+        ## assert input has no net
+        if input.get_lower_net() is not None:
+            print("net", input.get_lower_net())
+            raise TypeError(f"Not disconnected: {input}")
         print(input)
         break
     index += 1
@@ -52,5 +57,23 @@ for output in inst.get_output_bit_terms():
     break
 
 out.connect_upper_net(net) 
-
+# insure net has only one driver
+drivers = out.get_equipotential().get_leaf_drivers()
+number_of_drivers = 0
+for term in net.get_inst_terms():
+    print("inst term:", term)
+for term in net.get_design_terms():
+    print("design term:", term)
+for driver in drivers:
+    print("driver", driver)
+    number_of_drivers += 1
+top_drivers = out.get_equipotential().get_top_drivers()
+for top_driver in top_drivers:
+    print("top driver", top_driver)
+    number_of_drivers += 1
+if number_of_drivers > 1:
+    raise TypeError(f"Net has multiple drivers: {net}, {drivers}")
+net.set_name("edit")
 netlist.dump_naja_if('tinyrocket_naja_edited.if')
+netlist.get_top().dump_verilog('tinyrocket_edited.v')
+top.dump_verilog('tinyrocket_edited2.v')

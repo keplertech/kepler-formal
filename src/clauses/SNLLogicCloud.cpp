@@ -150,8 +150,18 @@ void SNLLogicCloud::compute() {
       isOutput(seedOutputTerm_)) {
     auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
-    if (iso.getDrivers().size() != 1) {
+    if (iso.getDrivers().size() > 1) {
+      
+      for (auto driver : iso.getDrivers()) {
+        printf("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
+                                      .getSnlBitTerm()
+                                      ->getName()
+                                      .getString()
+                                      .c_str());
+      }
       throw std::runtime_error("Seed output term is not a single driver");
+    } else if (iso.getDrivers().empty()) {
+      throw std::runtime_error("Seed output term has no drivers");
     }
     auto driver = iso.getDrivers().front();
     auto inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();

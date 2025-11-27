@@ -22,14 +22,12 @@ class BuildPrimaryOutputClauses {
   const std::vector<naja::DNL::DNLID>& getInputs() const { return inputs_; }
   const std::vector<naja::DNL::DNLID>& getOutputs() const { return outputs_; }
   const std::map<naja::DNL::DNLID,
-                 std::pair<std::vector<naja::NL::NLID::DesignID>,
-                           std::vector<naja::NL::NLID::DesignID>>>&
+                 std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>&
   getInputs2InputsIDs() const {
     return inputs2inputsIDs_;
   }
   const std::map<naja::DNL::DNLID,
-                 std::pair<std::vector<naja::NL::NLID::DesignID>,
-                           std::vector<naja::NL::NLID::DesignID>>>&
+                 std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>&
   getOutputs2OutputsIDs() const {
     return outputs2outputsIDs_;
   }
@@ -41,11 +39,11 @@ class BuildPrimaryOutputClauses {
     outputs_ = outputs; /*sortOutputs();*/
     setOutputs2OutputsIDs();
   }
-  const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>&
+  const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
   getInputsMap() const {
     return inputsMap_;
   }
-  const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>&
+  const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
   getOutputsMap() const {
     return outputsMap_;
   }
@@ -65,15 +63,13 @@ class BuildPrimaryOutputClauses {
   tbb::concurrent_vector<std::shared_ptr<BoolExpr>> POs_;
   std::vector<naja::DNL::DNLID> inputs_;
   std::vector<naja::DNL::DNLID> outputs_;
-  std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID> inputsMap_;
-  std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID> outputsMap_;
+  std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID> inputsMap_;
+  std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID> outputsMap_;
   std::map<naja::DNL::DNLID,
-           std::pair<std::vector<naja::NL::NLID::DesignID>,
-                     std::vector<naja::NL::NLID::DesignID>>>
+           std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>
       inputs2inputsIDs_;
   std::map<naja::DNL::DNLID,
-           std::pair<std::vector<naja::NL::NLID::DesignID>,
-                     std::vector<naja::NL::NLID::DesignID>>>
+           std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>
       outputs2outputsIDs_;
   std::vector<size_t> termDNLID2varID_;  // Only for PIs
 };

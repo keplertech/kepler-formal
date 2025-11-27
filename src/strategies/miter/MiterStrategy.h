@@ -19,19 +19,22 @@ namespace KEPLER_FORMAL {
 class MiterStrategy {
  public:
   MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& prefix = "")
-      : top0_(top0), top1_(top1), prefix_(prefix) {}
+      : prefix_(prefix) {
+    top0_ = top0;
+    top1_ = top1;
+  }
 
   bool run();
 
   void normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
-                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs0Map,
-                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& inputs1Map);
+                        const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& inputs0Map,
+                        const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& inputs1Map);
 
   void normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
                         std::vector<naja::DNL::DNLID>& outputs1,
-                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& outputs0Map,
-                        const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>& outputs1Map);
+                        const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& outputs0Map,
+                        const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& outputs1Map);
   
 
  private:
@@ -39,8 +42,8 @@ class MiterStrategy {
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const;
 
-  naja::NL::SNLDesign* top0_ = nullptr;
-  naja::NL::SNLDesign* top1_ = nullptr;
+  static naja::NL::SNLDesign* top0_;
+  static naja::NL::SNLDesign* top1_;
   tbb::concurrent_vector<BoolExpr> POs0_;
   tbb::concurrent_vector<BoolExpr> POs1_;
   std::vector<naja::DNL::DNLID> failedPOs_;

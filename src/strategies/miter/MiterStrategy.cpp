@@ -32,6 +32,8 @@ using namespace naja;
 using namespace naja::NL;
 using namespace KEPLER_FORMAL;
 
+SNLDesign* MiterStrategy::top0_ = nullptr;
+SNLDesign* MiterStrategy::top1_ = nullptr;
 namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
@@ -226,18 +228,19 @@ Glucose::Lit tseitinEncode(
 void MiterStrategy::normalizeInputs(
     std::vector<naja::DNL::DNLID>& inputs0,
     std::vector<naja::DNL::DNLID>& inputs1,
-    const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>&
+    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
         inputs0Map,
-    const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>&
+    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
         inputs1Map) {
   ensureLoggerInitialized();
   logger->info("normalizeInputs: starting");
 
   // find the intersection of inputs0 and inputs1 based on the getFullPathIDs of
   // DNLTerminal and the diffs
-  std::set<std::vector<NLID::DesignObjectID>> paths0;
-  std::set<std::vector<NLID::DesignObjectID>> paths1;
-  std::set<std::vector<NLID::DesignObjectID>> pathsCommon;
+  
+  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths0;
+  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths1;
+  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> pathsCommon;
 
   for (const auto& [path0, input0] : inputs0Map) {
     paths0.insert(path0);
@@ -248,7 +251,7 @@ void MiterStrategy::normalizeInputs(
   size_t index = 0;
   for (const auto& [path0, input0] : inputs0Map) {
     if (paths1.find(path0) != paths1.end()) {
-      pathsCommon.insert(path0);
+      pathsCommon.insert(path0 );
     }
   }
   std::vector<naja::DNL::DNLID> diff0;
@@ -256,12 +259,11 @@ void MiterStrategy::normalizeInputs(
     if (pathsCommon.find(path0) == pathsCommon.end()) {
       diff0.push_back(input0);
       auto pathInstance = path0;
-      pathInstance.pop_back();  // removing bit ID
-      pathInstance.pop_back();  // removing terminal ID
-      assert(false);  // need to change back to top 0 for the next line
-      naja::NL::SNLPath p = naja::NL::SNLPath(
-          naja::DNL::get()->getTop().getSNLModel(), pathInstance);
-      logger->info("diff0 input: {}", p.getString());
+      std::string pathString = "";
+      for (const auto& name : pathInstance.first) {
+        pathString += name.getString() + ".";
+      }
+      logger->info("diff0 input: {}", pathString);
     }
   }
   std::vector<naja::DNL::DNLID> diff1;
@@ -269,11 +271,11 @@ void MiterStrategy::normalizeInputs(
     if (pathsCommon.find(path1) == pathsCommon.end()) {
       diff1.push_back(input1);
       auto pathInstance = path1;
-      pathInstance.pop_back();  // removing bit ID
-      pathInstance.pop_back();  // removing terminal ID
-      naja::NL::SNLPath p = naja::NL::SNLPath(
-          naja::DNL::get()->getTop().getSNLModel(), pathInstance);
-      logger->info("diff1 input: {}", p.getString());
+      std::string pathString = "";
+      for (const auto& name : pathInstance.first) {
+        pathString += name.getString() + ".";
+      }
+      logger->info("diff1 input: {}", pathString);
     }
   }
   inputs0.clear();
@@ -300,24 +302,26 @@ void MiterStrategy::normalizeInputs(
 void MiterStrategy::normalizeOutputs(
     std::vector<naja::DNL::DNLID>& outputs0,
     std::vector<naja::DNL::DNLID>& outputs1,
-    const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>&
+    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
         outputs0Map,
-    const std::map<std::vector<NLID::DesignObjectID>, naja::DNL::DNLID>&
+    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
         outputs1Map) {
   ensureLoggerInitialized();
   logger->debug("normalizeOutputs: starting");
 
   // find the intersection of outputs0 and outputs1 based on the getFullPathIDs
   // of DNLTerminal and the diffs
-  std::set<std::vector<NLID::DesignObjectID>> paths1;
-  std::set<std::vector<NLID::DesignObjectID>> pathsCommon;
+  
+  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths0;
+  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths1;
+  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> pathsCommon;
   for (const auto& [path1, output1] : outputs1Map) {
     paths1.insert(path1);
   }
   size_t index = 0;
   for (const auto& [path0, output0] : outputs0Map) {
     if (paths1.find(path0) != paths1.end()) {
-      pathsCommon.insert(path0);
+      pathsCommon.insert(path0 );
     }
   }
   std::vector<naja::DNL::DNLID> diff0;
@@ -348,10 +352,10 @@ void MiterStrategy::normalizeOutputs(
   if (outputs0.size() == outputs1.size()) {
     if (outputs0 != outputs1) {
       // build the paths vector for outputs0 and outputs1
-      std::vector<std::vector<NLID::DesignObjectID>> paths0;
-      std::vector<std::vector<NLID::DesignObjectID>> paths1;
+      std::vector<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths0;
+      std::vector<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths1;
       for (const auto& output0 : outputs0) {
-        std::vector<NLID::DesignObjectID> path;
+        std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>> path;
         for (const auto& [path0, output0m] : outputs0Map) {
           if (output0m == output0) {
             path = path0;
@@ -361,7 +365,7 @@ void MiterStrategy::normalizeOutputs(
         paths0.push_back(path);
       }
       for (const auto& output1 : outputs1) {
-        std::vector<NLID::DesignObjectID> path;
+        std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>> path;
         for (const auto& [path1, output1m] : outputs1Map) {
           if (output1m == output1) {
             path = path1;
@@ -372,15 +376,15 @@ void MiterStrategy::normalizeOutputs(
       }
       if (paths0 != paths1) {
         logger->error("Miter outputs must match in order");
-        for (size_t i = 0; i < paths0.size(); ++i) {
-          naja::NL::SNLPath p0 = naja::NL::SNLPath(
-              naja::DNL::get()->getTop().getSNLModel(), paths0[i]);
-          naja::NL::SNLPath p1 = naja::NL::SNLPath(
-              naja::DNL::get()->getTop().getSNLModel(), paths1[i]);
-          throw std::runtime_error("Output " + std::to_string(i) +
-                                   " mismatch: " + p0.getString() + " vs " +
-                                   p1.getString());
-        }
+        // for (size_t i = 0; i < paths0.size(); ++i) {
+        //   naja::NL::SNLPath p0 = naja::NL::SNLPath(
+        //       top0_, paths0[i]);
+        //   naja::NL::SNLPath p1 = naja::NL::SNLPath(
+        //       top1_, paths1[i]);
+        //   throw std::runtime_error("Output " + std::to_string(i) +
+        //                            " mismatch: " + p0.getString() + " vs " +
+        //                            p1.getString());
+        // }
         assert(false && "Miter outputs must match in order");
       }
     }
@@ -627,9 +631,9 @@ bool MiterStrategy::run() {
         for (const auto& term0 : insTerms0) {
           bool found = false;
           for (const auto& term1 : insTerms1) {
-            if (term0.getPath().getPathIDs() == term1.getPath().getPathIDs() &&
-                term0.getInstTerm()->getInstance()->getID() ==
-                    term1.getInstTerm()->getInstance()->getID() &&
+            if (term0.getPath().getPathNames() == term1.getPath().getPathNames() &&
+                term0.getInstTerm()->getInstance()->getName() ==
+                    term1.getInstTerm()->getInstance()->getName() &&
                 term0.getInstTerm()->getBitTerm()->getID() ==
                     term1.getInstTerm()->getBitTerm()->getID() &&
                 term0.getInstTerm()->getBitTerm()->getBit() ==
@@ -659,9 +663,9 @@ bool MiterStrategy::run() {
         for (const auto& term1 : insTerms1) {
           bool found = false;
           for (const auto& term0 : insTerms0) {
-            if (term0.getPath().getPathIDs() == term1.getPath().getPathIDs() &&
-                term0.getInstTerm()->getInstance()->getID() ==
-                    term1.getInstTerm()->getInstance()->getID() &&
+            if (term0.getPath().getPathNames() == term1.getPath().getPathNames() &&
+                term0.getInstTerm()->getInstance()->getName() ==
+                    term1.getInstTerm()->getInstance()->getName() &&
                 term0.getInstTerm()->getBitTerm()->getID() ==
                     term1.getInstTerm()->getBitTerm()->getID() &&
                 term0.getInstTerm()->getBitTerm()->getBit() ==
