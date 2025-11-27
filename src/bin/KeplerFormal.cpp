@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
   if (argc < 3 || (std::string(argv[1]) == "--help") ||
       (std::string(argv[1]) == "-h")) {
     printf(
-        "Usage: kepler_formal <naja-if-dir-1> <naja-if-dir-2> "
+        "Usage: kepler_formal <-naja_if/-verilog> <netlist1> <netlist2> "
         "[<liberty-file>...]\n");
     return EXIT_SUCCESS;
   }
