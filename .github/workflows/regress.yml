@@ -67,6 +67,8 @@ jobs:
           ./example/tinyrocket.v \
           ./example/tinyrocket.v \
           ./example/NangateOpenCellLibrary_typical.lib \
+          ./example/fakeram45_1024x32.lib \
+          ./example/fakeram45_64x32.lib 
           
     - name: Install najaeda
       run: pip install najaeda
@@ -95,7 +97,9 @@ jobs:
           ./example/tinyrocket.v \
           ./example/tinyrocket_edited.v \
           ./example/NangateOpenCellLibrary_typical.lib \
-      
           ./example/fakeram45_1024x32.lib \
-          ./example/fakeram45_64x32.lib
+          ./example/fakeram45_64x32.lib 
+
+
+
           
