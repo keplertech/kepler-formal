@@ -37,6 +37,7 @@ target_include_directories(formal_structures
     ${TBB_INCLUDE_DIRS}          # if defined by find_package
     /opt/homebrew/include        # fallback for tbb headers
 )
+
 target_link_libraries(formal_structures
   PRIVATE TBB::tbb
   yaml-cpp::yaml-cpp
