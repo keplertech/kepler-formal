@@ -31,66 +31,89 @@ set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 
-# Find packages early so we can create compatibility imported targets if needed.
+# ---------------------------------------------------------------------------
+# Find dependencies (prefer system packages; fall back to vendored copies)
+# ---------------------------------------------------------------------------
+
+# Try system packages quietly first
 find_package(TBB QUIET)
 find_package(yaml-cpp QUIET)
 find_package(spdlog QUIET)
 
-# If find_package didn't create modern imported targets but did set legacy variables,
-# create lightweight imported targets for consistent usage below.
-# yaml-cpp compatibility
-if(NOT TARGET yaml-cpp::yaml-cpp)
-  if(yaml-cpp_FOUND)
-    # If module-mode provided YAML_CPP_LIBRARIES / INCLUDE dirs, create an imported target
-    add_library(yaml-cpp::yaml-cpp UNKNOWN IMPORTED)
-    if(DEFINED YAML_CPP_LIBRARIES)
-      set_target_properties(yaml-cpp::yaml-cpp PROPERTIES
-        IMPORTED_LOCATION "${YAML_CPP_LIBRARIES}")
-    elseif(DEFINED yaml-cpp_LIBRARIES)
-      set_target_properties(yaml-cpp::yaml-cpp PROPERTIES
-        IMPORTED_LOCATION "${yaml-cpp_LIBRARIES}")
-    endif()
-    if(DEFINED YAML_CPP_INCLUDE_DIR)
-      set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${YAML_CPP_INCLUDE_DIR}")
-    elseif(DEFINED yaml-cpp_INCLUDE_DIRS)
-      set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${yaml-cpp_INCLUDE_DIRS}")
-    endif()
-  else()
-    message(STATUS "yaml-cpp not found via quiet search; will fallback to REQUIRED search momentarily")
+# If system packages didn't provide modern imported targets, try to create
+# lightweight imported targets from legacy variables (keeps compatibility).
+# yaml-cpp compatibility (legacy variable names vary by distro/CMake mode)
+if(NOT TARGET yaml-cpp::yaml-cpp AND yaml-cpp_FOUND)
+  add_library(yaml-cpp::yaml-cpp UNKNOWN IMPORTED)
+  if(DEFINED YAML_CPP_LIBRARIES)
+    set_target_properties(yaml-cpp::yaml-cpp PROPERTIES IMPORTED_LOCATION "${YAML_CPP_LIBRARIES}")
+  elseif(DEFINED yaml-cpp_LIBRARIES)
+    set_target_properties(yaml-cpp::yaml-cpp PROPERTIES IMPORTED_LOCATION "${yaml-cpp_LIBRARIES}")
+  endif()
+  if(DEFINED YAML_CPP_INCLUDE_DIR)
+    set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${YAML_CPP_INCLUDE_DIR}")
+  elseif(DEFINED yaml-cpp_INCLUDE_DIRS)
+    set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${yaml-cpp_INCLUDE_DIRS}")
   endif()
 endif()
 
 # spdlog compatibility
+if(NOT TARGET spdlog::spdlog AND spdlog_FOUND)
+  add_library(spdlog::spdlog UNKNOWN IMPORTED)
+  if(DEFINED spdlog_LIBRARIES)
+    set_target_properties(spdlog::spdlog PROPERTIES IMPORTED_LOCATION "${spdlog_LIBRARIES}")
+  endif()
+  if(DEFINED spdlog_INCLUDE_DIRS)
+    set_property(TARGET spdlog::spdlog PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${spdlog_INCLUDE_DIRS}")
+  endif()
+endif()
+
+# TBB compatibility
+if(NOT TARGET TBB::tbb AND TBB_FOUND AND DEFINED TBB_LIBRARY)
+  add_library(TBB::tbb UNKNOWN IMPORTED)
+  set_target_properties(TBB::tbb PROPERTIES IMPORTED_LOCATION "${TBB_LIBRARY}")
+  if(DEFINED TBB_INCLUDE_DIRS)
+    set_property(TARGET TBB::tbb PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIRS}")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Fallback: if system packages not found, try vendored thirdparty directories
+# (these add_subdirectory calls must happen before any subdir that links them)
+# ---------------------------------------------------------------------------
+
+# yaml-cpp: prefer system, else vendored
+if(NOT TARGET yaml-cpp::yaml-cpp)
+  if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/yaml-cpp/CMakeLists.txt")
+    message(STATUS "Using vendored yaml-cpp from thirdparty/yaml-cpp")
+    add_subdirectory(thirdparty/yaml-cpp EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
+# spdlog: prefer system, else vendored
 if(NOT TARGET spdlog::spdlog)
-  if(spdlog_FOUND)
-    add_library(spdlog::spdlog UNKNOWN IMPORTED)
-    if(DEFINED spdlog_LIBRARIES)
-      set_target_properties(spdlog::spdlog PROPERTIES IMPORTED_LOCATION "${spdlog_LIBRARIES}")
-    endif()
-    if(DEFINED spdlog_INCLUDE_DIRS)
-      set_property(TARGET spdlog::spdlog PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${spdlog_INCLUDE_DIRS}")
-    endif()
+  if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog/CMakeLists.txt")
+    message(STATUS "Using vendored spdlog from thirdparty/spdlog")
+    add_subdirectory(thirdparty/spdlog EXCLUDE_FROM_ALL)
   endif()
 endif()
 
-# TBB compatibility (libtbb usually provides target TBB::tbb; provide fallback)
+# TBB: prefer system; vendored TBB is uncommon, so require system if not present
 if(NOT TARGET TBB::tbb)
-  if(TBB_FOUND AND DEFINED TBB_LIBRARY)
-    add_library(TBB::tbb UNKNOWN IMPORTED)
-    set_target_properties(TBB::tbb PROPERTIES IMPORTED_LOCATION "${TBB_LIBRARY}")
-    if(DEFINED TBB_INCLUDE_DIRS)
-      set_property(TARGET TBB::tbb PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIRS}")
-    endif()
+  if (NOT TBB_FOUND)
+    message(FATAL_ERROR "TBB not found. Install system TBB or vendor it under thirdparty/")
   endif()
 endif()
 
-# Canonical target names (prefer namespaced targets, fall back to vendored names)
+# ---------------------------------------------------------------------------
+# Canonical target variables (subprojects should use these names)
+# ---------------------------------------------------------------------------
 if (TARGET yaml-cpp::yaml-cpp)
   set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
 elseif (TARGET yaml-cpp)
   set(YAML_CPP_TARGET yaml-cpp)
 else()
-  message(FATAL_ERROR "yaml-cpp target not available; ensure find_package(yaml-cpp) succeeded or vendored yaml-cpp added")
+  message(FATAL_ERROR "yaml-cpp target not available; ensure system package installed or vendored copy present")
 endif()
 
 if (TARGET spdlog::spdlog)
@@ -98,7 +121,7 @@ if (TARGET spdlog::spdlog)
 elseif (TARGET spdlog)
   set(SPDLOG_TARGET spdlog)
 else()
-  message(FATAL_ERROR "spdlog target not available; ensure find_package(spdlog) succeeded or vendored spdlog added")
+  message(FATAL_ERROR "spdlog target not available; ensure system package installed or vendored copy present")
 endif()
 
 if (TARGET TBB::tbb)
@@ -106,44 +129,38 @@ if (TARGET TBB::tbb)
 elseif (TARGET TBB)
   set(TBB_TARGET TBB)
 else()
-  message(FATAL_ERROR "TBB target not available; ensure find_package(TBB) succeeded")
+  message(FATAL_ERROR "TBB target not available; ensure system package installed")
 endif()
 
+message(STATUS "Using YAML_CPP_TARGET = ${YAML_CPP_TARGET}")
+message(STATUS "Using SPDLOG_TARGET  = ${SPDLOG_TARGET}")
+message(STATUS "Using TBB_TARGET     = ${TBB_TARGET}")
 
-# If any package is required by your project policy, explicitly require them now.
-# Using REQUIRED to cause clear configure failure if not present.
-if(NOT TARGET yaml-cpp::yaml-cpp)
-  find_package(yaml-cpp REQUIRED)  # will error if missing
-endif()
-if(NOT TARGET spdlog::spdlog)
-  find_package(spdlog REQUIRED)
-endif()
-if(NOT TARGET TBB::tbb)
-  find_package(TBB REQUIRED)
-endif()
-
+# ---------------------------------------------------------------------------
 # Add project subdirectories (these define formal_structures and others).
+# ---------------------------------------------------------------------------
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 include(CTest)
 add_subdirectory(test)
 
-# Now, only set include_directories / link libraries if the formal_structures
-# target exists. This avoids ordering issues.
+# ---------------------------------------------------------------------------
+# Top-level link/include setup for formal_structures (guarded)
+# ---------------------------------------------------------------------------
 if(TARGET formal_structures)
   # Include TBB headers (TBB::tbb provides interface dirs; keep fallback path for macOS Homebrew)
   target_include_directories(formal_structures
     PRIVATE
-      $<$<TARGET_EXISTS:TBB::tbb>:$<TARGET_PROPERTY:TBB::tbb,INTERFACE_INCLUDE_DIRECTORIES>>
+      $<$<TARGET_EXISTS:${TBB_TARGET}>:$<TARGET_PROPERTY:${TBB_TARGET},INTERFACE_INCLUDE_DIRECTORIES>>
       /opt/homebrew/include
   )
 
-  # Link to available targets in a guarded way.
+  # Link to available targets using canonical variables
   target_link_libraries(formal_structures
     PRIVATE
-      $<$<TARGET_EXISTS:TBB::tbb>:TBB::tbb>
-      $<$<TARGET_EXISTS:yaml-cpp::yaml-cpp>:yaml-cpp::yaml-cpp>
-      $<$<TARGET_EXISTS:spdlog::spdlog>:spdlog::spdlog>
+      $<$<BOOL:${TBB_TARGET}>:${TBB_TARGET}>
+      $<$<BOOL:${YAML_CPP_TARGET}>:${YAML_CPP_TARGET}>
+      $<$<BOOL:${SPDLOG_TARGET}>:${SPDLOG_TARGET}>
   )
 else()
   message(WARNING "formal_structures target was not defined by subdirectories; skipping top-level link/include setup.")
