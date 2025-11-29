@@ -21,14 +21,14 @@ set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 
+find_package(TBB REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(spdlog REQUIRED)
+
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 include(CTest)
 add_subdirectory(test)
-
-find_package(TBB REQUIRED)
-find_package(yaml-cpp REQUIRED)
-find_package(spdlog REQUIRED)
 
 # if you’re using find_package(TBB), ensure it picked up Homebrew’s install
 
