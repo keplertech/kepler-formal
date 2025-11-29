@@ -17,29 +17,108 @@ project(kepler-formal
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 
+# Option to enable/disable the Python interface. CI disables it by default.
+option(PYTHON_INTERFACE "Enable Python interface" OFF)
+
+# If the python interface is disabled, provide a no-op INTERFACE target so
+# other targets that unconditionally link PYTHON_INTERFACE still configure.
+# This must be created before add_subdirectory(...) so subprojects can link to it.
+if(NOT PYTHON_INTERFACE AND NOT TARGET PYTHON_INTERFACE)
+  add_library(PYTHON_INTERFACE INTERFACE)
+endif()
+
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 
-find_package(TBB REQUIRED)
-find_package(yaml-cpp REQUIRED)
-find_package(spdlog REQUIRED)
+# Find packages early so we can create compatibility imported targets if needed.
+find_package(TBB QUIET)
+find_package(yaml-cpp QUIET)
+find_package(spdlog QUIET)
 
+# If find_package didn't create modern imported targets but did set legacy variables,
+# create lightweight imported targets for consistent usage below.
+# yaml-cpp compatibility
+if(NOT TARGET yaml-cpp::yaml-cpp)
+  if(yaml-cpp_FOUND)
+    # If module-mode provided YAML_CPP_LIBRARIES / INCLUDE dirs, create an imported target
+    add_library(yaml-cpp::yaml-cpp UNKNOWN IMPORTED)
+    if(DEFINED YAML_CPP_LIBRARIES)
+      set_target_properties(yaml-cpp::yaml-cpp PROPERTIES
+        IMPORTED_LOCATION "${YAML_CPP_LIBRARIES}")
+    elseif(DEFINED yaml-cpp_LIBRARIES)
+      set_target_properties(yaml-cpp::yaml-cpp PROPERTIES
+        IMPORTED_LOCATION "${yaml-cpp_LIBRARIES}")
+    endif()
+    if(DEFINED YAML_CPP_INCLUDE_DIR)
+      set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${YAML_CPP_INCLUDE_DIR}")
+    elseif(DEFINED yaml-cpp_INCLUDE_DIRS)
+      set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${yaml-cpp_INCLUDE_DIRS}")
+    endif()
+  else()
+    message(STATUS "yaml-cpp not found via quiet search; will fallback to REQUIRED search momentarily")
+  endif()
+endif()
+
+# spdlog compatibility
+if(NOT TARGET spdlog::spdlog)
+  if(spdlog_FOUND)
+    add_library(spdlog::spdlog UNKNOWN IMPORTED)
+    if(DEFINED spdlog_LIBRARIES)
+      set_target_properties(spdlog::spdlog PROPERTIES IMPORTED_LOCATION "${spdlog_LIBRARIES}")
+    endif()
+    if(DEFINED spdlog_INCLUDE_DIRS)
+      set_property(TARGET spdlog::spdlog PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${spdlog_INCLUDE_DIRS}")
+    endif()
+  endif()
+endif()
+
+# TBB compatibility (libtbb usually provides target TBB::tbb; provide fallback)
+if(NOT TARGET TBB::tbb)
+  if(TBB_FOUND AND DEFINED TBB_LIBRARY)
+    add_library(TBB::tbb UNKNOWN IMPORTED)
+    set_target_properties(TBB::tbb PROPERTIES IMPORTED_LOCATION "${TBB_LIBRARY}")
+    if(DEFINED TBB_INCLUDE_DIRS)
+      set_property(TARGET TBB::tbb PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIRS}")
+    endif()
+  endif()
+endif()
+
+# If any package is required by your project policy, explicitly require them now.
+# Using REQUIRED to cause clear configure failure if not present.
+if(NOT TARGET yaml-cpp::yaml-cpp)
+  find_package(yaml-cpp REQUIRED)  # will error if missing
+endif()
+if(NOT TARGET spdlog::spdlog)
+  find_package(spdlog REQUIRED)
+endif()
+if(NOT TARGET TBB::tbb)
+  find_package(TBB REQUIRED)
+endif()
+
+# Add project subdirectories (these define formal_structures and others).
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 include(CTest)
 add_subdirectory(test)
 
-# if you’re using find_package(TBB), ensure it picked up Homebrew’s install
+# Now, only set include_directories / link libraries if the formal_structures
+# target exists. This avoids ordering issues.
+if(TARGET formal_structures)
+  # Include TBB headers (TBB::tbb provides interface dirs; keep fallback path for macOS Homebrew)
+  target_include_directories(formal_structures
+    PRIVATE
+      $<$<TARGET_EXISTS:TBB::tbb>:$<TARGET_PROPERTY:TBB::tbb,INTERFACE_INCLUDE_DIRECTORIES>>
+      /opt/homebrew/include
+  )
 
-target_include_directories(formal_structures
-  PRIVATE
-    ${TBB_INCLUDE_DIRS}          # if defined by find_package
-    /opt/homebrew/include        # fallback for tbb headers
-)
-
-target_link_libraries(formal_structures
-  PRIVATE TBB::tbb
-  yaml-cpp::yaml-cpp
-  spdlog::spdlog
-)
+  # Link to available targets in a guarded way.
+  target_link_libraries(formal_structures
+    PRIVATE
+      $<$<TARGET_EXISTS:TBB::tbb>:TBB::tbb>
+      $<$<TARGET_EXISTS:yaml-cpp::yaml-cpp>:yaml-cpp::yaml-cpp>
+      $<$<TARGET_EXISTS:spdlog::spdlog>:spdlog::spdlog>
+  )
+else()
+  message(WARNING "formal_structures target was not defined by subdirectories; skipping top-level link/include setup.")
+endif()
