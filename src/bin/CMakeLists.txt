@@ -6,6 +6,6 @@ target_include_directories(kepler_formal SYSTEM BEFORE PUBLIC ${Boost_INCLUDE_DI
 target_include_directories(kepler_formal PUBLIC ${ARGPARSE_DIR} ${YAML_CPP_INCLUDE_DIR})
 target_link_libraries(kepler_formal
     naja_snl_pyloader
-    naja_dnl naja_opt formal_strategies $<$<TARGET_EXISTS:yaml-cpp::yaml-cpp>:yaml-cpp::yaml-cpp>
-    $<$<TARGET_EXISTS:spdlog::spdlog>:spdlog::spdlog> )
+    naja_dnl naja_opt formal_strategies ${YAML_CPP_TARGET}
+    ${SPDLOG_TARGET})
 install(TARGETS kepler_formal DESTINATION ${CMAKE_INSTALL_BINDIR})
