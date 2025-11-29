@@ -27,7 +27,7 @@ jobs:
       run: git submodule update --init --recursive
     # install dependencies
     - name: Install dependencies
-      run: brew install cmake doxygen capnp tbb bison flex boost libyaml-cpp-dev
+      run: brew install cmake doxygen capnp tbb bison flex boost libyaml-cpp-dev libspdlog-dev
     - name: set env variable
       run: |
         echo "/usr/local/opt/flex/bin" >> $GITHUB_PATH; echo "/usr/local/opt/bison/bin" >> $GITHUB_PATH;
