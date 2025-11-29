@@ -60,16 +60,37 @@ if(NOT TARGET yaml-cpp::yaml-cpp)
   endif()
 endif()
 
-# --- after your find_package(...) and compatibility imported-target creation ---
+# spdlog compatibility
+if(NOT TARGET spdlog::spdlog)
+  if(spdlog_FOUND)
+    add_library(spdlog::spdlog UNKNOWN IMPORTED)
+    if(DEFINED spdlog_LIBRARIES)
+      set_target_properties(spdlog::spdlog PROPERTIES IMPORTED_LOCATION "${spdlog_LIBRARIES}")
+    endif()
+    if(DEFINED spdlog_INCLUDE_DIRS)
+      set_property(TARGET spdlog::spdlog PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${spdlog_INCLUDE_DIRS}")
+    endif()
+  endif()
+endif()
 
-# Canonical target variables (prefer modern names, fall back to vendored unnamespaced targets)
+# TBB compatibility (libtbb usually provides target TBB::tbb; provide fallback)
+if(NOT TARGET TBB::tbb)
+  if(TBB_FOUND AND DEFINED TBB_LIBRARY)
+    add_library(TBB::tbb UNKNOWN IMPORTED)
+    set_target_properties(TBB::tbb PROPERTIES IMPORTED_LOCATION "${TBB_LIBRARY}")
+    if(DEFINED TBB_INCLUDE_DIRS)
+      set_property(TARGET TBB::tbb PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${TBB_INCLUDE_DIRS}")
+    endif()
+  endif()
+endif()
+
+# Canonical target names (prefer namespaced targets, fall back to vendored names)
 if (TARGET yaml-cpp::yaml-cpp)
   set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
 elseif (TARGET yaml-cpp)
   set(YAML_CPP_TARGET yaml-cpp)
 else()
-  # yaml-cpp should already be REQUIRED above; this is defensive
-  message(FATAL_ERROR "yaml-cpp target not available")
+  message(FATAL_ERROR "yaml-cpp target not available; ensure find_package(yaml-cpp) succeeded or vendored yaml-cpp added")
 endif()
 
 if (TARGET spdlog::spdlog)
@@ -77,7 +98,7 @@ if (TARGET spdlog::spdlog)
 elseif (TARGET spdlog)
   set(SPDLOG_TARGET spdlog)
 else()
-  message(FATAL_ERROR "spdlog target not available")
+  message(FATAL_ERROR "spdlog target not available; ensure find_package(spdlog) succeeded or vendored spdlog added")
 endif()
 
 if (TARGET TBB::tbb)
@@ -85,8 +106,9 @@ if (TARGET TBB::tbb)
 elseif (TARGET TBB)
   set(TBB_TARGET TBB)
 else()
-  message(FATAL_ERROR "TBB target not available")
+  message(FATAL_ERROR "TBB target not available; ensure find_package(TBB) succeeded")
 endif()
+
 
 # If any package is required by your project policy, explicitly require them now.
 # Using REQUIRED to cause clear configure failure if not present.
