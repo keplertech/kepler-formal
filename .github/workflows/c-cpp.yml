@@ -29,7 +29,7 @@ jobs:
     - name: Checkout submodules
       run: git submodule update --init --recursive
     - name: Install boost & capnproto
-      run: sudo apt-get update && sudo apt-get install -yq pkg-config libspdlog-dev libyaml-cpp-dev libboost-dev libfl-dev capnproto libcapnp-dev ninja-build clang libtbb-dev
+      run: sudo apt-get update && sudo apt-get install -yq pkg-config libspdlog-dev libyaml-cpp libboost-dev libfl-dev capnproto libcapnp-dev ninja-build clang libtbb-dev
     - name: Install dependencies with vcpkg
       run: vcpkg install yaml-cpp
     - name: Configure CMake
