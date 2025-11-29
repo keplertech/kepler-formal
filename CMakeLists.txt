@@ -27,6 +27,8 @@ include(CTest)
 add_subdirectory(test)
 
 find_package(TBB REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(spdlog REQUIRED)
 
 # if you’re using find_package(TBB), ensure it picked up Homebrew’s install
 
@@ -37,4 +39,6 @@ target_include_directories(formal_structures
 )
 target_link_libraries(formal_structures
   PRIVATE TBB::tbb
+  yaml-cpp::yaml-cpp
+  spdlog::spdlog
 )
