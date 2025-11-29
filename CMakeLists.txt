@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 cmake_minimum_required(VERSION 3.21)
-# tell CMake to pretend any cmake_minimum_required(VERSION X) with X<3.5
-# is OK.  Mirrors the -DCMAKE_POLICY_VERSION_MINIMUM=3.5 hack.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE INTERNAL
     "Allow parsing of subprojects that require CMake < 3.5")
 
@@ -17,12 +15,8 @@ project(kepler-formal
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 
-# Option to enable/disable the Python interface. CI disables it by default.
 option(PYTHON_INTERFACE "Enable Python interface" OFF)
 
-# If the python interface is disabled, provide a no-op INTERFACE target so
-# other targets that unconditionally link PYTHON_INTERFACE still configure.
-# This must be created before add_subdirectory(...) so subprojects can link to it.
 if(NOT PYTHON_INTERFACE AND NOT TARGET PYTHON_INTERFACE)
   add_library(PYTHON_INTERFACE INTERFACE)
 endif()
@@ -32,17 +26,16 @@ set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 
 # ---------------------------------------------------------------------------
-# Find dependencies (prefer system packages; fall back to vendored copies)
+# Try system packages first (quiet). We'll fall back to vendored copies below.
 # ---------------------------------------------------------------------------
-
-# Try system packages quietly first
 find_package(TBB QUIET)
 find_package(yaml-cpp QUIET)
 find_package(spdlog QUIET)
 
-# If system packages didn't provide modern imported targets, try to create
-# lightweight imported targets from legacy variables (keeps compatibility).
-# yaml-cpp compatibility (legacy variable names vary by distro/CMake mode)
+# ---------------------------------------------------------------------------
+# If system packages provided legacy variables but no imported targets, create
+# lightweight imported targets so subprojects can link consistently.
+# ---------------------------------------------------------------------------
 if(NOT TARGET yaml-cpp::yaml-cpp AND yaml-cpp_FOUND)
   add_library(yaml-cpp::yaml-cpp UNKNOWN IMPORTED)
   if(DEFINED YAML_CPP_LIBRARIES)
@@ -57,7 +50,6 @@ if(NOT TARGET yaml-cpp::yaml-cpp AND yaml-cpp_FOUND)
   endif()
 endif()
 
-# spdlog compatibility
 if(NOT TARGET spdlog::spdlog AND spdlog_FOUND)
   add_library(spdlog::spdlog UNKNOWN IMPORTED)
   if(DEFINED spdlog_LIBRARIES)
@@ -68,7 +60,6 @@ if(NOT TARGET spdlog::spdlog AND spdlog_FOUND)
   endif()
 endif()
 
-# TBB compatibility
 if(NOT TARGET TBB::tbb AND TBB_FOUND AND DEFINED TBB_LIBRARY)
   add_library(TBB::tbb UNKNOWN IMPORTED)
   set_target_properties(TBB::tbb PROPERTIES IMPORTED_LOCATION "${TBB_LIBRARY}")
@@ -78,29 +69,26 @@ if(NOT TARGET TBB::tbb AND TBB_FOUND AND DEFINED TBB_LIBRARY)
 endif()
 
 # ---------------------------------------------------------------------------
-# Fallback: if system packages not found, try vendored thirdparty directories
-# (these add_subdirectory calls must happen before any subdir that links them)
+# Vendored fallback: add_subdirectory for thirdparty copies if system not found.
+# These must be added before subdirs that link to them.
 # ---------------------------------------------------------------------------
-
-# yaml-cpp: prefer system, else vendored
 if(NOT TARGET yaml-cpp::yaml-cpp)
-  if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/yaml-cpp/CMakeLists.txt")
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/yaml-cpp/CMakeLists.txt")
     message(STATUS "Using vendored yaml-cpp from thirdparty/yaml-cpp")
     add_subdirectory(thirdparty/yaml-cpp EXCLUDE_FROM_ALL)
   endif()
 endif()
 
-# spdlog: prefer system, else vendored
 if(NOT TARGET spdlog::spdlog)
-  if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog/CMakeLists.txt")
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog/CMakeLists.txt")
     message(STATUS "Using vendored spdlog from thirdparty/spdlog")
     add_subdirectory(thirdparty/spdlog EXCLUDE_FROM_ALL)
   endif()
 endif()
 
-# TBB: prefer system; vendored TBB is uncommon, so require system if not present
+# Require TBB from system (common on CI). If you vendor TBB, add similar fallback.
 if(NOT TARGET TBB::tbb)
-  if (NOT TBB_FOUND)
+  if(NOT TBB_FOUND)
     message(FATAL_ERROR "TBB not found. Install system TBB or vendor it under thirdparty/")
   endif()
 endif()
@@ -113,7 +101,7 @@ if (TARGET yaml-cpp::yaml-cpp)
 elseif (TARGET yaml-cpp)
   set(YAML_CPP_TARGET yaml-cpp)
 else()
-  message(FATAL_ERROR "yaml-cpp target not available; ensure system package installed or vendored copy present")
+  message(FATAL_ERROR "yaml-cpp target not available; install libyaml-cpp-dev or add thirdparty/yaml-cpp")
 endif()
 
 if (TARGET spdlog::spdlog)
@@ -121,7 +109,7 @@ if (TARGET spdlog::spdlog)
 elseif (TARGET spdlog)
   set(SPDLOG_TARGET spdlog)
 else()
-  message(FATAL_ERROR "spdlog target not available; ensure system package installed or vendored copy present")
+  message(FATAL_ERROR "spdlog target not available; install libspdlog-dev or add thirdparty/spdlog")
 endif()
 
 if (TARGET TBB::tbb)
@@ -129,7 +117,7 @@ if (TARGET TBB::tbb)
 elseif (TARGET TBB)
   set(TBB_TARGET TBB)
 else()
-  message(FATAL_ERROR "TBB target not available; ensure system package installed")
+  message(FATAL_ERROR "TBB target not available; ensure system TBB is installed")
 endif()
 
 message(STATUS "Using YAML_CPP_TARGET = ${YAML_CPP_TARGET}")
@@ -148,14 +136,12 @@ add_subdirectory(test)
 # Top-level link/include setup for formal_structures (guarded)
 # ---------------------------------------------------------------------------
 if(TARGET formal_structures)
-  # Include TBB headers (TBB::tbb provides interface dirs; keep fallback path for macOS Homebrew)
   target_include_directories(formal_structures
     PRIVATE
       $<$<TARGET_EXISTS:${TBB_TARGET}>:$<TARGET_PROPERTY:${TBB_TARGET},INTERFACE_INCLUDE_DIRECTORIES>>
       /opt/homebrew/include
   )
 
-  # Link to available targets using canonical variables
   target_link_libraries(formal_structures
     PRIVATE
       $<$<BOOL:${TBB_TARGET}>:${TBB_TARGET}>
