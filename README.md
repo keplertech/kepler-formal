@@ -28,13 +28,13 @@ The property of stable indices is employed to localize the scopes affected by ed
 On Ubuntu:
 
 ```bash
-sudo apt-get install g++ libboost-dev python3.9-dev capnproto libcapnp-dev libtbb-dev pkg-config bison flex doxygen
+sudo apt-get install g++ libboost-dev python3.9-dev capnproto libcapnp-dev libtbb-dev pkg-config bison flex doxygen libspdlog-dev 
 ```
 
 On macOS, using [Homebrew](https://brew.sh/):
 
 ```bash
-brew install cmake doxygen capnp tbb bison flex boost
+brew install cmake doxygen capnp tbb bison flex boost spdlog
 ```
 
 Ensure the versions of `bison` and `flex` installed via Homebrew take precedence over the macOS defaults by modifying your $PATH environment variable as follows:
