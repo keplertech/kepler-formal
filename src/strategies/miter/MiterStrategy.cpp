@@ -480,7 +480,7 @@ bool MiterStrategy::run() {
   logger->info("Finished Glucose solving: {}", sat ? "SAT" : "UNSAT");
 
   if (sat) {
-    logger->warn("Miter failed: analyzing individual POs");
+    logger->warn("Miter found a difference -> moving to analyze individual POs");
     for (size_t i = 0; i < POs0.size(); ++i) {
       if (builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i)) !=
           builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i))) {
@@ -503,7 +503,7 @@ bool MiterStrategy::run() {
       singleSolver.addClause(singleRootLit);
       if (singleSolver.solve()) {
         failedPOs_.push_back(i);
-        logger->info("Check failed for PO: {}", i);
+        logger->info("Found difference for PO: {}", i);
         // logger->info("Clause 0 {}", POs0[i]->toString());
         // logger->info("Clause 1 {}", POs1[i]->toString());
         std::vector<naja::NL::SNLDesign*> topModels;

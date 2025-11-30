@@ -28,13 +28,13 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
 
   // Factory methods (canonical, fold constants, share structure)
   static std::shared_ptr<BoolExpr> Var(size_t id);
-  static std::shared_ptr<BoolExpr> Not(std::shared_ptr<BoolExpr> a);
-  static std::shared_ptr<BoolExpr> And(std::shared_ptr<BoolExpr> a,
-                                       std::shared_ptr<BoolExpr> b);
-  static std::shared_ptr<BoolExpr> Or(std::shared_ptr<BoolExpr> a,
-                                      std::shared_ptr<BoolExpr> b);
-  static std::shared_ptr<BoolExpr> Xor(std::shared_ptr<BoolExpr> a,
-                                       std::shared_ptr<BoolExpr> b);
+  static std::shared_ptr<BoolExpr> Not(const std::shared_ptr<BoolExpr>& a);
+  static std::shared_ptr<BoolExpr> And(const std::shared_ptr<BoolExpr>& a,
+                                       const std::shared_ptr<BoolExpr>& b);
+  static std::shared_ptr<BoolExpr> Or(const std::shared_ptr<BoolExpr>& a,
+                                      const std::shared_ptr<BoolExpr>& b);
+  static std::shared_ptr<BoolExpr> Xor(const std::shared_ptr<BoolExpr>& a,
+                                       const std::shared_ptr<BoolExpr>& b);
 
   // Print and stringify
   void Print(std::ostream& out) const;
@@ -83,14 +83,14 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   }
   // Simplify/optimize an expression DAG (returns interned canonical node)
   // Memoized, safe on DAGs.
-  static std::shared_ptr<BoolExpr> simplify(std::shared_ptr<BoolExpr> e);
+  static std::shared_ptr<BoolExpr> simplify(const std::shared_ptr<BoolExpr>& e);
 
  private:
   // Private ctor: use factory methods
   BoolExpr(Op op,
            size_t id,
-           std::shared_ptr<BoolExpr> a,
-           std::shared_ptr<BoolExpr> b);
+           const std::shared_ptr<BoolExpr>& a,
+           const std::shared_ptr<BoolExpr>& b);
 
   Op op_ = Op::NONE;
   size_t varID_ = (size_t)-1;  // only for VAR

@@ -1,0 +1,11 @@
+# tinyrocket_config.yaml
+format: verilog
+input_paths:
+  - tinyrocket.v
+  - tinyrocket_edited.v
+liberty_files:
+  - NangateOpenCellLibrary_typical.lib
+  - fakeram45_1024x32.lib
+  - fakeram45_64x32.lib
+log_level: info
+

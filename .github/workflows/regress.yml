@@ -30,7 +30,7 @@ jobs:
     - name: Checkout submodules
       run: git submodule update --init --recursive
     - name: Install boost & capnproto
-      run: sudo apt-get update && sudo apt-get install -yq libboost-dev libfl-dev capnproto libcapnp-dev ninja-build clang libtbb-dev
+      run: sudo apt-get update && sudo apt-get install -y pkg-config libboost-dev libfl-dev capnproto libcapnp-dev ninja-build clang libtbb-dev libspdlog-dev 
       
     - name: Configure CMake
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DCMAKE_C_COMPILER=clang -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
@@ -78,28 +78,18 @@ jobs:
       run: python edit.py
 
     - name: Run on naja if edited
-      working-directory: ${{github.workspace}}
+      working-directory: ${{github.workspace}}/example
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler_formal -naja_if \
-          ./example/tinyrocket_naja.if \
-          ./example/tinyrocket_naja_edited.if \
-          ./example/NangateOpenCellLibrary_typical.lib \
-          ./example/fakeram45_1024x32.lib \
-          ./example/fakeram45_64x32.lib 
+        ../build/src/bin/kepler_formal --config test_config_naja_if.yaml
     
     - name: Run on verilog edited
-      working-directory: ${{github.workspace}}
+      working-directory: ${{github.workspace}}/example
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler_formal -verilog \
-          ./example/tinyrocket.v \
-          ./example/tinyrocket_edited.v \
-          ./example/NangateOpenCellLibrary_typical.lib \
-          ./example/fakeram45_1024x32.lib \
-          ./example/fakeram45_64x32.lib 
+        ../build/src/bin/kepler_formal --config test_config_verilog.yaml
 
 
 
