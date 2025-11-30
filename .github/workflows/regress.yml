@@ -78,18 +78,18 @@ jobs:
       run: python edit.py
 
     - name: Run on naja if edited
-      working-directory: ${{github.workspace}}
+      working-directory: ${{github.workspace}}/example
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler_formal --config ./example/test_config_naja_if.yaml
+        ./build/src/bin/kepler_formal --config test_config_naja_if.yaml
     
     - name: Run on verilog edited
-      working-directory: ${{github.workspace}}
+      working-directory: ${{github.workspace}}/example
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler_formal --config ./example/test_config_verilog.yaml
+        ./build/src/bin/kepler_formal --config test_config_verilog.yaml
 
 
 
