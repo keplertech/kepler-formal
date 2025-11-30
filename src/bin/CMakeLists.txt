@@ -11,7 +11,7 @@ target_link_libraries(kepler_formal
     naja_dnl
     naja_opt
     formal_strategies
-    ${YAML_CPP_TARGET}
+    yaml-cpp
     ${SPDLOG_TARGET}
 )
 

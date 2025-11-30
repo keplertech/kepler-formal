@@ -29,26 +29,12 @@ set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 # Try system packages first (quiet). We'll fall back to vendored copies below.
 # ---------------------------------------------------------------------------
 find_package(TBB QUIET)
-find_package(yaml-cpp QUIET)
 find_package(spdlog QUIET)
 
 # ---------------------------------------------------------------------------
 # If system packages provided legacy variables but no imported targets, create
 # lightweight imported targets so subprojects can link consistently.
 # ---------------------------------------------------------------------------
-if(NOT TARGET yaml-cpp::yaml-cpp AND yaml-cpp_FOUND)
-  add_library(yaml-cpp::yaml-cpp UNKNOWN IMPORTED)
-  if(DEFINED YAML_CPP_LIBRARIES)
-    set_target_properties(yaml-cpp::yaml-cpp PROPERTIES IMPORTED_LOCATION "${YAML_CPP_LIBRARIES}")
-  elseif(DEFINED yaml-cpp_LIBRARIES)
-    set_target_properties(yaml-cpp::yaml-cpp PROPERTIES IMPORTED_LOCATION "${yaml-cpp_LIBRARIES}")
-  endif()
-  if(DEFINED YAML_CPP_INCLUDE_DIR)
-    set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${YAML_CPP_INCLUDE_DIR}")
-  elseif(DEFINED yaml-cpp_INCLUDE_DIRS)
-    set_property(TARGET yaml-cpp::yaml-cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${yaml-cpp_INCLUDE_DIRS}")
-  endif()
-endif()
 
 if(NOT TARGET spdlog::spdlog AND spdlog_FOUND)
   add_library(spdlog::spdlog UNKNOWN IMPORTED)
@@ -72,12 +58,6 @@ endif()
 # Vendored fallback: add_subdirectory for thirdparty copies if system not found.
 # These must be added before subdirs that link to them.
 # ---------------------------------------------------------------------------
-if(NOT TARGET yaml-cpp::yaml-cpp)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/yaml-cpp/CMakeLists.txt")
-    message(STATUS "Using vendored yaml-cpp from thirdparty/yaml-cpp")
-    add_subdirectory(thirdparty/yaml-cpp EXCLUDE_FROM_ALL)
-  endif()
-endif()
 
 if(NOT TARGET spdlog::spdlog)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog/CMakeLists.txt")
@@ -96,13 +76,6 @@ endif()
 # ---------------------------------------------------------------------------
 # Canonical target variables (subprojects should use these names)
 # ---------------------------------------------------------------------------
-if (TARGET yaml-cpp::yaml-cpp)
-  set(YAML_CPP_TARGET yaml-cpp::yaml-cpp)
-elseif (TARGET yaml-cpp)
-  set(YAML_CPP_TARGET yaml-cpp)
-else()
-  message(FATAL_ERROR "yaml-cpp target not available; install libyaml-cpp-dev or add thirdparty/yaml-cpp")
-endif()
 
 if (TARGET spdlog::spdlog)
   set(SPDLOG_TARGET spdlog::spdlog)
