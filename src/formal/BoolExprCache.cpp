@@ -66,8 +66,8 @@ BoolExprCache::Impl& BoolExprCache::impl() {
 
 static inline TupleKey make_tuple_key(Op op,
                                       size_t varId,
-                                      std::shared_ptr<BoolExpr> lptr,
-                                      std::shared_ptr<BoolExpr> rptr) noexcept {
+                                      const std::shared_ptr<BoolExpr>& lptr,
+                                      const std::shared_ptr<BoolExpr>& rptr) noexcept {
   // use pointer identity as integer; nullptr -> 0
   auto lid = reinterpret_cast<uint64_t>(lptr.get());
   auto rid = reinterpret_cast<uint64_t>(rptr.get());

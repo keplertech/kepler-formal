@@ -16,8 +16,8 @@ tbb::concurrent_unordered_map<BoolExprCache::Key,
 
 /// Private ctor
 BoolExpr::BoolExpr(Op op, size_t id,
-                   std::shared_ptr<BoolExpr> a,
-                   std::shared_ptr<BoolExpr> b)
+                   const std::shared_ptr<BoolExpr>& a,
+                   const std::shared_ptr<BoolExpr>& b)
   : op_(op), varID_(id)/*, left_(l) , right_(r)*/ {
     if (b == nullptr) {
         if (a == nullptr && op != Op::VAR) {
@@ -66,7 +66,7 @@ std::shared_ptr<BoolExpr> BoolExpr::Var(size_t id) {
     return createNode(k);
 }
 
-std::shared_ptr<BoolExpr> BoolExpr::Not(std::shared_ptr<BoolExpr> a) {
+std::shared_ptr<BoolExpr> BoolExpr::Not(const std::shared_ptr<BoolExpr>& a) {
     // constant-fold
     if (a->op_ == Op::VAR && a->varID_ < 2)
         return Var(1 - a->varID_);
@@ -78,8 +78,8 @@ std::shared_ptr<BoolExpr> BoolExpr::Not(std::shared_ptr<BoolExpr> a) {
 }
 
 std::shared_ptr<BoolExpr> BoolExpr::And(
-    std::shared_ptr<BoolExpr> a,
-    std::shared_ptr<BoolExpr> b)
+    const std::shared_ptr<BoolExpr>& a,
+    const std::shared_ptr<BoolExpr>& b)
 {
     // constant-fold
     if ((a->op_ == Op::VAR && a->varID_ == 0) ||
@@ -92,14 +92,15 @@ std::shared_ptr<BoolExpr> BoolExpr::And(
     if (b->op_==Op::NOT && b->left_==a) return Var(0);
 
     // canonical order
-    if (b < a) std::swap(a, b);
-    BoolExprCache::Key k{Op::AND, 0, a, b};
+    // if (b < a) std::swap(a, b);
+    // BoolExprCache::Key k{Op::AND, 0, a, b};
+    BoolExprCache::Key k{Op::AND, 0, (b < a) ? a : b, (b < a) ? b : a};
     return createNode(k);
 }
 
 std::shared_ptr<BoolExpr> BoolExpr::Or(
-    std::shared_ptr<BoolExpr> a,
-    std::shared_ptr<BoolExpr> b)
+    const std::shared_ptr<BoolExpr>& a,
+    const std::shared_ptr<BoolExpr>& b)
 {
     if ((a->op_ == Op::VAR && a->varID_ == 1) ||
         (b->op_ == Op::VAR && b->varID_ == 1))
@@ -110,14 +111,15 @@ std::shared_ptr<BoolExpr> BoolExpr::Or(
     if (a->op_==Op::NOT && a->left_==b) return Var(1);
     if (b->op_==Op::NOT && b->left_==a) return Var(1);
 
-    if (b < a) std::swap(a, b);
-    BoolExprCache::Key k{Op::OR, 0, a, b};
+    // if (b < a) std::swap(a, b);
+    // BoolExprCache::Key k{Op::OR, 0, a, b};
+    BoolExprCache::Key k{Op::OR, 0, (b < a) ? a : b, (b < a) ? b : a};
     return createNode(k);
 }
 
 std::shared_ptr<BoolExpr> BoolExpr::Xor(
-    std::shared_ptr<BoolExpr> a,
-    std::shared_ptr<BoolExpr> b)
+    const std::shared_ptr<BoolExpr>& a,
+    const std::shared_ptr<BoolExpr>& b)
 {
     if (a->op_ == Op::VAR && a->varID_ == 0)     return b;
     if (b->op_ == Op::VAR && b->varID_ == 0)     return a;
@@ -125,8 +127,9 @@ std::shared_ptr<BoolExpr> BoolExpr::Xor(
     if (b->op_ == Op::VAR && b->varID_ == 1)     return Not(a);
     if (a == b)                  return Var(0);
 
-    if (b < a) std::swap(a, b);
-    BoolExprCache::Key k{Op::XOR, 0, a, b};
+    // if (b < a) std::swap(a, b);
+    // BoolExprCache::Key k{Op::XOR, 0, a, b};
+    BoolExprCache::Key k{Op::XOR, 0, (b < a) ? a : b, (b < a) ? b : a};
     return createNode(k);
 }
 
@@ -184,14 +187,14 @@ std::string BoolExpr::OpToString(Op op) {
 
 // replace previous isConstFalse/isConstTrue and Simplify implementation with this:
 
-static inline bool isConstFalse(std::shared_ptr<BoolExpr> e) {
+static inline bool isConstFalse(const std::shared_ptr<BoolExpr>& e) {
     return e->getOp() == Op::VAR && e->getId() == 0;
 }
-static inline bool isConstTrue(std::shared_ptr<BoolExpr> e) {
+static inline bool isConstTrue(const std::shared_ptr<BoolExpr>& e) {
     return e->getOp() == Op::VAR && e->getId() == 1;
 }
 
-std::shared_ptr<BoolExpr> BoolExpr::simplify(std::shared_ptr<BoolExpr> e) {
+std::shared_ptr<BoolExpr> BoolExpr::simplify(const std::shared_ptr<BoolExpr>& e) {
     if (!e) return nullptr;
     if (e->getOp() == Op::VAR) return e;
 
@@ -215,7 +218,7 @@ std::shared_ptr<BoolExpr> BoolExpr::simplify(std::shared_ptr<BoolExpr> e) {
         }
     }
 
-    for (std::shared_ptr<BoolExpr> node : order) {
+    for (const std::shared_ptr<BoolExpr>& node : order) {
         switch (node->getOp()) {
         case Op::NOT: {
             std::shared_ptr<BoolExpr> a = memo.count(node->getLeft()) ? memo[node->getLeft()] : node->getLeft();
