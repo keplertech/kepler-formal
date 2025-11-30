@@ -59,7 +59,7 @@ make
 # Classic 
 "build/src/bin/kepler_formal <-verilog/-naja_if> <netlist1> <netlist2> [<liberty-file>...]"
 # Through yaml config file
-build/src/bin/kepler_formal --config <yaml file>
+"build/src/bin/kepler_formal --config <yaml file>"
 ```
 
 ## Example 
