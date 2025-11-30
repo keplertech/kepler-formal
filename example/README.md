@@ -11,5 +11,6 @@ python edit.py
 # For verilog
 ../build/src/bin/kepler_formal -verilog tinyrocket_pre_edited.v tinyrocket_edited.v NangateOpenCellLibrary_typical.lib fakeram45_1024x32.lib /example/fakeram45_64x32.lib
 # Through config file
-../build/src/bin/kepler_formal --config test_config.yaml 
+../build/src/bin/kepler_formal --config test_config_naja_if.yaml
+../build/src/bin/kepler_formal --config test_config_verilog.yaml 
 ```
