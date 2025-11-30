@@ -82,19 +82,14 @@ jobs:
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler_formal --config ./test_config.yaml
+        ./build/src/bin/kepler_formal --config ./test_config_naja_if.yaml
     
     - name: Run on verilog edited
       working-directory: ${{github.workspace}}
       run: |
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler_formal -verilog \
-          ./example/tinyrocket.v \
-          ./example/tinyrocket_edited.v \
-          ./example/NangateOpenCellLibrary_typical.lib \
-          ./example/fakeram45_1024x32.lib \
-          ./example/fakeram45_64x32.lib 
+        ./build/src/bin/kepler_formal --config ./test_config_verilog.yaml
 
 
 
