@@ -58,7 +58,7 @@ void clearTermsETS() {
   termsLocal.second = 0;
 }
 
-void pushBackTermsETS(std::shared_ptr<BoolExpr> term) {
+void pushBackTermsETS(const std::shared_ptr<BoolExpr>& term) {
   auto& termsLocal = getTErmsETS();
   auto& vec = termsLocal.first;
   auto& sz = termsLocal.second;
@@ -205,7 +205,7 @@ void clearMemoETS() {
   memoLocal.second = 0;
 }
 
-void pushBackMemoETS(std::shared_ptr<BoolExpr> expr) {
+void pushBackMemoETS(const std::shared_ptr<BoolExpr>& expr) {
   auto& memoLocal = getMemoETS();
   auto& vec = memoLocal.first;
   auto& sz = memoLocal.second;
@@ -232,7 +232,7 @@ void reserveMemoETS(size_t n) {
   vec.assign(n, nullptr);
 }
 
-void setMemoETS(size_t i, std::shared_ptr<BoolExpr> expr) {
+void setMemoETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
   auto& memoLocal = getMemoETS();
   if (i >= memoLocal.second) {
     assert(false && "setMemoETS: index out of range");
@@ -240,7 +240,7 @@ void setMemoETS(size_t i, std::shared_ptr<BoolExpr> expr) {
   memoLocal.first[i] = expr;
 }
 
-std::shared_ptr<BoolExpr> getMemoETS(size_t i) {
+const std::shared_ptr<BoolExpr>& getMemoETS(size_t i) {
   auto& memoLocal = getMemoETS();
   if (i >= memoLocal.second) {
     assert(false && "getMemoETS: index out of range");
@@ -288,7 +288,7 @@ void clearChildFETS() {
   childLocal.second = 0;
 }
 
-void pushBackChildFETS(std::shared_ptr<BoolExpr> expr) {
+void pushBackChildFETS(const std::shared_ptr<BoolExpr>& expr) {
   auto& childLocal = getChildFETS();
   auto& vec = childLocal.first;
   auto& sz = childLocal.second;
@@ -315,7 +315,7 @@ void reserveChildFETS(size_t n) {
   vec.assign(n, nullptr);
 }
 
-std::shared_ptr<BoolExpr> getChildFETS(size_t i) {
+const std::shared_ptr<BoolExpr>& getChildFETS(size_t i) {
   auto& childLocal = getChildFETS();
   if (i >= childLocal.second) {
     assert(false && "getChildFETS: index out of range");
@@ -323,7 +323,7 @@ std::shared_ptr<BoolExpr> getChildFETS(size_t i) {
   return childLocal.first[i];
 }
 
-void setChildFETS(size_t i, std::shared_ptr<BoolExpr> expr) {
+void setChildFETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
   auto& childLocal = getChildFETS();
   if (i >= childLocal.second) {
     assert(false && "setChildFETS: index out of range");
