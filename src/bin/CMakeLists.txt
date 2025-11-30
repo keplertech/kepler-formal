@@ -15,4 +15,5 @@ target_link_libraries(kepler_formal
     ${SPDLOG_TARGET}
 )
 
+install(TARGETS kepler_formal DESTINATION ${CMAKE_INSTALL_BINDIR})
 
