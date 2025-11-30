@@ -255,9 +255,9 @@ int main(int argc, char** argv) {
   try {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
     if (MiterS.run()) {
-      SPDLOG_INFO("Miter strategy succeeded: outputs are identical.");
+      SPDLOG_INFO("No difference was found.");
     } else {
-      SPDLOG_INFO("Miter strategy failed: outputs differ.");
+      SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
     }
   } catch (const std::exception& e) {
     SPDLOG_ERROR("Workflow failed: {}", e.what());
