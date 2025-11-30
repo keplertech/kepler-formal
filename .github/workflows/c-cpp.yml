@@ -30,7 +30,7 @@ jobs:
         sudo apt-get install -yq \
           build-essential cmake ninja-build clang pkg-config \
           libboost-dev libfl-dev libtbb-dev capnproto libcapnp-dev \
-          libgtest-dev libspdlog-dev libyaml-cpp-dev
+          libgtest-dev libspdlog-dev libfmt-dev
 
     - name: Configure CMake
       working-directory: ${{github.workspace}}/
