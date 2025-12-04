@@ -23,8 +23,12 @@ set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 
 add_subdirectory(src)
 add_subdirectory(thirdparty)
-include(CTest)
-add_subdirectory(test)
+
+option(ENABLE_UNIT_TESTS ON)
+if(ENABLE_UNIT_TESTS)
+  include(CTest)
+  add_subdirectory(test)
+endif()
 
 find_package(TBB REQUIRED)
 
