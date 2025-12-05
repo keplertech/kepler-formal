@@ -49,8 +49,15 @@ git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
 cd kepler-formal
 mkdir build
 cd build
-cmake ..
+cmake .. 
 make
+```
+
+```bash
+# For optimized performance use: 
+cmake .. -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -march=native \
+  -ffast-math -flto" -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
 ## Usage
