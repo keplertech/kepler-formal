@@ -360,7 +360,7 @@ void BuildPrimaryOutputClauses::collect() {
     KeyT key{ path, std::move(ids) };
     outputsMap_[std::move(key)]  =
             output;
-    printf("Output collected: %s\n", naja::DNL::get()
+    DEBUG_LOG("Output collected: %s\n", naja::DNL::get()
                                          ->getDNLTerminalFromID(output)
                                          .getSnlBitTerm()
                                          ->getName()
