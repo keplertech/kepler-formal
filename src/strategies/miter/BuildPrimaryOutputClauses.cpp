@@ -395,7 +395,7 @@ void BuildPrimaryOutputClauses::build() {
   tbb::task_arena arena(40);
   auto processOutput = [&](size_t i) {
     DNLID out = outputs_[i];
-    printf("Procssing output %zu/%zu: %s\n", ++processedOutputs,
+    DEBUG_LOG("Procssing output %zu/%zu: %s\n", ++processedOutputs,
            outputs_.size(),
            get()
                ->getDNLTerminalFromID(out)
