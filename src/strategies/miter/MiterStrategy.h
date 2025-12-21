@@ -18,11 +18,7 @@ namespace KEPLER_FORMAL {
 
 class MiterStrategy {
  public:
-  MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& prefix = "")
-      : prefix_(prefix) {
-    top0_ = top0;
-    top1_ = top1;
-  }
+  MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& logFileName = "", const std::string& prefix = "");
 
   bool run();
 
@@ -36,12 +32,12 @@ class MiterStrategy {
                         const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& outputs0Map,
                         const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& outputs1Map);
   
-
+  static std::string logFileName_;
  private:
   std::shared_ptr<BoolExpr> buildMiter(
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const;
-
+  
   static naja::NL::SNLDesign* top0_;
   static naja::NL::SNLDesign* top1_;
   tbb::concurrent_vector<BoolExpr> POs0_;

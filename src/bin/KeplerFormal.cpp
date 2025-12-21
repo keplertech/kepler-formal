@@ -59,6 +59,9 @@ int main(int argc, char** argv) {
 
   // Check for config mode (--config or -c). If present, YAML takes precedence.
   bool usedConfig = false;
+
+  std::string logFileName;
+
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--config" || a == "-c") {
@@ -92,6 +95,11 @@ int main(int argc, char** argv) {
         // log level
         if (cfg["log_level"] && cfg["log_level"].IsScalar()) {
           logLevel = cfg["log_level"].as<std::string>();
+        }
+
+        // Add log file name
+        if (cfg["log_file"] && cfg["log_file"].IsScalar()) {
+          logFileName = cfg["log_file"].as<std::string>();
         }
 
         usedConfig = true;
@@ -253,7 +261,7 @@ int main(int argc, char** argv) {
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
   try {
-    KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
+    KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
     if (MiterS.run()) {
       SPDLOG_INFO("No difference was found.");
     } else {

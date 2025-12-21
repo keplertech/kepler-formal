@@ -64,9 +64,9 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
 
 ```bash
 # Classic 
-"build/src/bin/kepler_formal <-verilog/-naja_if> <netlist1> <netlist2> [<liberty-file>...]"
+"build/src/bin/kepler-formal <-verilog/-naja_if> <netlist1> <netlist2> [<liberty-file>...]"
 # Through yaml config file
-"build/src/bin/kepler_formal --config <yaml file>"
+"build/src/bin/kepler-formal --config <yaml file>"
 ```
 
 ## Example 

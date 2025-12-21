@@ -34,6 +34,7 @@ using namespace KEPLER_FORMAL;
 
 SNLDesign* MiterStrategy::top0_ = nullptr;
 SNLDesign* MiterStrategy::top1_ = nullptr;
+std::string MiterStrategy::logFileName_ = "";
 namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
@@ -45,6 +46,10 @@ void ensureLoggerInitialized() {
       // already exist and then crete mitter_log_(x+1).txt
       int logIndex = 0;
       while (true) {
+        if (MiterStrategy::logFileName_ != "") {
+          logIndex = -1;
+          break;
+        }
         std::string logFileName =
             "miter_log_" + std::to_string(logIndex) + ".txt";
         std::ifstream infile(logFileName);
@@ -56,6 +61,13 @@ void ensureLoggerInitialized() {
       }
       std::string logFileName =
           "miter_log_" + std::to_string(logIndex) + ".txt";
+      if (MiterStrategy::logFileName_ != "") {
+        if (!MiterStrategy::logFileName_.empty()) {
+            std::filesystem::path p(MiterStrategy::logFileName_);
+            std::filesystem::create_directories(p.parent_path());
+            logFileName = p.string();
+        }
+      }
       auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
           logFileName, true);
       logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
@@ -225,6 +237,13 @@ Glucose::Lit tseitinEncode(
 
 }  // namespace
 
+ MiterStrategy::MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& logFileName, const std::string& prefix)
+      : prefix_(prefix) {
+    top0_ = top0;
+    top1_ = top1;
+    logFileName_ = logFileName;
+  }
+
 void MiterStrategy::normalizeInputs(
     std::vector<naja::DNL::DNLID>& inputs0,
     std::vector<naja::DNL::DNLID>& inputs1,
@@ -328,11 +347,25 @@ void MiterStrategy::normalizeOutputs(
   for (const auto& [path0, output0] : outputs0Map) {
     if (pathsCommon.find(path0) == pathsCommon.end()) {
       diff0.push_back(output0);
+      std::string fullName;
+      for (const auto& name : path0.first) {
+        fullName += name.getString() + ".";
+      }
+      fullName += std::to_string(path0.second[0]) + ".";
+      fullName += std::to_string(path0.second[1]);
+      logger->info("Will ignore the analysis for: {} from netlist 0 as it does not exist in netlist 1", fullName);
     }
   }
   std::vector<naja::DNL::DNLID> diff1;
   for (const auto& [path1, output1] : outputs1Map) {
     if (pathsCommon.find(path1) == pathsCommon.end()) {
+      std::string fullName;
+      for (const auto& name : path1.first) {
+        fullName += name.getString() + ".";
+      }
+      fullName += std::to_string(path1.second[0]) + ".";
+      fullName += std::to_string(path1.second[1]);
+      logger->info("Will ignore the analysis for: {} from netlist 1 as it does not exist in netlist 0", fullName);
       diff1.push_back(output1);
     }
   }
@@ -340,12 +373,12 @@ void MiterStrategy::normalizeOutputs(
   for (const auto& path : pathsCommon) {
     outputs0.push_back(outputs0Map.at(path));
   }
-  outputs0.insert(outputs0.end(), diff0.begin(), diff0.end());
+  //outputs0.insert(outputs0.end(), diff0.begin(), diff0.end());
   outputs1.clear();
   for (const auto& path : pathsCommon) {
     outputs1.push_back(outputs1Map.at(path));
   }
-  outputs1.insert(outputs1.end(), diff1.begin(), diff1.end());
+  //outputs1.insert(outputs1.end(), diff1.begin(), diff1.end());
   logger->debug("size of common outputs: {}", pathsCommon.size());
   logger->debug("size of diff0 outputs: {}", diff0.size());
   logger->debug("size of diff1 outputs: {}", diff1.size());
@@ -484,6 +517,24 @@ bool MiterStrategy::run() {
     for (size_t i = 0; i < POs0.size(); ++i) {
       if (builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i)) !=
           builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i))) {
+        auto path0 = builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i));
+        auto path1 = builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i));
+        // print path0
+        for (const auto& name : path0.first) {
+          logger->info("%s.", name.getString().c_str());
+        }
+        for (const auto& id : path0.second) {
+          logger->info("%lu.", id);
+        }
+        logger->info("\n");
+        // print path1
+        for (const auto& name : path1.first) {
+          logger->info("%s.", name.getString().c_str());
+        }
+        for (const auto& id : path1.second) {
+          logger->info("%lu.", id);
+        }
+        logger->info("\n");
         throw std::runtime_error("Miter PO index " + std::to_string(i) +
                                  " DNLIDs do not match");
       }
@@ -506,6 +557,25 @@ bool MiterStrategy::run() {
         logger->info("Found difference for PO: {}", i);
         // logger->info("Clause 0 {}", POs0[i]->toString());
         // logger->info("Clause 1 {}", POs1[i]->toString());
+        // print path of index i
+        auto path0 = builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i));
+        std::string pathString = "";
+        for (const auto& name : path0.first) {
+          pathString += name.getString() + ".";
+        }
+        for (const auto& id : path0.second) {
+          pathString += std::to_string(id) + ".";
+        }
+        logger->info("Path of differing PO {}: {}", i, pathString);
+        auto path1 = builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i));
+        std::string pathString1 = "";
+        for (const auto& name : path1.first) {
+          pathString1 += name.getString() + ".";
+        }
+        for (const auto& id : path1.second) {
+          pathString1 += std::to_string(id) + ".";
+        }
+        logger->info("Path of differing PO {}: {}", i, pathString1);
         std::vector<naja::NL::SNLDesign*> topModels;
         topModels.push_back(top0_);
         topModels.push_back(top1_);
