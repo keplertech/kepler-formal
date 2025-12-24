@@ -24,6 +24,8 @@
 #include "SNLVRLDumper.h"
 #include "SNLUtils.h"
 
+#include "ScopeExtraction.h"
+
 static void print_usage(const char* prog) {
   std::printf(
       "Usage: %s [--config <file>] | <-naja_if/-verilog> <netlist1> <netlist2> "
@@ -252,6 +254,7 @@ int main(int argc, char** argv) {
   // --------------------------------------------------------------------------
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
+  // 
   try {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
     if (MiterS.run()) {
