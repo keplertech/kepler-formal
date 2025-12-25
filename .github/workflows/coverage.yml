@@ -47,16 +47,17 @@ jobs:
       env:
         PYTHONMALLOC: malloc
       run: ctest -VV -E ".*[p|P]ython.*" -C ${{ env.BUILD_TYPE }}
-
-    - name: Upload coverage reports to Codecov
+    - name: lcov
       working-directory: ${{github.workspace}}/build
-      uses: codecov/codecov-action@v5
       run: |
            lcov --directory . --capture --output-file coverage.info
-           lcov --remove coverage.info --output-file coverage.info '/usr/*' '*/test/*' '*/naja/thirdparty/*'
+           lcov --remove coverage.info --output-file coverage.info '/usr/*' '*/test/*' '*/kepler-formal/thirdparty/*'
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        slug: nanocoh/kepler-formal
         fail_ci_if_error: true
         file: ${{github.workspace}}/build/coverage.info
         disable_search: true
