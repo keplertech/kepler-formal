@@ -30,6 +30,17 @@ if(ENABLE_UNIT_TESTS)
   add_subdirectory(test)
 endif()
 
+option(CODE_COVERAGE "Enable coverage reporting" OFF)
+if(CODE_COVERAGE)
+  # Add required flags (GCC & LLVM/Clang)
+  target_compile_options(coverage_config INTERFACE
+    -O0        # no optimization
+    -g         # generate debug info
+    --coverage # sets all required flags
+  )
+  target_link_options(coverage_config INTERFACE --coverage)
+endif(CODE_COVERAGE)
+
 find_package(TBB REQUIRED)
 
 # if you’re using find_package(TBB), ensure it picked up Homebrew’s install
