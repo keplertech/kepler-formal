@@ -47,9 +47,16 @@ jobs:
       env:
         PYTHONMALLOC: malloc
       run: ctest -VV -E ".*[p|P]ython.*" -C ${{ env.BUILD_TYPE }}
-            
+
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         slug: nanocoh/kepler-formal
+        fail_ci_if_error: true
+        file: ${{github.workspace}}/build/coverage.info
+        disable_search: true
+        files: coverage.info
+        flags: unittests
+        name: codecov-umbrella
+        verbose: true
