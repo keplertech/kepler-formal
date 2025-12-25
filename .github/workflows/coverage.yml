@@ -54,9 +54,9 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         slug: nanocoh/kepler-formal
         fail_ci_if_error: true
-        file: ${{github.workspace}}/build/coverage.info
+        # file: ${{github.workspace}}/build/coverage.info
         disable_search: true
-        files: coverage.info
+        # files: coverage.info
         flags: unittests
         name: codecov-umbrella
         verbose: true
