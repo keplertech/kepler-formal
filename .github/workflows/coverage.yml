@@ -36,7 +36,7 @@ jobs:
       working-directory: ${{github.workspace}}/
       run: |
         rm -rf build
-        cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DCMAKE_C_COMPILER=clang -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
+        cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}  -DCODE_COVERAGE=ON -DLONG_TESTS=ON -GNinja -DCMAKE_C_COMPILER=clang -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
   
 
     - name: Build
@@ -49,14 +49,18 @@ jobs:
       run: ctest -VV -E ".*[p|P]ython.*" -C ${{ env.BUILD_TYPE }}
 
     - name: Upload coverage reports to Codecov
+      working-directory: ${{github.workspace}}/build
       uses: codecov/codecov-action@v5
+      run: |
+           lcov --directory . --capture --output-file coverage.info
+           lcov --remove coverage.info --output-file coverage.info '/usr/*' '*/test/*' '*/naja/thirdparty/*'
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         slug: nanocoh/kepler-formal
         fail_ci_if_error: true
-        # file: ${{github.workspace}}/build/coverage.info
+        file: ${{github.workspace}}/build/coverage.info
         disable_search: true
-        # files: coverage.info
+        files: coverage.info
         flags: unittests
         name: codecov-umbrella
         verbose: true
