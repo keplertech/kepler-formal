@@ -33,14 +33,16 @@ jobs:
           libgtest-dev libspdlog-dev libfmt-dev libboost-iostreams-dev zlib1g-dev lcov
 
     - name: Configure CMake
-      working-directory: ${{github.workspace}}/
-      run: |
-        rm -rf build
-        cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}  -DCODE_COVERAGE=ON -DLONG_TESTS=ON -GNinja -DCMAKE_C_COMPILER=clang -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
-  
-
+        # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+        # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+        run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCODE_COVERAGE=ON -DLONG_TESTS=ON
+    
     - name: Build
-      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+        # Build your program with the given configuration
+        run: cmake --build ${{github.workspace}}/build -j 4 --config ${{env.BUILD_TYPE}}
+        env:
+          CC:   clang
+          CXX:  clang++
 
     - name: Test
       working-directory: ${{github.workspace}}/build
