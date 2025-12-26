@@ -24,11 +24,12 @@ set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 
-option(ENABLE_UNIT_TESTS ON)
-if(ENABLE_UNIT_TESTS)
-  include(CTest)
-  add_subdirectory(test)
-endif()
+# option(ENABLE_UNIT_TESTS ON)
+# if(ENABLE_UNIT_TESTS)
+include(CTest)
+enable_testing()
+add_subdirectory(test)
+# endif()
 
 option(CODE_COVERAGE "Enable coverage reporting" OFF)
 if(CODE_COVERAGE)
@@ -53,3 +54,9 @@ target_include_directories(formal_structures
 target_link_libraries(formal_structures
   PRIVATE TBB::tbb
 )
+
+option(ENABLE_COVERAGE "Enable coverage flags" ON)
+if(ENABLE_COVERAGE AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
+  add_compile_options(--coverage -g)
+  add_link_options(--coverage)
+endif()

@@ -586,13 +586,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     std::filesystem::path outputPath("./topEdited1.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-  //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  //Check output of binary ../../../src/bin/kepler-formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal -naja_if ./top.capnp ./topEdited1.capnp")
+      std::string("../../../src/bin/kepler-formal -naja_if ./top.capnp ./topEdited1.capnp")
           .c_str());  
   // look for "DIFFERENT" in the file ./miter_log_1.txt
   // open the file  
-  std::ifstream miterLogFile("./miter_log_1.txt");
+  std::ifstream miterLogFile("./miter_log_0.txt");
   std::string line;
   bool foundDifferent = false;
   if (miterLogFile.is_open()) {
@@ -626,13 +626,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     SNLCapnP::dump(db, outputPath);
   }
 
-  //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  //Check output of binary ../../../src/bin/kepler-formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal -naja_if ./top.capnp ./topEdited2.capnp")
+      std::string("../../../src/bin/kepler-formal -naja_if ./top.capnp ./topEdited2.capnp")
           .c_str()); 
   // look for "IDENTICAL" in the file ./miter_log_2.txt
   // open the file
-  std::ifstream miterLogFile2("./miter_log_2.txt");
+  std::ifstream miterLogFile2("./miter_log_1.txt");
   bool foundIdentical = false;
   if (miterLogFile2.is_open()) {
     while (getline(miterLogFile2, line)) {
