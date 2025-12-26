@@ -15,8 +15,9 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
+        fetch-depth: 0
         submodules: true
      # install dependencies
     - name: Install GoogleTest
@@ -49,7 +50,8 @@ jobs:
       env:
         PYTHONMALLOC: malloc
       run: ctest -VV -E ".*[p|P]ython.*" -C ${{ env.BUILD_TYPE }}
-    - name: lcov
+    
+      - name: lcov
       working-directory: ${{github.workspace}}/build
       run: |
            lcov --directory . --capture --output-file coverage.info
