@@ -51,8 +51,7 @@ jobs:
       env:
         PYTHONMALLOC: malloc
       run: ctest -VV -E ".*[p|P]ython.*" -C ${{ env.BUILD_TYPE }}
-    
-      - name: lcov
+    - name: lcov
       working-directory: ${{github.workspace}}/build
       run: |
            lcov --directory . --capture --output-file coverage.info
