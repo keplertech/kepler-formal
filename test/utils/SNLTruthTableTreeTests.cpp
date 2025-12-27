@@ -265,3 +265,40 @@ TEST(SNLTruthTableTreeApiTest, DefaultConstructionAndMaxIdBehavior) {
   EXPECT_NO_THROW(tree.print());
   EXPECT_NO_THROW(tree.destroy());
 }
+
+// Expect allocateNode to reject null shared_ptr
+TEST(SNLTruthTableTreeNodeFromIdTest, AllocateNullSharedPtrThrows) {
+  SNLTruthTableTree tree;
+  std::shared_ptr<Node> nullsp; // empty
+  EXPECT_THROW(tree.allocateNode(nullsp), std::logic_error);
+}
+
+// Create a child, allocate it, then corrupt its nodeID so nodeFromId returns null.
+// Use that id as a child id for a parent table node and expect eval to throw "Null child node".
+TEST(SNLTruthTableTreeEvalTest, NullChildNodeThrowsViaIdMismatch) {
+  SNLTruthTableTree tree;
+
+  // Create and allocate a valid child node
+  auto child = std::make_shared<Node>(0u, &tree);
+  child->type = Node::Type::Input;
+  child->data.inputIndex = 0;
+  child->truthTable = SNLTruthTable();
+  uint32_t childId = tree.allocateNode(child);
+
+  // Sanity: nodeFromId returns the child
+  EXPECT_EQ(tree.nodeFromId(childId).get(), child.get());
+
+  // Corrupt the stored nodeID to force nodeFromId to return null for this id
+  child->nodeID = SNLTruthTableTree::kInvalidId;
+
+  // Parent: 1-input table with mask 0b01
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(1, 0b01);
+  parent->childrenIds.push_back(childId);
+
+  tree.allocateNode(parent);
+
+  // Now nodeFromId(childId) will return null (id mismatch), so eval should throw "Null child node"
+  EXPECT_THROW(parent->eval({true}), std::logic_error);
+}
