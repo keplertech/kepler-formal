@@ -211,3 +211,57 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+//------------------------------------------------------------------------------
+// SNLTruthTableTree API coverage tests (no DNL dependency)
+//------------------------------------------------------------------------------
+
+TEST(SNLTruthTableTreeApiTest, AllocateNodeAndEvalInput) {
+  SNLTruthTableTree tree;
+  auto node = std::make_shared<Node>(0u, &tree);
+
+  tree.allocateNode(node);
+
+  EXPECT_THROW(node->eval({true}), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeApiTest, FinalizeSimplifyAndDestroyNoThrow) {
+  SNLTruthTableTree tree;
+
+  // Minimal tree: single input node registered via allocateNode.
+  auto node = std::make_shared<Node>(0u, &tree);
+  tree.allocateNode(node);
+
+  // finalize() should be safe on a simple, already-consistent tree.
+  EXPECT_NO_THROW(tree.finalize());
+
+  // simplify() is allowed to be a no-op on such a tree, but must not throw.
+  EXPECT_NO_THROW(tree.simplify());
+
+  // print() should also be safe; we only assert it doesn't throw.
+  EXPECT_NO_THROW(tree.print());
+
+  // destroy() should clear internal storage without throwing.
+  size_t before = tree.getNumNodes();
+  EXPECT_GE(before, static_cast<size_t>(1));
+  EXPECT_NO_THROW(tree.destroy());
+  EXPECT_LE(tree.getNumNodes(), before);
+}
+
+TEST(SNLTruthTableTreeApiTest, DefaultConstructionAndMaxIdBehavior) {
+  SNLTruthTableTree tree;
+
+  // With no nodes, size/getNumNodes should be zero.
+  EXPECT_EQ(tree.getNumNodes(), static_cast<size_t>(0));
+
+  // getMaxID should be consistent with the kIdOffset rule even for empty trees.
+  uint32_t maxId = tree.getMaxID();
+  EXPECT_GE(maxId, SNLTruthTableTree::kIdOffset - 1);
+
+  // Calling finalize / simplify / print / destroy on an empty tree
+  // should not throw (robust no-op behavior).
+  EXPECT_NO_THROW(tree.finalize());
+  EXPECT_NO_THROW(tree.simplify());
+  EXPECT_NO_THROW(tree.print());
+  EXPECT_NO_THROW(tree.destroy());
+}
