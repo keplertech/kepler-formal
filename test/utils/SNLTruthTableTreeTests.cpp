@@ -302,3 +302,166 @@ TEST(SNLTruthTableTreeEvalTest, NullChildNodeThrowsViaIdMismatch) {
   // Now nodeFromId(childId) will return null (id mismatch), so eval should throw "Null child node"
   EXPECT_THROW(parent->eval({true}), std::logic_error);
 }
+
+TEST(SNLTruthTableTreeApi_Additions, AllocateNodeAndEvalInput) {
+  SNLTruthTableTree tree;
+
+  // The idx constructor currently yields a table-like node in this implementation.
+  // Assert that evaluating it without wiring children throws the expected logic_error.
+  auto node = std::make_shared<Node>(0u, &tree);
+
+  // Defensive: try to mark as Input (harmless) but do not rely on it.
+  node->type = Node::Type::Input;
+  node->data.inputIndex = 0;
+  node->truthTable = SNLTruthTable(); // attempt to clear arity
+
+  uint32_t id = tree.allocateNode(node);
+  EXPECT_EQ(tree.nodeFromId(id).get(), node.get());
+
+  // Implementation treats this as a table node; evaluating without children should throw.
+  EXPECT_THROW(node->eval({true}), std::logic_error);
+}
+
+
+TEST(SNLTruthTableTreeApi_Additions, AllocateNullSharedPtrThrows) {
+  SNLTruthTableTree tree;
+  std::shared_ptr<Node> nullsp;
+  EXPECT_THROW(tree.allocateNode(nullsp), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeApi_Additions, NodeFromId_NodeIdMismatch) {
+  SNLTruthTableTree tree;
+
+  auto node = std::make_shared<Node>(0u, &tree);
+  node->type = Node::Type::Input;
+  node->data.inputIndex = 0;
+  node->truthTable = SNLTruthTable();
+  uint32_t id = tree.allocateNode(node);
+
+  EXPECT_EQ(tree.nodeFromId(id).get(), node.get());
+
+  // Corrupt nodeID to force nodeFromId to return null
+  node->nodeID = SNLTruthTableTree::kInvalidId;
+  EXPECT_EQ(tree.nodeFromId(id).get(), nullptr);
+}
+
+TEST(SNLTruthTableTreeEval_Additions, TableNodeChildrenCountMismatchThrows) {
+  SNLTruthTableTree tree;
+
+  auto tableNode = std::make_shared<Node>(0u, &tree);
+  tableNode->type = Node::Type::Table;
+  tableNode->truthTable = makeMaskTable(1, 0b01); // arity 1
+  tree.allocateNode(tableNode);
+
+  EXPECT_THROW(tableNode->eval({true}), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeEval_Additions, InvalidChildIdThrows) {
+  SNLTruthTableTree tree;
+
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(1, 0b01);
+  parent->childrenIds.push_back(SNLTruthTableTree::kInvalidId);
+
+  tree.allocateNode(parent);
+  EXPECT_THROW(parent->eval({true}), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeEval_Additions, NullChildNodeThrowsViaIdMismatch) {
+  SNLTruthTableTree tree;
+
+  auto child = std::make_shared<Node>(0u, &tree);
+  child->type = Node::Type::Input;
+  child->data.inputIndex = 0;
+  child->truthTable = SNLTruthTable();
+  uint32_t childId = tree.allocateNode(child);
+
+  EXPECT_EQ(tree.nodeFromId(childId).get(), child.get());
+
+  // Corrupt stored nodeID so nodeFromId returns null
+  child->nodeID = SNLTruthTableTree::kInvalidId;
+
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(1, 0b01);
+  parent->childrenIds.push_back(childId);
+  tree.allocateNode(parent);
+
+  EXPECT_THROW(parent->eval({true}), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeEval_Additions, InputChildIndexOutOfRangeThrows) {
+  SNLTruthTableTree tree;
+
+  auto child = std::make_shared<Node>(0u, &tree);
+  child->type = Node::Type::Input;
+  child->data.inputIndex = 5; // out of range
+  child->truthTable = SNLTruthTable();
+  uint32_t childId = tree.allocateNode(child);
+
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(1, 0b01);
+  parent->childrenIds.push_back(childId);
+  tree.allocateNode(parent);
+
+  EXPECT_THROW(parent->eval({true, false}), std::out_of_range);
+  EXPECT_THROW(parent->eval({}), std::out_of_range);
+}
+
+TEST(SNLTruthTableTreeEval_Additions, EvaluatesInputChildAndReadsTableBit) {
+  SNLTruthTableTree tree;
+
+  auto child = std::make_shared<Node>(0u, &tree);
+  child->type = Node::Type::Input;
+  child->data.inputIndex = 0;
+  child->truthTable = SNLTruthTable();
+  uint32_t childId = tree.allocateNode(child);
+
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(1, 0b01); // bit0=true, bit1=false
+  parent->childrenIds.push_back(childId);
+  tree.allocateNode(parent);
+
+  EXPECT_TRUE(parent->eval({false}));
+  EXPECT_FALSE(parent->eval({true}));
+}
+
+TEST(SNLTruthTableTreeAddChild_Additions, AddChildIdRejectsInvalidId) {
+  SNLTruthTableTree tree;
+
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(0, 0);
+  tree.allocateNode(parent);
+
+  EXPECT_THROW(parent->addChildId(SNLTruthTableTree::kInvalidId), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeAddChild_Additions, AddChildIdEstablishesParentChildRelation) {
+  SNLTruthTableTree tree;
+
+  auto parent = std::make_shared<Node>(0u, &tree);
+  parent->type = Node::Type::Table;
+  parent->truthTable = makeMaskTable(0, 0);
+  uint32_t parentId = tree.allocateNode(parent);
+
+  auto child = std::make_shared<Node>(0u, &tree);
+  child->type = Node::Type::Input;
+  child->data.inputIndex = 0;
+  child->truthTable = SNLTruthTable();
+  uint32_t childId = tree.allocateNode(child);
+
+  EXPECT_TRUE(parent->childrenIds.empty());
+  EXPECT_TRUE(child->parentIds.empty());
+
+  EXPECT_NO_THROW(parent->addChildId(childId));
+
+  auto it = std::find(parent->childrenIds.begin(), parent->childrenIds.end(), childId);
+  EXPECT_NE(it, parent->childrenIds.end());
+
+  auto pit = std::find(child->parentIds.begin(), child->parentIds.end(), parentId);
+  EXPECT_NE(pit, child->parentIds.end());
+}
