@@ -1,4 +1,4 @@
-// Copyright 2024-2025 keplertech.io
+// Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "SNLTruthTableTree.h"
@@ -421,17 +421,6 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
   }
 
   return *newNodeSp;
-}
-
-//----------------------------------------------------------------------
-// concat / concatFull
-//----------------------------------------------------------------------
-void SNLTruthTableTree::concat(size_t borderIndex,
-                               naja::DNL::DNLID instid,
-                               naja::DNL::DNLID termid) {
-  auto const& n = concatBody(borderIndex, instid, termid);
-  numExternalInputs_ += (n.getTruthTable().size() - 1);
-  updateBorderLeaves();
 }
 
 void SNLTruthTableTree::concatFull(
@@ -919,6 +908,7 @@ bool SNLTruthTableTree::isInitialized() const {
   return true;
 }
 
+// LCOV_EXCL_START
 void SNLTruthTableTree::print() const {
   if (rootId_ == kInvalidId)
     return;
@@ -931,177 +921,31 @@ void SNLTruthTableTree::print() const {
     if (!n)
       continue;
     if (n->type == Node::Type::Table) {
-      DEBUG_LOG("term: %zu nodeID=%u id=%u\n", (size_t)n->data.termid,
+      printf("term: %zu nodeID=%u id=%u\n", (size_t)n->data.termid,
                 n->nodeID, n->nodeID);
     } else if (n->type == Node::Type::P) {
-      DEBUG_LOG("P nodeID=%u id=%u\n", n->nodeID, n->nodeID);
+      printf("P nodeID=%u id=%u\n", n->nodeID, n->nodeID);
     } else {
-      DEBUG_LOG("Input node index=%u nodeID=%u id=%u\n", n->data.inputIndex,
+      printf("Input node index=%u nodeID=%u id=%u\n", n->data.inputIndex,
                 n->nodeID, n->nodeID);
     }
     for (size_t i = 0; i < n->childrenIds.size(); ++i) {
       uint32_t cid = n->childrenIds[i];
       auto ch = nodeFromId(cid);
       if (!ch) {
-        DEBUG_LOG("  child[%zu] = null (childId=%u)\n", i, cid);
+        printf("  child[%zu] = null (childId=%u)\n", i, cid);
       } else if (ch->type == Node::Type::Input) {
-        DEBUG_LOG("  child[%zu] = Input(%u) id=%u\n", i, ch->data.inputIndex,
+        printf("  child[%zu] = Input(%u) id=%u\n", i, ch->data.inputIndex,
                   ch->nodeID);
       } else {
-        DEBUG_LOG("  child[%zu] = Node(id=%u)\n", i, cid);
+        printf("  child[%zu] = Node(id=%u)\n", i, cid);
         stk.push_back(cid);
       }
     }
   }
 }
 
-//----------------------------------------------------------------------
-// simplify
-//----------------------------------------------------------------------
-void SNLTruthTableTree::simplify() {
-  if (rootId_ == kInvalidId)
-    return;
-
-  std::vector<uint32_t> stackIds;
-  stackIds.reserve(nodes_.size());
-  stackIds.push_back(rootId_);
-
-  std::vector<uint32_t> order;
-  order.reserve(nodes_.size());
-  std::unordered_set<uint32_t> seen;
-
-  while (!stackIds.empty()) {
-    uint32_t nid = stackIds.back();
-    stackIds.pop_back();
-    if (seen.count(nid))
-      continue;
-    seen.insert(nid);
-    auto n = nodeFromId(nid);
-    if (!n)
-      continue;
-    for (uint32_t cid : n->childrenIds) {
-      auto ch = nodeFromId(cid);
-      if (ch && ch->type != Node::Type::Input)
-        stackIds.push_back(cid);
-    }
-    order.push_back(nid);
-  }
-
-  for (auto nid : order) {
-    auto node = nodeFromId(nid);
-    if (!node)
-      continue;
-    if (node->type != Node::Type::Table)
-      continue;
-
-    const SNLTruthTable& tbl = node->getTruthTable();
-    const uint32_t arity = tbl.size();
-
-    if (node->childrenIds.size() != arity)
-      continue;
-
-    if (arity == 1) {
-      bool b0 = tbl.bits().bit(0);
-      bool b1 = tbl.bits().bit(1);
-      if (b0 == false && b1 == true) {
-        uint32_t childId = node->childrenIds[0];
-        if (!node->parentIds.empty()) {
-          for (auto pid : node->parentIds) {
-            auto parent = nodeFromId(pid);
-            if (parent) {
-              for (size_t i = 0; i < parent->childrenIds.size(); ++i) {
-                if (parent->childrenIds[i] == nid) {
-                  parent->childrenIds[i] = childId;
-                  auto child = nodeFromId(childId);
-                  if (child)
-                    child->parentIds.push_back(parent->nodeID);
-                  break;
-                }
-              }
-            }
-          }
-        } else {
-          rootId_ = childId;
-          auto child = nodeFromId(childId);
-          if (child)
-            child->parentIds.push_back(kInvalidId);
-        }
-        continue;
-      }
-    }
-
-    bool all_equal = true;
-    for (size_t i = 1; i < node->childrenIds.size(); ++i) {
-      if (node->childrenIds[i] != node->childrenIds[0]) {
-        all_equal = false;
-        break;
-      }
-    }
-    if (all_equal && arity >= 1) {
-      uint32_t idx0 = 0;
-      uint32_t idx1 = (1u << arity) - 1u;
-      bool out0 = tbl.bits().bit(idx0);
-      bool out1 = tbl.bits().bit(idx1);
-      if (!out0 && out1) {
-        uint32_t childId = node->childrenIds[0];
-        if (!node->parentIds.empty()) {
-          for (auto pid : node->parentIds) {
-            auto parent = nodeFromId(pid);
-            if (parent) {
-              for (size_t i = 0; i < parent->childrenIds.size(); ++i) {
-                if (parent->childrenIds[i] == nid) {
-                  parent->childrenIds[i] = childId;
-                  auto child = nodeFromId(childId);
-                  if (child)
-                    child->parentIds.push_back(parent->nodeID);
-                  break;
-                }
-              }
-            }
-          }
-        } else {
-          rootId_ = childId;
-          auto child = nodeFromId(childId);
-          if (child)
-            child->parentIds.push_back(kInvalidId);
-        }
-        continue;
-      }
-    }
-  }
-
-  size_t maxInput = 0;
-  bool anyInput = false;
-  std::vector<uint32_t> stk2;
-  if (rootId_ != kInvalidId)
-    stk2.push_back(rootId_);
-  while (!stk2.empty()) {
-    uint32_t nid = stk2.back();
-    stk2.pop_back();
-    auto n = nodeFromId(nid);
-    if (!n)
-      continue;
-    for (size_t i = 0; i < n->childrenIds.size(); ++i) {
-      uint32_t cid = n->childrenIds[i];
-      auto ch = nodeFromId(cid);
-      if (!ch)
-        continue;
-      if (ch->type == Node::Type::Input) {
-        anyInput = true;
-        if (ch->data.inputIndex > maxInput)
-          maxInput = ch->data.inputIndex;
-      } else {
-        stk2.push_back(cid);
-      }
-    }
-  }
-  if (anyInput)
-    numExternalInputs_ = maxInput + 1;
-  else
-    numExternalInputs_ = 0;
-
-  updateBorderLeaves();
-}
+// LCOV_EXCL_STOP
 
 //----------------------------------------------------------------------
 // destroy

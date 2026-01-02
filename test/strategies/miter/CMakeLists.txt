@@ -24,7 +24,6 @@ target_link_libraries(miterTests
     kepler_clauses          # 👈 place first
     formal_strategies       # 👈 after its dependencies
     formal_structures
-    naja_bne
     naja_dnl
     pthread
     naja_snl_pyloader

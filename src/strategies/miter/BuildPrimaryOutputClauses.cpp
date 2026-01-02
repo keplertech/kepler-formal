@@ -1,4 +1,4 @@
-// Copyright 2024-2025 keplertech.io
+// Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "BuildPrimaryOutputClauses.h"
@@ -231,6 +231,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
               for (const auto& d : tt.getDependencies()) {
                 DEBUG_LOG("TT deps: %llu\n", d);
               }
+            } else if (tt.all0() || tt.all1()) {
+              tts.push_back(tt);
             }
           }
           bool inTermInTTDeps = false;
@@ -376,6 +378,22 @@ void BuildPrimaryOutputClauses::collect() {
 void BuildPrimaryOutputClauses::initVarNames() {
   termDNLID2varID_.resize(naja::DNL::get()->getDNLTerms().size(), (size_t)-1);
   for (size_t i = 0; i < inputs_.size(); ++i) {
+    // Get Truth Table for terminal
+    const DNLTerminalFull& tTerm = naja::DNL::get()->getDNLTerminalFromID(inputs_[i]);
+    // If direction is input, skip
+    if (!tTerm.isTopPort()) {
+      const auto& tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
+      tTerm.getSnlBitTerm()->getOrderID());
+      if (tt.isInitialized()) {
+        if (tt.all0()) {
+          termDNLID2varID_[inputs_[i]] = 0;
+          continue;
+        } else if (tt.all1()) {
+          termDNLID2varID_[inputs_[i]] = 1;
+          continue;
+        }
+      }
+    }
     termDNLID2varID_[inputs_[i]] =
         i + 2;  // +2 to avoid 0 and 1 which are reserved for constants
   }

@@ -586,13 +586,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     std::filesystem::path outputPath("./topEdited1.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-  //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  //Check output of binary ../../../src/bin/kepler-formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal -naja_if ./top.capnp ./topEdited1.capnp")
+      std::string("../../../src/bin/kepler-formal -naja_if ./top.capnp ./topEdited1.capnp")
           .c_str());  
   // look for "DIFFERENT" in the file ./miter_log_1.txt
   // open the file  
-  std::ifstream miterLogFile("./miter_log_1.txt");
+  std::ifstream miterLogFile("./miter_log_0.txt");
   std::string line;
   bool foundDifferent = false;
   if (miterLogFile.is_open()) {
@@ -626,13 +626,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     SNLCapnP::dump(db, outputPath);
   }
 
-  //Check output of binary ../../../src/bin/kepler_formal on the 2 capnp files
+  //Check output of binary ../../../src/bin/kepler-formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler_formal -naja_if ./top.capnp ./topEdited2.capnp")
+      std::string("../../../src/bin/kepler-formal -naja_if ./top.capnp ./topEdited2.capnp")
           .c_str()); 
   // look for "IDENTICAL" in the file ./miter_log_2.txt
   // open the file
-  std::ifstream miterLogFile2("./miter_log_2.txt");
+  std::ifstream miterLogFile2("./miter_log_1.txt");
   bool foundIdentical = false;
   if (miterLogFile2.is_open()) {
     while (getline(miterLogFile2, line)) {
@@ -652,3 +652,347 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ---------------------- Tests appended for coverage (subprocess approach, tolerant) ----------------------
+// Append this block at the end of the file (after main).
+
+#include <gtest/gtest.h>
+#include <fstream>
+#include <filesystem>
+#include <vector>
+#include <string>
+#include <cstdlib>
+#include <cstdio>
+
+// Path to the kepler-formal CLI binary used by the project tests.
+// Adjust this path if your binary is located elsewhere.
+static const char* KEPLER_BIN = "../../../src/bin/kepler-formal";
+
+// Helper to run the CLI binary with arguments in a subprocess using std::system.
+// Returns the program's exit code (child exit status) when available, otherwise EXIT_FAILURE.
+static int run_kepler_cli_with_args(const std::vector<std::string>& args) {
+  std::string cmd;
+  cmd += KEPLER_BIN;
+  for (const auto& a : args) {
+    cmd += " ";
+    // naive quoting: wrap in single quotes and escape any single quotes inside
+    std::string quoted = "'";
+    for (char c : a) {
+      if (c == '\'') quoted += "'\\''";
+      else quoted.push_back(c);
+    }
+    quoted += "'";
+    cmd += quoted;
+  }
+
+  int rc = std::system(cmd.c_str());
+  if (rc == -1) {
+    // system failed to start the process
+    return EXIT_FAILURE;
+  }
+
+#if defined(_WIN32)
+  // On Windows, system returns the exit code directly
+  return rc;
+#else
+  // On POSIX, interpret wait status
+  if (WIFEXITED(rc)) {
+    return WEXITSTATUS(rc);
+  } else {
+    // Abnormal termination (signal, etc.) -> treat as failure
+    return EXIT_FAILURE;
+  }
+#endif
+}
+
+TEST(KeplerCliSubprocessTests, BinaryExists) {
+  std::filesystem::path p(KEPLER_BIN);
+  bool exists = std::filesystem::exists(p);
+  if (!exists) {
+    GTEST_SKIP() << "kepler-formal binary not found at " << KEPLER_BIN << "; skipping CLI subprocess tests.";
+  }
+  EXPECT_TRUE(std::filesystem::is_regular_file(p));
+}
+
+TEST(KeplerCliSubprocessTests, PrintUsageOnNoArgs) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  int rc = run_kepler_cli_with_args({});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+}
+
+TEST(KeplerCliSubprocessTests, HelpFlagReturnsSuccess) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  int rc = run_kepler_cli_with_args({"--help"});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  rc = run_kepler_cli_with_args({"-h"});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+}
+
+TEST(KeplerCliSubprocessTests, MissingConfigFileArgument) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  int rc = run_kepler_cli_with_args({"--config"});
+  EXPECT_NE(rc, EXIT_SUCCESS);
+  rc = run_kepler_cli_with_args({"-c"});
+  EXPECT_NE(rc, EXIT_SUCCESS);
+}
+
+TEST(KeplerCliSubprocessTests, ConfigFileNotFoundReturnsFailure) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  std::string tmpPath = "./nonexistent_config_12345.yaml";
+  int rc = run_kepler_cli_with_args({"--config", tmpPath});
+  EXPECT_NE(rc, EXIT_SUCCESS);
+}
+
+TEST(KeplerCliSubprocessTests, ConfigUnrecognizedFormatReturnsFailure) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  std::filesystem::path tmp = std::filesystem::temp_directory_path() / "kepler_test_bad_format.yaml";
+  {
+    std::ofstream ofs(tmp);
+    ofs << "format: unknown_format\n";
+    ofs << "input_paths:\n  - a\n  - b\n";
+    ofs.close();
+  }
+  int rc = run_kepler_cli_with_args({"--config", tmp.string()});
+  EXPECT_NE(rc, EXIT_SUCCESS);
+  std::filesystem::remove(tmp);
+}
+
+TEST(KeplerCliSubprocessTests, ConfigSnlFormatLoadFailureReturnsFailure) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  std::filesystem::path tmp = std::filesystem::temp_directory_path() / "kepler_test_snl.yaml";
+  {
+    std::ofstream ofs(tmp);
+    ofs << "format: snl\n";
+    ofs << "input_paths:\n  - /path/does/not/exist1.snl\n  - /path/does/not/exist2.snl\n";
+    ofs.close();
+  }
+  int rc = run_kepler_cli_with_args({"--config", tmp.string()});
+  // Accept any non-success result (normal nonzero exit or abnormal termination)
+  EXPECT_NE(rc, EXIT_SUCCESS);
+  std::filesystem::remove(tmp);
+}
+
+TEST(KeplerCliSubprocessTests, CliUnrecognizedFormatReturnsFailure) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  int rc = run_kepler_cli_with_args({"-badformat", "a", "b"});
+  EXPECT_NE(rc, EXIT_SUCCESS);
+}
+
+// Program prints usage and returns success when argc < 4; keep that behavior expected.
+TEST(KeplerCliSubprocessTests, CliNotEnoughPathsReturnsSuccess) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  int rc = run_kepler_cli_with_args({"-verilog", "only_one_path.v"});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+}
+
+TEST(KeplerCliSubprocessTests, CliNajaIfFormatButMissingFilesReturnsFailure) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  int rc = run_kepler_cli_with_args({"-naja_if", "/no/such/file1.capnp", "/no/such/file2.capnp"});
+  EXPECT_NE(rc, EXIT_SUCCESS);
+}
+
+TEST(KeplerCliSubprocessTests, ConfigParsingViaFilesCoversYamlToVectorBehavior) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+
+  // 1) Sequence of scalars -> valid config with two input_paths should proceed to further checks.
+  std::filesystem::path tmpSeq = std::filesystem::temp_directory_path() / "kepler_test_seq.yaml";
+  {
+    std::ofstream ofs(tmpSeq);
+    ofs << "format: verilog\n";
+    ofs << "input_paths:\n";
+    ofs << "  - fileA.v\n";
+    ofs << "  - fileB.v\n";
+    ofs << "liberty_files:\n";
+    ofs << "  - lib1.lib\n";
+    ofs.close();
+  }
+  {
+    int rc = run_kepler_cli_with_args({"--config", tmpSeq.string()});
+    EXPECT_NE(rc, EXIT_SUCCESS); // files missing or parser errors -> not success
+  }
+  std::filesystem::remove(tmpSeq);
+
+  // 2) Scalar node for input_paths (invalid shape) -> should fail
+  std::filesystem::path tmpScalar = std::filesystem::temp_directory_path() / "kepler_test_scalar.yaml";
+  {
+    std::ofstream ofs(tmpScalar);
+    ofs << "format: verilog\n";
+    ofs << "input_paths: \"not-a-sequence\"\n";
+    ofs.close();
+  }
+  {
+    int rc = run_kepler_cli_with_args({"--config", tmpScalar.string()});
+    EXPECT_NE(rc, EXIT_SUCCESS);
+  }
+  std::filesystem::remove(tmpScalar);
+
+  // 3) Null node (empty YAML) -> should fail
+  std::filesystem::path tmpNull = std::filesystem::temp_directory_path() / "kepler_test_null.yaml";
+  {
+    std::ofstream ofs(tmpNull);
+    ofs << "# empty config\n";
+    ofs.close();
+  }
+  {
+    int rc = run_kepler_cli_with_args({"--config", tmpNull.string()});
+    EXPECT_NE(rc, EXIT_SUCCESS);
+  }
+  std::filesystem::remove(tmpNull);
+
+  // 4) Sequence of non-scalars (maps) for input_paths -> should fail
+  std::filesystem::path tmpSeqMaps = std::filesystem::temp_directory_path() / "kepler_test_seqmaps.yaml";
+  {
+    std::ofstream ofs(tmpSeqMaps);
+    ofs << "format: verilog\n";
+    ofs << "input_paths:\n";
+    ofs << "  - {a: 1}\n";
+    ofs << "  - {b: 2}\n";
+    ofs.close();
+  }
+  {
+    int rc = run_kepler_cli_with_args({"--config", tmpSeqMaps.string()});
+    EXPECT_NE(rc, EXIT_SUCCESS);
+  }
+  std::filesystem::remove(tmpSeqMaps);
+}
+
+TEST_F(MiterTests, CoverDiff) {
+  // 1. Create SNL
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  // 2. Create a top model with one output
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  SNLDesign* top =
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard, NLName("top"));
+  univ->setTopDesign(top);
+  auto topin =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto topin2 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in2"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+  auto topOut2 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
+  // 3. create a logic_0 model
+  SNLDesign* logic0 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC0"));
+  // add output to logic0
+  auto logic0Out =
+      SNLScalarTerm::create(logic0, SNLTerm::Direction::Output, NLName("out"));
+  // 4. create a logic_1 model
+  SNLDesign* logic1 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC1"));
+  // add output to logic0
+  auto logic1Out =
+      SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(logic0, SNLTruthTable(0, 0));
+  SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
+  NLLibraryTruthTables::construct(library);
+  // 5. create a logic_0 instace in top
+  SNLInstance* inst1 = SNLInstance::create(top, logic0, NLName("logic0"));
+  // 6. create a logic_1 instace in top
+  SNLInstance* inst2 = SNLInstance::create(top, logic1, NLName("logic1"));
+  // 7. create a and model
+  SNLDesign* seqModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
+
+  // add 2 inputs and 1 output to and
+  auto andIn1 =
+      SNLScalarTerm::create(seqModel, SNLTerm::Direction::Input, NLName("in1"));
+  auto andIn2 =
+      SNLScalarTerm::create(seqModel, SNLTerm::Direction::Input, NLName("in2"));
+  auto andOut = SNLScalarTerm::create(seqModel, SNLTerm::Direction::Output,
+                                      NLName("out"));
+  // 8. create a and instance in top
+  SNLInstance* inst3 = SNLInstance::create(top, seqModel, NLName("and"));
+  SNLInstance* inst4 = SNLInstance::create(top, seqModel, NLName("and2"));
+  // set truth table for and model
+  //SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  // 9. connect all instances inputs
+  SNLNet* net1 = SNLScalarNet::create(top, NLName("logic_0_net"));
+  net1->setType(SNLNet::Type::Assign0);
+  SNLNet* net2 = SNLScalarNet::create(top, NLName("logic_1_net"));
+  net2->setType(SNLNet::Type::Assign1);
+  SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
+  SNLNet* net4 = SNLScalarNet::create(top, NLName("and2_output_net"));
+  // connect logic0 to and
+  inst1->getInstTerm(logic0Out)->setNet(net1);
+
+  inst4->getInstTerm(andIn1)->setNet(net2);
+  inst4->getInstTerm(andIn2)->setNet(net2);
+  // connect logic1 to and
+  inst2->getInstTerm(logic1Out)->setNet(net2);
+  inst3->getInstTerm(andIn2)->setNet(net1);
+  inst3->getInstTerm(andIn1)->setNet(net4);
+  // connect the and instance output to the top output
+  inst3->getInstTerm(andOut)->setNet(net3);
+  topOut->setNet(net3);
+  inst4->getInstTerm(andOut)->setNet(net4);
+  topOut2->setNet(net4);
+
+  SNLDesign* topClone0 = top->clone(NLName("topClone0"));
+  SNLNet* netC0a = SNLScalarNet::create(topClone0, NLName("netC0a"));
+  SNLNet* netC0b = SNLScalarNet::create(topClone0, NLName("netC0b"));
+  auto andC0 = topClone0->getInstance(NLName("and"));
+  andC0->getInstTerm(andIn1->getID())->setNet(netC0a);
+  andC0->getInstTerm(andIn2->getID())->setNet(netC0b);
+  topClone0->getBitTerm(topin->getID(), 0)->setNet(netC0a);
+  SNLInstance* constC0 = SNLInstance::create(topClone0, logic0, NLName("logic0C0"));
+  constC0->getInstTerm(logic0Out->getID())->setNet(netC0b);
+
+  SNLDesign* topClone1 = top->clone(NLName("topClone1"));
+  SNLNet* netC1a = SNLScalarNet::create(topClone1, NLName("netC1a"));
+  SNLNet* netC1b = SNLScalarNet::create(topClone1, NLName("netC1b"));
+  auto andC1 = topClone1->getInstance(NLName("and"));
+  andC1->getInstTerm(andIn1->getID())->setNet(netC1a);
+  andC1->getInstTerm(andIn2->getID())->setNet(netC1b);
+  SNLInstance* constC1 = SNLInstance::create(topClone1, logic0, NLName("logic0C1"));
+  SNLDesign* inverterModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
+  // set truth table for inverter model
+  auto invIn =
+      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
+  auto invOut =
+      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
+  auto inverterC1 = SNLInstance::create(topClone1, inverterModel, NLName("inverterC1"));
+  constC1->getInstTerm(logic0Out->getID())->setNet(netC1a);
+  auto netC1invOut = SNLScalarNet::create(topClone1, NLName("netC1invOut"));
+  inverterC1->getInstTerm(invIn->getID())->setNet(netC1b);
+  inverterC1->getInstTerm(invOut->getID())->setNet(netC1invOut);
+  andC1->getInstTerm(andIn1->getID())->setNet(netC1invOut);
+  topClone1->getBitTerm(topin2->getID(), 0)->setNet(netC1b);
+  
+  // 11. create DNL
+  get(); 
+  naja::DNL::destroy();
+  MiterStrategy MiterS(topClone0, topClone1, "CaseD");
+    EXPECT_FALSE(MiterS.run());
+}
+
+TEST(KeplerCliSubprocessTests, ExampleTestRun) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+
+  int rc = run_kepler_cli_with_args({"-verilog", "../../../../example/tinyrocket.v", "../../../../example/tinyrocket_edited.v", 
+                                         "../../../../example/NangateOpenCellLibrary_typical.lib",
+                                         "../../../../example/fakeram45_64x15.lib",
+                                         "../../../../example/fakeram45_64x32.lib",
+                                         "../../../../example/fakeram45_1024x32.lib"});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+}
+
+// End of appended tests

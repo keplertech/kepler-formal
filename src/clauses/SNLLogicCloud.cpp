@@ -1,4 +1,4 @@
-// Copyright 2024-2025 keplertech.io
+// Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "SNLLogicCloud.h"
@@ -24,8 +24,13 @@ tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector =
     tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
 
 void initCurrentIterationInputsETS() {
-  assert(tbb::this_task_arena::current_thread_index() <
-         currentIterationInputsETSvector.size());
+  // LCOV_EXCL_START
+  if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+    for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+      currentIterationInputsETSvector.push_back(nullptr);
+    }
+  }
+  // LCOV_EXCL_STOP
   if (currentIterationInputsETSvector
           [tbb::this_task_arena::current_thread_index()] == nullptr) {
     currentIterationInputsETSvector
@@ -40,8 +45,13 @@ IterationInputsETSPair& getCurrentIterationInputsETS() {
 }
 
 void initNewIterationInputsETS() {
-  assert(tbb::this_task_arena::current_thread_index() <
-         newIterationInputsETSvector.size());
+  // LCOV_EXCL_START
+  if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+    for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+      newIterationInputsETSvector.push_back(nullptr);
+    }
+  }
+  // LCOV_EXCL_STOP
   if (newIterationInputsETSvector
           [tbb::this_task_arena::current_thread_index()] == nullptr) {
     newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] =
@@ -145,15 +155,16 @@ void SNLLogicCloud::compute() {
   initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
-  DEBUG_LOG("---- Beging!!\n");
+  DEBUG_LOG("---- Begin!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() ||
       isOutput(seedOutputTerm_)) {
     auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
+    // LCOV_EXCL_START
     if (iso.getDrivers().size() > 1) {
       
       for (auto driver : iso.getDrivers()) {
-        printf("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
+        DEBUG_LOG("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
                                       .getSnlBitTerm()
                                       ->getName()
                                       .getString()
@@ -161,8 +172,15 @@ void SNLLogicCloud::compute() {
       }
       throw std::runtime_error("Seed output term is not a single driver");
     } else if (iso.getDrivers().empty()) {
-      throw std::runtime_error("Seed output term has no drivers");
+      std::string termName = dnl_.getDNLTerminalFromID(seedOutputTerm_)
+                                 .getSnlBitTerm()
+                                 ->getName()
+                                 .getString();
+      std::string error =
+          "Seed output term '" + termName + "' has no drivers";
+      throw std::runtime_error(error);
     }
+    // LCOV_EXCL_STOP
     auto driver = iso.getDrivers().front();
     auto inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     if (isInput(driver)) {

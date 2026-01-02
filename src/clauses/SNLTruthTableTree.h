@@ -1,4 +1,4 @@
-// Copyright 2024-2025 keplertech.io
+// Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
 #ifndef SNLTRUTHTABLETREE_H
@@ -81,7 +81,6 @@ public:
   const std::shared_ptr<Node>& nodeFromId(uint32_t id) const;
   bool isInitialized() const;
   void print() const;
-  void simplify();
   void destroy();
 
   size_t getNumNodes() const { return nodes_.size(); }

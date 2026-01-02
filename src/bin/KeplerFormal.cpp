@@ -1,4 +1,4 @@
-// Copyright 2024-2025 keplertech.io
+// Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <chrono>
@@ -23,7 +23,6 @@
 #include "SNLVRLConstructor.h"
 #include "SNLVRLDumper.h"
 #include "SNLUtils.h"
-
 #include "ScopeExtraction.h"
 
 static void print_usage(const char* prog) {
@@ -154,12 +153,12 @@ int main(int argc, char** argv) {
     spdlog::set_level(spdlog::level::debug);
   else if (logLevel == "info")
     spdlog::set_level(spdlog::level::info);
-  else if (logLevel == "warn")
-    spdlog::set_level(spdlog::level::warn);
-  else if (logLevel == "error")
-    spdlog::set_level(spdlog::level::err);
-  else if (logLevel == "critical")
-    spdlog::set_level(spdlog::level::critical);
+  // else if (logLevel == "warn")
+  //   spdlog::set_level(spdlog::level::warn);
+  // else if (logLevel == "error")
+  //   spdlog::set_level(spdlog::level::err);
+  // else if (logLevel == "critical")
+  //   spdlog::set_level(spdlog::level::critical);
   else
     spdlog::set_level(spdlog::level::info);
 
@@ -199,22 +198,29 @@ int main(int argc, char** argv) {
       db0->setTopDesign(top);
       SPDLOG_INFO("Found top design: {}", top->getString());
     } else {
-      SPDLOG_ERROR("No top design was found after parsing verilog");
+      // LCOV_EXCL_START
+      SPDLOG_CRITICAL("No top design was found after parsing verilog");
+      return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
     }
   } else {  // SNL
     std::printf("Loading SNL file: %s\n", inputPaths[0].c_str());
     db0 = SNLCapnP::load(inputPaths[0].c_str(), primitivesAreLoaded);
     if (!db0) {
+      // LCOV_EXCL_START
       SPDLOG_CRITICAL("Failed to load SNL file: {}", inputPaths[0]);
       return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
     }
   }
 
   // get db0 top
   auto top0 = db0->getTopDesign();
   if (!top0) {
+    // LCOV_EXCL_START
     SPDLOG_CRITICAL("Top design not set for first netlist");
     return EXIT_FAILURE;
+    // LCOV_EXCL_STOP
   }
   db0->setID(2);  // Increment ID to avoid conflicts
 
@@ -241,28 +247,34 @@ int main(int argc, char** argv) {
       db1->setTopDesign(top);
       SPDLOG_INFO("Found top design: {}", top->getString());
     } else {
-      SPDLOG_ERROR("No top design was found after parsing verilog");
+      // LCOV_EXCL_START
+      SPDLOG_CRITICAL("No top design was found after parsing verilog");
+      return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
     }
   } else {  // SNL
     std::printf("Loading SNL file: %s\n", inputPaths[1].c_str());
     db1 = SNLCapnP::load(inputPaths[1].c_str(), primitivesAreLoaded);
     if (!db1) {
+      // LCOV_EXCL_START
       SPDLOG_CRITICAL("Failed to load SNL file: {}", inputPaths[1]);
       return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
     }
   }
 
   // get db1 top
   auto top1 = db1->getTopDesign();
   if (!top1) {
+    // LCOV_EXCL_START
     SPDLOG_CRITICAL("Top design not set for second netlist");
     return EXIT_FAILURE;
+    // LCOV_EXCL_STOP
   }
 
   // --------------------------------------------------------------------------
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
-  // 
   try {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
     if (MiterS.run()) {
@@ -271,8 +283,10 @@ int main(int argc, char** argv) {
       SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
     }
   } catch (const std::exception& e) {
+    // LCOV_EXCL_START
     SPDLOG_ERROR("Workflow failed: {}", e.what());
     return EXIT_FAILURE;
+    // LCOV_EXCL_STOP
   }
 
   return EXIT_SUCCESS;

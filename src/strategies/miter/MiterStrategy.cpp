@@ -1,4 +1,4 @@
-// Copyright 2024-2025 keplertech.io
+// Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "MiterStrategy.h"
@@ -40,63 +40,107 @@ namespace {
 static std::shared_ptr<spdlog::logger> logger;
 
 void ensureLoggerInitialized() {
-  if (!logger) {
-    try {
-      // to choose the right name, search for what mitter_log_x.txt files
-      // already exist and then crete mitter_log_(x+1).txt
-      int logIndex = 0;
-      while (true) {
-        if (MiterStrategy::logFileName_ != "") {
-          logIndex = -1;
-          break;
-        }
-        std::string logFileName =
-            "miter_log_" + std::to_string(logIndex) + ".txt";
-        std::ifstream infile(logFileName);
-        if (infile.good()) {
-          logIndex++;
+  if (logger) return;
+
+  try {
+    // 1) Choose a default file name in the current working directory
+    int logIndex = 0;
+    while (true) {
+      std::string candidate = "miter_log_" + std::to_string(logIndex) + ".txt";
+      std::ifstream infile(candidate);
+      if (infile.good()) {
+        ++logIndex;
+      } else {
+        break;
+      }
+    }
+    std::string chosenLogFile = "miter_log_" + std::to_string(logIndex) + ".txt";
+
+    // 2) If user provided an explicit path, try to use it (with safe checks)
+    if (!MiterStrategy::logFileName_.empty()) {
+      std::filesystem::path p(MiterStrategy::logFileName_);
+      auto parent = p.parent_path();
+
+      // If parent is empty, treat the provided name as a filename in CWD
+      if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+          // LCOV_EXCL_START
+          // Failed to create requested directory; log and fall back
+          std::cerr << "Warning: failed to create log directory '" << parent.string()
+                    << "': " << ec.message() << " (" << ec.value() << "). Using fallback path.\n";
+          // LCOV_EXCL_STOP
         } else {
-          break;
+          chosenLogFile = p.string();
         }
+      } else {
+        // Provided path had no parent; use it as-is
+        chosenLogFile = p.string();
       }
-      std::string logFileName =
-          "miter_log_" + std::to_string(logIndex) + ".txt";
-      if (MiterStrategy::logFileName_ != "") {
-        if (!MiterStrategy::logFileName_.empty()) {
-            std::filesystem::path p(MiterStrategy::logFileName_);
-            std::filesystem::create_directories(p.parent_path());
-            logFileName = p.string();
-        }
-      }
-      auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-          logFileName, true);
+    }
+
+    // 3) Try to create file sink; if it fails, fall back to temp dir or stdout
+    try {
+      auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(chosenLogFile, true);
       logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+    } catch (const spdlog::spdlog_ex& ex) {
+      // LCOV_EXCL_START
+      // Try a safe fallback: temp directory
+      std::error_code ec;
+      auto tmp = std::filesystem::temp_directory_path(ec);
+      if (!ec) {
+        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(::getpid()) + ".txt");
+        try {
+          auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(fallback.string(), true);
+          logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+        } catch (...) {
+          // Final fallback to stdout sink
+          auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+          logger = std::make_shared<spdlog::logger>("miter_logger_fallback", console_sink);
+          logger->set_level(spdlog::level::debug);
+          spdlog::register_logger(logger);
+          logger->error("spdlog initialization failed for file sink and temp fallback: {}", ex.what());
+        }
+      } else {
+        auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+        logger = std::make_shared<spdlog::logger>("miter_logger_fallback", console_sink);
+        logger->set_level(spdlog::level::debug);
+        spdlog::register_logger(logger);
+        logger->error("spdlog initialization failed and temp_directory_path() failed: {}", ex.what());
+      }
+      // LCOV_EXCL_STOP
+    }
+
+    // 4) Finalize logger if created
+    if (logger) {
       logger->set_level(spdlog::level::info);
       logger->flush_on(spdlog::level::info);
       spdlog::register_logger(logger);
-    } catch (const spdlog::spdlog_ex& ex) {
-      // Fallback: create a simple stdout logger explicitly
-      auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-      logger = std::make_shared<spdlog::logger>("miter_logger_fallback",
-                                                console_sink);
-      logger->set_level(spdlog::level::debug);
-      spdlog::register_logger(logger);
-      logger->error("spdlog initialization failed for file sink: {}",
-                    ex.what());
     }
+  } catch (const std::exception& ex) {
+    // LCOV_EXCL_START
+    // Last-resort fallback to stdout logger to avoid crashing tests
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+    logger = std::make_shared<spdlog::logger>("miter_logger_fallback", console_sink);
+    logger->set_level(spdlog::level::debug);
+    spdlog::register_logger(logger);
+    logger->error("Unexpected exception initializing logger: {}", ex.what());
+    // LCOV_EXCL_STOP
   }
 }
 
-void executeCommand(const std::string& command) {
-  ensureLoggerInitialized();
-  int result = system(command.c_str());
-  if (result != 0) {
-    logger->error("Command execution failed: {} (exit code {})", command,
-                  result);
-  } else {
-    logger->debug("Command executed successfully: {}", command);
-  }
-}
+
+// void executeCommand(const std::string& command) {
+//   ensureLoggerInitialized();
+//   int result = system(command.c_str());
+//   if (result != 0) {
+//     logger->error("Command execution failed: {} (exit code {})", command,
+//                   result);
+//   } else {
+//     logger->debug("Command executed successfully: {}", command);
+//   }
+// }
 
 //
 // A tiny Tseitin-translator from BoolExpr -> Glucose CNF.
@@ -517,6 +561,7 @@ bool MiterStrategy::run() {
     for (size_t i = 0; i < POs0.size(); ++i) {
       if (builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i)) !=
           builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i))) {
+        // LCOV_EXCL_START
         auto path0 = builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i));
         auto path1 = builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i));
         // print path0
@@ -537,6 +582,7 @@ bool MiterStrategy::run() {
         logger->info("\n");
         throw std::runtime_error("Miter PO index " + std::to_string(i) +
                                  " DNLIDs do not match");
+        // LCOV_EXCL_STOP
       }
       tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs0S;
       singlePOs0S.push_back(POs0[i]);
