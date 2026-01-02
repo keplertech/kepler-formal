@@ -8,7 +8,7 @@
 #include "Tree2BoolExpr.h"
 #include "SNLPath.h"
 
- #define DEBUG_PRINTS
+// #define DEBUG_PRINTS
 // #define DEBUG_CHECKS
 
 #ifdef DEBUG_PRINTS
@@ -25,9 +25,6 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   std::vector<DNLID> inputs;
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
-  printf("top instance: %s\n",
-         top.getSNLModel()->getName().getString().c_str());
-  printf("number of leaves: %zu\n", dnl->getLeaves().size());
 
   for (DNLID termId = top.getTermIndexes().first;
        termId != DNLID_MAX && termId <= top.getTermIndexes().second; termId++) {
