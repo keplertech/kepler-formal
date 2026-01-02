@@ -275,18 +275,49 @@ int main(int argc, char** argv) {
   // --------------------------------------------------------------------------
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
-  try {
-    KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
-    if (MiterS.run()) {
-      SPDLOG_INFO("No difference was found.");
-    } else {
-      SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+  if (inputFormatType == FormatType::SNL) {
+    ScopeExtraction extractor(top0, top1);
+    extractor.collectVerificationScopes();
+    for (auto scopes : extractor.getScopesToVerify()) {
+      SPDLOG_INFO("Looiking at scope: {} ",
+                  scopes.first->getName().getString());
+      std::string scopeLogFile = (logFileName.empty() ? "kf_" : logFileName) + "_" +
+                                scopes.first->getName().getString() + ".txt";
+      try {
+        KEPLER_FORMAL::MiterStrategy MiterS(scopes.first, scopes.second, logFileName);
+        if (MiterS.run()) {
+          SPDLOG_INFO("No difference was found for scope: {} , {}",
+                      scopes.first->getName().getString(),
+                      scopes.second->getName().getString());
+        } else {
+          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log(miter_log_x.txt) for details.",
+                      scopes.first->getName().getString(),
+                      scopes.second->getName().getString());
+        }
+      } catch (const std::exception& e) {
+        // LCOV_EXCL_START
+        SPDLOG_ERROR("Workflow failed for scope: {} , {}: {}", 
+                      scopes.first->getName().getString(),
+                      scopes.second->getName().getString(),
+                      e.what());
+        return EXIT_FAILURE;
+        // LCOV_EXCL_STOP
+      }
     }
-  } catch (const std::exception& e) {
-    // LCOV_EXCL_START
-    SPDLOG_ERROR("Workflow failed: {}", e.what());
-    return EXIT_FAILURE;
-    // LCOV_EXCL_STOP
+  } else {
+    try {
+      KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
+      if (MiterS.run()) {
+        SPDLOG_INFO("No difference was found.");
+      } else {
+        SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+      }
+    } catch (const std::exception& e) {
+      // LCOV_EXCL_START
+      SPDLOG_ERROR("Workflow failed: {}", e.what());
+      return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
+    }
   }
 
   return EXIT_SUCCESS;

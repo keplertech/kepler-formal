@@ -1,6 +1,14 @@
 #include "ScopeExtraction.h"
 #include <stack>
 
+//#define DEBUG_PRINTS
+
+#ifdef DEBUG_PRINTS
+#define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#define DEBUG_LOG(fmt, ...)
+#endif
+
 void ScopeExtraction::collectVerificationScopes() {
   // Find leaf models(model that contain leaf only)
   // DFS
@@ -8,91 +16,128 @@ void ScopeExtraction::collectVerificationScopes() {
   std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> toCompare;
   toCompare.first = top0_;
   toCompare.second = top1_;
-  auto currentEqualDesigns = equalDesigns_;
-  while ((currentEqualDesigns.size() > equalDesigns_.size()) ||
-         equalDesigns_.empty()) {
-    stack.push(toCompare);
-    currentEqualDesigns = equalDesigns_;
-    designsToVerify_.clear();
-    while (!stack.empty()) {
-      std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> toCompareNew =
-          stack.top();
-      stack.pop();
-      auto design0 = toCompareNew.first;
-      auto design1 = toCompareNew.second;
-      if (design0->getInstances().size() == design1->getInstances().size()) {
-        bool modelsAreEqual = true;
-        std::vector<naja::NL::SNLInstance*> instancesVector0;
-        for (auto instance : design0->getInstances()) {
-          if (instance->isPrimitive()) {
-            continue;
-          }
-          instancesVector0.push_back(instance);
+  stack.push(toCompare);
+  while (!stack.empty()) {
+    std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> toCompareNew =
+        stack.top();
+    stack.pop();
+    auto design0 = toCompareNew.first;
+    auto design1 = toCompareNew.second;
+    bool modelsAreEqual = true;
+    // First check, same number of instances
+    if (design0->getInstances().size() == design1->getInstances().size()) {
+      // We have same number of instances moving on to next checks
+      // 1. Check same child instances
+      DEBUG_LOG(" - Comparing models %s and %s\n",
+                design0->getName().getString().c_str(),
+                design1->getName().getString().c_str());
+      std::vector<naja::NL::NLID::DesignObjectID> childInstances0;
+      for (auto instance : design0->getInstances()) {
+        childInstances0.push_back(instance->getID());
+      }
+      std::vector<naja::NL::NLID::DesignObjectID> childInstances1;
+      for (auto instance : design1->getInstances()) {
+        childInstances1.push_back(instance->getID());
+      }
+      if (childInstances0 != childInstances1) {
+        DEBUG_LOG(" - Child instances are different.\n");
+        modelsAreEqual = false;
+      }
+      if (modelsAreEqual) {
+        DEBUG_LOG(" - Child instances are the same -> Comparing nets.\n");
+        // Same child instances, now we will check all nets
+        std::vector<naja::NL::SNLBitNet*> nets0;
+        for (auto net : design0->getBitNets()) {
+          nets0.push_back(net);
         }
-        std::vector<naja::NL::SNLInstance*> instancesVector1;
-        for (auto instance : design1->getInstances()) {
-          if (instance->isPrimitive()) {
-            continue;
-          }
-          instancesVector1.push_back(instance);
+        std::vector<naja::NL::SNLBitNet*> nets1;
+        for (auto net : design1->getBitNets()) {
+          nets1.push_back(net);
         }
-        if (instancesVector1.size() != instancesVector0.size()) {
-          // Different number of hierarchical instances, for sure different
-          modelsAreEqual = false;
-        }
-        if (modelsAreEqual) {
-          for (size_t i = 0; i < instancesVector1.size(); ++i) {
-            if ((instancesVector0[i]->getModel()->getID() !=
-                 instancesVector1[i]->getModel()->getID()) ||
-                (instancesVector0[i]->getID() !=
-                 instancesVector1[i]->getID())) {
-              // Different instance ID or model ID of an instance the same
-              // position means that the models differ
-              modelsAreEqual = false;
-            } else {
-              std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> pair;
-              pair.first = instancesVector0[i]->getModel();
-              pair.second = instancesVector1[i]->getModel();
-              if (equalDesigns_.find(pair) == equalDesigns_.end()) {
-                modelsAreEqual = false;
-                // Only in one case we need to go down the hierarchy
-                // When the 2 models have the same interfaces but were not
-                // yes checked
-                stack.push(pair);
-              }
-            }
+        for (size_t i = 0; i < nets0.size(); ++i) {
+          DEBUG_LOG(" - Comparing net %s and %s\n",
+                    nets0[i]->getName().getString().c_str(),
+                    nets1[i]->getName().getString().c_str());
+          DEBUG_LOG("Comparing bit terms.\n");
+          auto net0 = nets0[i];
+          auto net1 = nets1[i];
+          // Check drivers
+          std::vector<SNLBitTerm*> bitTerms0;
+          for (auto bitterm : net0->getBitTerms()) {
+            bitTerms0.push_back(bitterm);
           }
-        }
-        if (modelsAreEqual) {
-          // Hierarchical instances passed all the checks, now we need to
-          // compare the primitive instances
-          auto primitiveInstances0 = design0->getPrimitiveInstances();
-          std::vector<naja::NL::SNLInstance*> primitivesVector0;
-          for (auto instance : primitiveInstances0) {
-            primitivesVector0.push_back(instance);
+          std::vector<SNLBitTerm*> bitTerms1;
+          for (auto bitterm : net1->getBitTerms()) {
+            bitTerms1.push_back(bitterm);
           }
-          auto primitiveInstances1 = design1->getPrimitiveInstances();
-          std::vector<naja::NL::SNLInstance*> primitivesVector1;
-          for (auto instance : primitiveInstances1) {
-            primitivesVector1.push_back(instance);
+          if (bitTerms0.size() != bitTerms1.size()) {
+            modelsAreEqual = false;
+            break;
           }
-          bool primitivesAreEqual = true;
-          for (size_t i = 0; i < primitivesVector0.size(); ++i) {
-            if ((primitivesVector0[i]->getModel()->getID() !=
-                 primitivesVector1[i]->getModel()->getID()) ||
-                (primitivesVector0[i]->getID() !=
-                 primitivesVector1[i]->getID())) {
+          for (size_t j = 0; j < bitTerms0.size(); ++j) {
+            auto term0 = bitTerms0[j];
+            auto term1 = bitTerms1[j];
+            if (term0->getID() != term1->getID()) {
               modelsAreEqual = false;
               break;
             }
           }
+          if (modelsAreEqual) {
+            DEBUG_LOG("Comparing inst terms.\n");
+            // bit terms are same, now check ins terms
+            std::vector<SNLInstTerm*> instTerms0;
+            for (auto instterm : net0->getInstTerms()) {
+              instTerms0.push_back(instterm);
+            }
+            std::vector<SNLInstTerm*> instTerms1;
+            for (auto instterm : net1->getInstTerms()) {
+              instTerms1.push_back(instterm);
+            }
+            if (instTerms0.size() != instTerms1.size()) {
+              modelsAreEqual = false;
+              break;
+            }
+            for (size_t j = 0; j < instTerms0.size(); ++j) {
+              auto term0 = instTerms0[j];
+              auto term1 = instTerms1[j];
+              if (term0->getInstance()->getID() !=
+                      term1->getInstance()->getID() ||
+                  term0->getBitTerm()->getID() !=
+                      term1->getBitTerm()->getID()) {
+                modelsAreEqual = false;
+                break;
+              }
+            }
+          }
         }
-        if (modelsAreEqual) {
-          equalDesigns_.insert(toCompareNew);
-        } else {
-          // models are not equal, need to compare with formal verification
-          designsToVerify_.insert(toCompareNew);
+      }
+    } else {
+      DEBUG_LOG(" - Different number of instances.\n");
+      modelsAreEqual = false;
+    }
+    if (!modelsAreEqual) {
+      designsToVerify_.insert(toCompareNew);
+    } else {
+      // Add checks for children instances in next interation
+      std::vector<naja::NL::SNLInstance*> instancesVector0;
+      for (auto instance : design0->getInstances()) {
+        if (instance->isPrimitive()) {
+          continue;
         }
+        instancesVector0.push_back(instance);
+      }
+      std::vector<naja::NL::SNLInstance*> instancesVector1;
+      for (auto instance : design1->getInstances()) {
+        if (instance->isPrimitive()) {
+          continue;
+        }
+        instancesVector1.push_back(instance);
+      }
+      for (size_t i = 0; i < instancesVector1.size(); ++i) {
+        std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> pair;
+        pair.first = instancesVector0[i]->getModel();
+        pair.second = instancesVector1[i]->getModel();
+        stack.push(pair);
       }
     }
   }
