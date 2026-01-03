@@ -647,12 +647,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   
 }
 
-// Required main function for Google Test
-int main(int argc, char** argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}
-
 // ---------------------- Tests appended for coverage (subprocess approach, tolerant) ----------------------
 // Append this block at the end of the file (after main).
 
@@ -993,6 +987,12 @@ TEST(KeplerCliSubprocessTests, ExampleTestRun) {
                                          "../../../../example/fakeram45_64x32.lib",
                                          "../../../../example/fakeram45_1024x32.lib"});
   EXPECT_EQ(rc, EXIT_SUCCESS);
+}
+
+// Required main function for Google Test
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }
 
 // End of appended tests

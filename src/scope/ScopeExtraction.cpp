@@ -54,58 +54,64 @@ void ScopeExtraction::collectVerificationScopes() {
         for (auto net : design1->getBitNets()) {
           nets1.push_back(net);
         }
-        for (size_t i = 0; i < nets0.size(); ++i) {
-          DEBUG_LOG(" - Comparing net %s and %s\n",
-                    nets0[i]->getName().getString().c_str(),
-                    nets1[i]->getName().getString().c_str());
-          DEBUG_LOG("Comparing bit terms.\n");
-          auto net0 = nets0[i];
-          auto net1 = nets1[i];
-          // Check drivers
-          std::vector<SNLBitTerm*> bitTerms0;
-          for (auto bitterm : net0->getBitTerms()) {
-            bitTerms0.push_back(bitterm);
-          }
-          std::vector<SNLBitTerm*> bitTerms1;
-          for (auto bitterm : net1->getBitTerms()) {
-            bitTerms1.push_back(bitterm);
-          }
-          if (bitTerms0.size() != bitTerms1.size()) {
-            modelsAreEqual = false;
-            break;
-          }
-          for (size_t j = 0; j < bitTerms0.size(); ++j) {
-            auto term0 = bitTerms0[j];
-            auto term1 = bitTerms1[j];
-            if (term0->getID() != term1->getID()) {
+        if (nets0.size() != nets1.size()) {
+          DEBUG_LOG(" - Different number of nets.\n");
+          modelsAreEqual = false;
+        }
+        if (modelsAreEqual) {
+          for (size_t i = 0; i < nets0.size(); ++i) {
+            DEBUG_LOG(" - Comparing net %s and %s\n",
+                      nets0[i]->getName().getString().c_str(),
+                      nets1[i]->getName().getString().c_str());
+            DEBUG_LOG("Comparing bit terms.\n");
+            auto net0 = nets0[i];
+            auto net1 = nets1[i];
+            // Check drivers
+            std::vector<SNLBitTerm*> bitTerms0;
+            for (auto bitterm : net0->getBitTerms()) {
+              bitTerms0.push_back(bitterm);
+            }
+            std::vector<SNLBitTerm*> bitTerms1;
+            for (auto bitterm : net1->getBitTerms()) {
+              bitTerms1.push_back(bitterm);
+            }
+            if (bitTerms0.size() != bitTerms1.size()) {
               modelsAreEqual = false;
               break;
             }
-          }
-          if (modelsAreEqual) {
-            DEBUG_LOG("Comparing inst terms.\n");
-            // bit terms are same, now check ins terms
-            std::vector<SNLInstTerm*> instTerms0;
-            for (auto instterm : net0->getInstTerms()) {
-              instTerms0.push_back(instterm);
-            }
-            std::vector<SNLInstTerm*> instTerms1;
-            for (auto instterm : net1->getInstTerms()) {
-              instTerms1.push_back(instterm);
-            }
-            if (instTerms0.size() != instTerms1.size()) {
-              modelsAreEqual = false;
-              break;
-            }
-            for (size_t j = 0; j < instTerms0.size(); ++j) {
-              auto term0 = instTerms0[j];
-              auto term1 = instTerms1[j];
-              if (term0->getInstance()->getID() !=
-                      term1->getInstance()->getID() ||
-                  term0->getBitTerm()->getID() !=
-                      term1->getBitTerm()->getID()) {
+            for (size_t j = 0; j < bitTerms0.size(); ++j) {
+              auto term0 = bitTerms0[j];
+              auto term1 = bitTerms1[j];
+              if (term0->getID() != term1->getID()) {
                 modelsAreEqual = false;
                 break;
+              }
+            }
+            if (modelsAreEqual) {
+              DEBUG_LOG("Comparing inst terms.\n");
+              // bit terms are same, now check ins terms
+              std::vector<SNLInstTerm*> instTerms0;
+              for (auto instterm : net0->getInstTerms()) {
+                instTerms0.push_back(instterm);
+              }
+              std::vector<SNLInstTerm*> instTerms1;
+              for (auto instterm : net1->getInstTerms()) {
+                instTerms1.push_back(instterm);
+              }
+              if (instTerms0.size() != instTerms1.size()) {
+                modelsAreEqual = false;
+                break;
+              }
+              for (size_t j = 0; j < instTerms0.size(); ++j) {
+                auto term0 = instTerms0[j];
+                auto term1 = instTerms1[j];
+                if (term0->getInstance()->getID() !=
+                        term1->getInstance()->getID() ||
+                    term0->getBitTerm()->getID() !=
+                        term1->getBitTerm()->getID()) {
+                  modelsAreEqual = false;
+                  break;
+                }
               }
             }
           }
