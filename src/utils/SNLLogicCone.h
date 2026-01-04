@@ -31,6 +31,10 @@ class SNLLogicCone {
   void run();
   std::vector<naja::NL::SNLEquipotential> getEquipotentials() const;
 
+  const std::vector<naja::DNL::DNLID>& getConeIsoIDs() const {
+    return coneIsos_;
+  }
+
  private:
   naja::DNL::DNLID seedOutputTerm_;
   std::vector<naja::DNL::DNLID> coneIsos_;

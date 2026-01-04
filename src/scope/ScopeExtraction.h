@@ -26,6 +26,11 @@ class ScopeExtraction {
     std::set<std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>> getScopesToVerify() const {
         return designsToVerify_;
     }
+    // Provide extracted verification scopes for debugging purposes by:
+    // 1 Collecting scopes via collectVerificationScopes()
+    // 2 Collecting logic cones for all differ elements in the scopes with SNLLogicCone
+    // 4 Deleting all elements not in the collected cones from the cloned tops
+    void cleanVerificationScopes(const std::vector<naja::DNL::DNLID>& pis0, const std::vector<naja::DNL::DNLID>& pis1);
 
  protected:
     // Allow derived test helpers to default-construct and inspect internals.

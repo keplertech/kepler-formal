@@ -1,13 +1,22 @@
 #include "ScopeExtraction.h"
+#include <tbb/concurrent_unordered_set.h>
 #include <stack>
+#include "DNL.h"
+#include "NLUniverse.h"
+#include "RemoveLoadlessLogic.h"
+#include "SNLDesign.h"
+#include "SNLLogicCone.h"
 
-//#define DEBUG_PRINTS
+// #define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
 #define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_LOG(fmt, ...)
 #endif
+
+using namespace naja::NL;
+using namespace naja::DNL;
 
 void ScopeExtraction::collectVerificationScopes() {
   // Find leaf models(model that contain leaf only)
@@ -146,5 +155,83 @@ void ScopeExtraction::collectVerificationScopes() {
         stack.push(pair);
       }
     }
+  }
+}
+
+// Provide extracted verification scopes for debugging purposes by:
+// 1 Collecting scopes via collectVerificationScopes()
+// 2 Collecting logic cones for all differ elements in the scopes with
+// SNLLogicCone 4 Deleting all elements not in the collected cones from the
+// cloned tops
+void ScopeExtraction::cleanVerificationScopes(
+    const std::vector<naja::DNL::DNLID>& pis0,
+    const std::vector<naja::DNL::DNLID>& pis1) {
+  std::vector<naja::NL::SNLDesign*> tops;
+  tops.push_back(top0_);
+  tops.push_back(top1_);
+  std::vector<std::vector<naja::DNL::DNLID>> pis;
+  pis.push_back(pis0);
+  pis.push_back(pis1);
+  for (size_t i = 0; i < tops.size(); ++i) {
+    // Setting top to top0
+    auto top = tops[i];
+    naja::NL::NLUniverse::get()->setTopDesign(top);
+    // Collecting all scopes to verify under top0
+    std::set<const naja::NL::SNLDesign*> scopes;
+    for (const auto& scope : designsToVerify_) {
+      naja::NL::SNLDesign* design0 = scope.first;
+      scopes.insert(design0);
+    }
+    // Collecting all leaves who are under model is in scopes
+    std::set<naja::DNL::DNLID> scopeLeaves0;
+    auto dnl = naja::DNL::get();
+    for (const auto& leaf : dnl->getLeaves()) {
+      const naja::NL::SNLDesign* model =
+          dnl->getDNLInstanceFromID(leaf).getSNLModel();
+      naja::DNL::DNLInstanceFull currentInstance =
+          dnl->getDNLInstanceFromID(leaf);
+      while (currentInstance.isTop() == false) {
+        if (scopes.find(model) != scopes.end()) {
+          scopeLeaves0.insert(leaf);
+          break;
+        }
+        currentInstance = currentInstance.getParentInstance();
+        model = currentInstance.getSNLModel();
+      }
+    }
+    std::set<naja::DNL::DNLID> leavesToKeep0;
+    std::set<DNLID> readers;
+    for (const auto& leaf : dnl->getLeaves()) {
+      // For each terminal collect the readers of it's iso
+      DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
+      for (DNLID termId = instance.getTermIndexes().first;
+           termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
+           termId++) {
+        const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
+        DNLID isoID = term.getIsoID();
+        if (isoID != DNLID_MAX) {
+          auto iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+          for (const auto& reader : iso.getReaders()) {
+            DNLInstanceFull readerInstance =
+                dnl->getDNLTerminalFromID(reader).getDNLInstance();
+            DNLID readerLeafID = readerInstance.getID();
+            if (scopeLeaves0.find(readerLeafID) != scopeLeaves0.end()) {
+              readers.insert(reader);
+            }
+          }
+        }
+      }
+    }
+    tbb::concurrent_unordered_set<naja::DNL::DNLID> isosToKeep;
+    for (const auto& reader : readers) {
+      KEPLER_FORMAL::SNLLogicCone cone(reader, pis[i]);
+      cone.run();
+      for (const auto& isoID : cone.getConeIsoIDs()) {
+        isosToKeep.insert(isoID);
+      }
+    }
+    naja::NAJA_OPT::LoadlessLogicRemover remover;
+    auto loadlessInstances = remover.getLoadlessInstances(*dnl, isosToKeep);
+    remover.removeLoadlessInstances(top, loadlessInstances);
   }
 }

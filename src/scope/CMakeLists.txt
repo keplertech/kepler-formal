@@ -14,4 +14,4 @@ add_library(scope_extraction STATIC
 
 # Make headers accessible to other targets
 target_include_directories(scope_extraction PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(scope_extraction PUBLIC naja_nl naja_dnl)
+target_link_libraries(scope_extraction PUBLIC naja_nl naja_dnl naja_opt kepler_formal_utils)
