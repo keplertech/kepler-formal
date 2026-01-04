@@ -173,18 +173,20 @@ void ScopeExtraction::cleanVerificationScopes(
   pis.push_back(pis0);
   pis.push_back(pis1);
   for (size_t i = 0; i < tops.size(); ++i) {
+    naja::DNL::destroy();
     // Setting top to top0
     auto top = tops[i];
     naja::NL::NLUniverse::get()->setTopDesign(top);
     // Collecting all scopes to verify under top0
     std::set<const naja::NL::SNLDesign*> scopes;
     for (const auto& scope : designsToVerify_) {
-      naja::NL::SNLDesign* design0 = scope.first;
-      scopes.insert(design0);
+      naja::NL::SNLDesign* design = i == 0 ? scope.first : scope.second;
+      scopes.insert(design);
     }
     // Collecting all leaves who are under model is in scopes
-    std::set<naja::DNL::DNLID> scopeLeaves0;
+    std::set<naja::DNL::DNLID> scopeLeaves;
     auto dnl = naja::DNL::get();
+    tbb::concurrent_unordered_set<naja::DNL::DNLID> isosToKeep;
     for (const auto& leaf : dnl->getLeaves()) {
       const naja::NL::SNLDesign* model =
           dnl->getDNLInstanceFromID(leaf).getSNLModel();
@@ -192,14 +194,25 @@ void ScopeExtraction::cleanVerificationScopes(
           dnl->getDNLInstanceFromID(leaf);
       while (currentInstance.isTop() == false) {
         if (scopes.find(model) != scopes.end()) {
-          scopeLeaves0.insert(leaf);
           break;
         }
         currentInstance = currentInstance.getParentInstance();
         model = currentInstance.getSNLModel();
+        // keep all isos on terminals of model
+      }
+      if (scopes.find(model) != scopes.end()) {
+        scopeLeaves.insert(leaf);
+        for (DNLID termId = currentInstance.getTermIndexes().first;
+             termId != DNLID_MAX && termId <= currentInstance.getTermIndexes().second;
+             termId++) {
+          const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
+          DNLID isoID = term.getIsoID();
+          if (isoID != DNLID_MAX) {
+            isosToKeep.insert(isoID);
+          }
+        }
       }
     }
-    std::set<naja::DNL::DNLID> leavesToKeep0;
     std::set<DNLID> readers;
     for (const auto& leaf : dnl->getLeaves()) {
       // For each terminal collect the readers of it's iso
@@ -215,14 +228,14 @@ void ScopeExtraction::cleanVerificationScopes(
             DNLInstanceFull readerInstance =
                 dnl->getDNLTerminalFromID(reader).getDNLInstance();
             DNLID readerLeafID = readerInstance.getID();
-            if (scopeLeaves0.find(readerLeafID) != scopeLeaves0.end()) {
+            if (scopeLeaves.find(readerLeafID) != scopeLeaves.end()) {
               readers.insert(reader);
             }
           }
         }
       }
     }
-    tbb::concurrent_unordered_set<naja::DNL::DNLID> isosToKeep;
+    
     for (const auto& reader : readers) {
       KEPLER_FORMAL::SNLLogicCone cone(reader, pis[i]);
       cone.run();

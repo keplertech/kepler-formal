@@ -276,16 +276,21 @@ int main(int argc, char** argv) {
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
   if (inputFormatType == FormatType::SNL) {
+    KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
+    MiterS.init();
     ScopeExtraction extractor(top0, top1);
     extractor.collectVerificationScopes();
+    extractor.cleanVerificationScopes(MiterS.getPIs0(), MiterS.getPIs1());
+    
     for (auto scopes : extractor.getScopesToVerify()) {
-      SPDLOG_INFO("Looiking at scope: {} ",
+      SPDLOG_INFO("Looking at scope: {} ",
                   scopes.first->getName().getString());
-      std::string scopeLogFile = (logFileName.empty() ? "kf_" : logFileName) + "_" +
-                                scopes.first->getName().getString() + ".txt";
+      // std::string scopeLogFile = (logFileName.empty() ? "kf_" : logFileName) + "_" +
+      //                           scopes.first->getName().getString() + ".txt";
       try {
-        KEPLER_FORMAL::MiterStrategy MiterS(scopes.first, scopes.second, logFileName);
-        if (MiterS.run()) {
+        KEPLER_FORMAL::MiterStrategy MiterScope(scopes.first, scopes.second, logFileName);
+        MiterScope.init();
+        if (MiterScope.run()) {
           SPDLOG_INFO("No difference was found for scope: {} , {}",
                       scopes.first->getName().getString(),
                       scopes.second->getName().getString());
@@ -307,6 +312,7 @@ int main(int argc, char** argv) {
   } else {
     try {
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
+      MiterS.init();
       if (MiterS.run()) {
         SPDLOG_INFO("No difference was found.");
       } else {

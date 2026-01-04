@@ -468,62 +468,64 @@ void MiterStrategy::normalizeOutputs(
   }
 }
 
-bool MiterStrategy::run() {
+void MiterStrategy::init() {
   ensureLoggerInitialized();
   logger->info("MiterStrategy::run starting");
-
   // build both sets of POs
   topInit_ = NLUniverse::get()->getTopDesign();
   NLUniverse* univ = NLUniverse::get();
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
-  BuildPrimaryOutputClauses builder0;
-  builder0.collect();
+  builder0_.collect();
   naja::DNL::destroy();
+  PIs0_ = builder0_.getInputs();
   univ->setTopDesign(top1_);
-  BuildPrimaryOutputClauses builder1;
-  builder1.collect();
+  builder1_.collect();
+  PIs1_ = builder1_.getInputs();
+}
 
+bool MiterStrategy::run() {
+  NLUniverse* univ = NLUniverse::get();
   // normalize inputs and outputs
-  auto inputs0sort = builder0.getInputs();
-  auto inputs1sort = builder1.getInputs();
-  auto outputs0sort = builder0.getOutputs();
-  auto outputs1sort = builder1.getOutputs();
+  auto inputs0sort = builder0_.getInputs();
+  auto inputs1sort = builder1_.getInputs();
+  auto outputs0sort = builder0_.getOutputs();
+  auto outputs1sort = builder1_.getOutputs();
   logger->info("size of PIs in circuit 0: {}", inputs0sort.size());
   logger->info("size of PIs in circuit 1: {}", inputs1sort.size());
   logger->info("size of POs in circuit 0: {}", outputs0sort.size());
   logger->info("size of POs in circuit 1: {}", outputs1sort.size());
-  normalizeInputs(inputs0sort, inputs1sort, builder0.getInputsMap(),
-                  builder1.getInputsMap());
-  normalizeOutputs(outputs0sort, outputs1sort, builder0.getOutputsMap(),
-                   builder1.getOutputsMap());
+  normalizeInputs(inputs0sort, inputs1sort, builder0_.getInputsMap(),
+                  builder1_.getInputsMap());
+  normalizeOutputs(outputs0sort, outputs1sort, builder0_.getOutputsMap(),
+                   builder1_.getOutputsMap());
   // return false;
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
-  builder0.setInputs(inputs0sort);
-  builder0.setOutputs(outputs0sort);
+  builder0_.setInputs(inputs0sort);
+  builder0_.setOutputs(outputs0sort);
   naja::DNL::destroy();
   univ->setTopDesign(top1_);
-  builder1.setInputs(inputs1sort);
-  builder1.setOutputs(outputs1sort);
+  builder1_.setInputs(inputs1sort);
+  builder1_.setOutputs(outputs1sort);
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
-  builder0.build();
-  const auto& PIs0 = builder0.getInputs();
-  const auto& POs0 = builder0.getPOs();
-  auto outputs0 = builder0.getOutputs();
-  auto inputs2inputsIDs0 = builder0.getInputs2InputsIDs();
-  auto outputs2outputsIDs0 = builder0.getOutputs2OutputsIDs();
+  builder0_.build();
+  const auto& PIs0 = builder0_.getInputs();
+  const auto& POs0 = builder0_.getPOs();
+  auto outputs0 = builder0_.getOutputs();
+  auto inputs2inputsIDs0 = builder0_.getInputs2InputsIDs();
+  auto outputs2outputsIDs0 = builder0_.getOutputs2OutputsIDs();
   naja::DNL::destroy();
   univ->setTopDesign(top1_);
-  builder1.build();
-  const auto& PIs1 = builder1.getInputs();
-  const auto& POs1 = builder1.getPOs();
-  auto outputs1 = builder1.getOutputs();
-  auto inputs2inputsIDs1 = builder1.getInputs2InputsIDs();
-  auto outputs2outputsIDs1 = builder1.getOutputs2OutputsIDs();
+  builder1_.build();
+  const auto& PIs1 = builder1_.getInputs();
+  const auto& POs1 = builder1_.getPOs();
+  auto outputs1 = builder1_.getOutputs();
+  auto inputs2inputsIDs1 = builder1_.getInputs2InputsIDs();
+  auto outputs2outputsIDs1 = builder1_.getOutputs2OutputsIDs();
 
-  std::vector<naja::DNL::DNLID> outputs2DnlIds = builder1.getOutputs();
+  std::vector<naja::DNL::DNLID> outputs2DnlIds = builder1_.getOutputs();
 
   if (topInit_ != nullptr) {
     univ->setTopDesign(topInit_);
@@ -559,11 +561,11 @@ bool MiterStrategy::run() {
   if (sat) {
     logger->warn("Miter found a difference -> moving to analyze individual POs");
     for (size_t i = 0; i < POs0.size(); ++i) {
-      if (builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i)) !=
-          builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i))) {
+      if (builder0_.getOutputs2OutputsIDs().at(builder0_.getDNLIDforOutput(i)) !=
+          builder1_.getOutputs2OutputsIDs().at(builder1_.getDNLIDforOutput(i))) {
         // LCOV_EXCL_START
-        auto path0 = builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i));
-        auto path1 = builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i));
+        auto path0 = builder0_.getOutputs2OutputsIDs().at(builder0_.getDNLIDforOutput(i));
+        auto path1 = builder1_.getOutputs2OutputsIDs().at(builder1_.getDNLIDforOutput(i));
         // print path0
         for (const auto& name : path0.first) {
           logger->info("%s.", name.getString().c_str());
@@ -604,7 +606,7 @@ bool MiterStrategy::run() {
         // logger->info("Clause 0 {}", POs0[i]->toString());
         // logger->info("Clause 1 {}", POs1[i]->toString());
         // print path of index i
-        auto path0 = builder0.getOutputs2OutputsIDs().at(builder0.getDNLIDforOutput(i));
+        auto path0 = builder0_.getOutputs2OutputsIDs().at(builder0_.getDNLIDforOutput(i));
         std::string pathString = "";
         for (const auto& name : path0.first) {
           pathString += name.getString() + ".";
@@ -613,7 +615,7 @@ bool MiterStrategy::run() {
           pathString += std::to_string(id) + ".";
         }
         logger->info("Path of differing PO {}: {}", i, pathString);
-        auto path1 = builder1.getOutputs2OutputsIDs().at(builder1.getDNLIDforOutput(i));
+        auto path1 = builder1_.getOutputs2OutputsIDs().at(builder1_.getDNLIDforOutput(i));
         std::string pathString1 = "";
         for (const auto& name : path1.first) {
           pathString1 += name.getString() + ".";

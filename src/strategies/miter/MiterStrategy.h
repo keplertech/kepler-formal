@@ -5,6 +5,7 @@
 #include "BoolExpr.h"
 #include "DNL.h"
 #include <tbb/concurrent_vector.h>
+#include "BuildPrimaryOutputClauses.h"
 
 #pragma once
 
@@ -20,6 +21,8 @@ class MiterStrategy {
  public:
   MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& logFileName = "", const std::string& prefix = "");
 
+  void init();
+
   bool run();
 
   void normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
@@ -33,13 +36,18 @@ class MiterStrategy {
                         const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& outputs1Map);
   
   static std::string logFileName_;
+  const std::vector<naja::DNL::DNLID>& getPIs0() const { return PIs0_; }
+  const std::vector<naja::DNL::DNLID>& getPIs1() const { return PIs1_; }
  private:
   std::shared_ptr<BoolExpr> buildMiter(
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
       const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const;
-  
+  BuildPrimaryOutputClauses builder0_;
+  BuildPrimaryOutputClauses builder1_;
   static naja::NL::SNLDesign* top0_;
   static naja::NL::SNLDesign* top1_;
+  std::vector<naja::DNL::DNLID> PIs0_;
+  std::vector<naja::DNL::DNLID> PIs1_;
   tbb::concurrent_vector<BoolExpr> POs0_;
   tbb::concurrent_vector<BoolExpr> POs1_;
   std::vector<naja::DNL::DNLID> failedPOs_;

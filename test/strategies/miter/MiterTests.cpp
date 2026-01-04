@@ -579,6 +579,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   // test the miter strategy
   {
     MiterStrategy MiterS(top, topClone, "CaseC");
+    MiterS.init();
     EXPECT_FALSE(MiterS.run());
   }
   {
@@ -618,6 +619,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   // test the miter strategy again
   {
     MiterStrategy MiterS(top, topClone, "CaseD");
+    MiterS.init();
     EXPECT_TRUE(MiterS.run());
   }
   {
@@ -974,6 +976,7 @@ TEST_F(MiterTests, CoverDiff) {
   get(); 
   naja::DNL::destroy();
   MiterStrategy MiterS(topClone0, topClone1, "CaseD");
+  MiterS.init();
     EXPECT_FALSE(MiterS.run());
 }
 
