@@ -16,7 +16,7 @@ void SNLLogicCone::run() {
     currentIterationDrivers.clear();
     for (const auto& isoID : newIterationIsos) {
       if (isoID != naja::DNL::DNLID_MAX) {
-        coneIsos_.push_back(isoID);
+        coneIsos_.insert(isoID);
         for (auto driver :
              dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID).getDrivers()) {
           currentIterationDrivers.push_back(driver);
@@ -28,7 +28,7 @@ void SNLLogicCone::run() {
       if (std::find(PIs_.begin(), PIs_.end(), driver) != PIs_.end()) {
         continue;  // Skip PIs and loops(?)
       }
-      DNLInstanceFull inst =
+      const DNLInstanceFull& inst =
           dnl_->getDNLTerminalFromID(driver).getDNLInstance();
       for (DNLID termID = inst.getTermIndexes().first;
            termID <= inst.getTermIndexes().second && termID != DNLID_MAX;
@@ -36,7 +36,7 @@ void SNLLogicCone::run() {
         const DNLTerminalFull& term = dnl_->getDNLTerminalFromID(termID);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
-          if (std::find(coneIsos_.begin(), coneIsos_.end(), term.getIsoID()) ==
+          if (coneIsos_.find(term.getIsoID())  ==
               coneIsos_.end()) {
             newIterationIsos.push_back(term.getIsoID());
           }
