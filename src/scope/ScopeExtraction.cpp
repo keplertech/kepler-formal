@@ -158,11 +158,6 @@ void ScopeExtraction::collectVerificationScopes() {
   }
 }
 
-// Provide extracted verification scopes for debugging purposes by:
-// 1 Collecting scopes via collectVerificationScopes()
-// 2 Collecting logic cones for all differ elements in the scopes with
-// SNLLogicCone 4 Deleting all elements not in the collected cones from the
-// cloned tops
 void ScopeExtraction::cleanVerificationScopes(
     const std::vector<naja::DNL::DNLID>& pis0,
     const std::vector<naja::DNL::DNLID>& pis1) {
@@ -243,6 +238,7 @@ void ScopeExtraction::cleanVerificationScopes(
         isosToKeep.insert(isoID);
       }
     }
+    dnl = naja::DNL::get();
     naja::NAJA_OPT::LoadlessLogicRemover remover;
     auto loadlessInstances = remover.getLoadlessInstances(*dnl, isosToKeep);
     remover.removeLoadlessInstances(top, loadlessInstances);
