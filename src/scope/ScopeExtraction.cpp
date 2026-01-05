@@ -238,7 +238,6 @@ void ScopeExtraction::cleanVerificationScopes(
         isosToKeep.insert(isoID);
       }
     }
-    dnl = naja::DNL::get();
     naja::NAJA_OPT::LoadlessLogicRemover remover;
     auto loadlessInstances = remover.getLoadlessInstances(*dnl, isosToKeep);
     remover.removeLoadlessInstances(top, loadlessInstances);
