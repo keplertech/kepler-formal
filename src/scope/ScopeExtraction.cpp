@@ -230,7 +230,7 @@ void ScopeExtraction::cleanVerificationScopes(
         }
       }
     }
-    
+    // After this loop the dnl variable contain deleted DNL as cone destroy it in constructor for safety 
     for (const auto& reader : readers) {
       KEPLER_FORMAL::SNLLogicCone cone(reader, pis[i]);
       cone.run();
@@ -238,9 +238,8 @@ void ScopeExtraction::cleanVerificationScopes(
         isosToKeep.insert(isoID);
       }
     }
-    dnl = naja::DNL::get();
     naja::NAJA_OPT::LoadlessLogicRemover remover;
-    auto loadlessInstances = remover.getLoadlessInstances(*dnl, isosToKeep);
+    auto loadlessInstances = remover.getLoadlessInstances(*naja::DNL::get(), isosToKeep);
     remover.removeLoadlessInstances(top, loadlessInstances);
   }
 }
