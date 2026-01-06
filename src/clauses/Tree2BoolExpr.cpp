@@ -47,7 +47,9 @@ TermsPair& getTErmsETS() {
   initTermsETS();
   size_t idx = tbb::this_task_arena::current_thread_index();
   if (idx >= termsETSvector.size() || termsETSvector[idx] == nullptr) {
+    // LCOV_EXCL_START
     throw std::runtime_error("getTErmsETS: not initialized for this thread");
+    // LCOV_EXCL_STOP
   }
   return *termsETSvector[idx];
 }
@@ -108,7 +110,9 @@ RelevantPair& getRelevantETS() {
   initRelevantETS();
   size_t idx = tbb::this_task_arena::current_thread_index();
   if (idx >= relevantETSvector.size() || relevantETSvector[idx] == nullptr) {
+    // LCOV_EXCL_START
     throw std::runtime_error("getRelevantETS: not initialized for this thread");
+    // LCOV_EXCL_STOP
   }
   return *relevantETSvector[idx];
 }
@@ -142,7 +146,9 @@ void clearRelevantETS() {
 void setRelevantETS(size_t i, bool b) {
   auto& relevantLocal = getRelevantETS();
   if (i >= relevantLocal.second) {
+    // LCOV_EXCL_START
     assert(false && "setRelevantETS: index out of range");
+    // LCOV_EXCL_STOP
   }
   relevantLocal.first[i] = b;
 }
@@ -150,7 +156,9 @@ void setRelevantETS(size_t i, bool b) {
 bool getRelevantETS(size_t i) {
   auto& relevantLocal = getRelevantETS();
   if (i >= relevantLocal.second) {
+    // LCOV_EXCL_START
     throw std::out_of_range("getRelevantETS: index out of range");
+    // LCOV_EXCL_STOP
   }
   return relevantLocal.first[i];
 }
@@ -191,7 +199,9 @@ MemoPair& getMemoETS() {
   initMemoETS();
   size_t idx = tbb::this_task_arena::current_thread_index();
   if (idx >= memoETSvector.size() || memoETSvector[idx] == nullptr) {
+    // LCOV_EXCL_START
     throw std::runtime_error("getMemoETS: not initialized for this thread");
+    // LCOV_EXCL_STOP
   }
   return *memoETSvector[idx];
 }
@@ -273,7 +283,9 @@ ChildFETSPair& getChildFETS() {
   initChildFETS();
   size_t idx = tbb::this_task_arena::current_thread_index();
   if (idx >= childFETSvector.size() || childFETSvector[idx] == nullptr) {
+    // LCOV_EXCL_START
     throw std::runtime_error("getChildFETS: not initialized for this thread");
+    // LCOV_EXCL_STOP
   }
   return *childFETSvector[idx];
 }
@@ -440,7 +452,11 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
           }
           #endif
         }
-        if (node->parentIds.empty()) { throw std::runtime_error("Input node has no parent"); }
+        if (node->parentIds.empty()) { 
+          // LCOV_EXCL_START
+          throw std::runtime_error("Input node has no parent"); 
+          // LCOV_EXCL_STOP
+        }
         assert(node->parentIds.size() == 1);
         auto parent = node->tree->nodeFromId(node->parentIds[0]);
         assert(parent && parent->type == SNLTruthTableTree::Node::Type::P);
@@ -449,7 +465,9 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
           assert(parent->data.termid < varNames.size());
         }
         if (varNames[parent->data.termid] == (size_t)-1) {
+          // LCOV_EXCL_START
           throw std::runtime_error("Input variable index is SIZE_MAX");
+          // LCOV_EXCL_STOP
         }
         if (varNames[parent->data.termid] == 0) {
            setMemoETS(id, BoolExpr::createFalse());

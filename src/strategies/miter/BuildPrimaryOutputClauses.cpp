@@ -201,12 +201,15 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
 
     if (!isSequential) {
+      uint64_t inputNum = 0;
       for (DNLID termId = instance.getTermIndexes().first;
            termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
            termId++) {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
+          uint64_t orderID = inputNum;
+          inputNum++;
           auto deps =
               SNLDesignModeling::getCombinatorialOutputs(term.getSnlBitTerm());
           // Collect all tt on the model
@@ -236,8 +239,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
           for (const auto& tt : tts) {
             const auto& ttDeps =
                 tt.getDependencies();  // expect std::vector<uint64_t>
-            uint64_t orderID =
-                term.getSnlBitTerm()->getOrderID();  // assume 0-based
+            // WRONG!!! We need the input's "orderID" not general terminal orderID
+            //uint64_t orderID =
+            //    term.getSnlBitTerm()->getOrderID();  // assume 0-based
 
             // If orderID is 1-based, uncomment:
             // if (orderID > 0) --orderID;
