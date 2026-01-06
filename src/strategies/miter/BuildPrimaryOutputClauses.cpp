@@ -38,7 +38,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   }
 
   for (DNLID leaf : dnl->getLeaves()) {
-    DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
+    const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     size_t numberOfInputs = 0, numberOfOutputs = 0;
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
@@ -174,7 +174,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
   for (DNLID leaf : dnl->getLeaves()) {
-    DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
+    const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     bool isSequential = false;
     std::vector<SNLBitTerm*> seqBitTerms;
 

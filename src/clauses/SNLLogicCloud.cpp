@@ -316,16 +316,14 @@ void SNLLogicCloud::compute() {
           namesOfDrivers.push_back(fullName);
         }
         // throw an error and separate names by comma
-        if (namesOfDrivers.size() > 1) {
-          std::string error = "Iso has multiple drivers: ";
-          for (size_t i = 0; i < namesOfDrivers.size(); i++) {
-            error += namesOfDrivers[i];
-            if (i != namesOfDrivers.size() - 1) {
-              error += ", ";
-            }
+        std::string error = "Iso has multiple drivers: ";
+        for (size_t i = 0; i < namesOfDrivers.size(); i++) {
+          error += namesOfDrivers[i];
+          if (i != namesOfDrivers.size() - 1) {
+            error += ", ";
           }
-          throw std::runtime_error(error);
         }
+        throw std::runtime_error(error);
       } else if (iso.getDrivers().empty()) {
         assert(iso.getDrivers().size() == 1 &&
                "Iso have no drivers and more than one reader, not supported");
