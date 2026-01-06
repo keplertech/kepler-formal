@@ -992,6 +992,15 @@ TEST(KeplerCliSubprocessTests, ExampleTestRun) {
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
+TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+
+  int rc = run_kepler_cli_with_args({"--config", "../../../../test/strategies/miter/test_config_naja_if_with_se.yaml"});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+}
+
+
 // Required main function for Google Test
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
