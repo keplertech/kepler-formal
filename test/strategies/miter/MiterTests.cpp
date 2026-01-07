@@ -1037,25 +1037,21 @@ TEST_F(MiterTests, multiDriver) {
   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("logic_0_net"));
-  net1->setType(SNLNet::Type::Assign0);
-  SNLNet* net2 = SNLScalarNet::create(top, NLName("logic_1_net"));
-  net2->setType(SNLNet::Type::Assign1);
-  SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
-  SNLNet* net4 = SNLScalarNet::create(top, NLName("and2_output_net"));
+ 
   // connect logic0 to and
   inst1->getInstTerm(logic0Out)->setNet(net1);
 
-  inst4->getInstTerm(andIn1)->setNet(net2);
-  inst4->getInstTerm(andIn2)->setNet(net2);
+  inst4->getInstTerm(andIn1)->setNet(net1);
+  inst4->getInstTerm(andIn2)->setNet(net1);
   // connect logic1 to and
-  inst2->getInstTerm(logic1Out)->setNet(net2);
+  inst2->getInstTerm(logic1Out)->setNet(net1);
   inst3->getInstTerm(andIn2)->setNet(net1);
-  inst3->getInstTerm(andIn1)->setNet(net4);
+  inst3->getInstTerm(andIn1)->setNet(net1);
   // connect the and instance output to the top output
-  inst3->getInstTerm(andOut)->setNet(net3);
-  topOut->setNet(net3);
-  inst4->getInstTerm(andOut)->setNet(net3);
-  topOut2->setNet(net3);
+  inst3->getInstTerm(andOut)->setNet(net1);
+  topOut->setNet(net1);
+  inst4->getInstTerm(andOut)->setNet(net1);
+  topOut2->setNet(net1);
   auto topClone = top->clone(NLName("topClone"));
   // 11. create DNL
   MiterStrategy MiterS(top, topClone, "MD");
