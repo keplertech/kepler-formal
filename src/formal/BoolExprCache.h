@@ -18,9 +18,9 @@ enum class Op { VAR, AND, OR, NOT, XOR, NONE };
 struct BoolExprCacheKey {
   Op op;
   size_t varId;
-  const std::shared_ptr<BoolExpr>&
+  std::shared_ptr<BoolExpr>
       l;  // raw pointer — not owning; use index/ptr identity for the key
-  const std::shared_ptr<BoolExpr>& r;  // raw pointer
+  std::shared_ptr<BoolExpr> r;  // raw pointer
 };
 
 class BoolExprCache {

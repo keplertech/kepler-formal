@@ -276,10 +276,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
               if (localBit >= 64) {
                 // std::fprintf(stderr, "localBit out of range: %llu\n",
                 //             static_cast<unsigned long long>(localBit));
-                break;
+                continue;
               }
 
               // Correct shift using 1ULL and parentheses
+              assert(localBit < 64);
               uint64_t mask = (1ULL << localBit);
               // std::printf("mask = 0x%llx\n", static_cast<unsigned long
               // long>(mask));
