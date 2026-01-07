@@ -62,7 +62,9 @@ class BuildPrimaryOutputClauses {
 
   tbb::concurrent_vector<std::shared_ptr<BoolExpr>> POs_;
   std::vector<naja::DNL::DNLID> inputs_;
+  std::vector<bool> IsPIs_;
   std::vector<naja::DNL::DNLID> outputs_;
+  std::vector<bool> IsPOs_;
   std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID> inputsMap_;
   std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID> outputsMap_;
   std::map<naja::DNL::DNLID,

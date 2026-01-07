@@ -9,23 +9,16 @@ namespace KEPLER_FORMAL {
 class SNLLogicCloud {
  public:
   SNLLogicCloud(naja::DNL::DNLID seedOutputTerm,
-                const std::vector<naja::DNL::DNLID>& PIs,
-                const std::vector<naja::DNL::DNLID>& POs)
-      : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()) {
-    PIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
-    for (auto pi : PIs) {
-      PIs_[pi] = true;
-    }
-    POs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
-    for (auto po : POs) {
-      POs_[po] = true;
-    }
+                const std::vector<bool>& PIs,
+                const std::vector<bool>& POs)
+      : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()),
+        PIs_(PIs), POs_(POs) {
   }
   void compute();
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);
   SNLTruthTableTree& getTruthTable() { return table_; }
-  const std::vector<naja::DNL::DNLID>& getInputs() const {
+  const std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& getInputs() const {
     return currentIterationInputs_;
   }
   // Get all inputs from the tree SNLTruthTableTree directly
@@ -51,11 +44,11 @@ class SNLLogicCloud {
 
  private:
   naja::DNL::DNLID seedOutputTerm_;
-  std::vector<naja::DNL::DNLID> currentIterationInputs_;
+  std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>> currentIterationInputs_;
   SNLTruthTableTree table_;
   const naja::DNL::DNLFull& dnl_;
-  std::vector<bool> PIs_;
-  std::vector<bool> POs_;
+  const std::vector<bool>& PIs_;
+  const std::vector<bool>& POs_;
 };
 
 }  // namespace KEPLER_FORMAL

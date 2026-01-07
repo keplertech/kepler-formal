@@ -458,7 +458,7 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
           // LCOV_EXCL_STOP
         }
         assert(node->parentIds.size() == 1);
-        auto parent = node->tree->nodeFromId(node->parentIds[0]);
+        const std::shared_ptr<SNLTruthTableTree::Node>& parent = node->tree->nodeFromId(node->parentIds[0]);
         assert(parent && parent->type == SNLTruthTableTree::Node::Type::P);
         if (parent->data.termid >= varNames.size()) {
           DEBUG_LOG("varNames size: %zu, parent data.termid: %zu\n", varNames.size(), (size_t)parent->data.termid);
@@ -508,11 +508,13 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
         }
 
         // collect the indices of relevant vars
-        std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> relIdx;
-        for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) relIdx.push_back(j); }
+        //std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> relIdx;
+        //for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) relIdx.push_back(j); }
+        size_t numRelIdx = 0;
+        for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) numRelIdx++; }
 
         // if nothing matters, fall back to constant-false
-        if (relIdx.empty()) {
+        if (numRelIdx == 0) {
           setMemoETS(id, BoolExpr::createFalse());
         } else {
           // build the DNF terms
@@ -523,7 +525,11 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
             std::shared_ptr<BoolExpr> term = nullptr;
             bool firstLit = true;
             std::shared_ptr<BoolExpr> lit = nullptr;
-            for (uint32_t j : relIdx) {
+            //for (uint32_t j : relIdx) {
+            for (uint32_t j = 0; j < k; ++j) { 
+              if (!getRelevantETS(j)) {
+                continue;
+              }
               bool bit1 = ((m >> j) & 1) != 0;
               lit = bit1 ? getChildFETS(j) : BoolExpr::Not(getChildFETS(j));
               if (firstLit) { term = lit; firstLit = false; }

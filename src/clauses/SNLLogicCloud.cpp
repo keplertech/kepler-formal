@@ -87,7 +87,7 @@ size_t sizeOfCurrentIterationInputsETS() {
   return getCurrentIterationInputsETS().second;
 }
 
-void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID>& res) {
+void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& res) {
   res.clear();
   auto& current = getCurrentIterationInputsETS();
   for (size_t i = 0; i < current.second; i++) {
@@ -130,6 +130,72 @@ void copyNewIterationInputsETStoCurrent() {
   assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
 }
 
+// implement same for std::vector<
+//        std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+//        tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
+//        inputsToMerge;
+
+tbb::enumerable_thread_specific<
+    std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+                     tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+                                                 naja::DNL::DNLID>>>,
+                  size_t>>
+    inputsToMergeETS;
+
+tbb::concurrent_vector<
+    std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+                         tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+                                                     naja::DNL::DNLID>>>,
+                  size_t>*>
+    inputsToMergeETSvector;
+
+void initInputsToMergeETS() {
+  if (inputsToMergeETSvector.size() <=
+      tbb::this_task_arena::current_thread_index()) {
+    for (size_t i = inputsToMergeETSvector.size();
+         i <= tbb::this_task_arena::current_thread_index(); i++) {
+      inputsToMergeETSvector.push_back(nullptr);
+    }
+  }
+  if (inputsToMergeETSvector
+          [tbb::this_task_arena::current_thread_index()] == nullptr) {
+    inputsToMergeETSvector[tbb::this_task_arena::current_thread_index()] =
+        &inputsToMergeETS.local();
+  }
+}
+
+std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+                      tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+                                                  naja::DNL::DNLID>>>, size_t>&
+getInputsToMergeETS() {
+  initInputsToMergeETS();
+  return *inputsToMergeETSvector
+      [tbb::this_task_arena::current_thread_index()];
+}
+
+void clearInputsToMergeETS() {
+  auto& inputsToMerge = getInputsToMergeETS();
+  inputsToMerge.second = 0;
+}
+
+void pushBackInputsToMergeETS(
+    const std::pair<naja::DNL::DNLID, naja::DNL::DNLID>& input) {
+  auto& inputsToMerge = getInputsToMergeETS();
+  auto& vec = inputsToMerge.first;
+  auto& sz = inputsToMerge.second;
+  if (vec.size() > sz) {
+    vec[sz] = input;
+    sz++;
+    return;
+  }
+  vec.push_back(input);
+  sz++;
+}
+
+size_t sizeOfInputsToMergeETS() {
+  return getInputsToMergeETS().second;
+}
+
 // #define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
@@ -152,6 +218,7 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 void SNLLogicCloud::compute() {
   // std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>
   // newIterationInputs;
+  //initInputsToMergeETS();
   initNewIterationInputsETS();
   initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
@@ -159,12 +226,12 @@ void SNLLogicCloud::compute() {
   DEBUG_LOG("---- Begin!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() ||
       isOutput(seedOutputTerm_)) {
-    auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+    const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
     // LCOV_EXCL_START
     if (iso.getDrivers().size() > 1) {
       
-      for (auto driver : iso.getDrivers()) {
+      for (const auto& driver : iso.getDrivers()) {
         DEBUG_LOG("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
                                       .getSnlBitTerm()
                                       ->getName()
@@ -182,8 +249,8 @@ void SNLLogicCloud::compute() {
       throw std::runtime_error(error);
     }
     // LCOV_EXCL_STOP
-    auto driver = iso.getDrivers().front();
-    auto inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+    const auto& driver = iso.getDrivers().front();
+    const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     if (isInput(driver)) {
       pushBackCurrentIterationInputsETS(driver);
       table_ = SNLTruthTableTree(inst.getID(), driver,
@@ -212,7 +279,7 @@ void SNLLogicCloud::compute() {
     assert(table_.isInitialized() &&
            "Truth table for seed output term is not initialized");
   } else {
-    auto inst = dnl_.getDNLInstanceFromID(seedOutputTerm_);
+    const auto& inst = dnl_.getDNLInstanceFromID(seedOutputTerm_);
     for (DNLID termID = inst.getTermIndexes().first;
          termID <= inst.getTermIndexes().second; termID++) {
       const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
@@ -246,7 +313,7 @@ void SNLLogicCloud::compute() {
     }
   }
 
-  std::set<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>> handledTerms;
+  std::set<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>, std::less<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>, tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>> handledTerms;
   size_t iter = 0;
 
   while (!reachedPIs) {
@@ -259,14 +326,17 @@ void SNLLogicCloud::compute() {
     DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n",
               table_.size(), sizeOfCurrentIterationInputsETS());
 
-    std::vector<
-        std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-        tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
-        inputsToMerge;
+    // std::vector<
+    //     std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+    //     tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
+    //     inputsToMerge;
+    clearInputsToMergeETS();
+
+    //auto& inputsToMerge = getInputsToMergeETS();
 
     size_t sizeOfCurrentInputs = sizeOfCurrentIterationInputsETS();
     for (size_t i = 0; i < sizeOfCurrentInputs; i++) {
-      auto input = getCurrentIterationInputsETS().first[i];
+      const auto& input = getCurrentIterationInputsETS().first[i];
       if (isInput(input) /*|| isOutput(input)*/) {
         pushBackNewIterationInputsETS(input);
         DEBUG_LOG("Adding input id: %zu %s\n", input,
@@ -275,16 +345,18 @@ void SNLLogicCloud::compute() {
                       ->getName()
                       .getString()
                       .c_str());
-        inputsToMerge.push_back(
+        // inputsToMerge.push_back(
+        //     {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
+        pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
         continue;
       }
 
-      auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+      const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
           dnl_.getDNLTerminalFromID(input).getIsoID());
       DEBUG_LOG("number of drivers: %zu\n", iso.getDrivers().size());
 
-      for (auto driver : iso.getDrivers()) {
+      for (const auto& driver : iso.getDrivers()) {
         DEBUG_LOG("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
                                       .getSnlBitTerm()
                                       ->getName()
@@ -294,27 +366,28 @@ void SNLLogicCloud::compute() {
 
       if (iso.getDrivers().size() >= 1) {
         // proper error with names of all the drivers
-        std::vector<std::string> namesOfDrivers;
-        for (auto dnlid : iso.getDrivers()) {
-          auto driver = dnl_.getDNLTerminalFromID(dnlid);
-          auto path = driver.getDNLInstance().getPath().getPathNames();
-          std::string fullName;
-          for (size_t i = 0; i < path.size(); i++) {
-            fullName += path[i].getString();
-            if (i != path.size() - 1) {
-              fullName += ".";
-            }
-          }
-          // add terminal name and bit
-          std::string termName =
-              driver.getSnlBitTerm()->getName().getString();
-          fullName += "." + termName;
-          // add bit
-          fullName += std::to_string(driver.getSnlBitTerm()->getBit());
-          namesOfDrivers.push_back(fullName);
-        }
+        
         // throw an error and separate names by comma
-        if (namesOfDrivers.size() > 1) {
+        if (iso.getDrivers().size() > 1) {
+          std::vector<std::string> namesOfDrivers;
+          for (const auto& dnlid : iso.getDrivers()) {
+            const auto& driver = dnl_.getDNLTerminalFromID(dnlid);
+            const auto& path = driver.getDNLInstance().getPath().getPathNames();
+            std::string fullName;
+            for (size_t i = 0; i < path.size(); i++) {
+              fullName += path[i].getString();
+              if (i != path.size() - 1) {
+                fullName += ".";
+              }
+            }
+            // add terminal name and bit
+            std::string termName =
+                driver.getSnlBitTerm()->getName().getString();
+            fullName += "." + termName;
+            // add bit
+            fullName += std::to_string(driver.getSnlBitTerm()->getBit());
+            namesOfDrivers.push_back(fullName);
+          }
           std::string error = "Iso has multiple drivers: ";
           for (size_t i = 0; i < namesOfDrivers.size(); i++) {
             error += namesOfDrivers[i];
@@ -329,7 +402,7 @@ void SNLLogicCloud::compute() {
                "Iso have no drivers and more than one reader, not supported");
       }
 
-      auto driver = iso.getDrivers().front();
+      const auto& driver = iso.getDrivers().front();
       if (isInput(driver) /* || isOutput(driver)*/) {
         pushBackNewIterationInputsETS(driver);
         DEBUG_LOG(
@@ -348,14 +421,16 @@ void SNLLogicCloud::compute() {
                 .getString()
                 .c_str(),
             driver);
-        inputsToMerge.push_back(
+        //inputsToMerge.push_back(
+        //    {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
+        pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
         continue;
       }
 
-      auto inst = dnl_.getDNLInstanceFromID(
+      const auto& inst = dnl_.getDNLInstanceFromID(
           dnl_.getDNLTerminalFromID(driver).getDNLInstance().getID());
-      auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
+      //auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
       // if (!model
       //          ->getTruthTable(dnl_.getDNLTerminalFromID(driver)
       //                              .getSnlBitTerm()
@@ -385,7 +460,8 @@ void SNLLogicCloud::compute() {
                     ->getName()
                     .getString()
                     .c_str());
-      inputsToMerge.push_back({inst.getID(), driver});
+      //inputsToMerge.push_back({inst.getID(), driver});
+      pushBackInputsToMergeETS({inst.getID(), driver});
 
       for (DNLID termID = inst.getTermIndexes().first;
            termID <= inst.getTermIndexes().second; termID++) {
@@ -418,13 +494,14 @@ void SNLLogicCloud::compute() {
       }
     }
 
-    if (inputsToMerge.empty()) {
+    if (sizeOfInputsToMergeETS() == 0) {
       break;
     }
 
     DEBUG_LOG("--- Merging truth tables with %zu inputs\n",
-              inputsToMerge.size());
-    table_.concatFull(inputsToMerge);
+              sizeOfInputsToMergeETS());
+    table_.concatFull(getInputsToMergeETS().first,
+                      sizeOfInputsToMergeETS());
     reachedPIs = true;
     size_t sizeOfNewInputs = sizeOfNewIterationInputsETS();
     for (size_t i = 0; i < sizeOfNewInputs; i++) {
@@ -440,7 +517,7 @@ void SNLLogicCloud::compute() {
   copyNewIterationInputsETStoCurrent();
   copyCurrentIterationInputsETS(currentIterationInputs_);
   assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
-  for (auto input : currentIterationInputs_) {
+  for (const auto& input : currentIterationInputs_) {
     assert(isInput(input));
   }
 }

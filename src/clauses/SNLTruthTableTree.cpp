@@ -241,10 +241,10 @@ void SNLTruthTableTree::updateBorderLeaves() {
   size_t externalIndex = 0;
   if (rootId_ == kInvalidId)
     return;
-  std::vector<uint32_t> stk;
+  std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> stk;
   stk.reserve(64);
   stk.push_back(rootId_);
-  std::set<uint32_t> visited;
+  std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
@@ -471,7 +471,7 @@ void SNLTruthTableTree::concatFull(
     const std::vector<
         std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
         tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>&
-        tables) {
+        tables, size_t size) {
 #ifdef DEBUG_CHECKS
   // print tables
   DEBUG_LOG("Tables in concatFull:\n");
@@ -642,9 +642,9 @@ void SNLTruthTableTree::concatFull(
   std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> newBorderLeaves;
   size_t newInputs = 0;
   size_t index = 0;
-  assert(tables.size() == borderLeaves_.size());
+  assert(size == borderLeaves_.size());
   numExternalInputs_ = 0;
-  for (size_t i = 0; i < tables.size(); ++i) {
+  for (size_t i = 0; i < size; ++i) {
     // For each entry in table to merge
     assert(newBorderLeaves.size() == newInputs);
     // Get the relevant border leaf based on order -> assuming identical order
@@ -1031,13 +1031,15 @@ void SNLTruthTableTree::finalize() {
     return;
 
   // Build lookup maps
-  std::unordered_map<uint32_t, std::shared_ptr<Node>> mapById;
-  std::unordered_map<uint32_t, std::shared_ptr<Node>> mapByNodeID;
+  std::unordered_map<uint32_t, std::shared_ptr<Node>, std::hash<uint32_t>, std::equal_to<uint32_t>,
+   tbb::tbb_allocator<std::pair<const uint32_t, std::shared_ptr<Node>>>> mapById;
+  std::unordered_map<uint32_t, std::shared_ptr<Node>, std::hash<uint32_t>, std::equal_to<uint32_t>,
+   tbb::tbb_allocator<std::pair<const uint32_t, std::shared_ptr<Node>>>> mapByNodeID;
   mapById.reserve(nodes_.size() * 2);
   mapByNodeID.reserve(nodes_.size() * 2);
 
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    auto sp = nodes_[i];
+    const std::shared_ptr<Node>& sp = nodes_[i];
     if (!sp)
       continue;
     if (sp->nodeID != kInvalidId)
@@ -1047,16 +1049,17 @@ void SNLTruthTableTree::finalize() {
   }
 
   // Resolve children entries to shared_ptrs for every node
-  std::vector<std::vector<std::shared_ptr<Node>>> resolvedChildren(
+  std::vector<std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>>,
+    tbb::tbb_allocator<std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>>>> resolvedChildren(
       nodes_.size());
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    auto sp = nodes_[i];
+    const std::shared_ptr<Node>& sp = nodes_[i];
     if (!sp)
       continue;
     resolvedChildren[i].reserve(sp->childrenIds.size());
     for (size_t j = 0; j < sp->childrenIds.size(); ++j) {
       uint32_t cid = sp->childrenIds[j];
-      std::shared_ptr<Node> target;
+      std::shared_ptr<Node> target = nullptr;
 
       // try match by exact nodeID
       auto it = mapById.find(cid);
@@ -1094,13 +1097,20 @@ void SNLTruthTableTree::finalize() {
   // Now assign canonical ids and remap childrenIds/parentId
   for (size_t i = 0; i < nodes_.size(); ++i) {
     uint32_t canonicalId = static_cast<uint32_t>(i) + kIdOffset;
-    auto sp = nodes_[i];
+    std::shared_ptr<Node>& sp = nodes_[i];
     sp->nodeID = canonicalId;
     sp->tree = this;
   }
 
   // Build reverse map from shared_ptr pointer (address) to canonical id
-  std::unordered_map<const Node*, uint32_t> ptrToId;
+  using MapAlloc = tbb::tbb_allocator<std::pair<const Node* const, uint32_t>>;
+
+  std::unordered_map<const Node*,
+                   uint32_t,
+                   std::hash<const Node*>,
+                   std::equal_to<const Node*>,
+                   MapAlloc> ptrToId;
+
   ptrToId.reserve(nodes_.size() * 2);
   for (size_t i = 0; i < nodes_.size(); ++i) {
     auto sp = nodes_[i];
@@ -1169,10 +1179,10 @@ void SNLTruthTableTree::finalize() {
   size_t maxInput = 0;
   numExternalInputs_ = 0;
   bool anyInput = false;
-  std::vector<uint32_t> stk;
+  std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> stk;
   if (rootId_ != kInvalidId)
     stk.push_back(rootId_);
-  std::set<uint32_t> visited;
+  std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();

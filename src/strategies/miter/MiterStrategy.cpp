@@ -478,11 +478,15 @@ bool MiterStrategy::run() {
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
   BuildPrimaryOutputClauses builder0;
+  printf("Collecting POs for design 0: %s\n", top0_->getName().getString().c_str());
   builder0.collect();
+  printf("Collected %lu POs for design 0\n", builder0.getOutputs().size());
   naja::DNL::destroy();
   univ->setTopDesign(top1_);
   BuildPrimaryOutputClauses builder1;
+  printf("Collecting POs for design 1: %s\n", top1_->getName().getString().c_str());
   builder1.collect();
+  printf("Collected %lu POs for design 1\n", builder1.getOutputs().size());
 
   // normalize inputs and outputs
   auto inputs0sort = builder0.getInputs();

@@ -72,7 +72,7 @@ public:
               naja::DNL::DNLID termid);
 
   void concatFull(const std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-            tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>& tables);
+            tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>& tables, size_t size);
 
   uint32_t getRootId() const { return rootId_; }
   const std::shared_ptr<Node>& getRootShared() const { return nodeFromId(rootId_); }
