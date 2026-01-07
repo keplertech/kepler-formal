@@ -293,8 +293,6 @@ void SNLLogicCloud::compute() {
       }
 
       if (iso.getDrivers().size() >= 1) {
-        assert(iso.getDrivers().size() <= 1 &&
-               "Iso have more than one driver, not supported");
         // proper error with names of all the drivers
         std::vector<std::string> namesOfDrivers;
         for (auto dnlid : iso.getDrivers()) {

@@ -996,10 +996,10 @@ TEST_F(MiterTests, multiDriver) {
   SNLDesign* top =
       SNLDesign::create(libraryS, SNLDesign::Type::Standard, NLName("top"));
   univ->setTopDesign(top);
+  auto topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
   auto topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
-  auto topOut2 =
-      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
   // 3. create a logic_0 model
   SNLDesign* logic0 =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC0"));
@@ -1036,10 +1036,12 @@ TEST_F(MiterTests, multiDriver) {
   // set truth table for and model
   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
-  SNLNet* net1 = SNLScalarNet::create(top, NLName("logic_0_net"));
+  SNLNet* net1 = SNLScalarNet::create(top, NLName("net1"));
+  SNLNet* net2 = SNLScalarNet::create(top, NLName("net2"));
  
   // connect logic0 to and
   inst1->getInstTerm(logic0Out)->setNet(net1);
+  topIn->setNet(net1);
 
   inst4->getInstTerm(andIn1)->setNet(net1);
   inst4->getInstTerm(andIn2)->setNet(net1);
@@ -1049,14 +1051,137 @@ TEST_F(MiterTests, multiDriver) {
   inst3->getInstTerm(andIn1)->setNet(net1);
   // connect the and instance output to the top output
   inst3->getInstTerm(andOut)->setNet(net1);
-  topOut->setNet(net1);
-  inst4->getInstTerm(andOut)->setNet(net1);
-  topOut2->setNet(net1);
+  topOut->setNet(net2);
+  inst4->getInstTerm(andOut)->setNet(net2);
   auto topClone = top->clone(NLName("topClone"));
   // 11. create DNL
-  MiterStrategy MiterS(top, topClone, "MD");
+  MiterStrategy MiterS(top, topClone, "MultiDriver");
   // Expect throw in run
+  EXPECT_THROW(MiterS.run(), std::runtime_error);
+  naja::DNL::destroy();
+}
 
+// Test error for multiple drivers
+TEST_F(MiterTests, tt65In) {
+  // 1. Create SNL
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryS =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("Stadarts"));
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  // 2. Create a top model with one output
+  SNLDesign* top =
+      SNLDesign::create(libraryS, SNLDesign::Type::Standard, NLName("top"));
+  univ->setTopDesign(top);
+  auto topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+  auto topOut2 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out2"));
+  // 3. create a logic_0 model
+  SNLDesign* logic0 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC0"));
+  // add output to logic0
+  auto logic0Out =
+      SNLScalarTerm::create(logic0, SNLTerm::Direction::Output, NLName("out"));
+  // 4. create a logic_1 model
+  SNLDesign* logic1 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC1"));
+  // add output to logic0
+  auto logic1Out =
+      SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(logic0, SNLTruthTable(0, 0));
+  SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
+  // Create a model with 65 inputs and 1 output and set the truth table so 
+  // output is 1 only when all inputs are 0
+  SNLDesign* tt65InModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("TT65IN"));
+  std::vector<SNLScalarTerm*> tt65InTerms;
+  std::vector<SNLScalarTerm*> topOutTerms;
+  std::vector<SNLBitNet*> topOutNets;
+  for (int i = 0; i < 65; ++i) {
+    auto outTerm = SNLScalarTerm::create(tt65InModel, SNLTerm::Direction::Output,
+                                       NLName("out" + std::to_string(i)));
+    auto topOut = SNLScalarTerm::create(top, SNLTerm::Direction::Output,
+                                       NLName("in" + std::to_string(i)));
+    topOutTerms.push_back(topOut);
+
+    tt65InTerms.push_back(outTerm);
+    auto topOutNet = SNLScalarNet::create(top, NLName("in_net" + std::to_string(i)));
+    topOutNets.push_back(topOutNet);
+  }
+  auto tt65In = SNLScalarTerm::create(tt65InModel, SNLTerm::Direction::Input,
+                                        NLName("in"));
+  auto tt65In2 = SNLScalarTerm::create(tt65InModel, SNLTerm::Direction::Input,
+                                        NLName("in2"));
+  // set truth tables for all 65 outputs with and function for the 2 inputs
+  std::vector<SNLTruthTable> tt65InTables;
+  for (int i = 0; i < 65; ++i) {
+    tt65InTables.push_back(SNLTruthTable(2, 8));
+  }
+  SNLDesignModeling::setTruthTables(tt65InModel,tt65InTables);
+  // create the instance of the model in top
+  auto tt65InInst = SNLInstance::create(top, tt65InModel, NLName("tt65in"));
+  // 5. create a logic_0 instace in top
+  SNLInstance* inst1 = SNLInstance::create(top, logic0, NLName("logic0"));
+  // 6. create a logic_1 instace in top
+  SNLInstance* inst2 = SNLInstance::create(top, logic1, NLName("logic1"));
+  // create 64 nets that will be connected to the tt65In first 64 inputs
+  std::vector<SNLNet*> tt65InNets;
+  // connect the 65 outputs to the 65 top outputs
+  for (int i = 0; i < 65; ++i) {
+    tt65InInst->getInstTerm(tt65InTerms[i])->setNet(topOutNets[i]);
+    topOutTerms[i]->setNet(topOutNets[i]);
+  }
+  // connect the last on to the top in
+  
+  // 7. create a and model
+  SNLDesign* andModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
+
+  // add 2 inputs and 1 output to and
+  auto andIn1 =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in1"));
+  auto andIn2 =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("in2"));
+  auto andOut = SNLScalarTerm::create(andModel, SNLTerm::Direction::Output,
+                                      NLName("out"));
+  // 8. create a and instance in top
+  SNLInstance* inst3 = SNLInstance::create(top, andModel, NLName("and"));
+  SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
+  // set truth table for and model
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  // 9. connect all instances inputs
+  SNLNet* net1 = SNLScalarNet::create(top, NLName("net1"));
+  SNLNet* net2 = SNLScalarNet::create(top, NLName("net2"));
+  auto netIn = SNLScalarNet::create(top, NLName("net_in"));
+  // connect the 65th input to top in
+  // connect logic0 to and
+  inst1->getInstTerm(logic0Out)->setNet(net1);
+  topIn->setNet(netIn);
+
+  tt65InInst->getInstTerm(tt65In)->setNet(netIn);
+  tt65InInst->getInstTerm(tt65In2)->setNet(net1);
+  // connect out of tt65In to topOut2
+  auto net_tt65Out = SNLScalarNet::create(top, NLName("tt65out_net"));
+  topOut2->setNet(net_tt65Out);
+
+  inst4->getInstTerm(andIn1)->setNet(net1);
+  inst4->getInstTerm(andIn2)->setNet(net1);
+  // connect logic1 to and
+  inst2->getInstTerm(logic1Out)->setNet(net1);
+  inst3->getInstTerm(andIn2)->setNet(net1);
+  inst3->getInstTerm(andIn1)->setNet(net1);
+  // connect the and instance output to the top output
+  inst3->getInstTerm(andOut)->setNet(net1);
+  topOut->setNet(net2);
+  inst4->getInstTerm(andOut)->setNet(net2);
+  auto topClone = top->clone(NLName("topClone"));
+  // 11. create DNL
+  MiterStrategy MiterS(top, topClone, "MultiDriver");
+  // Expect throw in run
   EXPECT_THROW(MiterS.run(), std::runtime_error);
   naja::DNL::destroy();
 }
