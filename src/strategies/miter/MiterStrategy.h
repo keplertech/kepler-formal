@@ -40,8 +40,6 @@ class MiterStrategy {
   
   static naja::NL::SNLDesign* top0_;
   static naja::NL::SNLDesign* top1_;
-  tbb::concurrent_vector<BoolExpr> POs0_;
-  tbb::concurrent_vector<BoolExpr> POs1_;
   std::vector<naja::DNL::DNLID> failedPOs_;
   BoolExpr miterClause_;
   std::string prefix_;

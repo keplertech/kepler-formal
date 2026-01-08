@@ -8,6 +8,7 @@
 #include "Tree2BoolExpr.h"
 #include "SNLPath.h"
 #include <thread>
+#include <tbb/global_control.h>
 
 // #define DEBUG_PRINTS
 // #define DEBUG_CHECKS
@@ -418,9 +419,11 @@ void BuildPrimaryOutputClauses::build() {
   size_t processedOutputs = 0;
   // tbb::task_arena arena(20);
   //  init arena with automatic number of threads
-  unsigned hw = std::thread::hardware_concurrency(); 
-  if (hw == 0) hw = 1; // fallback 
-  tbb::task_arena arena(static_cast<int>(hw));
+  // unsigned hw = std::thread::hardware_concurrency(); 
+  // if (hw == 0) hw = 1; // fallback 
+  tbb::global_control gc(tbb::global_control::max_allowed_parallelism, 20);
+  tbb::task_arena arena(20);
+  arena.initialize();
   IsPIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
   for (auto pi : inputs_) {
     IsPIs_[pi] = true;
@@ -441,11 +444,15 @@ void BuildPrimaryOutputClauses::build() {
                .c_str());
 
     SNLLogicCloud cloud(out, IsPIs_, IsPOs_);
+    #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
+    #endif
     cloud.compute();
+    #ifdef DEBUG_CHECKS
     auto endComp = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds_comp = endComp - startComp;
     printf("Computation time for %lu: %f seconds\n", i, elapsed_seconds_comp.count());
+    #endif
     // //cloud.getTruthTable().print();
     // std::vector<DNLID> test1;
     // std::vector<DNLID> test2;
@@ -520,16 +527,24 @@ void BuildPrimaryOutputClauses::build() {
     //  }
     assert(POs_.size() - 1 >= i);
     // add run time counter here
+    #ifdef DEBUG_CHECKS
     auto startFin = std::chrono::steady_clock::now();    
+    #endif
     cloud.getTruthTable().finalize();
+    #ifdef DEBUG_CHECKS
     auto endFin = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds_fin = endFin - startFin;
     printf("Finalization time for %lu: %f seconds\n", i, elapsed_seconds_fin.count());
+    #endif
+    #ifdef DEBUG_CHECKS
     auto startConv = std::chrono::steady_clock::now();
+    #endif
     POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+    #ifdef DEBUG_CHECKS
     auto endConv = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds_conv = endConv - startConv;
     printf("Conversion time for %lu: %f seconds\n", i, elapsed_seconds_conv.count());
+    #endif
     cloud.destroy();
     // BoolExpr::getMutex().unlock();
     // printf("size of expr: %lu\n", POs_.back()->size());
