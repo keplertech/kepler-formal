@@ -555,12 +555,21 @@ void BuildPrimaryOutputClauses::build() {
       processOutput(i);
     }
   } else {
-    tbb::parallel_for(tbb::blocked_range<DNLID>(0, outputs_.size(), outputs_.size()/1000 <= 1000 && outputs_.size()/1000 > 0 ? outputs_.size()/1000 : 1000),
-                      [&](const tbb::blocked_range<DNLID>& r) {
-                        for (DNLID i = r.begin(); i < r.end(); ++i) {
-                          processOutput(i);
-                        }
-                      }, tbb::simple_partitioner());
+    // compute grain safely
+    size_t n = outputs_.size();
+    size_t default_grain = 1000;
+    size_t computed = (n >= 1000) ? (n / 1000) : 1; // never zero
+    size_t grain = std::max<size_t>(computed, default_grain); // or clamp as you prefer
+
+    tbb::parallel_for(
+      tbb::blocked_range<DNLID>(0, n, grain),
+      [&](const tbb::blocked_range<DNLID>& r) {
+        for (DNLID i = r.begin(); i < r.end(); ++i) {
+          processOutput(i);
+        }
+      },
+      tbb::static_partitioner()
+    );
   }
   destroy();  // Clean up DNL instance
 }
