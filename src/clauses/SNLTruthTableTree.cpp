@@ -1183,15 +1183,15 @@ void SNLTruthTableTree::finalize() {
     return;
   size_t nodeSize = nodes_.size();
   // Build lookup maps
-  std::unordered_map<uint32_t, std::shared_ptr<Node>, std::hash<uint32_t>, std::equal_to<uint32_t>,
-   tbb::tbb_allocator<std::pair<const uint32_t, std::shared_ptr<Node>>>> mapById;
-  std::unordered_map<uint32_t, std::shared_ptr<Node>, std::hash<uint32_t>, std::equal_to<uint32_t>,
-   tbb::tbb_allocator<std::pair<const uint32_t, std::shared_ptr<Node>>>> mapByNodeID;
+  std::unordered_map<uint32_t, Node*, std::hash<uint32_t>, std::equal_to<uint32_t>,
+   tbb::tbb_allocator<std::pair<const uint32_t, Node*>>> mapById;
+  std::unordered_map<uint32_t, Node*, std::hash<uint32_t>, std::equal_to<uint32_t>,
+   tbb::tbb_allocator<std::pair<const uint32_t, Node*>>> mapByNodeID;
   mapById.reserve(nodeSize * 2);
   mapByNodeID.reserve(nodeSize * 2);
 
   for (size_t i = 0; i < nodeSize; ++i) {
-    const std::shared_ptr<Node>& sp = nodes_[i];
+    Node* sp = nodes_[i].get();
     if (!sp)
       continue;
     if (sp->nodeID != kInvalidId)
@@ -1206,14 +1206,14 @@ void SNLTruthTableTree::finalize() {
   //    nodes_.size());
   reserveResolvedChildrenETS(nodeSize);
   for (size_t i = 0; i < nodeSize; ++i) {
-    const std::shared_ptr<Node>& sp = nodes_[i];
+    Node* sp = nodes_[i].get();
     if (!sp)
       continue;
     //resolvedChildren[i].reserve(sp->childrenIds.size());
     getResolvedChildrenETS().first[i].reserve(sp->childrenIds.size());
     for (size_t j = 0; j < sp->childrenIds.size(); ++j) {
       uint32_t cid = sp->childrenIds[j];
-      std::shared_ptr<Node> target = nullptr;
+      Node* target = nullptr;
 
       // try match by exact nodeID
       auto it = mapById.find(cid);
@@ -1230,7 +1230,7 @@ void SNLTruthTableTree::finalize() {
         if (cid >= kIdOffset) {
           size_t idx = (size_t)(cid - kIdOffset);
           if (idx < nodeSize) {
-            target = nodes_[idx];
+            target = nodes_[idx].get();
           }
         }
       }
@@ -1245,14 +1245,14 @@ void SNLTruthTableTree::finalize() {
         // LCOV_EXCL_STOP
       }
       //resolvedChildren[i].emplace_back(target);
-      getResolvedChildrenETS().first[i].emplace_back(target.get());
+      getResolvedChildrenETS().first[i].emplace_back(target);
     }
   }
 
   // Now assign canonical ids and remap childrenIds/parentId
   for (size_t i = 0; i < nodeSize; ++i) {
     uint32_t canonicalId = static_cast<uint32_t>(i) + kIdOffset;
-    const std::shared_ptr<Node>& sp = nodes_[i];
+    Node* sp = nodes_[i].get();
     sp->nodeID = canonicalId;
     sp->tree = this;
   }
@@ -1268,10 +1268,10 @@ void SNLTruthTableTree::finalize() {
   
   ptrToId.reserve(nodeSize * 2);
   for (size_t i = 0; i < nodeSize; ++i) {
-    const std::shared_ptr<Node>&  sp = nodes_[i];
+    Node*  sp = nodes_[i].get();
     if (!sp)
       continue;
-    ptrToId[sp.get()] = static_cast<uint32_t>(i) + kIdOffset;
+    ptrToId[sp] = static_cast<uint32_t>(i) + kIdOffset;
   }
 
   // Replace childrenIds with canonical ids and set parentId accordingly
@@ -1318,7 +1318,7 @@ void SNLTruthTableTree::finalize() {
     uint32_t newRoot = kInvalidId;
     auto itRoot = mapById.find(rootId_);
     if (itRoot != mapById.end()) {
-      Node* const sp = itRoot->second.get();
+      Node* const sp = itRoot->second;
       auto pit = ptrToId.find(sp);
       if (pit != ptrToId.end())
         newRoot = pit->second;
