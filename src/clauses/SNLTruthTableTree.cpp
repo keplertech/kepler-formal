@@ -83,23 +83,15 @@ void clearNewBorderLeavesETS() {
 //       nodes_.size());
 
 // prefer clear aliases so allocator types are consistent
-using NodePtr = std::shared_ptr<SNLTruthTableTree::Node>;
+using NodeRaw = SNLTruthTableTree::Node*;
+using NodeVecRaw = std::vector<NodeRaw, tbb::tbb_allocator<NodeRaw>>;
+using NodeVecVecRaw = std::vector<NodeVecRaw, tbb::tbb_allocator<NodeVecRaw>>;
+using ResolvedChildrenPairRaw = std::pair<NodeVecVecRaw, size_t>;
+tbb::enumerable_thread_specific<ResolvedChildrenPairRaw> resolvedChildrenETS;
 
-// inner vector: vector of NodePtr using TBB allocator
-using NodeVec = std::vector<NodePtr, tbb::tbb_allocator<NodePtr>>;
-
-// outer vector: vector of NodeVec using TBB allocator for NodeVec
-using NodeVecVec = std::vector<NodeVec, tbb::tbb_allocator<NodeVec>>;
-
-// final pair type
-using ResolvedChildrenPair = std::pair<NodeVecVec, size_t>;
-
-tbb::enumerable_thread_specific<ResolvedChildrenPair>
-    resolvedChildrenETS;
-
-tbb::concurrent_vector<ResolvedChildrenPair*>
+tbb::concurrent_vector<ResolvedChildrenPairRaw*>
     resolvedChildrenETSVector =
-        tbb::concurrent_vector<ResolvedChildrenPair*>(40, nullptr);
+        tbb::concurrent_vector<ResolvedChildrenPairRaw*>(40, nullptr);
 
 void initResolvedChildrenETS() {
   size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
@@ -117,7 +109,7 @@ void initResolvedChildrenETS() {
   }
 }
 
-ResolvedChildrenPair& getResolvedChildrenETS() {
+ResolvedChildrenPairRaw& getResolvedChildrenETS() {
   size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
   return *resolvedChildrenETSVector
       [idx];
@@ -128,8 +120,7 @@ size_t getSizeOfResolvedChildrenETS() {
 }
 
 void pushBackResolvedChildrenETS(
-    const std::vector<std::shared_ptr<SNLTruthTableTree::Node>,
-                      tbb::tbb_allocator<std::shared_ptr<SNLTruthTableTree::Node>>>&
+    NodeVecRaw&
         childVec) {
   auto& pair = getResolvedChildrenETS();
   auto& vec = pair.first;
@@ -159,8 +150,7 @@ void reserveResolvedChildrenETS(size_t n) {
   if (pair.first.size() < n) {
     for (size_t i = pair.first.size(); i < n; ++i) {
       pair.first.emplace_back(
-          std::vector<std::shared_ptr<SNLTruthTableTree::Node>,
-                      tbb::tbb_allocator<std::shared_ptr<SNLTruthTableTree::Node>>>());
+          NodeVecRaw());
     }
   }
 }
@@ -1191,16 +1181,16 @@ void SNLTruthTableTree::finalize() {
   // Step 0: quick sanity for root
   if (rootId_ == kInvalidId && nodes_.empty())
     return;
-
+  size_t nodeSize = nodes_.size();
   // Build lookup maps
   std::unordered_map<uint32_t, std::shared_ptr<Node>, std::hash<uint32_t>, std::equal_to<uint32_t>,
    tbb::tbb_allocator<std::pair<const uint32_t, std::shared_ptr<Node>>>> mapById;
   std::unordered_map<uint32_t, std::shared_ptr<Node>, std::hash<uint32_t>, std::equal_to<uint32_t>,
    tbb::tbb_allocator<std::pair<const uint32_t, std::shared_ptr<Node>>>> mapByNodeID;
-  mapById.reserve(nodes_.size() * 2);
-  mapByNodeID.reserve(nodes_.size() * 2);
+  mapById.reserve(nodeSize * 2);
+  mapByNodeID.reserve(nodeSize * 2);
 
-  for (size_t i = 0; i < nodes_.size(); ++i) {
+  for (size_t i = 0; i < nodeSize; ++i) {
     const std::shared_ptr<Node>& sp = nodes_[i];
     if (!sp)
       continue;
@@ -1214,8 +1204,8 @@ void SNLTruthTableTree::finalize() {
   //std::vector<std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>>,
   //  tbb::tbb_allocator<std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>>>> resolvedChildren(
   //    nodes_.size());
-  reserveResolvedChildrenETS(nodes_.size());
-  for (size_t i = 0; i < nodes_.size(); ++i) {
+  reserveResolvedChildrenETS(nodeSize);
+  for (size_t i = 0; i < nodeSize; ++i) {
     const std::shared_ptr<Node>& sp = nodes_[i];
     if (!sp)
       continue;
@@ -1239,7 +1229,7 @@ void SNLTruthTableTree::finalize() {
       if (!target) {
         if (cid >= kIdOffset) {
           size_t idx = (size_t)(cid - kIdOffset);
-          if (idx < nodes_.size()) {
+          if (idx < nodeSize) {
             target = nodes_[idx];
           }
         }
@@ -1250,17 +1240,17 @@ void SNLTruthTableTree::finalize() {
         fprintf(stderr,
                 "finalize: could not resolve child reference: parent_slot=%zu "
                 "parent_assigned_id=%u childPos=%zu childId=%u nodes=%zu\n",
-                i, sp->nodeID, j, cid, nodes_.size());
+                i, sp->nodeID, j, cid, nodeSize);
         throw std::logic_error("finalize: unresolved child id");
         // LCOV_EXCL_STOP
       }
       //resolvedChildren[i].emplace_back(target);
-      getResolvedChildrenETS().first[i].emplace_back(target);
+      getResolvedChildrenETS().first[i].emplace_back(target.get());
     }
   }
 
   // Now assign canonical ids and remap childrenIds/parentId
-  for (size_t i = 0; i < nodes_.size(); ++i) {
+  for (size_t i = 0; i < nodeSize; ++i) {
     uint32_t canonicalId = static_cast<uint32_t>(i) + kIdOffset;
     const std::shared_ptr<Node>& sp = nodes_[i];
     sp->nodeID = canonicalId;
@@ -1275,9 +1265,9 @@ void SNLTruthTableTree::finalize() {
                    std::hash<const Node*>,
                    std::equal_to<const Node*>,
                    MapAlloc> ptrToId;
-
-  ptrToId.reserve(nodes_.size() * 2);
-  for (size_t i = 0; i < nodes_.size(); ++i) {
+  
+  ptrToId.reserve(nodeSize * 2);
+  for (size_t i = 0; i < nodeSize; ++i) {
     const std::shared_ptr<Node>&  sp = nodes_[i];
     if (!sp)
       continue;
@@ -1285,14 +1275,14 @@ void SNLTruthTableTree::finalize() {
   }
 
   // Replace childrenIds with canonical ids and set parentId accordingly
-  for (size_t i = 0; i < nodes_.size(); ++i) {
+  for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
     sp->childrenIds.clear();
     const auto& resolvedChilde = getResolvedChildrenETS().first[i];
     sp->childrenIds.reserve(resolvedChilde.size());
     for (size_t j = 0; j < resolvedChilde.size(); ++j) {
       auto targ = resolvedChilde[j];
-      auto it = ptrToId.find(targ.get());
+      auto it = ptrToId.find(targ);
       if (it == ptrToId.end()) {
         // LCOV_EXCL_START
         fprintf(stderr,
@@ -1356,7 +1346,7 @@ void SNLTruthTableTree::finalize() {
                     std::hash<uint32_t>,
                     std::equal_to<uint32_t>,
                     tbb::tbb_allocator<uint32_t>> visited;
-  visited.reserve(nodes_.size() * 2);        // avoid rehashes; tune factor to expected size
+  visited.reserve(nodeSize * 2);        // avoid rehashes; tune factor to expected size
   visited.max_load_factor(0.7f);             // optional: control bucket density
 
   while (!stk.empty()) {

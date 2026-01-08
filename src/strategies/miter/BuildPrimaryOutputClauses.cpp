@@ -560,7 +560,7 @@ void BuildPrimaryOutputClauses::build() {
                         for (DNLID i = r.begin(); i < r.end(); ++i) {
                           processOutput(i);
                         }
-                      }, tbb::auto_partitioner());
+                      }, tbb::simple_partitioner());
   }
   destroy();  // Clean up DNL instance
 }
