@@ -72,19 +72,20 @@ void clearCurrentIterationInputsETS() {
 
 void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
   auto& currentIterationInputs = getCurrentIterationInputsETS();
-  auto& vec = currentIterationInputs.first;
-  auto& sz = currentIterationInputs.second;
-  if (vec.size() > sz) {
-    vec[sz] = input;
-    sz++;
-    return;
-  }
-  vec.emplace_back(input);
-  sz++;
+  // auto& vec = currentIterationInputs.first;
+  // auto& sz = currentIterationInputs.second;
+  // if (vec.size() > sz) {
+  //   vec[sz] = input;
+  //   sz++;
+  //   return;
+  // }
+  // vec.emplace_back(input);
+  // sz++;
+  currentIterationInputs.first.emplace_back(input);
 }
 
 size_t sizeOfCurrentIterationInputsETS() {
-  return getCurrentIterationInputsETS().second;
+  return getCurrentIterationInputsETS().first.size();
 }
 
 void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& res) {
@@ -99,28 +100,29 @@ void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_alloca
 
 void clearNewIterationInputsETS() {
   auto& newIterationInputs = getNewIterationInputsETS();
-  newIterationInputs.second = 0;
+  newIterationInputs.first.clear();
 }
 
 void pushBackNewIterationInputsETS(naja::DNL::DNLID input) {
-  auto& newIterationInputs = getNewIterationInputsETS();
-  auto& vec = newIterationInputs.first;
-  auto& sz = newIterationInputs.second;
-  if (vec.size() > sz) {
-    vec[sz] = input;
-    sz++;
-    return;
-  }
-  vec.emplace_back(input);
-  sz++;
+  // auto& newIterationInputs = getNewIterationInputsETS();
+  // auto& vec = newIterationInputs.first;
+  // auto& sz = newIterationInputs.second;
+  // if (vec.size() > sz) {
+  //   vec[sz] = input;
+  //   sz++;
+  //   return;
+  // }
+  // vec.emplace_back(input);
+  // sz++;
+  getNewIterationInputsETS().first.emplace_back(input);
 }
 
 bool emptyNewIterationInputsETS() {
-  return getNewIterationInputsETS().second == 0;
+  return getNewIterationInputsETS().first.empty();
 }
 
 size_t sizeOfNewIterationInputsETS() {
-  return getNewIterationInputsETS().second;
+  return getNewIterationInputsETS().first.size();
 }
 
 void copyNewIterationInputsETStoCurrent() {
@@ -179,25 +181,26 @@ getInputsToMergeETS() {
 
 void clearInputsToMergeETS() {
   auto& inputsToMerge = getInputsToMergeETS();
-  inputsToMerge.second = 0;
+  inputsToMerge.first.clear();
 }
 
 void pushBackInputsToMergeETS(
     const std::pair<naja::DNL::DNLID, naja::DNL::DNLID>& input) {
-  auto& inputsToMerge = getInputsToMergeETS();
-  auto& vec = inputsToMerge.first;
-  auto& sz = inputsToMerge.second;
-  if (vec.size() > sz) {
-    vec[sz] = input;
-    sz++;
-    return;
-  }
-  vec.emplace_back(input);
-  sz++;
+  // auto& inputsToMerge = getInputsToMergeETS();
+  // auto& vec = inputsToMerge.first;
+  // auto& sz = inputsToMerge.second;
+  // if (vec.size() > sz) {
+  //   vec[sz] = input;
+  //   sz++;
+  //   return;
+  // }
+  // vec.emplace_back(input);
+  // sz++;
+  getInputsToMergeETS().first.emplace_back(input);
 }
 
 size_t sizeOfInputsToMergeETS() {
-  return getInputsToMergeETS().second;
+  return getInputsToMergeETS().first.size();
 }
 
 // #define DEBUG_PRINTS

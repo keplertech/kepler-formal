@@ -56,25 +56,26 @@ BorderLeavesPair& getNewBorderLeavesETS() {
 }
 
 size_t getSizeOfNewBorderLeavesETS() {
-  return getNewBorderLeavesETS().second;
+  return getNewBorderLeavesETS().first.size();
 }
 
 void pushBackNewBorderLeavesETS(const KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf& leaf) {
-  auto& pair = getNewBorderLeavesETS();
-  auto& vec = pair.first;
-  auto& sz = pair.second;
-  if (vec.size() > sz) {
-    vec[sz] = leaf;
-    sz++;
-    return;
-  }
-  vec.emplace_back(leaf);
-  sz++;
+  // auto& pair = getNewBorderLeavesETS();
+  // auto& vec = pair.first;
+  // auto& sz = pair.second;
+  // if (vec.size() > sz) {
+  //   vec[sz] = leaf;
+  //   sz++;
+  //   return;
+  // }
+  // vec.emplace_back(leaf);
+  // sz++;
+  getNewBorderLeavesETS().first.emplace_back(leaf);
 }
 
 void clearNewBorderLeavesETS() {
   auto& pair = getNewBorderLeavesETS();
-  pair.second = 0;
+  pair.first.clear();
 }
 
 // same for
@@ -122,7 +123,7 @@ size_t getSizeOfResolvedChildrenETS() {
 void pushBackResolvedChildrenETS(
     NodeVecRaw&
         childVec) {
-  auto& pair = getResolvedChildrenETS();
+ /*  auto& pair = getResolvedChildrenETS();
   auto& vec = pair.first;
   auto& sz = pair.second;
   if (vec.size() > sz) {
@@ -131,15 +132,17 @@ void pushBackResolvedChildrenETS(
     return;
   }
   vec.emplace_back(childVec);
-  sz++;
+  sz++; */
+  getResolvedChildrenETS().first.emplace_back(childVec);
 }
 
 void clearResolvedChildrenETS() {
   auto& pair = getResolvedChildrenETS();
-  for (auto& childVec : pair.first) {
-    childVec.clear();
-  }
-  pair.second = 0;
+  // for (auto& childVec : pair.first) {
+  //   childVec.clear();
+  // }
+  // pair.second = 0;
+  pair.first.clear();
 }
 
 void reserveResolvedChildrenETS(size_t n) {

@@ -64,20 +64,21 @@ void clearTermsETS() {
   // if (termsLocal.first.size() > 1024) {
   //   termsLocal.first.clear();
   // }
-  termsLocal.second = 0;
+  termsLocal.first.clear();
 }
 
 void pushBackTermsETS(BoolExpr* term) {
-  auto& termsLocal = getTErmsETS();
-  auto& vec = termsLocal.first;
-  auto& sz = termsLocal.second;
-  if (vec.size() > sz) {
-    vec[sz] = term;
-    sz++;
-    return;
-  }
-  vec.emplace_back(term);
-  sz++;
+  // auto& termsLocal = getTErmsETS();
+  // auto& vec = termsLocal.first;
+  // auto& sz = termsLocal.second;
+  // if (vec.size() > sz) {
+  //   vec[sz] = term;
+  //   sz++;
+  //   return;
+  // }
+  // vec.emplace_back(term);
+  // sz++;
+  getTErmsETS().first.emplace_back(term);
 }
 
 void reserveTermsETS(size_t n) {
@@ -87,7 +88,7 @@ void reserveTermsETS(size_t n) {
 }
 
 bool emptyTermsETS() {
-  return getTErmsETS().second == 0;
+  return getTErmsETS().first.empty();
 }
 
 // same for std::vector<bool, tbb::tbb_allocator<bool>>
@@ -127,7 +128,7 @@ void clearRelevantETS() {
   // if (relevantLocal.first.size() > 1024) {
   //   relevantLocal.first.clear();
   // }
-  relevantLocal.second = 0;
+  relevantLocal.first.clear();
 }
 
 // void pushBackRelevantETS(bool b) {
@@ -207,7 +208,7 @@ MemoPair& getMemoETS() {
 }
 
 size_t sizeOfMemoETS() {
-  return getMemoETS().second;
+  return getMemoETS().first.size();
 }
 
 void clearMemoETS() {
@@ -216,7 +217,7 @@ void clearMemoETS() {
   // if (memoLocal.first.size() > 1024) {
   //   memoLocal.first.clear();
   // }
-  memoLocal.second = 0;
+  memoLocal.first.clear();
 }
 
 // void pushBackMemoETS(BoolExpr* expr) {
@@ -346,6 +347,15 @@ void setChildFETS(size_t i, BoolExpr* expr) {
   childLocal.first[i] = expr;
 }
 
+// same for stuck with frame
+using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
+//std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
+tbb::enumerable_thread_specific<std::vector<Frame, tbb::tbb_allocator<Frame>>> stackETS;
+
+std::vector<Frame, tbb::tbb_allocator<Frame>>& getStackETS() {
+  return stackETS.local();
+}
+
 // size_t toSizeT(const std::string& s) {
 //   if (s.empty()) {
 //     assert(false && "toSizeT: empty string");
@@ -423,8 +433,10 @@ BoolExpr* Tree2BoolExpr::convert(
   reserveMemoETS(maxID + 1);
 
   // 3) post-order build
-  using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
-  std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
+  //using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
+  //std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
+  auto & stack = getStackETS();
+  stack.clear();
   stack.reserve(maxID + 1);
   stack.emplace_back(root.get(), false);
 
