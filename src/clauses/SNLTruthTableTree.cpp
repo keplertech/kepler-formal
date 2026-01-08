@@ -389,9 +389,9 @@ void SNLTruthTableTree::updateBorderLeaves() {
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
-    if (visited.find(nid) != visited.end())
+    auto [itr, inserted] = visited.insert(nid);
+    if (!inserted)
       continue;
-    visited.insert(nid);
     const auto& nsp = nodeFromId(nid).get();
     if (!nsp)
       assert(false && "updateBorderLeaves: null node in tree");
@@ -1352,9 +1352,9 @@ void SNLTruthTableTree::finalize() {
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
-    if (visited.count(nid))
+    auto [itr, inserted] = visited.insert(nid);
+    if (!inserted)
       continue;
-    visited.insert(nid);
     Node* const n = nodeFromId(nid).get();
     if (!n)
       continue;

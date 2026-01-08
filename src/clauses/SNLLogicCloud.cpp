@@ -490,7 +490,9 @@ void SNLLogicCloud::compute() {
         const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
-          if (handledTerms.find({driver, termID}) != handledTerms.end()) {
+          //size_t sizeBeofre = handledTerms.size();
+          auto [it, inserted] = handledTerms.insert({driver, termID});
+          if (!inserted) {
             DEBUG_LOG(
                 "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
                 "skipping\n",
@@ -510,7 +512,7 @@ void SNLLogicCloud::compute() {
                     .c_str());
             continue;
           }
-          handledTerms.insert({driver, termID});
+          //handledTerms.insert({driver, termID});
           pushBackNewIterationInputsETS(termID);
         }
       }
