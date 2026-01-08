@@ -295,7 +295,7 @@ void SNLLogicCloud::compute() {
       if (iso.getDrivers().size() >= 1) {
         // proper error with names of all the drivers
         // throw an error and separate names by comma
-        if (namesOfDrivers.size() > 1) {
+        if (iso.getDrivers().size() > 1) {
           std::vector<std::string> namesOfDrivers;
           for (auto dnlid : iso.getDrivers()) {
             auto driver = dnl_.getDNLTerminalFromID(dnlid);
