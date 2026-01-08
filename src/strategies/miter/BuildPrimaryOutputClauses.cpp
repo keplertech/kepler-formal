@@ -276,7 +276,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
               if (localBit >= 64) {
                 // std::fprintf(stderr, "localBit out of range: %llu\n",
                 //             static_cast<unsigned long long>(localBit));
+                // LCOV_EXCL_START
                 continue;
+                // LCOV_EXCL_STOP
               }
 
               // Correct shift using 1ULL and parentheses

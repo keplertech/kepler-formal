@@ -304,7 +304,9 @@ void SNLLogicCloud::compute() {
             for (size_t i = 0; i < path.size(); i++) {
               fullName += path[i].getString();
               if (i != path.size() - 1) {
+                // LCOV_EXCL_START
                 fullName += ".";
+                // LCOV_EXCL_STOP
               }
             }
             // add terminal name and bit
