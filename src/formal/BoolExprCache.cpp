@@ -76,8 +76,8 @@ static inline TupleKey make_tuple_key(Op op,
 }
 
 std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
-  std::shared_ptr<BoolExpr> lptr = k.l;
-  std::shared_ptr<BoolExpr> rptr = k.r;
+  const std::shared_ptr<BoolExpr>& lptr = k.l;
+  const std::shared_ptr<BoolExpr>& rptr = k.r;
   TupleKey tk = make_tuple_key(k.op, k.varId, lptr, rptr);
   if (k.l == nullptr || k.r == nullptr) {
     if (k.l == nullptr) {
@@ -111,11 +111,9 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
 
   // construct new BoolExpr. We need shared_ptr owners for children if they
   // exist.
-  std::shared_ptr<BoolExpr> L = lptr ? lptr : nullptr;
-  std::shared_ptr<BoolExpr> R = rptr ? rptr : nullptr;
 
   // use new because constructor may be non-public
-  std::shared_ptr<BoolExpr> newptr(new BoolExpr(k.op, k.varId, L, R));
+  std::shared_ptr<BoolExpr> newptr(new BoolExpr(k.op, k.varId, lptr ? lptr : nullptr, rptr ? rptr : nullptr));
 
   // assign id atomically
   size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -134,7 +132,7 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
   numMiss_ += 1;
   // printf("miss rate: %lf\n", (double) numHit_ / (double) numMiss_);
   // printf("size of cache: %lu\n", tbl.size());
-
+  
   return newptr;
 }
 

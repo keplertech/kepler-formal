@@ -90,9 +90,11 @@ size_t sizeOfCurrentIterationInputsETS() {
 void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& res) {
   res.clear();
   auto& current = getCurrentIterationInputsETS();
-  for (size_t i = 0; i < current.second; i++) {
-    res.push_back(current.first[i]);
-  }
+  // for (size_t i = 0; i < current.second; i++) {
+  //   res.push_back(current.first[i]);
+  // }
+  // do as above but with move instead
+  res = std::move(current.first);
 }
 
 void clearNewIterationInputsETS() {
@@ -124,9 +126,11 @@ size_t sizeOfNewIterationInputsETS() {
 void copyNewIterationInputsETStoCurrent() {
   clearCurrentIterationInputsETS();
   auto& newIterationInputs = getNewIterationInputsETS();
-  for (size_t i = 0; i < newIterationInputs.second; i++) {
-    pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
-  }
+  // for (size_t i = 0; i < newIterationInputs.second; i++) {
+  //   pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
+  // }
+  auto& currentIterationInputs = getCurrentIterationInputsETS();
+  currentIterationInputs = std::move(newIterationInputs);
   assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
 }
 
@@ -250,7 +254,7 @@ void SNLLogicCloud::compute() {
     }
     // LCOV_EXCL_STOP
     const auto& driver = iso.getDrivers().front();
-    const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+    auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     if (isInput(driver)) {
       pushBackCurrentIterationInputsETS(driver);
       table_ = SNLTruthTableTree(inst.getID(), driver,
@@ -271,7 +275,7 @@ void SNLLogicCloud::compute() {
     DEBUG_LOG("model name: %s\n",
               inst.getSNLModel()->getName().getString().c_str());
     table_ = SNLTruthTableTree(inst.getID(), driver);
-    auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
+    auto* model = inst.getSNLModel();
     assert(SNLDesignModeling::getTruthTable(model, 
                 dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID())
             .isInitialized() &&
@@ -312,8 +316,25 @@ void SNLLogicCloud::compute() {
       break;
     }
   }
+  struct PairHash {
+  size_t operator()(const std::pair<DNLID,DNLID>& p) const noexcept {
+    // 64-bit combine; tweak for your DNLID type
+    uint64_t a = static_cast<uint64_t>(p.first);
+    uint64_t b = static_cast<uint64_t>(p.second);
+    return (a * 11400714819323198485ull) ^ (b + 0x9e3779b97f4a7c15ull + (a<<6) + (a>>2));
+    }
+  };
+  struct PairEq {
+    bool operator()(const std::pair<DNLID,DNLID>& x, const std::pair<DNLID,DNLID>& y) const noexcept {
+      return x.first == y.first && x.second == y.second;
+    }
+  };
+  using HandledSet = std::unordered_set<
+    std::pair<DNLID,DNLID>,
+    PairHash, PairEq,
+    tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>; // allocator for buckets
 
-  std::set<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>, std::less<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>, tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>> handledTerms;
+  HandledSet handledTerms;
   size_t iter = 0;
 
   while (!reachedPIs) {

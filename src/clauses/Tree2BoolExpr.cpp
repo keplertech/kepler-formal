@@ -61,9 +61,9 @@ size_t sizeOfTermsETS() {
 void clearTermsETS() {
   // If vector reach size larger than 1024, clear it to save memory
   auto& termsLocal = getTErmsETS();
-  if (termsLocal.first.size() > 1024) {
-    termsLocal.first.clear();
-  }
+  // if (termsLocal.first.size() > 1024) {
+  //   termsLocal.first.clear();
+  // }
   termsLocal.second = 0;
 }
 
@@ -124,9 +124,9 @@ size_t sizeOfRelevantETS() {
 void clearRelevantETS() {
   // If vector reach size larger than 1024, clear it to save memory
   auto& relevantLocal = getRelevantETS();
-  if (relevantLocal.first.size() > 1024) {
-    relevantLocal.first.clear();
-  }
+  // if (relevantLocal.first.size() > 1024) {
+  //   relevantLocal.first.clear();
+  // }
   relevantLocal.second = 0;
 }
 
@@ -213,9 +213,9 @@ size_t sizeOfMemoETS() {
 void clearMemoETS() {
   // If vector reach size larger than 1024, clear it to save memory
   auto& memoLocal = getMemoETS();
-  if (memoLocal.first.size() > 1024) {
-    memoLocal.first.clear();
-  }
+  // if (memoLocal.first.size() > 1024) {
+  //   memoLocal.first.clear();
+  // }
   memoLocal.second = 0;
 }
 
@@ -297,9 +297,9 @@ size_t sizeOfChildFETS() {
 void clearChildFETS() {
   // If vector reach size larger than 1024, clear it to save memory
   auto& childLocal = getChildFETS();
-  if (childLocal.first.size() > 1024) {
-    childLocal.first.clear();
-  }
+  // if (childLocal.first.size() > 1024) {
+  //   childLocal.first.clear();
+  // }
   childLocal.second = 0;
 }
 
@@ -458,23 +458,24 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
           // LCOV_EXCL_STOP
         }
         assert(node->parentIds.size() == 1);
-        const std::shared_ptr<SNLTruthTableTree::Node>& parent = node->tree->nodeFromId(node->parentIds[0]);
+        SNLTruthTableTree::Node* const parent = node->tree->nodeFromId(node->parentIds[0]).get();
         assert(parent && parent->type == SNLTruthTableTree::Node::Type::P);
         if (parent->data.termid >= varNames.size()) {
           DEBUG_LOG("varNames size: %zu, parent data.termid: %zu\n", varNames.size(), (size_t)parent->data.termid);
           assert(parent->data.termid < varNames.size());
         }
-        if (varNames[parent->data.termid] == (size_t)-1) {
+        const auto& name = varNames[parent->data.termid];
+        if (name == (size_t)-1) {
           // LCOV_EXCL_START
           throw std::runtime_error("Input variable index is SIZE_MAX");
           // LCOV_EXCL_STOP
         }
-        if (varNames[parent->data.termid] == 0) {
+        if (name == 0) {
            setMemoETS(id, BoolExpr::createFalse());
-        } else if (varNames[parent->data.termid] == 1) {
+        } else if (name == 1) {
            setMemoETS(id, BoolExpr::createTrue());
         } else {
-          setMemoETS(id, BoolExpr::Var(varNames[parent->data.termid]));
+          setMemoETS(id, BoolExpr::Var(name));
         }
       }
     } else {

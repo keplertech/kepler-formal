@@ -118,7 +118,7 @@ const std::shared_ptr<SNLTruthTableTree::Node>& SNLTruthTableTree::nodeFromId(
   size_t idx = (size_t)(id - kIdOffset);
   if (idx >= nodes_.size())
     return nullNodePtr;
-  auto& sp = nodes_[idx];
+  const auto& sp = nodes_[idx];
   if (!sp)
     return nullNodePtr;
   // sanity check: nodeID must match slot
@@ -157,7 +157,7 @@ bool SNLTruthTableTree::Node::eval(const std::vector<bool>& extInputs) const {
       throw std::logic_error("Invalid child id");
       // LCOV_EXCL_STOP
     }
-    auto childSp = tree->nodeFromId(cid);
+    Node* const childSp = tree->nodeFromId(cid).get();
     if (!childSp) {
       // LCOV_EXCL_START
       throw std::logic_error("Null child node");
@@ -244,7 +244,17 @@ void SNLTruthTableTree::updateBorderLeaves() {
   std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> stk;
   stk.reserve(64);
   stk.push_back(rootId_);
-  std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
+  // replace:
+  // std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
+
+  // with:
+  std::unordered_set<uint32_t,
+                    std::hash<uint32_t>,
+                    std::equal_to<uint32_t>,
+                    tbb::tbb_allocator<uint32_t>> visited;
+  visited.reserve(nodes_.size() * 2);        // avoid rehashes; tune factor to expected size
+  visited.max_load_factor(0.7f);             // optional: control bucket density
+
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
@@ -344,7 +354,7 @@ bool SNLTruthTableTree::eval(const std::vector<bool>& extInputs) const {
     throw std::invalid_argument("wrong input size or uninitialized tree");
     // LCOV_EXCL_STOP
   }
-  auto rootSp = nodeFromId(rootId_);
+  Node* const rootSp = nodeFromId(rootId_).get();
   if (!rootSp) {
     // LCOV_EXCL_START
     throw std::logic_error("Missing root");
@@ -933,7 +943,7 @@ bool SNLTruthTableTree::isInitialized() const {
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
-    auto n = nodeFromId(nid);
+    Node* const n = nodeFromId(nid).get();
     if (!n)
       continue;
     if (n->type == Node::Type::Table) {
@@ -942,7 +952,7 @@ bool SNLTruthTableTree::isInitialized() const {
     }
     for (size_t i = 0; i < n->childrenIds.size(); ++i) {
       uint32_t cid = n->childrenIds[i];
-      auto ch = nodeFromId(cid);
+      Node* const ch = nodeFromId(cid).get();
       if (!ch)
         continue;
       if (ch->type != Node::Type::Input)
@@ -1097,15 +1107,15 @@ void SNLTruthTableTree::finalize() {
   // Now assign canonical ids and remap childrenIds/parentId
   for (size_t i = 0; i < nodes_.size(); ++i) {
     uint32_t canonicalId = static_cast<uint32_t>(i) + kIdOffset;
-    std::shared_ptr<Node>& sp = nodes_[i];
+    const std::shared_ptr<Node>& sp = nodes_[i];
     sp->nodeID = canonicalId;
     sp->tree = this;
   }
 
   // Build reverse map from shared_ptr pointer (address) to canonical id
-  using MapAlloc = tbb::tbb_allocator<std::pair<const Node* const, uint32_t>>;
+ using MapAlloc = tbb::tbb_allocator<std::pair<const Node* const, uint32_t>>;
 
-  std::unordered_map<const Node*,
+std::unordered_map<const Node*,
                    uint32_t,
                    std::hash<const Node*>,
                    std::equal_to<const Node*>,
@@ -1113,7 +1123,7 @@ void SNLTruthTableTree::finalize() {
 
   ptrToId.reserve(nodes_.size() * 2);
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    auto sp = nodes_[i];
+    const std::shared_ptr<Node>&  sp = nodes_[i];
     if (!sp)
       continue;
     ptrToId[sp.get()] = static_cast<uint32_t>(i) + kIdOffset;
@@ -1121,7 +1131,7 @@ void SNLTruthTableTree::finalize() {
 
   // Replace childrenIds with canonical ids and set parentId accordingly
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    auto sp = nodes_[i];
+    Node* sp = nodes_[i].get();
     sp->childrenIds.clear();
     sp->childrenIds.reserve(resolvedChildren[i].size());
     for (size_t j = 0; j < resolvedChildren[i].size(); ++j) {
@@ -1162,8 +1172,8 @@ void SNLTruthTableTree::finalize() {
     uint32_t newRoot = kInvalidId;
     auto itRoot = mapById.find(rootId_);
     if (itRoot != mapById.end()) {
-      auto sp = itRoot->second;
-      auto pit = ptrToId.find(sp.get());
+      Node* const sp = itRoot->second.get();
+      auto pit = ptrToId.find(sp);
       if (pit != ptrToId.end())
         newRoot = pit->second;
     }
@@ -1182,19 +1192,29 @@ void SNLTruthTableTree::finalize() {
   std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> stk;
   if (rootId_ != kInvalidId)
     stk.push_back(rootId_);
-  std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
+  // replace:
+  // std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
+
+  // with:
+  std::unordered_set<uint32_t,
+                    std::hash<uint32_t>,
+                    std::equal_to<uint32_t>,
+                    tbb::tbb_allocator<uint32_t>> visited;
+  visited.reserve(nodes_.size() * 2);        // avoid rehashes; tune factor to expected size
+  visited.max_load_factor(0.7f);             // optional: control bucket density
+
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
     if (visited.count(nid))
       continue;
     visited.insert(nid);
-    auto n = nodeFromId(nid);
+    Node* const n = nodeFromId(nid).get();
     if (!n)
       continue;
     for (size_t k = 0; k < n->childrenIds.size(); ++k) {
       uint32_t cid = n->childrenIds[k];
-      auto ch = nodeFromId(cid);
+      Node* const ch = nodeFromId(cid).get();
       if (!ch)
         continue;
       if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {

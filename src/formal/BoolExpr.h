@@ -46,8 +46,8 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   // Accessors
   Op getOp() const { return op_; }
   size_t getId() const { return varID_; }
-  std::shared_ptr<BoolExpr> getLeft() const { return left_; }
-  std::shared_ptr<BoolExpr> getRight() const { return right_; }
+  const std::shared_ptr<BoolExpr>& getLeft() const { return left_; }
+  const std::shared_ptr<BoolExpr>& getRight() const { return right_; }
   std::string getName() const {
     if (op_ != Op::VAR)
       throw std::logic_error("getName: not a variable");
