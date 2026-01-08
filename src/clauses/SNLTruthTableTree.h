@@ -56,6 +56,12 @@ public:
     const SNLTruthTable& getTruthTable() const;
   };
 
+  struct BorderLeaf {
+    uint32_t parentId;
+    size_t childPos;
+    size_t extIndex;
+  };
+
   static constexpr uint32_t kReservedId0 = 0u;
   static constexpr uint32_t kReservedId1 = 1u;
   static constexpr uint32_t kIdOffset = 2u; // id = index + kIdOffset
@@ -99,11 +105,6 @@ public:
   }
 
 private:
-  struct BorderLeaf {
-    uint32_t parentId;
-    size_t childPos;
-    size_t extIndex;
-  };
 
   const Node& concatBody(size_t borderIndex,
                          naja::DNL::DNLID instid,

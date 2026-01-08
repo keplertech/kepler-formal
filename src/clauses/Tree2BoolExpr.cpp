@@ -35,7 +35,7 @@ tbb::concurrent_vector<TermsPair*> termsETSvector;
 void initTermsETS() {
   if (termsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
     for (size_t i = termsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      termsETSvector.push_back(nullptr);
+      termsETSvector.emplace_back(nullptr);
     }
   }
   if (termsETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
@@ -76,7 +76,7 @@ void pushBackTermsETS(BoolExpr* term) {
     sz++;
     return;
   }
-  vec.push_back(term);
+  vec.emplace_back(term);
   sz++;
 }
 
@@ -91,14 +91,14 @@ bool emptyTermsETS() {
 }
 
 // same for std::vector<bool, tbb::tbb_allocator<bool>>
-typedef std::pair<std::vector<bool, tbb::tbb_allocator<bool>>, size_t> RelevantPair;
+typedef std::pair<std::vector<uint8_t, tbb::tbb_allocator<uint8_t>>, size_t> RelevantPair;
 tbb::enumerable_thread_specific<RelevantPair> relevantETS;
 tbb::concurrent_vector<RelevantPair*> relevantETSvector;
 
 void initRelevantETS() {
   if (relevantETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
     for (size_t i = relevantETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      relevantETSvector.push_back(nullptr);
+      relevantETSvector.emplace_back(nullptr);
     }
   }
   if (relevantETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
@@ -139,7 +139,7 @@ void clearRelevantETS() {
 //     sz++;
 //     return;
 //   }
-//   vec.push_back(b);
+//   vec.emplace_back(b);
 //   sz++;
 // }
 
@@ -187,7 +187,7 @@ tbb::concurrent_vector<MemoPair*> memoETSvector;
 void initMemoETS() {
   if (memoETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
     for (size_t i = memoETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      memoETSvector.push_back(nullptr);
+      memoETSvector.emplace_back(nullptr);
     }
   }
   if (memoETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
@@ -228,7 +228,7 @@ void clearMemoETS() {
 //     sz++;
 //     return;
 //   }
-//   vec.push_back(expr);
+//   vec.emplace_back(expr);
 //   sz++;
 // }
 
@@ -271,7 +271,7 @@ tbb::concurrent_vector<ChildFETSPair*> childFETSvector;
 void initChildFETS() {
   if (childFETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
     for (size_t i = childFETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      childFETSvector.push_back(nullptr);
+      childFETSvector.emplace_back(nullptr);
     }
   }
   if (childFETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
@@ -312,7 +312,7 @@ void clearChildFETS() {
 //     sz++;
 //     return;
 //   }
-//   vec.push_back(expr);
+//   vec.emplace_back(expr);
 //   sz++;
 // }
 
@@ -401,7 +401,7 @@ BoolExpr* Tree2BoolExpr::convert(
   // using NodePtr = const SNLTruthTableTree::Node*;
   // std::vector<NodePtr, tbb::tbb_allocator<NodePtr>> dfs;
   // dfs.reserve(128);
-  // dfs.push_back(root);
+  // dfs.emplace_back(root);
   // while (!dfs.empty()) {
   // NodePtr n = dfs.back();
   // dfs.pop_back();
@@ -410,7 +410,7 @@ BoolExpr* Tree2BoolExpr::convert(
   // {
   // for (const auto& c : n->childrenIds) {
   // assert(n->tree->nodeFromId(c) != nullptr);
-  // dfs.push_back(n->tree->nodeFromId(c));
+  // dfs.emplace_back(n->tree->nodeFromId(c));
   // }
   // }
   // }
@@ -510,7 +510,7 @@ BoolExpr* Tree2BoolExpr::convert(
 
         // collect the indices of relevant vars
         //std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> relIdx;
-        //for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) relIdx.push_back(j); }
+        //for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) relIdx.emplace_back(j); }
         size_t numRelIdx = 0;
         for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) numRelIdx++; }
 

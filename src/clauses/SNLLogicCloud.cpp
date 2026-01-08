@@ -28,7 +28,7 @@ void initCurrentIterationInputsETS() {
   // LCOV_EXCL_START
   if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
     for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      currentIterationInputsETSvector.push_back(nullptr);
+      currentIterationInputsETSvector.emplace_back(nullptr);
     }
   }
   // LCOV_EXCL_STOP
@@ -49,7 +49,7 @@ void initNewIterationInputsETS() {
   // LCOV_EXCL_START
   if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
     for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      newIterationInputsETSvector.push_back(nullptr);
+      newIterationInputsETSvector.emplace_back(nullptr);
     }
   }
   // LCOV_EXCL_STOP
@@ -79,7 +79,7 @@ void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
     sz++;
     return;
   }
-  vec.push_back(input);
+  vec.emplace_back(input);
   sz++;
 }
 
@@ -91,7 +91,7 @@ void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_alloca
   res.clear();
   auto& current = getCurrentIterationInputsETS();
   // for (size_t i = 0; i < current.second; i++) {
-  //   res.push_back(current.first[i]);
+  //   res.emplace_back(current.first[i]);
   // }
   // do as above but with move instead
   res = std::move(current.first);
@@ -111,7 +111,7 @@ void pushBackNewIterationInputsETS(naja::DNL::DNLID input) {
     sz++;
     return;
   }
-  vec.push_back(input);
+  vec.emplace_back(input);
   sz++;
 }
 
@@ -158,7 +158,7 @@ void initInputsToMergeETS() {
       tbb::this_task_arena::current_thread_index()) {
     for (size_t i = inputsToMergeETSvector.size();
          i <= tbb::this_task_arena::current_thread_index(); i++) {
-      inputsToMergeETSvector.push_back(nullptr);
+      inputsToMergeETSvector.emplace_back(nullptr);
     }
   }
   if (inputsToMergeETSvector
@@ -192,7 +192,7 @@ void pushBackInputsToMergeETS(
     sz++;
     return;
   }
-  vec.push_back(input);
+  vec.emplace_back(input);
   sz++;
 }
 
@@ -289,7 +289,7 @@ void SNLLogicCloud::compute() {
       const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
       if (term.getSnlBitTerm()->getDirection() !=
           SNLBitTerm::Direction::Output) {
-        // newIterationInputs.push_back(termID);
+        // newIterationInputs.emplace_back(termID);
         pushBackNewIterationInputsETS(termID);
         DEBUG_LOG("Add input with id: %zu\n", termID);
       }
@@ -366,7 +366,7 @@ void SNLLogicCloud::compute() {
                       ->getName()
                       .getString()
                       .c_str());
-        // inputsToMerge.push_back(
+        // inputsToMerge.emplace_back(
         //     {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
         pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
@@ -407,7 +407,7 @@ void SNLLogicCloud::compute() {
             fullName += "." + termName;
             // add bit
             fullName += std::to_string(driver.getSnlBitTerm()->getBit());
-            namesOfDrivers.push_back(fullName);
+            namesOfDrivers.emplace_back(fullName);
           }
           std::string error = "Iso has multiple drivers: ";
           for (size_t i = 0; i < namesOfDrivers.size(); i++) {
@@ -442,7 +442,7 @@ void SNLLogicCloud::compute() {
                 .getString()
                 .c_str(),
             driver);
-        //inputsToMerge.push_back(
+        //inputsToMerge.emplace_back(
         //    {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
         pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
@@ -481,7 +481,7 @@ void SNLLogicCloud::compute() {
                     ->getName()
                     .getString()
                     .c_str());
-      //inputsToMerge.push_back({inst.getID(), driver});
+      //inputsToMerge.emplace_back({inst.getID(), driver});
       pushBackInputsToMergeETS({inst.getID(), driver});
 
       for (DNLID termID = inst.getTermIndexes().first;
