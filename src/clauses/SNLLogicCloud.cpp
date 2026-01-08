@@ -294,27 +294,27 @@ void SNLLogicCloud::compute() {
 
       if (iso.getDrivers().size() >= 1) {
         // proper error with names of all the drivers
-        std::vector<std::string> namesOfDrivers;
-        for (auto dnlid : iso.getDrivers()) {
-          auto driver = dnl_.getDNLTerminalFromID(dnlid);
-          auto path = driver.getDNLInstance().getPath().getPathNames();
-          std::string fullName;
-          for (size_t i = 0; i < path.size(); i++) {
-            fullName += path[i].getString();
-            if (i != path.size() - 1) {
-              fullName += ".";
-            }
-          }
-          // add terminal name and bit
-          std::string termName =
-              driver.getSnlBitTerm()->getName().getString();
-          fullName += "." + termName;
-          // add bit
-          fullName += std::to_string(driver.getSnlBitTerm()->getBit());
-          namesOfDrivers.push_back(fullName);
-        }
         // throw an error and separate names by comma
         if (namesOfDrivers.size() > 1) {
+          std::vector<std::string> namesOfDrivers;
+          for (auto dnlid : iso.getDrivers()) {
+            auto driver = dnl_.getDNLTerminalFromID(dnlid);
+            auto path = driver.getDNLInstance().getPath().getPathNames();
+            std::string fullName;
+            for (size_t i = 0; i < path.size(); i++) {
+              fullName += path[i].getString();
+              if (i != path.size() - 1) {
+                fullName += ".";
+              }
+            }
+            // add terminal name and bit
+            std::string termName =
+                driver.getSnlBitTerm()->getName().getString();
+            fullName += "." + termName;
+            // add bit
+            fullName += std::to_string(driver.getSnlBitTerm()->getBit());
+            namesOfDrivers.push_back(fullName);
+          }
           std::string error = "Iso has multiple drivers: ";
           for (size_t i = 0; i < namesOfDrivers.size(); i++) {
             error += namesOfDrivers[i];
