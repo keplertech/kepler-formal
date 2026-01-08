@@ -335,6 +335,7 @@ void SNLLogicCloud::compute() {
     tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>; // allocator for buckets
 
   HandledSet handledTerms;
+  handledTerms.reserve(naja::DNL::get()->getDNLTerms().size() / 4);
   size_t iter = 0;
 
   while (!reachedPIs) {

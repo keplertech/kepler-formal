@@ -392,13 +392,13 @@ void SNLTruthTableTree::updateBorderLeaves() {
     if (visited.find(nid) != visited.end())
       continue;
     visited.insert(nid);
-    const auto& nsp = nodeFromId(nid);
+    const auto& nsp = nodeFromId(nid).get();
     if (!nsp)
       assert(false && "updateBorderLeaves: null node in tree");
     assert(nsp->childrenIds.size() > 0);
     for (size_t i = 0; i < nsp->childrenIds.size(); ++i) {
       uint32_t cid = nsp->childrenIds[i];
-      const auto& ch = nodeFromId(cid);
+      const auto& ch = nodeFromId(cid).get();
       if (!ch)
         assert(false && "updateBorderLeaves: null child node in tree");
       if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
@@ -514,7 +514,7 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
   const auto& leaf = borderLeaves_[borderIndex];
 
   uint32_t parentId = (leaf.parentId);
-  auto parentSp = nodeFromId(parentId);
+  auto parentSp = nodeFromId(parentId).get();
   if (!parentSp) {
     // LCOV_EXCL_START
     throw std::logic_error("concat: null parent");
@@ -571,7 +571,7 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
   // Connecting children, skipped if node already existed
 
   newNodeSp->childrenIds.emplace_back(oldChildId);
-  auto oldChildSp = nodeFromId(oldChildId);
+  auto oldChildSp = nodeFromId(oldChildId).get();
   if (oldChildSp) {
     assert(oldChildSp->type == Node::Type::Input);
     assert(oldChildSp->parentIds.size() == 1);
@@ -800,7 +800,7 @@ void SNLTruthTableTree::concatFull(
     // between tables and border leaves
     const auto& borderLeaf = borderLeaves_[i];
     // Get parent node of current border leaf
-    auto parentPtr = nodeFromId(borderLeaf.parentId);
+    auto parentPtr = nodeFromId(borderLeaf.parentId).get();
     // if (!parentPtr) {
     //   // No parent so it is the root
     //   index++;
@@ -847,7 +847,7 @@ void SNLTruthTableTree::concatFull(
       // assert that insertedId is an input node
       // assert(nodeFromId(insertedId)->type != Node::Type::Input &&
       //  "concatFull: inserted node is input after concatBody");
-      auto insertedSp = nodeFromId(insertedId);
+      auto insertedSp = nodeFromId(insertedId).get();
       assert(insertedSp->type != Node::Type::Input &&
              "concatFull: inserted node is input after concatBody");
       // assert the input node have only one parent
@@ -869,7 +869,7 @@ void SNLTruthTableTree::concatFull(
       for (size_t j = 0; j < insertedSp->childrenIds.size(); ++j) {
         uint32_t cid = insertedSp->childrenIds[j];
 
-        auto ch = nodeFromId(cid);
+        auto ch = nodeFromId(cid).get();
         assert(ch);
         // assert that cid is an input node
         assert(ch->type == Node::Type::Input &&
