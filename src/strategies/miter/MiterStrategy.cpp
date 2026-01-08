@@ -154,8 +154,8 @@ void ensureLoggerInitialized() {
 
 Glucose::Lit tseitinEncode(
     Glucose::SimpSolver& S,
-    std::shared_ptr<BoolExpr> root,
-    std::unordered_map<std::shared_ptr<BoolExpr>, int>& node2var,
+    BoolExpr* root,
+    std::unordered_map<BoolExpr*, int>& node2var,
     std::unordered_map<std::string, int>& varName2idx) {
   ensureLoggerInitialized();
   logger->debug("Starting Tseitin encode for root expr");
@@ -180,18 +180,18 @@ Glucose::Lit tseitinEncode(
   };
 
   struct Frame {
-    std::shared_ptr<BoolExpr> expr;
+    BoolExpr* expr;
     bool visited = false;
     Glucose::Lit leftLit, rightLit;
   };
 
   std::stack<Frame> stk;
   stk.push({root, false, {}, {}});
-  std::unordered_map<std::shared_ptr<BoolExpr>, Glucose::Lit> result;
+  std::unordered_map<BoolExpr*, Glucose::Lit> result;
 
   while (!stk.empty()) {
     Frame& fr = stk.top();
-    std::shared_ptr<BoolExpr> e = fr.expr;
+    BoolExpr* e = fr.expr;
 
     // If already encoded, reuse
     if (node2var.count(e)) {
@@ -546,7 +546,7 @@ bool MiterStrategy::run() {
   Glucose::SimpSolver solver;
 
   // mappings for Tseitin encoding
-  std::unordered_map<std::shared_ptr<BoolExpr>, int> node2var;
+  std::unordered_map<BoolExpr*, int> node2var;
   std::unordered_map<std::string, int> varName2idx;
 
   // Tseitin-encode & get the literal for the root
@@ -588,13 +588,13 @@ bool MiterStrategy::run() {
                                  " DNLIDs do not match");
         // LCOV_EXCL_STOP
       }
-      tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs0S;
+      tbb::concurrent_vector<BoolExpr*> singlePOs0S;
       singlePOs0S.push_back(POs0[i]);
-      tbb::concurrent_vector<std::shared_ptr<BoolExpr>> singlePOs1S;
+      tbb::concurrent_vector<BoolExpr*> singlePOs1S;
       singlePOs1S.push_back(POs1[i]);
       auto singleMiter = buildMiter(singlePOs0S, singlePOs1S);
 
-      std::unordered_map<std::shared_ptr<BoolExpr>, int> singleNode2var;
+      std::unordered_map<BoolExpr*, int> singleNode2var;
       std::unordered_map<std::string, int> singleVarName2idx;
       // Tseitin-encode the single miter
       Glucose::SimpSolver singleSolver;
@@ -827,9 +827,9 @@ bool MiterStrategy::run() {
   return !sat;
 }
 
-std::shared_ptr<BoolExpr> MiterStrategy::buildMiter(
-    const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
-    const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const {
+BoolExpr* MiterStrategy::buildMiter(
+    const tbb::concurrent_vector<BoolExpr*>& A,
+    const tbb::concurrent_vector<BoolExpr*>& B) const {
   ensureLoggerInitialized();
   logger->debug("buildMiter: A.size={} B.size={}", A.size(), B.size());
 

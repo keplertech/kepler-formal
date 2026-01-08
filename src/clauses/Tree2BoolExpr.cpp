@@ -28,7 +28,7 @@
 using namespace naja::NL;
 using namespace KEPLER_FORMAL;
 
-typedef std::pair<std::vector<std::shared_ptr<BoolExpr>, tbb::tbb_allocator<std::shared_ptr<BoolExpr>>>, size_t> TermsPair;
+typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> TermsPair;
 tbb::enumerable_thread_specific<TermsPair> termsETS;
 tbb::concurrent_vector<TermsPair*> termsETSvector;
 
@@ -67,7 +67,7 @@ void clearTermsETS() {
   termsLocal.second = 0;
 }
 
-void pushBackTermsETS(const std::shared_ptr<BoolExpr>& term) {
+void pushBackTermsETS(BoolExpr* term) {
   auto& termsLocal = getTErmsETS();
   auto& vec = termsLocal.first;
   auto& sz = termsLocal.second;
@@ -178,9 +178,9 @@ void reserveRelevantETSwithFalse(size_t n) {
   sz = n;
 }
 
-// do same for std::vector<std::shared_ptr<BoolExpr>,
-// tbb::tbb_allocator<std::shared_ptr<BoolExpr>>> memo;
-typedef std::pair<std::vector<std::shared_ptr<BoolExpr>, tbb::tbb_allocator<std::shared_ptr<BoolExpr>>>, size_t> MemoPair;
+// do same for std::vector<BoolExpr*,
+// tbb::tbb_allocator<BoolExpr*>> memo;
+typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> MemoPair;
 tbb::enumerable_thread_specific<MemoPair> memoETS;
 tbb::concurrent_vector<MemoPair*> memoETSvector;
 
@@ -219,7 +219,7 @@ void clearMemoETS() {
   memoLocal.second = 0;
 }
 
-// void pushBackMemoETS(const std::shared_ptr<BoolExpr>& expr) {
+// void pushBackMemoETS(BoolExpr* expr) {
 //   auto& memoLocal = getMemoETS();
 //   auto& vec = memoLocal.first;
 //   auto& sz = memoLocal.second;
@@ -246,7 +246,7 @@ void reserveMemoETS(size_t n) {
   vec.assign(n, nullptr);
 }
 
-void setMemoETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
+void setMemoETS(size_t i, BoolExpr* expr) {
   auto& memoLocal = getMemoETS();
   if (i >= memoLocal.second) {
     assert(false && "setMemoETS: index out of range");
@@ -254,7 +254,7 @@ void setMemoETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
   memoLocal.first[i] = expr;
 }
 
-const std::shared_ptr<BoolExpr>& getMemoETS(size_t i) {
+BoolExpr* getMemoETS(size_t i) {
   auto& memoLocal = getMemoETS();
   if (i >= memoLocal.second) {
     assert(false && "getMemoETS: index out of range");
@@ -262,9 +262,9 @@ const std::shared_ptr<BoolExpr>& getMemoETS(size_t i) {
   return memoLocal.first[i];
 }
 
-// same for std::vector<std::shared_ptr<BoolExpr>>,
-// tbb::tbb_allocator<std::shared_ptr<BoolExpr>>> childF;
-typedef std::pair<std::vector<std::shared_ptr<BoolExpr>, tbb::tbb_allocator<std::shared_ptr<BoolExpr>>>, size_t> ChildFETSPair;
+// same for std::vector<BoolExpr*>,
+// tbb::tbb_allocator<BoolExpr*>> childF;
+typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildFETSPair;
 tbb::enumerable_thread_specific<ChildFETSPair> childFETS;
 tbb::concurrent_vector<ChildFETSPair*> childFETSvector;
 
@@ -303,7 +303,7 @@ void clearChildFETS() {
   childLocal.second = 0;
 }
 
-// void pushBackChildFETS(const std::shared_ptr<BoolExpr>& expr) {
+// void pushBackChildFETS(BoolExpr* expr) {
 //   auto& childLocal = getChildFETS();
 //   auto& vec = childLocal.first;
 //   auto& sz = childLocal.second;
@@ -330,7 +330,7 @@ void reserveChildFETS(size_t n) {
   vec.assign(n, nullptr);
 }
 
-const std::shared_ptr<BoolExpr>& getChildFETS(size_t i) {
+BoolExpr* getChildFETS(size_t i) {
   auto& childLocal = getChildFETS();
   if (i >= childLocal.second) {
     assert(false && "getChildFETS: index out of range");
@@ -338,7 +338,7 @@ const std::shared_ptr<BoolExpr>& getChildFETS(size_t i) {
   return childLocal.first[i];
 }
 
-void setChildFETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
+void setChildFETS(size_t i, BoolExpr* expr) {
   auto& childLocal = getChildFETS();
   if (i >= childLocal.second) {
     assert(false && "setChildFETS: index out of range");
@@ -367,8 +367,8 @@ void setChildFETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
 // }
 
 // Fold a list of literals into a single AND
-// static std::shared_ptr<BoolExpr> mkAnd(
-//   const std::vector<std::shared_ptr<BoolExpr>, tbb::tbb_allocator<std::shared_ptr<BoolExpr>>>& lits) {
+// static BoolExpr* mkAnd(
+//   const std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>& lits) {
 //   if (lits.empty()) return BoolExpr::createTrue();
 //   auto cur = lits[0];
 //   for (size_t i = 1; i < lits.size(); ++i) cur = BoolExpr::And(cur, lits[i]);
@@ -376,15 +376,15 @@ void setChildFETS(size_t i, const std::shared_ptr<BoolExpr>& expr) {
 // }
 
 // // Fold a list of terms into a single OR
-// static std::shared_ptr<BoolExpr> mkOr(
-//   const std::vector<std::shared_ptr<BoolExpr>, tbb::tbb_allocator<std::shared_ptr<BoolExpr>>>& terms) {
+// static BoolExpr* mkOr(
+//   const std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>& terms) {
 //   if (terms.empty()) return BoolExpr::createFalse();
 //   auto cur = terms[0];
 //   for (size_t i = 1; i < terms.size(); ++i) cur = BoolExpr::Or(cur, terms[i]);
 //   return cur;
 // }
 
-std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
+BoolExpr* Tree2BoolExpr::convert(
   const SNLTruthTableTree& tree, const std::vector<size_t>& varNames) {
 
   initChildFETS();
@@ -401,7 +401,7 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
   // using NodePtr = const SNLTruthTableTree::Node*;
   // std::vector<NodePtr, tbb::tbb_allocator<NodePtr>> dfs;
   // dfs.reserve(128);
-  // dfs.push_back(root.get());
+  // dfs.push_back(root);
   // while (!dfs.empty()) {
   // NodePtr n = dfs.back();
   // dfs.pop_back();
@@ -409,8 +409,8 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
   // if (n->type == SNLTruthTableTree::Node::Type::Table || // n->type == SNLTruthTableTree::Node::Type::P)
   // {
   // for (const auto& c : n->childrenIds) {
-  // assert(n->tree->nodeFromId(c).get() != nullptr);
-  // dfs.push_back(n->tree->nodeFromId(c).get());
+  // assert(n->tree->nodeFromId(c) != nullptr);
+  // dfs.push_back(n->tree->nodeFromId(c));
   // }
   // }
   // }
@@ -523,9 +523,9 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
           reserveTermsETS(static_cast<size_t>(rows));
           for (uint64_t m = 0; m < rows; ++m) {
             if (!tbl.bits().bit(m)) continue;
-            std::shared_ptr<BoolExpr> term = nullptr;
+            BoolExpr* term = nullptr;
             bool firstLit = true;
-            std::shared_ptr<BoolExpr> lit = nullptr;
+            BoolExpr* lit = nullptr;
             //for (uint32_t j : relIdx) {
             for (uint32_t j = 0; j < k; ++j) { 
               if (!getRelevantETS(j)) {
@@ -544,7 +544,7 @@ std::shared_ptr<BoolExpr> Tree2BoolExpr::convert(
           if (emptyTermsETS()) { setMemoETS(id, BoolExpr::createFalse()); }
           else {
             // fold into OR
-            std::shared_ptr<BoolExpr> expr = getTErmsETS().first[0];
+            BoolExpr* expr = getTErmsETS().first[0];
             for (size_t t = 1; t < sizeOfTermsETS(); ++t) {
               expr = BoolExpr::Or(expr, getTErmsETS().first[t]);
             }

@@ -34,9 +34,9 @@ class MiterStrategy {
   
   static std::string logFileName_;
  private:
-  std::shared_ptr<BoolExpr> buildMiter(
-      const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
-      const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const;
+  BoolExpr* buildMiter(
+      const tbb::concurrent_vector<BoolExpr*>& A,
+      const tbb::concurrent_vector<BoolExpr*>& B) const;
   
   static naja::NL::SNLDesign* top0_;
   static naja::NL::SNLDesign* top1_;
