@@ -54,10 +54,12 @@ make
 ```
 
 ```bash
-# For optimized performance use: 
-cmake .. -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -march=native \
-  -ffast-math -flto" -DCMAKE_EXE_LINKER_FLAGS="-flto"
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DCMAKE_CXX_FLAGS="-O3 -march=native -ffast-math -flto -DNDEBUG" \
+  -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -march=native -ffast-math -flto -DNDEBUG" \
+  -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
 ## Usage
