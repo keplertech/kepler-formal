@@ -443,6 +443,25 @@ void BuildPrimaryOutputClauses::build() {
                .getString()
                .c_str());
 
+    DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
+    if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end()) {
+      POs_[i] = iso2boolExpr_[isoID];
+      #ifdef DEBUG_CHECKS
+      assert(POs_[i] != nullptr);
+      #endif
+      #ifdef DEBUG_PRINTS
+      printf("Reusing iso output %s for output %s\n",
+             POs_[i]->toString().c_str(),
+             get()
+                 ->getDNLTerminalFromID(out)
+                 .getSnlBitTerm()
+                 ->getName()
+                 .getString()
+                 .c_str());
+      #endif
+      return;
+    }
+    
     SNLLogicCloud cloud(out, IsPIs_, IsPOs_);
     #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
@@ -548,6 +567,7 @@ void BuildPrimaryOutputClauses::build() {
     cloud.destroy();
     // BoolExpr::getMutex().unlock();
     // printf("size of expr: %lu\n", POs_.back()->size());
+    iso2boolExpr_[isoID] = POs_[i];
   };
 
   if (getenv("KEPLER_NO_MT")) {

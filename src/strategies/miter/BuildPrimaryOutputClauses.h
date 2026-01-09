@@ -5,6 +5,7 @@
 #include <vector>
 #include "BoolExpr.h"
 #include "DNL.h"
+#include <tbb/concurrent_unordered_map.h>
 
 #pragma once
 
@@ -50,6 +51,8 @@ class BuildPrimaryOutputClauses {
   naja::DNL::DNLID getDNLIDforOutput(size_t index) const {
     return outputs_[index];
   }
+
+  static tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> iso2boolExpr_;
 
  private:
   std::vector<naja::DNL::DNLID> collectInputs();

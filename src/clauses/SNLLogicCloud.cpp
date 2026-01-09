@@ -13,56 +13,62 @@ typedef std::pair<
     std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>,
     size_t>
     IterationInputsETSPair;
-tbb::enumerable_thread_specific<IterationInputsETSPair>
-    currentIterationInputsETS;
-tbb::enumerable_thread_specific<IterationInputsETSPair> newIterationInputsETS;
+// tbb::enumerable_thread_specific<IterationInputsETSPair>
+//     currentIterationInputsETS;
+// tbb::enumerable_thread_specific<IterationInputsETSPair> newIterationInputsETS;
 
-tbb::concurrent_vector<IterationInputsETSPair*>
-    currentIterationInputsETSvector =
-        tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
+// tbb::concurrent_vector<IterationInputsETSPair*>
+//     currentIterationInputsETSvector =
+//         tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
 
-tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector =
-    tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
+// tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector =
+//     tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
 
-void initCurrentIterationInputsETS() {
-  // LCOV_EXCL_START
-  if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      currentIterationInputsETSvector.emplace_back(nullptr);
-    }
-  }
-  // LCOV_EXCL_STOP
-  if (currentIterationInputsETSvector
-          [tbb::this_task_arena::current_thread_index()] == nullptr) {
-    currentIterationInputsETSvector
-        [tbb::this_task_arena::current_thread_index()] =
-            &currentIterationInputsETS.local();
-  }
-}
+// void initCurrentIterationInputsETS() {
+//   // LCOV_EXCL_START
+//   if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       currentIterationInputsETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   // LCOV_EXCL_STOP
+//   if (currentIterationInputsETSvector
+//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     currentIterationInputsETSvector
+//         [tbb::this_task_arena::current_thread_index()] =
+//             &currentIterationInputsETS.local();
+//   }
+// }
+
+thread_local IterationInputsETSPair currentIterationInputsETS;
 
 IterationInputsETSPair& getCurrentIterationInputsETS() {
-  return *currentIterationInputsETSvector
-      [tbb::this_task_arena::current_thread_index()];
+  //return *currentIterationInputsETSvector
+  //    [tbb::this_task_arena::current_thread_index()];
+  return currentIterationInputsETS;
 }
 
-void initNewIterationInputsETS() {
-  // LCOV_EXCL_START
-  if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      newIterationInputsETSvector.emplace_back(nullptr);
-    }
-  }
-  // LCOV_EXCL_STOP
-  if (newIterationInputsETSvector
-          [tbb::this_task_arena::current_thread_index()] == nullptr) {
-    newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] =
-        &newIterationInputsETS.local();
-  }
-}
+// void initNewIterationInputsETS() {
+//   // LCOV_EXCL_START
+//   if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       newIterationInputsETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   // LCOV_EXCL_STOP
+//   if (newIterationInputsETSvector
+//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] =
+//         &newIterationInputsETS.local();
+//   }
+// }
+
+thread_local IterationInputsETSPair newIterationInputsETS;
 
 IterationInputsETSPair& getNewIterationInputsETS() {
-  return *newIterationInputsETSvector
-      [tbb::this_task_arena::current_thread_index()];
+  //return *newIterationInputsETSvector
+  //    [tbb::this_task_arena::current_thread_index()];
+  return newIterationInputsETS;
 }
 
 void clearCurrentIterationInputsETS() {
@@ -141,42 +147,50 @@ void copyNewIterationInputsETStoCurrent() {
 //        tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
 //        inputsToMerge;
 
-tbb::enumerable_thread_specific<
-    std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-                     tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
-                                                 naja::DNL::DNLID>>>,
-                  size_t>>
+// tbb::enumerable_thread_specific<
+//     std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+//                      tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+//                                                  naja::DNL::DNLID>>>,
+//                   size_t>>
+//     inputsToMergeETS;
+
+// tbb::concurrent_vector<
+//     std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+//                          tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+//                                                      naja::DNL::DNLID>>>,
+//                   size_t>*>
+//     inputsToMergeETSvector;
+
+// void initInputsToMergeETS() {
+//   if (inputsToMergeETSvector.size() <=
+//       tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = inputsToMergeETSvector.size();
+//          i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       inputsToMergeETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   if (inputsToMergeETSvector
+//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     inputsToMergeETSvector[tbb::this_task_arena::current_thread_index()] =
+//         &inputsToMergeETS.local();
+//   }
+// }
+
+thread_local std::pair<
+    std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+                tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+                                            naja::DNL::DNLID>>>,
+    size_t>
     inputsToMergeETS;
-
-tbb::concurrent_vector<
-    std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-                         tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
-                                                     naja::DNL::DNLID>>>,
-                  size_t>*>
-    inputsToMergeETSvector;
-
-void initInputsToMergeETS() {
-  if (inputsToMergeETSvector.size() <=
-      tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = inputsToMergeETSvector.size();
-         i <= tbb::this_task_arena::current_thread_index(); i++) {
-      inputsToMergeETSvector.emplace_back(nullptr);
-    }
-  }
-  if (inputsToMergeETSvector
-          [tbb::this_task_arena::current_thread_index()] == nullptr) {
-    inputsToMergeETSvector[tbb::this_task_arena::current_thread_index()] =
-        &inputsToMergeETS.local();
-  }
-}
 
 std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
                       tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
                                                   naja::DNL::DNLID>>>, size_t>&
 getInputsToMergeETS() {
-  initInputsToMergeETS();
-  return *inputsToMergeETSvector
-      [tbb::this_task_arena::current_thread_index()];
+  //initInputsToMergeETS();
+  //return *inputsToMergeETSvector
+  //    [tbb::this_task_arena::current_thread_index()];
+  return inputsToMergeETS;
 }
 
 void clearInputsToMergeETS() {
@@ -203,6 +217,117 @@ size_t sizeOfInputsToMergeETS() {
   return getInputsToMergeETS().first.size();
 }
 
+// 2 level vector visited terms pair - 1st: termID, 2nd: termID
+typedef std::vector<
+    std::unordered_set<naja::DNL::DNLID, 
+                                                 std::hash<naja::DNL::DNLID>,
+                                                 std::equal_to<naja::DNL::DNLID>,
+                                                 tbb::tbb_allocator<naja::DNL::DNLID>>,
+    tbb::tbb_allocator<std::unordered_set<naja::DNL::DNLID, 
+                                                 std::hash<naja::DNL::DNLID>,
+                                                 std::equal_to<naja::DNL::DNLID>,
+                                                 tbb::tbb_allocator<naja::DNL::DNLID>>>>
+    VisitedTermsPairsVec;
+
+//tbb::enumerable_thread_specific<VisitedTermsPairsVec> visitedTermsPairsETS;
+
+//tbb::concurrent_vector<VisitedTermsPairsVec*>
+//    visitedTermsPairsETSvector;
+
+thread_local VisitedTermsPairsVec visitedTermsPairsETS;
+
+// void initVisitedTermsPairsETS() {
+//   if (visitedTermsPairsETSvector.size() <=
+//       tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = visitedTermsPairsETSvector.size();
+//          i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       visitedTermsPairsETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   if (visitedTermsPairsETSvector
+//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     auto & visitedTermsPairsETSlocal = visitedTermsPairsETS.local();
+//     visitedTermsPairsETSvector
+//         [tbb::this_task_arena::current_thread_index()] =
+//             &visitedTermsPairsETSlocal;
+//     visitedTermsPairsETSlocal.resize(naja::DNL::get()->getDNLTerms().size()); // initial size
+//   }
+// }
+
+struct PairHash {
+  size_t operator()(const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& p) const noexcept {
+    // 64-bit combine; tweak for your DNLID type
+    uint64_t a = static_cast<uint64_t>(p.first);
+    uint64_t b = static_cast<uint64_t>(p.second);
+    return (a * 11400714819323198485ull) ^ (b + 0x9e3779b97f4a7c15ull + (a<<6) + (a>>2));
+    }
+  };
+  struct PairEq {
+    bool operator()(const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& x, const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& y) const noexcept {
+      return x.first == y.first && x.second == y.second;
+    }
+  };
+   using HandledSet = std::unordered_set<
+     std::pair<naja::DNL::DNLID,naja::DNL::DNLID>,
+     PairHash, PairEq,
+     tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>;
+
+thread_local HandledSet visitedTermsPairsETSSet;
+
+VisitedTermsPairsVec& getVisitedTermsPairsETS() {
+  //initVisitedTermsPairsETS();
+  //return *visitedTermsPairsETSvector
+  //    [tbb::this_task_arena::current_thread_index()];
+  return visitedTermsPairsETS;
+}
+
+void clearVisitedTermsPairsETS() {
+  //initVisitedTermsPairsETS();
+  // auto& visitedTermsPairs = getVisitedTermsPairsETS();
+  // visitedTermsPairs.resize(naja::DNL::get()->getDNLTerms().size());
+  // for (auto& vec : visitedTermsPairs) {
+  //   vec.clear();
+  // }
+  //visitedTermsPairs.clear();
+  visitedTermsPairsETSSet.clear();
+}
+
+thread_local std::pair<naja::DNL::DNLID, naja::DNL::DNLID> tempPairETS;
+
+bool isPairVisitedETS(naja::DNL::DNLID termA,
+                              naja::DNL::DNLID termB) {
+  // if (termA == -1 || termB == -1) {
+  //   throw std::runtime_error("Negative term ID in isPairVisitedETS");
+  // }
+  // auto& visitedTermsPairs = getVisitedTermsPairsETS();
+  // //size_t maxTermID =
+  // //    std::max(termA, termB);
+  // auto &m = visitedTermsPairs[termA];
+  // // brute force search as vector is expected to be small(at max num of inputs of a primitive) 
+  // // and also to use emplace_back efficiency
+  // // for (const auto& t : v) {
+  // //   if (t == termB) {
+  // //     return true;
+  // //   }
+  // // }
+  // // v.emplace_back(termB);
+  // // auto& value = m[termB];
+  // // if (value) {
+  // //   return true;
+  // // }
+  // // value = true;
+  // if (!(m.insert(termB)).second) {
+  //   return true;
+  // }
+  // return false;
+  tempPairETS.first = termA;
+  tempPairETS.second = termB;
+  if (!(visitedTermsPairsETSSet.insert(tempPairETS)).second) {
+    return true;
+  }
+  return false;
+}
+
 // #define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
@@ -226,8 +351,8 @@ void SNLLogicCloud::compute() {
   // std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>
   // newIterationInputs;
   //initInputsToMergeETS();
-  initNewIterationInputsETS();
-  initCurrentIterationInputsETS();
+  //initNewIterationInputsETS();
+  //initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
   DEBUG_LOG("---- Begin!!\n");
@@ -318,27 +443,11 @@ void SNLLogicCloud::compute() {
       reachedPIs = false;
       break;
     }
-  }
-  struct PairHash {
-  size_t operator()(const std::pair<DNLID,DNLID>& p) const noexcept {
-    // 64-bit combine; tweak for your DNLID type
-    uint64_t a = static_cast<uint64_t>(p.first);
-    uint64_t b = static_cast<uint64_t>(p.second);
-    return (a * 11400714819323198485ull) ^ (b + 0x9e3779b97f4a7c15ull + (a<<6) + (a>>2));
-    }
-  };
-  struct PairEq {
-    bool operator()(const std::pair<DNLID,DNLID>& x, const std::pair<DNLID,DNLID>& y) const noexcept {
-      return x.first == y.first && x.second == y.second;
-    }
-  };
-  using HandledSet = std::unordered_set<
-    std::pair<DNLID,DNLID>,
-    PairHash, PairEq,
-    tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>; // allocator for buckets
+  } // allocator for buckets
 
-  HandledSet handledTerms;
-  handledTerms.reserve(naja::DNL::get()->getDNLTerms().size() / 4);
+  // HandledSet handledTerms;
+  // handledTerms.reserve(naja::DNL::get()->getDNLTerms().size() / 4);
+  clearVisitedTermsPairsETS();
   size_t iter = 0;
 
   while (!reachedPIs) {
@@ -494,8 +603,8 @@ void SNLLogicCloud::compute() {
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
           //size_t sizeBeofre = handledTerms.size();
-          auto [it, inserted] = handledTerms.insert({driver, termID});
-          if (!inserted) {
+          //auto [it, inserted] = handledTerms.insert({driver, termID});
+          if (isPairVisitedETS(driver, termID)) {
             DEBUG_LOG(
                 "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
                 "skipping\n",

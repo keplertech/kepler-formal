@@ -29,29 +29,32 @@ using namespace naja::NL;
 using namespace KEPLER_FORMAL;
 
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> TermsPair;
-tbb::enumerable_thread_specific<TermsPair> termsETS;
-tbb::concurrent_vector<TermsPair*> termsETSvector;
+// tbb::enumerable_thread_specific<TermsPair> termsETS;
+// tbb::concurrent_vector<TermsPair*> termsETSvector;
 
-void initTermsETS() {
-  if (termsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = termsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      termsETSvector.emplace_back(nullptr);
-    }
-  }
-  if (termsETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-    termsETSvector[tbb::this_task_arena::current_thread_index()] = &termsETS.local();
-  }
-}
+// void initTermsETS() {
+//   if (termsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = termsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       termsETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   if (termsETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     termsETSvector[tbb::this_task_arena::current_thread_index()] = &termsETS.local();
+//   }
+// }
+
+thread_local TermsPair termsETS;
 
 TermsPair& getTErmsETS() {
-  initTermsETS();
-  size_t idx = tbb::this_task_arena::current_thread_index();
-  if (idx >= termsETSvector.size() || termsETSvector[idx] == nullptr) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("getTErmsETS: not initialized for this thread");
-    // LCOV_EXCL_STOP
-  }
-  return *termsETSvector[idx];
+  // initTermsETS();
+  // size_t idx = tbb::this_task_arena::current_thread_index();
+  // if (idx >= termsETSvector.size() || termsETSvector[idx] == nullptr) {
+  //   // LCOV_EXCL_START
+  //   throw std::runtime_error("getTErmsETS: not initialized for this thread");
+  //   // LCOV_EXCL_STOP
+  // }
+  // return *termsETSvector[idx];
+  return termsETS;
 }
 
 size_t sizeOfTermsETS() {
@@ -93,29 +96,32 @@ bool emptyTermsETS() {
 
 // same for std::vector<bool, tbb::tbb_allocator<bool>>
 typedef std::pair<std::vector<uint8_t, tbb::tbb_allocator<uint8_t>>, size_t> RelevantPair;
-tbb::enumerable_thread_specific<RelevantPair> relevantETS;
-tbb::concurrent_vector<RelevantPair*> relevantETSvector;
+// tbb::enumerable_thread_specific<RelevantPair> relevantETS;
+// tbb::concurrent_vector<RelevantPair*> relevantETSvector;
 
-void initRelevantETS() {
-  if (relevantETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = relevantETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      relevantETSvector.emplace_back(nullptr);
-    }
-  }
-  if (relevantETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-    relevantETSvector[tbb::this_task_arena::current_thread_index()] = &relevantETS.local();
-  }
-}
+// void initRelevantETS() {
+//   if (relevantETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = relevantETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       relevantETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   if (relevantETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     relevantETSvector[tbb::this_task_arena::current_thread_index()] = &relevantETS.local();
+//   }
+// }
+
+thread_local RelevantPair relevantETS;
 
 RelevantPair& getRelevantETS() {
-  initRelevantETS();
-  size_t idx = tbb::this_task_arena::current_thread_index();
-  if (idx >= relevantETSvector.size() || relevantETSvector[idx] == nullptr) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("getRelevantETS: not initialized for this thread");
-    // LCOV_EXCL_STOP
-  }
-  return *relevantETSvector[idx];
+  // initRelevantETS();
+  // size_t idx = tbb::this_task_arena::current_thread_index();
+  // if (idx >= relevantETSvector.size() || relevantETSvector[idx] == nullptr) {
+  //   // LCOV_EXCL_START
+  //   throw std::runtime_error("getRelevantETS: not initialized for this thread");
+  //   // LCOV_EXCL_STOP
+  // }
+  // return *relevantETSvector[idx];
+  return relevantETS;
 }
 
 size_t sizeOfRelevantETS() {
@@ -182,29 +188,32 @@ void reserveRelevantETSwithFalse(size_t n) {
 // do same for std::vector<BoolExpr*,
 // tbb::tbb_allocator<BoolExpr*>> memo;
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> MemoPair;
-tbb::enumerable_thread_specific<MemoPair> memoETS;
-tbb::concurrent_vector<MemoPair*> memoETSvector;
+// tbb::enumerable_thread_specific<MemoPair> memoETS;
+// tbb::concurrent_vector<MemoPair*> memoETSvector;
 
-void initMemoETS() {
-  if (memoETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = memoETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      memoETSvector.emplace_back(nullptr);
-    }
-  }
-  if (memoETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-    memoETSvector[tbb::this_task_arena::current_thread_index()] = &memoETS.local();
-  }
-}
+thread_local MemoPair memoETS;
+
+// void initMemoETS() {
+//   if (memoETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = memoETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       memoETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   if (memoETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     memoETSvector[tbb::this_task_arena::current_thread_index()] = &memoETS.local();
+//   }
+// }
 
 MemoPair& getMemoETS() {
-  initMemoETS();
-  size_t idx = tbb::this_task_arena::current_thread_index();
-  if (idx >= memoETSvector.size() || memoETSvector[idx] == nullptr) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("getMemoETS: not initialized for this thread");
-    // LCOV_EXCL_STOP
-  }
-  return *memoETSvector[idx];
+  // initMemoETS();
+  // size_t idx = tbb::this_task_arena::current_thread_index();
+  // if (idx >= memoETSvector.size() || memoETSvector[idx] == nullptr) {
+  //   // LCOV_EXCL_START
+  //   throw std::runtime_error("getMemoETS: not initialized for this thread");
+  //   // LCOV_EXCL_STOP
+  // }
+  // return *memoETSvector[idx];
+  return memoETS;
 }
 
 size_t sizeOfMemoETS() {
@@ -266,29 +275,32 @@ BoolExpr* getMemoETS(size_t i) {
 // same for std::vector<BoolExpr*>,
 // tbb::tbb_allocator<BoolExpr*>> childF;
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildFETSPair;
-tbb::enumerable_thread_specific<ChildFETSPair> childFETS;
-tbb::concurrent_vector<ChildFETSPair*> childFETSvector;
+// tbb::enumerable_thread_specific<ChildFETSPair> childFETS;
+// tbb::concurrent_vector<ChildFETSPair*> childFETSvector;
 
-void initChildFETS() {
-  if (childFETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = childFETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      childFETSvector.emplace_back(nullptr);
-    }
-  }
-  if (childFETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-    childFETSvector[tbb::this_task_arena::current_thread_index()] = &childFETS.local();
-  }
-}
+thread_local ChildFETSPair childFETS;
+
+// void initChildFETS() {
+//   if (childFETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
+//     for (size_t i = childFETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
+//       childFETSvector.emplace_back(nullptr);
+//     }
+//   }
+//   if (childFETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
+//     childFETSvector[tbb::this_task_arena::current_thread_index()] = &childFETS.local();
+//   }
+// }
 
 ChildFETSPair& getChildFETS() {
-  initChildFETS();
-  size_t idx = tbb::this_task_arena::current_thread_index();
-  if (idx >= childFETSvector.size() || childFETSvector[idx] == nullptr) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("getChildFETS: not initialized for this thread");
-    // LCOV_EXCL_STOP
-  }
-  return *childFETSvector[idx];
+  // initChildFETS();
+  // size_t idx = tbb::this_task_arena::current_thread_index();
+  // if (idx >= childFETSvector.size() || childFETSvector[idx] == nullptr) {
+  //   // LCOV_EXCL_START
+  //   throw std::runtime_error("getChildFETS: not initialized for this thread");
+  //   // LCOV_EXCL_STOP
+  // }
+  // return *childFETSvector[idx];
+  return childFETS;
 }
 
 size_t sizeOfChildFETS() {
@@ -350,10 +362,12 @@ void setChildFETS(size_t i, BoolExpr* expr) {
 // same for stuck with frame
 using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
 //std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
-tbb::enumerable_thread_specific<std::vector<Frame, tbb::tbb_allocator<Frame>>> stackETS;
+//tbb::enumerable_thread_specific<std::vector<Frame, tbb::tbb_allocator<Frame>>> stackETS;
+
+thread_local std::vector<Frame, tbb::tbb_allocator<Frame>> stackETS;
 
 std::vector<Frame, tbb::tbb_allocator<Frame>>& getStackETS() {
-  return stackETS.local();
+  return stackETS;
 }
 
 // size_t toSizeT(const std::string& s) {
@@ -397,10 +411,10 @@ std::vector<Frame, tbb::tbb_allocator<Frame>>& getStackETS() {
 BoolExpr* Tree2BoolExpr::convert(
   const SNLTruthTableTree& tree, const std::vector<size_t>& varNames) {
 
-  initChildFETS();
-  initMemoETS();
-  initRelevantETS();
-  initTermsETS();
+  // initChildFETS();
+  // initMemoETS();
+  // initRelevantETS();
+  // initTermsETS();
 
   const auto root = tree.getRoot();
   if (!root) return nullptr;
@@ -437,13 +451,17 @@ BoolExpr* Tree2BoolExpr::convert(
   //std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
   auto & stack = getStackETS();
   stack.clear();
-  stack.reserve(maxID + 1);
+  //stack.reserve(maxID + 1);
   stack.emplace_back(root.get(), false);
 
   while (!stack.empty()) {
     Frame f = stack.back();
     stack.pop_back();
     const SNLTruthTableTree::Node* node = f.first;
+    naja::DNL::DNLID isoID = naja::DNL::DNLID_MAX;
+    if (node->type == SNLTruthTableTree::Node::Type::P) {
+      isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
+    }
     bool visited = f.second;
     size_t id = node->nodeID;
 
@@ -553,7 +571,10 @@ BoolExpr* Tree2BoolExpr::convert(
           }
 
           // guard against an empty terms list
-          if (emptyTermsETS()) { setMemoETS(id, BoolExpr::createFalse()); }
+          if (emptyTermsETS()) { 
+            setMemoETS(id, BoolExpr::createFalse());
+            //BuildPrimaryOutputClauses::iso2boolExpr_[isoID] = BoolExpr::createFalse();
+          }
           else {
             // fold into OR
             BoolExpr* expr = getTErmsETS().first[0];
@@ -561,6 +582,7 @@ BoolExpr* Tree2BoolExpr::convert(
               expr = BoolExpr::Or(expr, getTErmsETS().first[t]);
             }
             setMemoETS(id, expr);
+            //BuildPrimaryOutputClauses::iso2boolExpr_[isoID] = expr;
           }
         }
       }

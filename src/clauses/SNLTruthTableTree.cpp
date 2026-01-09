@@ -30,29 +30,32 @@ using namespace KEPLER_FORMAL;
 typedef std::pair<std::vector<KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf, tbb::tbb_allocator<KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf>>, size_t> BorderLeavesPair;
 
 // ets for std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> newBorderLeaves;
-tbb::enumerable_thread_specific<BorderLeavesPair> newBorderLeavesETS;
+// tbb::enumerable_thread_specific<BorderLeavesPair> newBorderLeavesETS;
 
-tbb::concurrent_vector<BorderLeavesPair*>
-    newBorderLeavesETSVector =
-        tbb::concurrent_vector<BorderLeavesPair*>(40, nullptr);
+// tbb::concurrent_vector<BorderLeavesPair*>
+//     newBorderLeavesETSVector =
+//         tbb::concurrent_vector<BorderLeavesPair*>(40, nullptr);
 
-void initNewBorderLeavesETS() {
- size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
- if (newBorderLeavesETSVector.size() <= idx) {
-    for (size_t i = newBorderLeavesETSVector.size(); i <= idx; i++) {
-      newBorderLeavesETSVector.emplace_back(nullptr);
-    }
-  }
-  if (newBorderLeavesETSVector
-          [idx] == nullptr) {
-    newBorderLeavesETSVector[idx] =
-        &newBorderLeavesETS.local();
-  }
-}
+// void initNewBorderLeavesETS() {
+//  size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
+//  if (newBorderLeavesETSVector.size() <= idx) {
+//     for (size_t i = newBorderLeavesETSVector.size(); i <= idx; i++) {
+//       newBorderLeavesETSVector.emplace_back(nullptr);
+//     }
+//   }
+//   if (newBorderLeavesETSVector
+//           [idx] == nullptr) {
+//     newBorderLeavesETSVector[idx] =
+//         &newBorderLeavesETS.local();
+//   }
+// }
+
+thread_local BorderLeavesPair newBorderLeavesETS;
 
 BorderLeavesPair& getNewBorderLeavesETS() {
-  size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-  return *newBorderLeavesETSVector[idx];
+  //size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
+  //return *newBorderLeavesETSVector[idx];
+  return newBorderLeavesETS;
 }
 
 size_t getSizeOfNewBorderLeavesETS() {
@@ -88,32 +91,35 @@ using NodeRaw = SNLTruthTableTree::Node*;
 using NodeVecRaw = std::vector<NodeRaw, tbb::tbb_allocator<NodeRaw>>;
 using NodeVecVecRaw = std::vector<NodeVecRaw, tbb::tbb_allocator<NodeVecRaw>>;
 using ResolvedChildrenPairRaw = std::pair<NodeVecVecRaw, size_t>;
-tbb::enumerable_thread_specific<ResolvedChildrenPairRaw> resolvedChildrenETS;
+// tbb::enumerable_thread_specific<ResolvedChildrenPairRaw> resolvedChildrenETS;
 
-tbb::concurrent_vector<ResolvedChildrenPairRaw*>
-    resolvedChildrenETSVector =
-        tbb::concurrent_vector<ResolvedChildrenPairRaw*>(40, nullptr);
+// tbb::concurrent_vector<ResolvedChildrenPairRaw*>
+//     resolvedChildrenETSVector =
+//         tbb::concurrent_vector<ResolvedChildrenPairRaw*>(40, nullptr);
 
-void initResolvedChildrenETS() {
-  size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-  if (resolvedChildrenETSVector.size() <=
-      idx) {
-    for (size_t i = resolvedChildrenETSVector.size();
-         i <= idx; i++) {
-      resolvedChildrenETSVector.emplace_back(nullptr);
-    }
-  }
-  if (resolvedChildrenETSVector
-          [idx] == nullptr) {
-    resolvedChildrenETSVector[idx] =
-        &resolvedChildrenETS.local();
-  }
-}
+// void initResolvedChildrenETS() {
+//   size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
+//   if (resolvedChildrenETSVector.size() <=
+//       idx) {
+//     for (size_t i = resolvedChildrenETSVector.size();
+//          i <= idx; i++) {
+//       resolvedChildrenETSVector.emplace_back(nullptr);
+//     }
+//   }
+//   if (resolvedChildrenETSVector
+//           [idx] == nullptr) {
+//     resolvedChildrenETSVector[idx] =
+//         &resolvedChildrenETS.local();
+//   }
+// }
+
+thread_local ResolvedChildrenPairRaw resolvedChildrenETS;
 
 ResolvedChildrenPairRaw& getResolvedChildrenETS() {
-  size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-  return *resolvedChildrenETSVector
-      [idx];
+  //size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
+  //return *resolvedChildrenETSVector
+  //    [idx];
+  return resolvedChildrenETS;
 }
 
 size_t getSizeOfResolvedChildrenETS() {
@@ -245,10 +251,12 @@ static std::shared_ptr<SNLTruthTableTree::Node> nullNodePtr = nullptr;
 //----------------------------------------------------------------------
 const std::shared_ptr<SNLTruthTableTree::Node>& SNLTruthTableTree::nodeFromId(
     uint32_t id) const {
-  if (id == kInvalidId)
-    return nullNodePtr;
-  if (id < kIdOffset)
-    return nullNodePtr;
+  //if (id == kInvalidId)
+  //  return nullNodePtr;
+  assert((id != kInvalidId));
+  //if (id < kIdOffset)
+  //  return nullNodePtr;
+  assert((id >= kIdOffset));
   size_t idx = (size_t)(id - kIdOffset);
   if (idx >= nodes_.size())
     return nullNodePtr;
@@ -256,12 +264,13 @@ const std::shared_ptr<SNLTruthTableTree::Node>& SNLTruthTableTree::nodeFromId(
   if (!sp)
     return nullNodePtr;
   // sanity check: nodeID must match slot
-  if (sp->nodeID != id) {
-    fprintf(stderr,
-            "nodeFromId: id mismatch requested=%u slot=%zu node->nodeID=%u\n",
-            id, idx, sp->nodeID);
-    return nullNodePtr;
-  }
+  // if (sp->nodeID != id) {
+  //   fprintf(stderr,
+  //           "nodeFromId: id mismatch requested=%u slot=%zu node->nodeID=%u\n",
+  //           id, idx, sp->nodeID);
+  //   return nullNodePtr;
+  // }
+  assert((sp->nodeID == id));
   return sp;
 }
 
@@ -382,20 +391,23 @@ void SNLTruthTableTree::updateBorderLeaves() {
   // std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
 
   // with:
-  std::unordered_set<uint32_t,
-                    std::hash<uint32_t>,
-                    std::equal_to<uint32_t>,
-                    tbb::tbb_allocator<uint32_t>> visited;
-  visited.reserve(nodes_.size() * 2);        // avoid rehashes; tune factor to expected size
-  visited.max_load_factor(0.7f);             // optional: control bucket density
-
+  // std::unordered_set<uint32_t,
+  //                   std::hash<uint32_t>,
+  //                   std::equal_to<uint32_t>,
+  //                   tbb::tbb_allocator<uint32_t>> visited;
+  // visited.reserve(nodes_.size() * 2);        // avoid rehashes; tune factor to expected size
+  // visited.max_load_factor(0.7f);             // optional: control bucket density
+  markAllUnvisited();
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
-    auto [itr, inserted] = visited.insert(nid);
-    if (!inserted)
-      continue;
+    //auto [itr, inserted] = visited.insert(nid);
+    //if (!inserted)
+    //  continue;
     const auto& nsp = nodeFromId(nid).get();
+    if (nsp->visited)
+      continue;
+    nsp->visited = true;
     if (!nsp)
       assert(false && "updateBorderLeaves: null node in tree");
     assert(nsp->childrenIds.size() > 0);
@@ -442,15 +454,15 @@ void SNLTruthTableTree::updateBorderLeaves() {
 //----------------------------------------------------------------------
 SNLTruthTableTree::SNLTruthTableTree()
     : rootId_(kInvalidId), numExternalInputs_(0) {
-      initNewBorderLeavesETS();
-      initResolvedChildrenETS();
+      //initNewBorderLeavesETS();
+      //initResolvedChildrenETS();
     }
 
 SNLTruthTableTree::SNLTruthTableTree(naja::DNL::DNLID instid,
                                      naja::DNL::DNLID termid,
                                      Node::Type type) {
-  initNewBorderLeavesETS();
-  initResolvedChildrenETS();
+  //initNewBorderLeavesETS();
+  //initResolvedChildrenETS();
   auto rootNode = std::make_shared<Node>(this, instid, termid, type);
   uint32_t id = allocateNode(rootNode);
   rootId_ = id;
@@ -1156,6 +1168,20 @@ void SNLTruthTableTree::destroy() {
   numExternalInputs_ = 0;
 }
 
+thread_local std::unordered_map<uint32_t, SNLTruthTableTree::Node*, std::hash<uint32_t>, std::equal_to<uint32_t>,
+   tbb::tbb_allocator<std::pair<const uint32_t, SNLTruthTableTree::Node*>>> mapById;
+thread_local std::unordered_map<uint32_t, SNLTruthTableTree::Node*, std::hash<uint32_t>, std::equal_to<uint32_t>,
+   tbb::tbb_allocator<std::pair<const uint32_t, SNLTruthTableTree::Node*>>> mapByNodeID;
+
+// Build reverse map from shared_ptr pointer (address) to canonical id
+using MapAlloc = tbb::tbb_allocator<std::pair<const SNLTruthTableTree::Node* const, uint32_t>>;
+
+thread_local std::unordered_map<const SNLTruthTableTree::Node*,
+                   uint32_t,
+                   std::hash<const SNLTruthTableTree::Node*>,
+                   std::equal_to<const SNLTruthTableTree::Node*>,
+                   MapAlloc> ptrToId;
+
 //----------------------------------------------------------------------
 // finalize: repair and validation after construction
 //----------------------------------------------------------------------
@@ -1186,12 +1212,11 @@ void SNLTruthTableTree::finalize() {
     return;
   size_t nodeSize = nodes_.size();
   // Build lookup maps
-  std::unordered_map<uint32_t, Node*, std::hash<uint32_t>, std::equal_to<uint32_t>,
-   tbb::tbb_allocator<std::pair<const uint32_t, Node*>>> mapById;
-  std::unordered_map<uint32_t, Node*, std::hash<uint32_t>, std::equal_to<uint32_t>,
-   tbb::tbb_allocator<std::pair<const uint32_t, Node*>>> mapByNodeID;
-  mapById.reserve(nodeSize * 2);
-  mapByNodeID.reserve(nodeSize * 2);
+  
+  //mapById.reserve(nodeSize * 2);
+  mapById.clear();
+  //mapByNodeID.reserve(nodeSize * 2);
+  mapByNodeID.clear();
 
   for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
@@ -1259,17 +1284,9 @@ void SNLTruthTableTree::finalize() {
     sp->nodeID = canonicalId;
     sp->tree = this;
   }
-
-  // Build reverse map from shared_ptr pointer (address) to canonical id
-  using MapAlloc = tbb::tbb_allocator<std::pair<const Node* const, uint32_t>>;
-
-  std::unordered_map<const Node*,
-                   uint32_t,
-                   std::hash<const Node*>,
-                   std::equal_to<const Node*>,
-                   MapAlloc> ptrToId;
   
-  ptrToId.reserve(nodeSize * 2);
+  //ptrToId.reserve(nodeSize * 2);
+  ptrToId.clear();
   for (size_t i = 0; i < nodeSize; ++i) {
     Node*  sp = nodes_[i].get();
     if (!sp)
@@ -1345,20 +1362,22 @@ void SNLTruthTableTree::finalize() {
   // std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
 
   // with:
-  std::unordered_set<uint32_t,
-                    std::hash<uint32_t>,
-                    std::equal_to<uint32_t>,
-                    tbb::tbb_allocator<uint32_t>> visited;
-  visited.reserve(nodeSize * 2);        // avoid rehashes; tune factor to expected size
-  visited.max_load_factor(0.7f);             // optional: control bucket density
-
+  // std::unordered_set<uint32_t,
+  //                   std::hash<uint32_t>,
+  //                   std::equal_to<uint32_t>,
+  //                   tbb::tbb_allocator<uint32_t>> visited;
+  // visited.reserve(nodeSize * 2);        // avoid rehashes; tune factor to expected size
+  // visited.max_load_factor(0.7f);             // optional: control bucket density
+  markAllUnvisited();
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
-    auto [itr, inserted] = visited.insert(nid);
-    if (!inserted)
-      continue;
+    //auto [itr, inserted] = visited.insert(nid);
+   
     Node* const n = nodeFromId(nid).get();
+     if (n->visited)
+      continue;
+    n->visited = true;
     if (!n)
       continue;
     for (size_t k = 0; k < n->childrenIds.size(); ++k) {

@@ -34,6 +34,8 @@ public:
     naja::DNL::DNLID termid; // 64-bit
   } data;
 
+  bool visited = false; // for traversals
+
   SNLTruthTable truthTable; 
 
   SNLTruthTableTree* tree = nullptr; // 8 bytes
@@ -111,6 +113,12 @@ private:
                          naja::DNL::DNLID termid);
 
   void updateBorderLeaves();
+
+  void markAllUnvisited() {
+    for (auto& n : nodes_) {
+      if (n) n->visited = false;
+    }
+  }
 
   std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>> nodes_;
   uint32_t rootId_ = kInvalidId;
