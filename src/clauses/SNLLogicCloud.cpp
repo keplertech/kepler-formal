@@ -8,6 +8,7 @@
 #include "tbb/concurrent_vector.h"
 #include "tbb/enumerable_thread_specific.h"
 #include "SNLPath.h"
+#include "Tree2BoolExpr.h"
 
 typedef std::pair<
     std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>,
@@ -536,9 +537,11 @@ void SNLLogicCloud::compute() {
         assert(iso.getDrivers().size() == 1 &&
                "Iso have no drivers and more than one reader, not supported");
       }
-
       const auto& driver = iso.getDrivers().front();
-      if (isInput(driver) /* || isOutput(driver)*/) {
+      
+      if (isInput(driver) /* || isOutput(driver)*/
+        || (Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
+          Tree2BoolExpr::iso2boolExpr_.end() && iter > 0)) {
         pushBackNewIterationInputsETS(driver);
         DEBUG_LOG(
             "- %lu After analyzing input %s(%lu), addings driver %s(%lu) is a "
@@ -642,7 +645,16 @@ void SNLLogicCloud::compute() {
     reachedPIs = true;
     size_t sizeOfNewInputs = sizeOfNewIterationInputsETS();
     for (size_t i = 0; i < sizeOfNewInputs; i++) {
-      if (!isInput(getNewIterationInputsETS().first[i])) {
+      auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+          dnl_.getDNLTerminalFromID(
+              getNewIterationInputsETS().first[i])
+              .getIsoID());
+      if (!isInput(getNewIterationInputsETS().first[i]) &&
+        (Tree2BoolExpr::iso2boolExpr_.find(
+            dnl_.getDNLTerminalFromID(
+                getNewIterationInputsETS().first[i])
+                .getIsoID()) == Tree2BoolExpr::iso2boolExpr_.end() || 
+                iso.getDrivers().front() != getNewIterationInputsETS().first[i])) {
         reachedPIs = false;
         break;
       }

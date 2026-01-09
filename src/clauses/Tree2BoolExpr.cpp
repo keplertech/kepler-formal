@@ -472,7 +472,7 @@ BoolExpr* Tree2BoolExpr::convert(
       naja::DNL::DNLID isoID = naja::DNL::DNLID_MAX;
       if (node->type != SNLTruthTableTree::Node::Type::Input) {
         isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
-        if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end()) {
+        if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end() && isoID != naja::DNL::DNLID_MAX) {
           setMemoETS(id, iso2boolExpr_[isoID]);
         }
       }
