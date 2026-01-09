@@ -444,8 +444,9 @@ void BuildPrimaryOutputClauses::build() {
                .c_str());
 
     DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
-    if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end()) {
-      POs_[i] = iso2boolExpr_[isoID];
+    DEBUG_LOG("isoID: %zu\n", isoID);
+    if (Tree2BoolExpr::iso2boolExpr_.find(isoID) != Tree2BoolExpr::iso2boolExpr_.end()) {
+      POs_[i] = Tree2BoolExpr::iso2boolExpr_[isoID];
       #ifdef DEBUG_CHECKS
       assert(POs_[i] != nullptr);
       #endif
@@ -567,9 +568,9 @@ void BuildPrimaryOutputClauses::build() {
     cloud.destroy();
     // BoolExpr::getMutex().unlock();
     // printf("size of expr: %lu\n", POs_.back()->size());
-    iso2boolExpr_[isoID] = POs_[i];
+    Tree2BoolExpr::iso2boolExpr_[isoID] = POs_[i];
   };
-
+  Tree2BoolExpr::iso2boolExpr_.clear();
   if (getenv("KEPLER_NO_MT")) {
     for (size_t i = 0; i < outputs_.size(); ++i) {
       processOutput(i);

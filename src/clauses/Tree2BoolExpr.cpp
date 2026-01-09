@@ -28,6 +28,9 @@
 using namespace naja::NL;
 using namespace KEPLER_FORMAL;
 
+tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> Tree2BoolExpr::iso2boolExpr_ =
+    tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*>();
+
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> TermsPair;
 // tbb::enumerable_thread_specific<TermsPair> termsETS;
 // tbb::concurrent_vector<TermsPair*> termsETSvector;
@@ -85,9 +88,9 @@ void pushBackTermsETS(BoolExpr* term) {
 }
 
 void reserveTermsETS(size_t n) {
-  auto& termsLocal = getTErmsETS();
-  if (termsLocal.first.size() >= n) return;
-  termsLocal.first.reserve(n);
+  // auto& termsLocal = getTErmsETS();
+  // if (termsLocal.first.size() >= n) return;
+  // termsLocal.first.reserve(n);
 }
 
 bool emptyTermsETS() {
@@ -459,13 +462,20 @@ BoolExpr* Tree2BoolExpr::convert(
     stack.pop_back();
     const SNLTruthTableTree::Node* node = f.first;
     naja::DNL::DNLID isoID = naja::DNL::DNLID_MAX;
-    if (node->type == SNLTruthTableTree::Node::Type::P) {
+    if (node->type != SNLTruthTableTree::Node::Type::Input) {
       isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
     }
     bool visited = f.second;
     size_t id = node->nodeID;
 
     if (!visited) {
+      naja::DNL::DNLID isoID = naja::DNL::DNLID_MAX;
+      if (node->type != SNLTruthTableTree::Node::Type::Input) {
+        isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
+        if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end()) {
+          setMemoETS(id, iso2boolExpr_[isoID]);
+        }
+      }
       if (getMemoETS(id) != nullptr) continue;
       if (node->type == SNLTruthTableTree::Node::Type::Table || node->type == SNLTruthTableTree::Node::Type::P) {
         stack.emplace_back(node, true);
@@ -502,10 +512,13 @@ BoolExpr* Tree2BoolExpr::convert(
         }
         if (name == 0) {
            setMemoETS(id, BoolExpr::createFalse());
+           iso2boolExpr_[isoID] = BoolExpr::createFalse();
         } else if (name == 1) {
            setMemoETS(id, BoolExpr::createTrue());
+           iso2boolExpr_[isoID] = BoolExpr::createTrue();
         } else {
           setMemoETS(id, BoolExpr::Var(name));
+          iso2boolExpr_[isoID] = BoolExpr::Var(name);
         }
       }
     } else {
@@ -516,8 +529,10 @@ BoolExpr* Tree2BoolExpr::convert(
 
       if (tbl.all0()) {
         setMemoETS(id, BoolExpr::createFalse());
+        iso2boolExpr_[isoID] = BoolExpr::createFalse();
       } else if (tbl.all1()) {
         setMemoETS(id, BoolExpr::createTrue());
+        iso2boolExpr_[isoID] = BoolExpr::createTrue();
       } else {
         // gather children
         clearChildFETS();
@@ -547,6 +562,7 @@ BoolExpr* Tree2BoolExpr::convert(
         // if nothing matters, fall back to constant-false
         if (numRelIdx == 0) {
           setMemoETS(id, BoolExpr::createFalse());
+          iso2boolExpr_[isoID] = BoolExpr::createFalse();
         } else {
           // build the DNF terms
           clearTermsETS();
@@ -573,7 +589,7 @@ BoolExpr* Tree2BoolExpr::convert(
           // guard against an empty terms list
           if (emptyTermsETS()) { 
             setMemoETS(id, BoolExpr::createFalse());
-            //BuildPrimaryOutputClauses::iso2boolExpr_[isoID] = BoolExpr::createFalse();
+            iso2boolExpr_[isoID] = BoolExpr::createFalse();
           }
           else {
             // fold into OR
@@ -582,7 +598,7 @@ BoolExpr* Tree2BoolExpr::convert(
               expr = BoolExpr::Or(expr, getTErmsETS().first[t]);
             }
             setMemoETS(id, expr);
-            //BuildPrimaryOutputClauses::iso2boolExpr_[isoID] = expr;
+            iso2boolExpr_[isoID] = expr;
           }
         }
       }

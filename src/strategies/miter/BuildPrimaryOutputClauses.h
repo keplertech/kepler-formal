@@ -52,8 +52,6 @@ class BuildPrimaryOutputClauses {
     return outputs_[index];
   }
 
-  static tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> iso2boolExpr_;
-
  private:
   std::vector<naja::DNL::DNLID> collectInputs();
   void setInputs2InputsIDs();
