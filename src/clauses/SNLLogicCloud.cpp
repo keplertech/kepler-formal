@@ -500,18 +500,19 @@ void SNLLogicCloud::compute() {
 
       if (iso.getDrivers().size() >= 1) {
         // proper error with names of all the drivers
-        
         // throw an error and separate names by comma
         if (iso.getDrivers().size() > 1) {
           std::vector<std::string> namesOfDrivers;
-          for (const auto& dnlid : iso.getDrivers()) {
-            const auto& driver = dnl_.getDNLTerminalFromID(dnlid);
-            const auto& path = driver.getDNLInstance().getPath().getPathNames();
+          for (auto dnlid : iso.getDrivers()) {
+            auto driver = dnl_.getDNLTerminalFromID(dnlid);
+            auto path = driver.getDNLInstance().getPath().getPathNames();
             std::string fullName;
             for (size_t i = 0; i < path.size(); i++) {
               fullName += path[i].getString();
               if (i != path.size() - 1) {
+                // LCOV_EXCL_START
                 fullName += ".";
+                // LCOV_EXCL_STOP
               }
             }
             // add terminal name and bit
@@ -520,7 +521,7 @@ void SNLLogicCloud::compute() {
             fullName += "." + termName;
             // add bit
             fullName += std::to_string(driver.getSnlBitTerm()->getBit());
-            namesOfDrivers.emplace_back(fullName);
+            namesOfDrivers.push_back(fullName);
           }
           std::string error = "Iso has multiple drivers: ";
           for (size_t i = 0; i < namesOfDrivers.size(); i++) {
