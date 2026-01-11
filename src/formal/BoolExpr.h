@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include "BoolExprCache.h"
-#include "tbb/concurrent_unordered_map.h"
+//#include "tbb/concurrent_unordered_map.h"
 
 namespace KEPLER_FORMAL {
 
@@ -23,18 +23,18 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
 
  public:
   // Convenient constants
-  static std::shared_ptr<BoolExpr> createFalse() { return Var(0); }
-  static std::shared_ptr<BoolExpr> createTrue() { return Var(1); }
+  static BoolExpr* createFalse() { return Var(0); }
+  static BoolExpr* createTrue() { return Var(1); }
 
   // Factory methods (canonical, fold constants, share structure)
-  static std::shared_ptr<BoolExpr> Var(size_t id);
-  static std::shared_ptr<BoolExpr> Not(const std::shared_ptr<BoolExpr>& a);
-  static std::shared_ptr<BoolExpr> And(const std::shared_ptr<BoolExpr>& a,
-                                       const std::shared_ptr<BoolExpr>& b);
-  static std::shared_ptr<BoolExpr> Or(const std::shared_ptr<BoolExpr>& a,
-                                      const std::shared_ptr<BoolExpr>& b);
-  static std::shared_ptr<BoolExpr> Xor(const std::shared_ptr<BoolExpr>& a,
-                                       const std::shared_ptr<BoolExpr>& b);
+  static BoolExpr* Var(size_t id);
+  static BoolExpr* Not(BoolExpr* a);
+  static BoolExpr* And(BoolExpr* a,
+                                       BoolExpr* b);
+  static BoolExpr* Or(BoolExpr* a,
+                                      BoolExpr* b);
+  static BoolExpr* Xor(BoolExpr* a,
+                                       BoolExpr* b);
 
   // Print and stringify
   void Print(std::ostream& out) const;
@@ -46,8 +46,8 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   // Accessors
   Op getOp() const { return op_; }
   size_t getId() const { return varID_; }
-  std::shared_ptr<BoolExpr> getLeft() const { return left_; }
-  std::shared_ptr<BoolExpr> getRight() const { return right_; }
+  BoolExpr* getLeft() const { return left_; }
+  BoolExpr* getRight() const { return right_; }
   std::string getName() const {
     if (op_ != Op::VAR)
       throw std::logic_error("getName: not a variable");
@@ -83,19 +83,19 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   }
   // Simplify/optimize an expression DAG (returns interned canonical node)
   // Memoized, safe on DAGs.
-  static std::shared_ptr<BoolExpr> simplify(const std::shared_ptr<BoolExpr>& e);
+  static BoolExpr* simplify(BoolExpr* e);
 
  private:
   // Private ctor: use factory methods
   BoolExpr(Op op,
            size_t id,
-           const std::shared_ptr<BoolExpr>& a,
-           const std::shared_ptr<BoolExpr>& b);
+           BoolExpr* a,
+           BoolExpr* b);
 
   Op op_ = Op::NONE;
   size_t varID_ = (size_t)-1;  // only for VAR
-  std::shared_ptr<BoolExpr> left_ = nullptr;
-  std::shared_ptr<BoolExpr> right_ = nullptr;
+  BoolExpr* left_ = nullptr;
+  BoolExpr* right_ = nullptr;
   // size_t index_ = (size_t) -1;
 
   static std::string OpToString(Op);
@@ -114,8 +114,8 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
       uint64_t a = splitmix64(uint64_t(std::hash<int>()(int(k.op))) + s);
       uint64_t b =
           splitmix64(uint64_t(std::hash<size_t>()(k.varId)) ^ (s << 1));
-      uint64_t c = splitmix64(uint64_t(std::uintptr_t(k.l.get())) + (s >> 1));
-      uint64_t d = splitmix64(uint64_t(std::uintptr_t(k.r.get())) ^ (s << 2));
+      uint64_t c = splitmix64(uint64_t(std::uintptr_t(k.l)) + (s >> 1));
+      uint64_t d = splitmix64(uint64_t(std::uintptr_t(k.r)) ^ (s << 2));
       uint64_t acc = a;
       acc = splitmix64(acc ^
                        (b + 0x9e3779b97f4a7c15ULL + (acc << 6) + (acc >> 2)));
@@ -133,14 +133,14 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
 
   // Global weak-map: BoolExprCache::Key → shared instance
   // guarded by tableMutex_ on every access
-  static tbb::concurrent_unordered_map<BoolExprCache::Key,
-                                       std::weak_ptr<BoolExpr>,
-                                       KeyHash,
-                                       KeyEq>
-      table_;
+  // static tbb::concurrent_unordered_map<BoolExprCache::Key,
+  //                                      std::weak_ptr<BoolExpr>,
+  //                                      KeyHash,
+  //                                      KeyEq>
+  //     table_;
 
   // Interning constructor (caller must lock tableMutex_)
-  static std::shared_ptr<BoolExpr> createNode(BoolExprCache::Key const& k);
+  static BoolExpr* createNode(BoolExprCache::Key const& k);
 };
 
 }  // namespace KEPLER_FORMAL

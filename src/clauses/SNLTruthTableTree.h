@@ -34,6 +34,8 @@ public:
     naja::DNL::DNLID termid; // 64-bit
   } data;
 
+  bool visited = false; // for traversals
+
   SNLTruthTable truthTable; 
 
   SNLTruthTableTree* tree = nullptr; // 8 bytes
@@ -56,6 +58,12 @@ public:
     const SNLTruthTable& getTruthTable() const;
   };
 
+  struct BorderLeaf {
+    uint32_t parentId;
+    size_t childPos;
+    size_t extIndex;
+  };
+
   static constexpr uint32_t kReservedId0 = 0u;
   static constexpr uint32_t kReservedId1 = 1u;
   static constexpr uint32_t kIdOffset = 2u; // id = index + kIdOffset
@@ -72,7 +80,7 @@ public:
               naja::DNL::DNLID termid);
 
   void concatFull(const std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-            tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>& tables);
+            tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>& tables, size_t size);
 
   uint32_t getRootId() const { return rootId_; }
   const std::shared_ptr<Node>& getRootShared() const { return nodeFromId(rootId_); }
@@ -99,17 +107,18 @@ public:
   }
 
 private:
-  struct BorderLeaf {
-    uint32_t parentId;
-    size_t childPos;
-    size_t extIndex;
-  };
 
   const Node& concatBody(size_t borderIndex,
                          naja::DNL::DNLID instid,
                          naja::DNL::DNLID termid);
 
   void updateBorderLeaves();
+
+  void markAllUnvisited() {
+    for (auto& n : nodes_) {
+      if (n) n->visited = false;
+    }
+  }
 
   std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>> nodes_;
   uint32_t rootId_ = kInvalidId;

@@ -9,14 +9,16 @@
 
 #include "BoolExpr.h"
 #include "SNLTruthTableTree.h"
+#include <tbb/concurrent_unordered_map.h>
 
 namespace KEPLER_FORMAL {
 
 /// Convert a truth-table tree directly into a BoolExpr
 class Tree2BoolExpr {
  public:
-  static std::shared_ptr<BoolExpr> convert(const SNLTruthTableTree& tree,
+  static BoolExpr* convert(const SNLTruthTableTree& tree,
                                            const std::vector<size_t>& varNames);
+  static tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> iso2boolExpr_;
 };
 
 }  // namespace KEPLER_FORMAL

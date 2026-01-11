@@ -39,9 +39,9 @@ class MiterStrategy {
   const std::vector<naja::DNL::DNLID>& getPIs0() const { return PIs0_; }
   const std::vector<naja::DNL::DNLID>& getPIs1() const { return PIs1_; }
  private:
-  std::shared_ptr<BoolExpr> buildMiter(
-      const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& A,
-      const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& B) const;
+  BoolExpr* buildMiter(
+      const tbb::concurrent_vector<BoolExpr*>& A,
+      const tbb::concurrent_vector<BoolExpr*>& B) const;
   BuildPrimaryOutputClauses builder0_;
   BuildPrimaryOutputClauses builder1_;
   static naja::NL::SNLDesign* top0_;

@@ -7,6 +7,8 @@
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
 #include "SNLPath.h"
+#include <thread>
+#include <tbb/global_control.h>
 
 // #define DEBUG_PRINTS
 // #define DEBUG_CHECKS
@@ -38,7 +40,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   }
 
   for (DNLID leaf : dnl->getLeaves()) {
-    DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
+    const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     size_t numberOfInputs = 0, numberOfOutputs = 0;
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
@@ -174,7 +176,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
   for (DNLID leaf : dnl->getLeaves()) {
-    DNLInstanceFull instance = dnl->getDNLInstanceFromID(leaf);
+    const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     bool isSequential = false;
     std::vector<SNLBitTerm*> seqBitTerms;
 
@@ -276,10 +278,13 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
               if (localBit >= 64) {
                 // std::fprintf(stderr, "localBit out of range: %llu\n",
                 //             static_cast<unsigned long long>(localBit));
-                break;
+                // LCOV_EXCL_START
+                continue;
+                // LCOV_EXCL_STOP
               }
 
               // Correct shift using 1ULL and parentheses
+              assert(localBit < 64);
               uint64_t mask = (1ULL << localBit);
               // std::printf("mask = 0x%llx\n", static_cast<unsigned long
               // long>(mask));
@@ -403,7 +408,7 @@ void BuildPrimaryOutputClauses::initVarNames() {
 void BuildPrimaryOutputClauses::build() {
   naja::DNL::get();
   POs_.clear();
-  POs_ = tbb::concurrent_vector<std::shared_ptr<BoolExpr>>(outputs_.size());
+  POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
   initVarNames();
   // Init var names(counting on the fact that normalization happened before)
 
@@ -414,10 +419,23 @@ void BuildPrimaryOutputClauses::build() {
   size_t processedOutputs = 0;
   // tbb::task_arena arena(20);
   //  init arena with automatic number of threads
-  tbb::task_arena arena(40);
+  // unsigned hw = std::thread::hardware_concurrency(); 
+  // if (hw == 0) hw = 1; // fallback 
+  tbb::global_control gc(tbb::global_control::max_allowed_parallelism, 20);
+  tbb::task_arena arena(20);
+  arena.initialize();
+  IsPIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
+  for (auto pi : inputs_) {
+    IsPIs_[pi] = true;
+  }
+  IsPOs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
+  for (auto po : outputs_) {
+    IsPOs_[po] = true;
+  }
   auto processOutput = [&](size_t i) {
     DNLID out = outputs_[i];
-    DEBUG_LOG("Procssing output %zu/%zu: %s\n", ++processedOutputs,
+    #ifdef DEBUG_PRINTS
+    printf("Procssing output %zu/%zu: %s\n", ++processedOutputs,
            outputs_.size(),
            get()
                ->getDNLTerminalFromID(out)
@@ -425,9 +443,38 @@ void BuildPrimaryOutputClauses::build() {
                ->getName()
                .getString()
                .c_str());
+    #endif
 
-    SNLLogicCloud cloud(out, inputs_, outputs_);
+    DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
+    DEBUG_LOG("isoID: %zu\n", isoID);
+    if (Tree2BoolExpr::iso2boolExpr_.find(isoID) != Tree2BoolExpr::iso2boolExpr_.end()) {
+      POs_[i] = Tree2BoolExpr::iso2boolExpr_[isoID];
+      #ifdef DEBUG_CHECKS
+      assert(POs_[i] != nullptr);
+      #endif
+      #ifdef DEBUG_PRINTS
+      printf("Reusing iso output %s for output %s\n",
+             POs_[i]->toString().c_str(),
+             get()
+                 ->getDNLTerminalFromID(out)
+                 .getSnlBitTerm()
+                 ->getName()
+                 .getString()
+                 .c_str());
+      #endif
+      return;
+    }
+    
+    SNLLogicCloud cloud(out, IsPIs_, IsPOs_);
+    #ifdef DEBUG_CHECKS
+    auto startComp = std::chrono::steady_clock::now();
+    #endif
     cloud.compute();
+    #ifdef DEBUG_CHECKS
+    auto endComp = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds_comp = endComp - startComp;
+    printf("Computation time for %lu: %f seconds\n", i, elapsed_seconds_comp.count());
+    #endif
     // //cloud.getTruthTable().print();
     // std::vector<DNLID> test1;
     // std::vector<DNLID> test2;
@@ -501,24 +548,51 @@ void BuildPrimaryOutputClauses::build() {
     //    }
     //  }
     assert(POs_.size() - 1 >= i);
+    // add run time counter here
+    #ifdef DEBUG_CHECKS
+    auto startFin = std::chrono::steady_clock::now();    
+    #endif
     cloud.getTruthTable().finalize();
+    #ifdef DEBUG_CHECKS
+    auto endFin = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds_fin = endFin - startFin;
+    printf("Finalization time for %lu: %f seconds\n", i, elapsed_seconds_fin.count());
+    #endif
+    #ifdef DEBUG_CHECKS
+    auto startConv = std::chrono::steady_clock::now();
+    #endif
     POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+    #ifdef DEBUG_CHECKS
+    auto endConv = std::chrono::steady_clock::now();
+    std::chrono::duration<double> elapsed_seconds_conv = endConv - startConv;
+    printf("Conversion time for %lu: %f seconds\n", i, elapsed_seconds_conv.count());
+    #endif
     cloud.destroy();
     // BoolExpr::getMutex().unlock();
     // printf("size of expr: %lu\n", POs_.back()->size());
+    Tree2BoolExpr::iso2boolExpr_[isoID] = POs_[i];
   };
-
+  Tree2BoolExpr::iso2boolExpr_.clear();
   if (getenv("KEPLER_NO_MT")) {
     for (size_t i = 0; i < outputs_.size(); ++i) {
       processOutput(i);
     }
   } else {
-    tbb::parallel_for(tbb::blocked_range<DNLID>(0, outputs_.size(), 100),
-                      [&](const tbb::blocked_range<DNLID>& r) {
-                        for (DNLID i = r.begin(); i < r.end(); ++i) {
-                          processOutput(i);
-                        }
-                      });
+    // compute grain safely
+    size_t n = outputs_.size();
+    size_t default_grain = 1000;
+    size_t computed = (n >= 1000) ? (n / 1000) : 1; // never zero
+    size_t grain = std::max<size_t>(computed, default_grain); // or clamp as you prefer
+
+    tbb::parallel_for(
+      tbb::blocked_range<DNLID>(0, n, grain),
+      [&](const tbb::blocked_range<DNLID>& r) {
+        for (DNLID i = r.begin(); i < r.end(); ++i) {
+          processOutput(i);
+        }
+      },
+      tbb::static_partitioner()
+    );
   }
   destroy();  // Clean up DNL instance
 }

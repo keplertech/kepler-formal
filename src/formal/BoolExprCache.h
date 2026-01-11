@@ -18,9 +18,9 @@ enum class Op { VAR, AND, OR, NOT, XOR, NONE };
 struct BoolExprCacheKey {
   Op op;
   size_t varId;
-  const std::shared_ptr<BoolExpr>&
+  BoolExpr*
       l;  // raw pointer — not owning; use index/ptr identity for the key
-  const std::shared_ptr<BoolExpr>& r;  // raw pointer
+  BoolExpr* r;  // raw pointer
 };
 
 class BoolExprCache {
@@ -28,7 +28,7 @@ class BoolExprCache {
   using Key = BoolExprCacheKey;
 
   // Lookup-or-create API
-  static std::shared_ptr<BoolExpr> getExpression(Key const& k);
+  static BoolExpr* getExpression(Key const& k);
   static void destroy();
 
  private:

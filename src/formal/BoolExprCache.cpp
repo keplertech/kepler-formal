@@ -66,18 +66,18 @@ BoolExprCache::Impl& BoolExprCache::impl() {
 
 static inline TupleKey make_tuple_key(Op op,
                                       size_t varId,
-                                      const std::shared_ptr<BoolExpr>& lptr,
-                                      const std::shared_ptr<BoolExpr>& rptr) noexcept {
+                                      BoolExpr* lptr,
+                                      BoolExpr* rptr) noexcept {
   // use pointer identity as integer; nullptr -> 0
-  auto lid = reinterpret_cast<uint64_t>(lptr.get());
-  auto rid = reinterpret_cast<uint64_t>(rptr.get());
+  auto lid = reinterpret_cast<uint64_t>(lptr);
+  auto rid = reinterpret_cast<uint64_t>(rptr);
   return TupleKey{static_cast<uint32_t>(op), static_cast<uint64_t>(varId), lid,
                   rid};
 }
 
-std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
-  std::shared_ptr<BoolExpr> lptr = k.l;
-  std::shared_ptr<BoolExpr> rptr = k.r;
+BoolExpr* BoolExprCache::getExpression(Key const& k) {
+  BoolExpr* lptr = k.l;
+  BoolExpr* rptr = k.r;
   TupleKey tk = make_tuple_key(k.op, k.varId, lptr, rptr);
   if (k.l == nullptr || k.r == nullptr) {
     if (k.l == nullptr) {
@@ -106,16 +106,14 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
     assert(it->second != nullptr);
     numHit_ += 1;
     // printf("######### numHit: %lu\n", numHit_);
-    return it->second;
+    return it->second.get();
   }
 
   // construct new BoolExpr. We need shared_ptr owners for children if they
   // exist.
-  std::shared_ptr<BoolExpr> L = lptr ? lptr : nullptr;
-  std::shared_ptr<BoolExpr> R = rptr ? rptr : nullptr;
 
   // use new because constructor may be non-public
-  std::shared_ptr<BoolExpr> newptr(new BoolExpr(k.op, k.varId, L, R));
+  std::shared_ptr<BoolExpr> newptr(new BoolExpr(k.op, k.varId, lptr ? lptr : nullptr, rptr ? rptr : nullptr));
 
   // assign id atomically
   size_t id = lastID_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -129,13 +127,13 @@ std::shared_ptr<BoolExpr> BoolExprCache::getExpression(Key const& k) {
     // delete newptr;
     //  destroy newptr
 
-    return pr.first->second;
+    return pr.first->second.get();
   }
   numMiss_ += 1;
   // printf("miss rate: %lf\n", (double) numHit_ / (double) numMiss_);
   // printf("size of cache: %lu\n", tbl.size());
-
-  return newptr;
+  
+  return newptr.get();
 }
 
 void BoolExprCache::destroy() {

@@ -5,6 +5,7 @@
 #include <vector>
 #include "BoolExpr.h"
 #include "DNL.h"
+#include <tbb/concurrent_unordered_map.h>
 
 #pragma once
 
@@ -16,7 +17,7 @@ class BuildPrimaryOutputClauses {
   void collect();
   void build();
 
-  const tbb::concurrent_vector<std::shared_ptr<BoolExpr>>& getPOs() const {
+  const tbb::concurrent_vector<BoolExpr*>& getPOs() const {
     return POs_;
   }
   const std::vector<naja::DNL::DNLID>& getInputs() const { return inputs_; }
@@ -60,9 +61,11 @@ class BuildPrimaryOutputClauses {
   void sortOutputs();
   void initVarNames();
 
-  tbb::concurrent_vector<std::shared_ptr<BoolExpr>> POs_;
+  tbb::concurrent_vector<BoolExpr*> POs_;
   std::vector<naja::DNL::DNLID> inputs_;
+  std::vector<bool> IsPIs_;
   std::vector<naja::DNL::DNLID> outputs_;
+  std::vector<bool> IsPOs_;
   std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID> inputsMap_;
   std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID> outputsMap_;
   std::map<naja::DNL::DNLID,

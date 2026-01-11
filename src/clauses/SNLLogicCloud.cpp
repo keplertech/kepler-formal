@@ -7,128 +7,10 @@
 #include "SNLDesignModeling.h"
 #include "tbb/concurrent_vector.h"
 #include "tbb/enumerable_thread_specific.h"
+#include "SNLPath.h"
+#include "Tree2BoolExpr.h"
 
-typedef std::pair<
-    std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>,
-    size_t>
-    IterationInputsETSPair;
-tbb::enumerable_thread_specific<IterationInputsETSPair>
-    currentIterationInputsETS;
-tbb::enumerable_thread_specific<IterationInputsETSPair> newIterationInputsETS;
-
-tbb::concurrent_vector<IterationInputsETSPair*>
-    currentIterationInputsETSvector =
-        tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
-
-tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector =
-    tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
-
-void initCurrentIterationInputsETS() {
-  // LCOV_EXCL_START
-  if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      currentIterationInputsETSvector.push_back(nullptr);
-    }
-  }
-  // LCOV_EXCL_STOP
-  if (currentIterationInputsETSvector
-          [tbb::this_task_arena::current_thread_index()] == nullptr) {
-    currentIterationInputsETSvector
-        [tbb::this_task_arena::current_thread_index()] =
-            &currentIterationInputsETS.local();
-  }
-}
-
-IterationInputsETSPair& getCurrentIterationInputsETS() {
-  return *currentIterationInputsETSvector
-      [tbb::this_task_arena::current_thread_index()];
-}
-
-void initNewIterationInputsETS() {
-  // LCOV_EXCL_START
-  if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-    for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-      newIterationInputsETSvector.push_back(nullptr);
-    }
-  }
-  // LCOV_EXCL_STOP
-  if (newIterationInputsETSvector
-          [tbb::this_task_arena::current_thread_index()] == nullptr) {
-    newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] =
-        &newIterationInputsETS.local();
-  }
-}
-
-IterationInputsETSPair& getNewIterationInputsETS() {
-  return *newIterationInputsETSvector
-      [tbb::this_task_arena::current_thread_index()];
-}
-
-void clearCurrentIterationInputsETS() {
-  auto& currentIterationInputs = getCurrentIterationInputsETS();
-  currentIterationInputs.second = 0;
-}
-
-void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
-  auto& currentIterationInputs = getCurrentIterationInputsETS();
-  auto& vec = currentIterationInputs.first;
-  auto& sz = currentIterationInputs.second;
-  if (vec.size() > sz) {
-    vec[sz] = input;
-    sz++;
-    return;
-  }
-  vec.push_back(input);
-  sz++;
-}
-
-size_t sizeOfCurrentIterationInputsETS() {
-  return getCurrentIterationInputsETS().second;
-}
-
-void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID>& res) {
-  res.clear();
-  auto& current = getCurrentIterationInputsETS();
-  for (size_t i = 0; i < current.second; i++) {
-    res.push_back(current.first[i]);
-  }
-}
-
-void clearNewIterationInputsETS() {
-  auto& newIterationInputs = getNewIterationInputsETS();
-  newIterationInputs.second = 0;
-}
-
-void pushBackNewIterationInputsETS(naja::DNL::DNLID input) {
-  auto& newIterationInputs = getNewIterationInputsETS();
-  auto& vec = newIterationInputs.first;
-  auto& sz = newIterationInputs.second;
-  if (vec.size() > sz) {
-    vec[sz] = input;
-    sz++;
-    return;
-  }
-  vec.push_back(input);
-  sz++;
-}
-
-bool emptyNewIterationInputsETS() {
-  return getNewIterationInputsETS().second == 0;
-}
-
-size_t sizeOfNewIterationInputsETS() {
-  return getNewIterationInputsETS().second;
-}
-
-void copyNewIterationInputsETStoCurrent() {
-  clearCurrentIterationInputsETS();
-  auto& newIterationInputs = getNewIterationInputsETS();
-  for (size_t i = 0; i < newIterationInputs.second; i++) {
-    pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
-  }
-  assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
-}
-
+// #define DEBUG_CHECKS
 // #define DEBUG_PRINTS
 
 #ifdef DEBUG_PRINTS
@@ -139,6 +21,150 @@ void copyNewIterationInputsETStoCurrent() {
 
 using namespace KEPLER_FORMAL;
 using namespace naja::DNL;
+typedef std::pair<
+    std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>,
+    size_t>
+    IterationInputsETSPair;
+
+thread_local IterationInputsETSPair currentIterationInputsETS;
+
+IterationInputsETSPair& getCurrentIterationInputsETS() {
+  return currentIterationInputsETS;
+}
+
+thread_local IterationInputsETSPair newIterationInputsETS;
+
+IterationInputsETSPair& getNewIterationInputsETS() {
+  return newIterationInputsETS;
+}
+
+void clearCurrentIterationInputsETS() {
+  auto& currentIterationInputs = getCurrentIterationInputsETS();
+  currentIterationInputs.first.clear();
+}
+
+void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
+  auto& currentIterationInputs = getCurrentIterationInputsETS();
+  currentIterationInputs.first.emplace_back(input);
+}
+
+size_t sizeOfCurrentIterationInputsETS() {
+  return getCurrentIterationInputsETS().first.size();
+}
+
+void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& res) {
+  res.clear();
+  auto& current = getCurrentIterationInputsETS();
+  res = std::move(current.first);
+}
+
+void clearNewIterationInputsETS() {
+  auto& newIterationInputs = getNewIterationInputsETS();
+  newIterationInputs.first.clear();
+}
+
+void pushBackNewIterationInputsETS(naja::DNL::DNLID input) {
+  getNewIterationInputsETS().first.emplace_back(input);
+}
+
+bool emptyNewIterationInputsETS() {
+  return getNewIterationInputsETS().first.empty();
+}
+
+size_t sizeOfNewIterationInputsETS() {
+  return getNewIterationInputsETS().first.size();
+}
+
+void copyNewIterationInputsETStoCurrent() {
+  auto& newIterationInputs = getNewIterationInputsETS();
+  auto& currentIterationInputs = getCurrentIterationInputsETS();
+  #ifdef DEBUG_CHECKS
+  size_t newSize = newIterationInputs.first.size();
+  #endif
+  currentIterationInputs = std::move(newIterationInputs);
+  #ifdef DEBUG_CHECKS
+  assert(currentIterationInputs.first.size() == newSize &&
+         "copyNewIterationInputsETStoCurrent: size mismatch after copy");
+  #endif
+}
+
+thread_local std::pair<
+    std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+                tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+                                            naja::DNL::DNLID>>>,
+    size_t>
+    inputsToMergeETS;
+
+std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
+                      tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
+                                                  naja::DNL::DNLID>>>, size_t>&
+getInputsToMergeETS() {
+  return inputsToMergeETS;
+}
+
+void clearInputsToMergeETS() {
+  auto& inputsToMerge = getInputsToMergeETS();
+  inputsToMerge.first.clear();
+}
+
+void pushBackInputsToMergeETS(
+    const std::pair<naja::DNL::DNLID, naja::DNL::DNLID>& input) {
+  getInputsToMergeETS().first.emplace_back(input);
+}
+
+size_t sizeOfInputsToMergeETS() {
+  return getInputsToMergeETS().first.size();
+}
+
+// 2 level vector visited terms pair - 1st: termID, 2nd: termID
+typedef std::vector<
+    std::unordered_set<naja::DNL::DNLID, 
+                                                 std::hash<naja::DNL::DNLID>,
+                                                 std::equal_to<naja::DNL::DNLID>,
+                                                 tbb::tbb_allocator<naja::DNL::DNLID>>,
+    tbb::tbb_allocator<std::unordered_set<naja::DNL::DNLID, 
+                                                 std::hash<naja::DNL::DNLID>,
+                                                 std::equal_to<naja::DNL::DNLID>,
+                                                 tbb::tbb_allocator<naja::DNL::DNLID>>>>
+    VisitedTermsPairsVec;
+
+thread_local VisitedTermsPairsVec visitedTermsPairsETS;
+
+struct PairHash {
+  size_t operator()(const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& p) const noexcept {
+    // 64-bit combine; tweak for your DNLID type
+    uint64_t a = static_cast<uint64_t>(p.first);
+    uint64_t b = static_cast<uint64_t>(p.second);
+    return (a * 11400714819323198485ull) ^ (b + 0x9e3779b97f4a7c15ull + (a<<6) + (a>>2));
+    }
+  };
+  struct PairEq {
+    bool operator()(const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& x, const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& y) const noexcept {
+      return x.first == y.first && x.second == y.second;
+    }
+  };
+   using HandledSet = std::unordered_set<
+     std::pair<naja::DNL::DNLID,naja::DNL::DNLID>,
+     PairHash, PairEq,
+     tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>;
+
+thread_local HandledSet visitedTermsPairsETSSet;
+
+void clearVisitedTermsPairsETS() {
+  visitedTermsPairsETSSet.clear();
+}
+
+thread_local std::pair<naja::DNL::DNLID, naja::DNL::DNLID> tempPairETS;
+
+bool isPairVisitedETS(naja::DNL::DNLID termA,
+                              naja::DNL::DNLID termB) {
+  tempPairETS.first = termA;
+  tempPairETS.second = termB;
+  if (!(visitedTermsPairsETSSet.insert(tempPairETS)).second) {
+    return true;
+  }
+  return false;
+}
 
 bool SNLLogicCloud::isInput(naja::DNL::DNLID termID) {
   return PIs_[termID];
@@ -149,21 +175,17 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 }
 
 void SNLLogicCloud::compute() {
-  // std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>
-  // newIterationInputs;
-  initNewIterationInputsETS();
-  initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
   DEBUG_LOG("---- Begin!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() ||
       isOutput(seedOutputTerm_)) {
-    auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+    const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
     // LCOV_EXCL_START
     if (iso.getDrivers().size() > 1) {
       
-      for (auto driver : iso.getDrivers()) {
+      for (const auto& driver : iso.getDrivers()) {
         DEBUG_LOG("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
                                       .getSnlBitTerm()
                                       ->getName()
@@ -181,8 +203,8 @@ void SNLLogicCloud::compute() {
       throw std::runtime_error(error);
     }
     // LCOV_EXCL_STOP
-    auto driver = iso.getDrivers().front();
-    auto inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+    const auto& driver = iso.getDrivers().front();
+    auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     if (isInput(driver)) {
       pushBackCurrentIterationInputsETS(driver);
       table_ = SNLTruthTableTree(inst.getID(), driver,
@@ -203,7 +225,7 @@ void SNLLogicCloud::compute() {
     DEBUG_LOG("model name: %s\n",
               inst.getSNLModel()->getName().getString().c_str());
     table_ = SNLTruthTableTree(inst.getID(), driver);
-    auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
+    auto* model = inst.getSNLModel();
     assert(SNLDesignModeling::getTruthTable(model, 
                 dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID())
             .isInitialized() &&
@@ -211,13 +233,13 @@ void SNLLogicCloud::compute() {
     assert(table_.isInitialized() &&
            "Truth table for seed output term is not initialized");
   } else {
-    auto inst = dnl_.getDNLInstanceFromID(seedOutputTerm_);
+    const auto& inst = dnl_.getDNLInstanceFromID(seedOutputTerm_);
     for (DNLID termID = inst.getTermIndexes().first;
          termID <= inst.getTermIndexes().second; termID++) {
       const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
       if (term.getSnlBitTerm()->getDirection() !=
           SNLBitTerm::Direction::Output) {
-        // newIterationInputs.push_back(termID);
+        // newIterationInputs.emplace_back(termID);
         pushBackNewIterationInputsETS(termID);
         DEBUG_LOG("Add input with id: %zu\n", termID);
       }
@@ -243,9 +265,11 @@ void SNLLogicCloud::compute() {
       reachedPIs = false;
       break;
     }
-  }
+  } // allocator for buckets
 
-  std::set<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>> handledTerms;
+  // HandledSet handledTerms;
+  // handledTerms.reserve(naja::DNL::get()->getDNLTerms().size() / 4);
+  clearVisitedTermsPairsETS();
   size_t iter = 0;
 
   while (!reachedPIs) {
@@ -257,15 +281,10 @@ void SNLLogicCloud::compute() {
     clearNewIterationInputsETS();
     DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n",
               table_.size(), sizeOfCurrentIterationInputsETS());
-
-    std::vector<
-        std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-        tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
-        inputsToMerge;
-
+    clearInputsToMergeETS();
     size_t sizeOfCurrentInputs = sizeOfCurrentIterationInputsETS();
     for (size_t i = 0; i < sizeOfCurrentInputs; i++) {
-      auto input = getCurrentIterationInputsETS().first[i];
+      const auto& input = getCurrentIterationInputsETS().first[i];
       if (isInput(input) /*|| isOutput(input)*/) {
         pushBackNewIterationInputsETS(input);
         DEBUG_LOG("Adding input id: %zu %s\n", input,
@@ -274,16 +293,16 @@ void SNLLogicCloud::compute() {
                       ->getName()
                       .getString()
                       .c_str());
-        inputsToMerge.push_back(
+        pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
         continue;
       }
 
-      auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+      const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
           dnl_.getDNLTerminalFromID(input).getIsoID());
       DEBUG_LOG("number of drivers: %zu\n", iso.getDrivers().size());
 
-      for (auto driver : iso.getDrivers()) {
+      for (const auto& driver : iso.getDrivers()) {
         DEBUG_LOG("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
                                       .getSnlBitTerm()
                                       ->getName()
@@ -292,15 +311,48 @@ void SNLLogicCloud::compute() {
       }
 
       if (iso.getDrivers().size() >= 1) {
-        assert(iso.getDrivers().size() <= 1 &&
-               "Iso have more than one driver, not supported");
+        // proper error with names of all the drivers
+        // throw an error and separate names by comma
+        if (iso.getDrivers().size() > 1) {
+          std::vector<std::string> namesOfDrivers;
+          for (auto dnlid : iso.getDrivers()) {
+            auto driver = dnl_.getDNLTerminalFromID(dnlid);
+            auto path = driver.getDNLInstance().getPath().getPathNames();
+            std::string fullName;
+            for (size_t i = 0; i < path.size(); i++) {
+              fullName += path[i].getString();
+              if (i != path.size() - 1) {
+                // LCOV_EXCL_START
+                fullName += ".";
+                // LCOV_EXCL_STOP
+              }
+            }
+            // add terminal name and bit
+            std::string termName =
+                driver.getSnlBitTerm()->getName().getString();
+            fullName += "." + termName;
+            // add bit
+            fullName += std::to_string(driver.getSnlBitTerm()->getBit());
+            namesOfDrivers.push_back(fullName);
+          }
+          std::string error = "Iso has multiple drivers: ";
+          for (size_t i = 0; i < namesOfDrivers.size(); i++) {
+            error += namesOfDrivers[i];
+            if (i != namesOfDrivers.size() - 1) {
+              error += ", ";
+            }
+          }
+          throw std::runtime_error(error);
+        }
       } else if (iso.getDrivers().empty()) {
         assert(iso.getDrivers().size() == 1 &&
                "Iso have no drivers and more than one reader, not supported");
       }
-
-      auto driver = iso.getDrivers().front();
-      if (isInput(driver) /* || isOutput(driver)*/) {
+      const auto& driver = iso.getDrivers().front();
+      
+      if (isInput(driver) /* || isOutput(driver)*/
+        || (Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
+          Tree2BoolExpr::iso2boolExpr_.end() && iter > 0)) {
         pushBackNewIterationInputsETS(driver);
         DEBUG_LOG(
             "- %lu After analyzing input %s(%lu), addings driver %s(%lu) is a "
@@ -318,30 +370,13 @@ void SNLLogicCloud::compute() {
                 .getString()
                 .c_str(),
             driver);
-        inputsToMerge.push_back(
+        pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
         continue;
       }
 
-      auto inst = dnl_.getDNLInstanceFromID(
+      const auto& inst = dnl_.getDNLInstanceFromID(
           dnl_.getDNLTerminalFromID(driver).getDNLInstance().getID());
-      auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
-      // if (!model
-      //          ->getTruthTable(dnl_.getDNLTerminalFromID(driver)
-      //                              .getSnlBitTerm()
-      //                              ->getOrderID())
-      //          .isInitialized()) {
-      //   DEBUG_LOG(
-      //       "#####Truth table for instance %s is not initialized\n",
-      //       inst.getSNLInstance()->getModel()->getName().getString().c_str());
-      //   auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
-      //   assert(model
-      //              ->getTruthTable(dnl_.getDNLTerminalFromID(driver)
-      //                                  .getSnlBitTerm()
-      //                                  ->getOrderID())
-      //              .isInitialized() &&
-      //          "Truth table for instance is not initialized");
-      // }
 
       DEBUG_LOG("Adding driver id: %zu %s(%s)\n", driver,
                 dnl_.getDNLTerminalFromID(driver)
@@ -355,14 +390,14 @@ void SNLLogicCloud::compute() {
                     ->getName()
                     .getString()
                     .c_str());
-      inputsToMerge.push_back({inst.getID(), driver});
+      pushBackInputsToMergeETS({inst.getID(), driver});
 
       for (DNLID termID = inst.getTermIndexes().first;
            termID <= inst.getTermIndexes().second; termID++) {
         const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
-          if (handledTerms.find({driver, termID}) != handledTerms.end()) {
+          if (isPairVisitedETS(driver, termID)) {
             DEBUG_LOG(
                 "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
                 "skipping\n",
@@ -382,23 +417,32 @@ void SNLLogicCloud::compute() {
                     .c_str());
             continue;
           }
-          handledTerms.insert({driver, termID});
           pushBackNewIterationInputsETS(termID);
         }
       }
     }
 
-    if (inputsToMerge.empty()) {
+    if (sizeOfInputsToMergeETS() == 0) {
       break;
     }
 
     DEBUG_LOG("--- Merging truth tables with %zu inputs\n",
-              inputsToMerge.size());
-    table_.concatFull(inputsToMerge);
+              sizeOfInputsToMergeETS());
+    table_.concatFull(getInputsToMergeETS().first,
+                      sizeOfInputsToMergeETS());
     reachedPIs = true;
     size_t sizeOfNewInputs = sizeOfNewIterationInputsETS();
     for (size_t i = 0; i < sizeOfNewInputs; i++) {
-      if (!isInput(getNewIterationInputsETS().first[i])) {
+      auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+          dnl_.getDNLTerminalFromID(
+              getNewIterationInputsETS().first[i])
+              .getIsoID());
+      if (!isInput(getNewIterationInputsETS().first[i]) &&
+        (Tree2BoolExpr::iso2boolExpr_.find(
+            dnl_.getDNLTerminalFromID(
+                getNewIterationInputsETS().first[i])
+                .getIsoID()) == Tree2BoolExpr::iso2boolExpr_.end() || 
+                iso.getDrivers().front() != getNewIterationInputsETS().first[i])) {
         reachedPIs = false;
         break;
       }
@@ -408,9 +452,21 @@ void SNLLogicCloud::compute() {
   }
 
   copyNewIterationInputsETStoCurrent();
+  #ifdef DEBUG_CHECKS
+  size_t finalSize = sizeOfCurrentIterationInputsETS();
+  #endif
   copyCurrentIterationInputsETS(currentIterationInputs_);
-  assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
-  for (auto input : currentIterationInputs_) {
-    assert(isInput(input));
+  #ifdef DEBUG_CHECKS
+  assert(finalSize == currentIterationInputs_.size() &&
+         "compute: size mismatch after final copy");
+  //assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
+  for (const auto& input : currentIterationInputs_) {
+    auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+        dnl_.getDNLTerminalFromID(input).getIsoID());
+    assert(isInput(input) || (Tree2BoolExpr::iso2boolExpr_.find(
+            dnl_.getDNLTerminalFromID(input)
+                .getIsoID()) != Tree2BoolExpr::iso2boolExpr_.end() && 
+                iso.getDrivers().front() == input));
   }
+  #endif
 }
