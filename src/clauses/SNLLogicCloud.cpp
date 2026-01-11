@@ -150,10 +150,6 @@ struct PairHash {
 
 thread_local HandledSet visitedTermsPairsETSSet;
 
-VisitedTermsPairsVec& getVisitedTermsPairsETS() {
-  return visitedTermsPairsETS;
-}
-
 void clearVisitedTermsPairsETS() {
   visitedTermsPairsETSSet.clear();
 }

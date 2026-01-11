@@ -122,10 +122,6 @@ ResolvedChildrenPairRaw& getResolvedChildrenETS() {
   return resolvedChildrenETS;
 }
 
-size_t getSizeOfResolvedChildrenETS() {
-  return getResolvedChildrenETS().second;
-}
-
 void reserveResolvedChildrenETS(size_t n) {
   auto& pair = getResolvedChildrenETS();
   for (size_t i = 0; i < pair.first.size(); ++i) {

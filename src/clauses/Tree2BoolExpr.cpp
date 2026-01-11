@@ -116,10 +116,6 @@ MemoPair& getMemoETS() {
   return memoETS;
 }
 
-size_t sizeOfMemoETS() {
-  return getMemoETS().first.size();
-}
-
 void clearMemoETS() {
   auto& memoLocal = getMemoETS();
   memoLocal.first.clear();
@@ -141,17 +137,13 @@ void reserveMemoETS(size_t n) {
 
 void setMemoETS(size_t i, BoolExpr* expr) {
   auto& memoLocal = getMemoETS();
-  if (i >= memoLocal.second) {
-    assert(false && "setMemoETS: index out of range");
-  }
+  assert(i < memoLocal.second && "setMemoETS: index out of range");
   memoLocal.first[i] = expr;
 }
 
 BoolExpr* getMemoETS(size_t i) {
   auto& memoLocal = getMemoETS();
-  if (i >= memoLocal.second) {
-    assert(false && "getMemoETS: index out of range");
-  }
+  assert(i < memoLocal.second && "getMemoETS: index out of range");
   return memoLocal.first[i];
 }
 
@@ -161,10 +153,6 @@ thread_local ChildFETSPair childFETS;
 
 ChildFETSPair& getChildFETS() {
   return childFETS;
-}
-
-size_t sizeOfChildFETS() {
-  return getChildFETS().second;
 }
 
 void clearChildFETS() {
@@ -188,17 +176,13 @@ void reserveChildFETS(size_t n) {
 
 BoolExpr* getChildFETS(size_t i) {
   auto& childLocal = getChildFETS();
-  if (i >= childLocal.second) {
-    assert(false && "getChildFETS: index out of range");
-  }
+  assert(i < childLocal.second && "getChildFETS: index out of range");
   return childLocal.first[i];
 }
 
 void setChildFETS(size_t i, BoolExpr* expr) {
   auto& childLocal = getChildFETS();
-  if (i >= childLocal.second) {
-    assert(false && "setChildFETS: index out of range");
-  }
+  assert(i < childLocal.second && "setChildFETS: index out of range");
   childLocal.first[i] = expr;
 }
 
@@ -328,10 +312,12 @@ BoolExpr* Tree2BoolExpr::convert(
         for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) numRelIdx++; }
 
         // if nothing matters, fall back to constant-false
-        if (numRelIdx == 0) {
-          setMemoETS(id, BoolExpr::createFalse());
-          iso2boolExpr_[isoID] = BoolExpr::createFalse();
-        } else {
+        // if (numRelIdx == 0) {
+        //   setMemoETS(id, BoolExpr::createFalse());
+        //   iso2boolExpr_[isoID] = BoolExpr::createFalse();
+        // } else 
+        assert(numRelIdx > 0);
+        {
           // build the DNF terms
           clearTermsETS();
           for (uint64_t m = 0; m < rows; ++m) {
