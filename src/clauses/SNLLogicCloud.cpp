@@ -25,81 +25,26 @@ typedef std::pair<
     std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>,
     size_t>
     IterationInputsETSPair;
-// tbb::enumerable_thread_specific<IterationInputsETSPair>
-//     currentIterationInputsETS;
-// tbb::enumerable_thread_specific<IterationInputsETSPair> newIterationInputsETS;
-
-// tbb::concurrent_vector<IterationInputsETSPair*>
-//     currentIterationInputsETSvector =
-//         tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
-
-// tbb::concurrent_vector<IterationInputsETSPair*> newIterationInputsETSvector =
-//     tbb::concurrent_vector<IterationInputsETSPair*>(40, nullptr);
-
-// void initCurrentIterationInputsETS() {
-//   // LCOV_EXCL_START
-//   if (currentIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = currentIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       currentIterationInputsETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   // LCOV_EXCL_STOP
-//   if (currentIterationInputsETSvector
-//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     currentIterationInputsETSvector
-//         [tbb::this_task_arena::current_thread_index()] =
-//             &currentIterationInputsETS.local();
-//   }
-// }
 
 thread_local IterationInputsETSPair currentIterationInputsETS;
 
 IterationInputsETSPair& getCurrentIterationInputsETS() {
-  //return *currentIterationInputsETSvector
-  //    [tbb::this_task_arena::current_thread_index()];
   return currentIterationInputsETS;
 }
-
-// void initNewIterationInputsETS() {
-//   // LCOV_EXCL_START
-//   if (newIterationInputsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = newIterationInputsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       newIterationInputsETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   // LCOV_EXCL_STOP
-//   if (newIterationInputsETSvector
-//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     newIterationInputsETSvector[tbb::this_task_arena::current_thread_index()] =
-//         &newIterationInputsETS.local();
-//   }
-// }
 
 thread_local IterationInputsETSPair newIterationInputsETS;
 
 IterationInputsETSPair& getNewIterationInputsETS() {
-  //return *newIterationInputsETSvector
-  //    [tbb::this_task_arena::current_thread_index()];
   return newIterationInputsETS;
 }
 
 void clearCurrentIterationInputsETS() {
   auto& currentIterationInputs = getCurrentIterationInputsETS();
-  //currentIterationInputs.second = 0;
   currentIterationInputs.first.clear();
 }
 
 void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
   auto& currentIterationInputs = getCurrentIterationInputsETS();
-  // auto& vec = currentIterationInputs.first;
-  // auto& sz = currentIterationInputs.second;
-  // if (vec.size() > sz) {
-  //   vec[sz] = input;
-  //   sz++;
-  //   return;
-  // }
-  // vec.emplace_back(input);
-  // sz++;
   currentIterationInputs.first.emplace_back(input);
 }
 
@@ -110,10 +55,6 @@ size_t sizeOfCurrentIterationInputsETS() {
 void copyCurrentIterationInputsETS(std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& res) {
   res.clear();
   auto& current = getCurrentIterationInputsETS();
-  // for (size_t i = 0; i < current.second; i++) {
-  //   res.emplace_back(current.first[i]);
-  // }
-  // do as above but with move instead
   res = std::move(current.first);
 }
 
@@ -123,16 +64,6 @@ void clearNewIterationInputsETS() {
 }
 
 void pushBackNewIterationInputsETS(naja::DNL::DNLID input) {
-  // auto& newIterationInputs = getNewIterationInputsETS();
-  // auto& vec = newIterationInputs.first;
-  // auto& sz = newIterationInputs.second;
-  // if (vec.size() > sz) {
-  //   vec[sz] = input;
-  //   sz++;
-  //   return;
-  // }
-  // vec.emplace_back(input);
-  // sz++;
   getNewIterationInputsETS().first.emplace_back(input);
 }
 
@@ -145,56 +76,17 @@ size_t sizeOfNewIterationInputsETS() {
 }
 
 void copyNewIterationInputsETStoCurrent() {
-  //clearCurrentIterationInputsETS();
   auto& newIterationInputs = getNewIterationInputsETS();
-  // for (size_t i = 0; i < newIterationInputs.second; i++) {
-  //   pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
-  // }
   auto& currentIterationInputs = getCurrentIterationInputsETS();
   #ifdef DEBUG_CHECKS
   size_t newSize = newIterationInputs.first.size();
   #endif
-  //assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
   currentIterationInputs = std::move(newIterationInputs);
   #ifdef DEBUG_CHECKS
   assert(currentIterationInputs.first.size() == newSize &&
          "copyNewIterationInputsETStoCurrent: size mismatch after copy");
   #endif
 }
-
-// implement same for std::vector<
-//        std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-//        tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
-//        inputsToMerge;
-
-// tbb::enumerable_thread_specific<
-//     std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-//                      tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
-//                                                  naja::DNL::DNLID>>>,
-//                   size_t>>
-//     inputsToMergeETS;
-
-// tbb::concurrent_vector<
-//     std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-//                          tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
-//                                                      naja::DNL::DNLID>>>,
-//                   size_t>*>
-//     inputsToMergeETSvector;
-
-// void initInputsToMergeETS() {
-//   if (inputsToMergeETSvector.size() <=
-//       tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = inputsToMergeETSvector.size();
-//          i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       inputsToMergeETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   if (inputsToMergeETSvector
-//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     inputsToMergeETSvector[tbb::this_task_arena::current_thread_index()] =
-//         &inputsToMergeETS.local();
-//   }
-// }
 
 thread_local std::pair<
     std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
@@ -207,9 +99,6 @@ std::pair<std::vector<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
                       tbb::tbb_allocator<std::pair<naja::DNL::DNLID,
                                                   naja::DNL::DNLID>>>, size_t>&
 getInputsToMergeETS() {
-  //initInputsToMergeETS();
-  //return *inputsToMergeETSvector
-  //    [tbb::this_task_arena::current_thread_index()];
   return inputsToMergeETS;
 }
 
@@ -220,16 +109,6 @@ void clearInputsToMergeETS() {
 
 void pushBackInputsToMergeETS(
     const std::pair<naja::DNL::DNLID, naja::DNL::DNLID>& input) {
-  // auto& inputsToMerge = getInputsToMergeETS();
-  // auto& vec = inputsToMerge.first;
-  // auto& sz = inputsToMerge.second;
-  // if (vec.size() > sz) {
-  //   vec[sz] = input;
-  //   sz++;
-  //   return;
-  // }
-  // vec.emplace_back(input);
-  // sz++;
   getInputsToMergeETS().first.emplace_back(input);
 }
 
@@ -249,30 +128,7 @@ typedef std::vector<
                                                  tbb::tbb_allocator<naja::DNL::DNLID>>>>
     VisitedTermsPairsVec;
 
-//tbb::enumerable_thread_specific<VisitedTermsPairsVec> visitedTermsPairsETS;
-
-//tbb::concurrent_vector<VisitedTermsPairsVec*>
-//    visitedTermsPairsETSvector;
-
 thread_local VisitedTermsPairsVec visitedTermsPairsETS;
-
-// void initVisitedTermsPairsETS() {
-//   if (visitedTermsPairsETSvector.size() <=
-//       tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = visitedTermsPairsETSvector.size();
-//          i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       visitedTermsPairsETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   if (visitedTermsPairsETSvector
-//           [tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     auto & visitedTermsPairsETSlocal = visitedTermsPairsETS.local();
-//     visitedTermsPairsETSvector
-//         [tbb::this_task_arena::current_thread_index()] =
-//             &visitedTermsPairsETSlocal;
-//     visitedTermsPairsETSlocal.resize(naja::DNL::get()->getDNLTerms().size()); // initial size
-//   }
-// }
 
 struct PairHash {
   size_t operator()(const std::pair<naja::DNL::DNLID,naja::DNL::DNLID>& p) const noexcept {
@@ -295,20 +151,10 @@ struct PairHash {
 thread_local HandledSet visitedTermsPairsETSSet;
 
 VisitedTermsPairsVec& getVisitedTermsPairsETS() {
-  //initVisitedTermsPairsETS();
-  //return *visitedTermsPairsETSvector
-  //    [tbb::this_task_arena::current_thread_index()];
   return visitedTermsPairsETS;
 }
 
 void clearVisitedTermsPairsETS() {
-  //initVisitedTermsPairsETS();
-  // auto& visitedTermsPairs = getVisitedTermsPairsETS();
-  // visitedTermsPairs.resize(naja::DNL::get()->getDNLTerms().size());
-  // for (auto& vec : visitedTermsPairs) {
-  //   vec.clear();
-  // }
-  //visitedTermsPairs.clear();
   visitedTermsPairsETSSet.clear();
 }
 
@@ -316,30 +162,6 @@ thread_local std::pair<naja::DNL::DNLID, naja::DNL::DNLID> tempPairETS;
 
 bool isPairVisitedETS(naja::DNL::DNLID termA,
                               naja::DNL::DNLID termB) {
-  // if (termA == -1 || termB == -1) {
-  //   throw std::runtime_error("Negative term ID in isPairVisitedETS");
-  // }
-  // auto& visitedTermsPairs = getVisitedTermsPairsETS();
-  // //size_t maxTermID =
-  // //    std::max(termA, termB);
-  // auto &m = visitedTermsPairs[termA];
-  // // brute force search as vector is expected to be small(at max num of inputs of a primitive) 
-  // // and also to use emplace_back efficiency
-  // // for (const auto& t : v) {
-  // //   if (t == termB) {
-  // //     return true;
-  // //   }
-  // // }
-  // // v.emplace_back(termB);
-  // // auto& value = m[termB];
-  // // if (value) {
-  // //   return true;
-  // // }
-  // // value = true;
-  // if (!(m.insert(termB)).second) {
-  //   return true;
-  // }
-  // return false;
   tempPairETS.first = termA;
   tempPairETS.second = termB;
   if (!(visitedTermsPairsETSSet.insert(tempPairETS)).second) {
@@ -357,11 +179,6 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 }
 
 void SNLLogicCloud::compute() {
-  // std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>
-  // newIterationInputs;
-  //initInputsToMergeETS();
-  //initNewIterationInputsETS();
-  //initCurrentIterationInputsETS();
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
   DEBUG_LOG("---- Begin!!\n");
@@ -468,15 +285,7 @@ void SNLLogicCloud::compute() {
     clearNewIterationInputsETS();
     DEBUG_LOG("table size: %zu, currentIterationInputs_ size: %zu\n",
               table_.size(), sizeOfCurrentIterationInputsETS());
-
-    // std::vector<
-    //     std::pair<naja::DNL::DNLID, naja::DNL::DNLID>,
-    //     tbb::tbb_allocator<std::pair<naja::DNL::DNLID, naja::DNL::DNLID>>>
-    //     inputsToMerge;
     clearInputsToMergeETS();
-
-    //auto& inputsToMerge = getInputsToMergeETS();
-
     size_t sizeOfCurrentInputs = sizeOfCurrentIterationInputsETS();
     for (size_t i = 0; i < sizeOfCurrentInputs; i++) {
       const auto& input = getCurrentIterationInputsETS().first[i];
@@ -488,8 +297,6 @@ void SNLLogicCloud::compute() {
                       ->getName()
                       .getString()
                       .c_str());
-        // inputsToMerge.emplace_back(
-        //     {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
         pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, input});  // Placeholder for PI/PO
         continue;
@@ -567,8 +374,6 @@ void SNLLogicCloud::compute() {
                 .getString()
                 .c_str(),
             driver);
-        //inputsToMerge.emplace_back(
-        //    {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
         pushBackInputsToMergeETS(
             {naja::DNL::DNLID_MAX, driver});  // Placeholder for PI/PO
         continue;
@@ -576,23 +381,6 @@ void SNLLogicCloud::compute() {
 
       const auto& inst = dnl_.getDNLInstanceFromID(
           dnl_.getDNLTerminalFromID(driver).getDNLInstance().getID());
-      //auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
-      // if (!model
-      //          ->getTruthTable(dnl_.getDNLTerminalFromID(driver)
-      //                              .getSnlBitTerm()
-      //                              ->getOrderID())
-      //          .isInitialized()) {
-      //   DEBUG_LOG(
-      //       "#####Truth table for instance %s is not initialized\n",
-      //       inst.getSNLInstance()->getModel()->getName().getString().c_str());
-      //   auto* model = const_cast<SNLDesign*>(inst.getSNLModel());
-      //   assert(model
-      //              ->getTruthTable(dnl_.getDNLTerminalFromID(driver)
-      //                                  .getSnlBitTerm()
-      //                                  ->getOrderID())
-      //              .isInitialized() &&
-      //          "Truth table for instance is not initialized");
-      // }
 
       DEBUG_LOG("Adding driver id: %zu %s(%s)\n", driver,
                 dnl_.getDNLTerminalFromID(driver)
@@ -606,7 +394,6 @@ void SNLLogicCloud::compute() {
                     ->getName()
                     .getString()
                     .c_str());
-      //inputsToMerge.emplace_back({inst.getID(), driver});
       pushBackInputsToMergeETS({inst.getID(), driver});
 
       for (DNLID termID = inst.getTermIndexes().first;
@@ -614,8 +401,6 @@ void SNLLogicCloud::compute() {
         const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
-          //size_t sizeBeofre = handledTerms.size();
-          //auto [it, inserted] = handledTerms.insert({driver, termID});
           if (isPairVisitedETS(driver, termID)) {
             DEBUG_LOG(
                 "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
@@ -636,7 +421,6 @@ void SNLLogicCloud::compute() {
                     .c_str());
             continue;
           }
-          //handledTerms.insert({driver, termID});
           pushBackNewIterationInputsETS(termID);
         }
       }

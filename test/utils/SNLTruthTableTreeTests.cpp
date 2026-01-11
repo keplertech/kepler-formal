@@ -295,7 +295,9 @@ TEST(SNLTruthTableTreeEvalTest, NullChildNodeThrowsViaIdMismatch) {
   tree.allocateNode(parent);
 
   // Now nodeFromId(childId) will return null (id mismatch), so eval should throw "Null child node"
-  EXPECT_THROW(parent->eval({true}), std::logic_error);
+  // Expect std::assert will be caught
+  
+  EXPECT_DEATH(parent->eval({true}),"sp->nodeID == id");
 }
 
 TEST(SNLTruthTableTreeApi_Additions, AllocateNodeAndEvalInput) {
@@ -337,7 +339,8 @@ TEST(SNLTruthTableTreeApi_Additions, NodeFromId_NodeIdMismatch) {
 
   // Corrupt nodeID to force nodeFromId to return null
   node->nodeID = SNLTruthTableTree::kInvalidId;
-  EXPECT_EQ(tree.nodeFromId(id).get(), nullptr);
+  //EXPECT_EQ(tree.nodeFromId(id).get(), nullptr);
+  EXPECT_DEATH(tree.nodeFromId(id).get(),"sp->nodeID == id");
 }
 
 TEST(SNLTruthTableTreeEval_Additions, TableNodeChildrenCountMismatchThrows) {
@@ -383,7 +386,7 @@ TEST(SNLTruthTableTreeEval_Additions, NullChildNodeThrowsViaIdMismatch) {
   parent->childrenIds.push_back(childId);
   tree.allocateNode(parent);
 
-  EXPECT_THROW(parent->eval({true}), std::logic_error);
+  EXPECT_DEATH(parent->eval({true}), "sp->nodeID == id");
 }
 
 TEST(SNLTruthTableTreeEval_Additions, InputChildIndexOutOfRangeThrows) {
