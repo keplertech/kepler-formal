@@ -316,7 +316,7 @@ BoolExpr* Tree2BoolExpr::convert(
         //   setMemoETS(id, BoolExpr::createFalse());
         //   iso2boolExpr_[isoID] = BoolExpr::createFalse();
         // } else 
-        assert(numRelIdx > 0);
+        assert(numRelIdx > 0 && "No relevant inputs for node");
         {
           // build the DNF terms
           clearTermsETS();
