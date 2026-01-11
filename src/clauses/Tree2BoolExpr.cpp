@@ -334,7 +334,6 @@ BoolExpr* Tree2BoolExpr::convert(
         } else {
           // build the DNF terms
           clearTermsETS();
-          reserveTermsETS(static_cast<size_t>(rows));
           for (uint64_t m = 0; m < rows; ++m) {
             if (!tbl.bits().bit(m)) continue;
             BoolExpr* term = nullptr;
