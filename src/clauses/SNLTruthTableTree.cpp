@@ -251,11 +251,7 @@ static std::shared_ptr<SNLTruthTableTree::Node> nullNodePtr = nullptr;
 //----------------------------------------------------------------------
 const std::shared_ptr<SNLTruthTableTree::Node>& SNLTruthTableTree::nodeFromId(
     uint32_t id) const {
-  //if (id == kInvalidId)
-  //  return nullNodePtr;
   assert((id != kInvalidId));
-  //if (id < kIdOffset)
-  //  return nullNodePtr;
   assert((id >= kIdOffset));
   size_t idx = (size_t)(id - kIdOffset);
   if (idx >= nodes_.size())
@@ -263,13 +259,6 @@ const std::shared_ptr<SNLTruthTableTree::Node>& SNLTruthTableTree::nodeFromId(
   const auto& sp = nodes_[idx];
   if (!sp)
     return nullNodePtr;
-  // sanity check: nodeID must match slot
-  // if (sp->nodeID != id) {
-  //   fprintf(stderr,
-  //           "nodeFromId: id mismatch requested=%u slot=%zu node->nodeID=%u\n",
-  //           id, idx, sp->nodeID);
-  //   return nullNodePtr;
-  // }
   assert((sp->nodeID == id));
   return sp;
 }
@@ -1227,17 +1216,11 @@ void SNLTruthTableTree::finalize() {
     if (sp->nodeID != 0)
       mapByNodeID[sp->nodeID] = sp;
   }
-
-  // Resolve children entries to shared_ptrs for every node
-  //std::vector<std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>>,
-  //  tbb::tbb_allocator<std::vector<std::shared_ptr<Node>, tbb::tbb_allocator<std::shared_ptr<Node>>>>> resolvedChildren(
-  //    nodes_.size());
   reserveResolvedChildrenETS(nodeSize);
   for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
     if (!sp)
       continue;
-    //resolvedChildren[i].reserve(sp->childrenIds.size());
     getResolvedChildrenETS().first[i].reserve(sp->childrenIds.size());
     for (size_t j = 0; j < sp->childrenIds.size(); ++j) {
       uint32_t cid = sp->childrenIds[j];
@@ -1356,18 +1339,9 @@ void SNLTruthTableTree::finalize() {
   numExternalInputs_ = 0;
   bool anyInput = false;
   std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> stk;
-  if (rootId_ != kInvalidId)
+  if (rootId_ != kInvalidId) {
     stk.emplace_back(rootId_);
-  // replace:
-  // std::set<uint32_t, std::less<uint32_t>, tbb::tbb_allocator<uint32_t>> visited;
-
-  // with:
-  // std::unordered_set<uint32_t,
-  //                   std::hash<uint32_t>,
-  //                   std::equal_to<uint32_t>,
-  //                   tbb::tbb_allocator<uint32_t>> visited;
-  // visited.reserve(nodeSize * 2);        // avoid rehashes; tune factor to expected size
-  // visited.max_load_factor(0.7f);             // optional: control bucket density
+  }
   markAllUnvisited();
   while (!stk.empty()) {
     uint32_t nid = stk.back();
@@ -1394,8 +1368,6 @@ void SNLTruthTableTree::finalize() {
       }
     }
   }
-  // if (anyInput) numExternalInputs_ = maxInput + 1;
-  // else numExternalInputs_ = 0;
 
   updateBorderLeaves();
 }

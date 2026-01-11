@@ -32,31 +32,10 @@ tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> Tree2BoolExpr::iso2bo
     tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*>();
 
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> TermsPair;
-// tbb::enumerable_thread_specific<TermsPair> termsETS;
-// tbb::concurrent_vector<TermsPair*> termsETSvector;
-
-// void initTermsETS() {
-//   if (termsETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = termsETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       termsETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   if (termsETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     termsETSvector[tbb::this_task_arena::current_thread_index()] = &termsETS.local();
-//   }
-// }
 
 thread_local TermsPair termsETS;
 
 TermsPair& getTErmsETS() {
-  // initTermsETS();
-  // size_t idx = tbb::this_task_arena::current_thread_index();
-  // if (idx >= termsETSvector.size() || termsETSvector[idx] == nullptr) {
-  //   // LCOV_EXCL_START
-  //   throw std::runtime_error("getTErmsETS: not initialized for this thread");
-  //   // LCOV_EXCL_STOP
-  // }
-  // return *termsETSvector[idx];
   return termsETS;
 }
 
@@ -65,65 +44,23 @@ size_t sizeOfTermsETS() {
 }
 
 void clearTermsETS() {
-  // If vector reach size larger than 1024, clear it to save memory
   auto& termsLocal = getTErmsETS();
-  // if (termsLocal.first.size() > 1024) {
-  //   termsLocal.first.clear();
-  // }
   termsLocal.first.clear();
 }
 
 void pushBackTermsETS(BoolExpr* term) {
-  // auto& termsLocal = getTErmsETS();
-  // auto& vec = termsLocal.first;
-  // auto& sz = termsLocal.second;
-  // if (vec.size() > sz) {
-  //   vec[sz] = term;
-  //   sz++;
-  //   return;
-  // }
-  // vec.emplace_back(term);
-  // sz++;
   getTErmsETS().first.emplace_back(term);
-}
-
-void reserveTermsETS(size_t n) {
-  // auto& termsLocal = getTErmsETS();
-  // if (termsLocal.first.size() >= n) return;
-  // termsLocal.first.reserve(n);
 }
 
 bool emptyTermsETS() {
   return getTErmsETS().first.empty();
 }
 
-// same for std::vector<bool, tbb::tbb_allocator<bool>>
 typedef std::pair<std::vector<uint8_t, tbb::tbb_allocator<uint8_t>>, size_t> RelevantPair;
-// tbb::enumerable_thread_specific<RelevantPair> relevantETS;
-// tbb::concurrent_vector<RelevantPair*> relevantETSvector;
-
-// void initRelevantETS() {
-//   if (relevantETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = relevantETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       relevantETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   if (relevantETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     relevantETSvector[tbb::this_task_arena::current_thread_index()] = &relevantETS.local();
-//   }
-// }
 
 thread_local RelevantPair relevantETS;
 
 RelevantPair& getRelevantETS() {
-  // initRelevantETS();
-  // size_t idx = tbb::this_task_arena::current_thread_index();
-  // if (idx >= relevantETSvector.size() || relevantETSvector[idx] == nullptr) {
-  //   // LCOV_EXCL_START
-  //   throw std::runtime_error("getRelevantETS: not initialized for this thread");
-  //   // LCOV_EXCL_STOP
-  // }
-  // return *relevantETSvector[idx];
   return relevantETS;
 }
 
@@ -132,26 +69,9 @@ size_t sizeOfRelevantETS() {
 }
 
 void clearRelevantETS() {
-  // If vector reach size larger than 1024, clear it to save memory
   auto& relevantLocal = getRelevantETS();
-  // if (relevantLocal.first.size() > 1024) {
-  //   relevantLocal.first.clear();
-  // }
   relevantLocal.first.clear();
 }
-
-// void pushBackRelevantETS(bool b) {
-//   auto& relevantLocal = getRelevantETS();
-//   auto& vec = relevantLocal.first;
-//   auto& sz = relevantLocal.second;
-//   if (vec.size() > sz) {
-//     vec[sz] = b;
-//     sz++;
-//     return;
-//   }
-//   vec.emplace_back(b);
-//   sz++;
-// }
 
 void setRelevantETS(size_t i, bool b) {
   auto& relevantLocal = getRelevantETS();
@@ -188,34 +108,11 @@ void reserveRelevantETSwithFalse(size_t n) {
   sz = n;
 }
 
-// do same for std::vector<BoolExpr*,
-// tbb::tbb_allocator<BoolExpr*>> memo;
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> MemoPair;
-// tbb::enumerable_thread_specific<MemoPair> memoETS;
-// tbb::concurrent_vector<MemoPair*> memoETSvector;
 
 thread_local MemoPair memoETS;
 
-// void initMemoETS() {
-//   if (memoETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = memoETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       memoETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   if (memoETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     memoETSvector[tbb::this_task_arena::current_thread_index()] = &memoETS.local();
-//   }
-// }
-
 MemoPair& getMemoETS() {
-  // initMemoETS();
-  // size_t idx = tbb::this_task_arena::current_thread_index();
-  // if (idx >= memoETSvector.size() || memoETSvector[idx] == nullptr) {
-  //   // LCOV_EXCL_START
-  //   throw std::runtime_error("getMemoETS: not initialized for this thread");
-  //   // LCOV_EXCL_STOP
-  // }
-  // return *memoETSvector[idx];
   return memoETS;
 }
 
@@ -224,26 +121,9 @@ size_t sizeOfMemoETS() {
 }
 
 void clearMemoETS() {
-  // If vector reach size larger than 1024, clear it to save memory
   auto& memoLocal = getMemoETS();
-  // if (memoLocal.first.size() > 1024) {
-  //   memoLocal.first.clear();
-  // }
   memoLocal.first.clear();
 }
-
-// void pushBackMemoETS(BoolExpr* expr) {
-//   auto& memoLocal = getMemoETS();
-//   auto& vec = memoLocal.first;
-//   auto& sz = memoLocal.second;
-//   if (vec.size() > sz) {
-//     vec[sz] = expr;
-//     sz++;
-//     return;
-//   }
-//   vec.emplace_back(expr);
-//   sz++;
-// }
 
 void reserveMemoETS(size_t n) {
   auto& memoLocal = getMemoETS();
@@ -275,34 +155,11 @@ BoolExpr* getMemoETS(size_t i) {
   return memoLocal.first[i];
 }
 
-// same for std::vector<BoolExpr*>,
-// tbb::tbb_allocator<BoolExpr*>> childF;
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildFETSPair;
-// tbb::enumerable_thread_specific<ChildFETSPair> childFETS;
-// tbb::concurrent_vector<ChildFETSPair*> childFETSvector;
 
 thread_local ChildFETSPair childFETS;
 
-// void initChildFETS() {
-//   if (childFETSvector.size() <= tbb::this_task_arena::current_thread_index()) {
-//     for (size_t i = childFETSvector.size(); i <= tbb::this_task_arena::current_thread_index(); i++) {
-//       childFETSvector.emplace_back(nullptr);
-//     }
-//   }
-//   if (childFETSvector[tbb::this_task_arena::current_thread_index()] == nullptr) {
-//     childFETSvector[tbb::this_task_arena::current_thread_index()] = &childFETS.local();
-//   }
-// }
-
 ChildFETSPair& getChildFETS() {
-  // initChildFETS();
-  // size_t idx = tbb::this_task_arena::current_thread_index();
-  // if (idx >= childFETSvector.size() || childFETSvector[idx] == nullptr) {
-  //   // LCOV_EXCL_START
-  //   throw std::runtime_error("getChildFETS: not initialized for this thread");
-  //   // LCOV_EXCL_STOP
-  // }
-  // return *childFETSvector[idx];
   return childFETS;
 }
 
@@ -311,26 +168,9 @@ size_t sizeOfChildFETS() {
 }
 
 void clearChildFETS() {
-  // If vector reach size larger than 1024, clear it to save memory
   auto& childLocal = getChildFETS();
-  // if (childLocal.first.size() > 1024) {
-  //   childLocal.first.clear();
-  // }
   childLocal.second = 0;
 }
-
-// void pushBackChildFETS(BoolExpr* expr) {
-//   auto& childLocal = getChildFETS();
-//   auto& vec = childLocal.first;
-//   auto& sz = childLocal.second;
-//   if (vec.size() > sz) {
-//     vec[sz] = expr;
-//     sz++;
-//     return;
-//   }
-//   vec.emplace_back(expr);
-//   sz++;
-// }
 
 void reserveChildFETS(size_t n) {
   auto& childLocal = getChildFETS();
@@ -364,84 +204,17 @@ void setChildFETS(size_t i, BoolExpr* expr) {
 
 // same for stuck with frame
 using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
-//std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
-//tbb::enumerable_thread_specific<std::vector<Frame, tbb::tbb_allocator<Frame>>> stackETS;
-
 thread_local std::vector<Frame, tbb::tbb_allocator<Frame>> stackETS;
 
 std::vector<Frame, tbb::tbb_allocator<Frame>>& getStackETS() {
   return stackETS;
 }
 
-// size_t toSizeT(const std::string& s) {
-//   if (s.empty()) {
-//     assert(false && "toSizeT: empty string");
-//   }
-//   size_t result = 0;
-//   const size_t max = std::numeric_limits<size_t>::max();
-//   for (unsigned char uc : s) {
-//     if (!std::isdigit(uc)) {
-//       throw std::invalid_argument("toSizeT: invalid character '" + std::string(1, static_cast<char>(uc)) + "' in input");
-//     }
-//     size_t digit = static_cast<size_t>(uc - '0');
-//     // Check for overflow: result * 10 + digit > max
-//     if (result > (max - digit) / 10) {
-//       throw std::out_of_range("toSizeT: value out of range for size_t");
-//     }
-//     result = result * 10 + digit;
-//   }
-//   return result;
-// }
-
-// Fold a list of literals into a single AND
-// static BoolExpr* mkAnd(
-//   const std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>& lits) {
-//   if (lits.empty()) return BoolExpr::createTrue();
-//   auto cur = lits[0];
-//   for (size_t i = 1; i < lits.size(); ++i) cur = BoolExpr::And(cur, lits[i]);
-//   return cur;
-// }
-
-// // Fold a list of terms into a single OR
-// static BoolExpr* mkOr(
-//   const std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>& terms) {
-//   if (terms.empty()) return BoolExpr::createFalse();
-//   auto cur = terms[0];
-//   for (size_t i = 1; i < terms.size(); ++i) cur = BoolExpr::Or(cur, terms[i]);
-//   return cur;
-// }
-
 BoolExpr* Tree2BoolExpr::convert(
   const SNLTruthTableTree& tree, const std::vector<size_t>& varNames) {
 
-  // initChildFETS();
-  // initMemoETS();
-  // initRelevantETS();
-  // initTermsETS();
-
   const auto root = tree.getRoot();
   if (!root) return nullptr;
-
-  // 1) find maxID
-  // size_t maxID = 0;
-  // {
-  // using NodePtr = const SNLTruthTableTree::Node*;
-  // std::vector<NodePtr, tbb::tbb_allocator<NodePtr>> dfs;
-  // dfs.reserve(128);
-  // dfs.emplace_back(root);
-  // while (!dfs.empty()) {
-  // NodePtr n = dfs.back();
-  // dfs.pop_back();
-  // maxID = std::max(maxID, (size_t) n->nodeID);
-  // if (n->type == SNLTruthTableTree::Node::Type::Table || // n->type == SNLTruthTableTree::Node::Type::P)
-  // {
-  // for (const auto& c : n->childrenIds) {
-  // assert(n->tree->nodeFromId(c) != nullptr);
-  // dfs.emplace_back(n->tree->nodeFromId(c));
-  // }
-  // }
-  // }
-  // }
 
   size_t maxID = tree.getMaxID();
 
@@ -450,8 +223,6 @@ BoolExpr* Tree2BoolExpr::convert(
   reserveMemoETS(maxID + 1);
 
   // 3) post-order build
-  //using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
-  //std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
   auto & stack = getStackETS();
   stack.clear();
   //stack.reserve(maxID + 1);
@@ -553,9 +324,6 @@ BoolExpr* Tree2BoolExpr::convert(
           }
         }
 
-        // collect the indices of relevant vars
-        //std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> relIdx;
-        //for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) relIdx.emplace_back(j); }
         size_t numRelIdx = 0;
         for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) numRelIdx++; }
 
