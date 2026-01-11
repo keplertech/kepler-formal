@@ -126,31 +126,6 @@ size_t getSizeOfResolvedChildrenETS() {
   return getResolvedChildrenETS().second;
 }
 
-void pushBackResolvedChildrenETS(
-    NodeVecRaw&
-        childVec) {
- /*  auto& pair = getResolvedChildrenETS();
-  auto& vec = pair.first;
-  auto& sz = pair.second;
-  if (vec.size() > sz) {
-    vec[sz] = childVec;
-    sz++;
-    return;
-  }
-  vec.emplace_back(childVec);
-  sz++; */
-  getResolvedChildrenETS().first.emplace_back(childVec);
-}
-
-void clearResolvedChildrenETS() {
-  auto& pair = getResolvedChildrenETS();
-  // for (auto& childVec : pair.first) {
-  //   childVec.clear();
-  // }
-  // pair.second = 0;
-  pair.first.clear();
-}
-
 void reserveResolvedChildrenETS(size_t n) {
   auto& pair = getResolvedChildrenETS();
   for (size_t i = 0; i < pair.first.size(); ++i) {
