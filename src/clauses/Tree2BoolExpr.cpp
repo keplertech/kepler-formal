@@ -271,10 +271,7 @@ BoolExpr* Tree2BoolExpr::convert(
         assert(node->parentIds.size() == 1);
         SNLTruthTableTree::Node* const parent = node->tree->nodeFromId(node->parentIds[0]).get();
         assert(parent && parent->type == SNLTruthTableTree::Node::Type::P);
-        if (parent->data.termid >= varNames.size()) {
-          DEBUG_LOG("varNames size: %zu, parent data.termid: %zu\n", varNames.size(), (size_t)parent->data.termid);
-          assert(parent->data.termid < varNames.size());
-        }
+        assert(parent->data.termid < varNames.size());
         const auto& name = varNames[parent->data.termid];
         if (name == (size_t)-1) {
           // LCOV_EXCL_START
