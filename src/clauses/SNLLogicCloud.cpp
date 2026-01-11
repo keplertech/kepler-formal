@@ -10,6 +10,17 @@
 #include "SNLPath.h"
 #include "Tree2BoolExpr.h"
 
+// #define DEBUG_CHECKS
+// #define DEBUG_PRINTS
+
+#ifdef DEBUG_PRINTS
+#define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#define DEBUG_LOG(fmt, ...)
+#endif
+
+using namespace KEPLER_FORMAL;
+using namespace naja::DNL;
 typedef std::pair<
     std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>,
     size_t>
@@ -74,7 +85,8 @@ IterationInputsETSPair& getNewIterationInputsETS() {
 
 void clearCurrentIterationInputsETS() {
   auto& currentIterationInputs = getCurrentIterationInputsETS();
-  currentIterationInputs.second = 0;
+  //currentIterationInputs.second = 0;
+  currentIterationInputs.first.clear();
 }
 
 void pushBackCurrentIterationInputsETS(naja::DNL::DNLID input) {
@@ -133,14 +145,21 @@ size_t sizeOfNewIterationInputsETS() {
 }
 
 void copyNewIterationInputsETStoCurrent() {
-  clearCurrentIterationInputsETS();
+  //clearCurrentIterationInputsETS();
   auto& newIterationInputs = getNewIterationInputsETS();
   // for (size_t i = 0; i < newIterationInputs.second; i++) {
   //   pushBackCurrentIterationInputsETS(newIterationInputs.first[i]);
   // }
   auto& currentIterationInputs = getCurrentIterationInputsETS();
+  #ifdef DEBUG_CHECKS
+  size_t newSize = newIterationInputs.first.size();
+  #endif
+  //assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
   currentIterationInputs = std::move(newIterationInputs);
-  assert(sizeOfCurrentIterationInputsETS() == sizeOfNewIterationInputsETS());
+  #ifdef DEBUG_CHECKS
+  assert(currentIterationInputs.first.size() == newSize &&
+         "copyNewIterationInputsETStoCurrent: size mismatch after copy");
+  #endif
 }
 
 // implement same for std::vector<
@@ -328,17 +347,6 @@ bool isPairVisitedETS(naja::DNL::DNLID termA,
   }
   return false;
 }
-
-// #define DEBUG_PRINTS
-
-#ifdef DEBUG_PRINTS
-#define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
-#else
-#define DEBUG_LOG(fmt, ...)
-#endif
-
-using namespace KEPLER_FORMAL;
-using namespace naja::DNL;
 
 bool SNLLogicCloud::isInput(naja::DNL::DNLID termID) {
   return PIs_[termID];
@@ -664,9 +672,21 @@ void SNLLogicCloud::compute() {
   }
 
   copyNewIterationInputsETStoCurrent();
+  #ifdef DEBUG_CHECKS
+  size_t finalSize = sizeOfCurrentIterationInputsETS();
+  #endif
   copyCurrentIterationInputsETS(currentIterationInputs_);
-  assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
+  #ifdef DEBUG_CHECKS
+  assert(finalSize == currentIterationInputs_.size() &&
+         "compute: size mismatch after final copy");
+  //assert(currentIterationInputs_.size() == sizeOfCurrentIterationInputsETS());
   for (const auto& input : currentIterationInputs_) {
-    assert(isInput(input));
+    auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+        dnl_.getDNLTerminalFromID(input).getIsoID());
+    assert(isInput(input) || (Tree2BoolExpr::iso2boolExpr_.find(
+            dnl_.getDNLTerminalFromID(input)
+                .getIsoID()) != Tree2BoolExpr::iso2boolExpr_.end() && 
+                iso.getDrivers().front() == input));
   }
+  #endif
 }
