@@ -229,12 +229,10 @@ const std::shared_ptr<SNLTruthTableTree::Node>& SNLTruthTableTree::nodeFromId(
   assert((id != kInvalidId));
   assert((id >= kIdOffset));
   size_t idx = (size_t)(id - kIdOffset);
-  if (idx >= nodes_.size())
-    return nullNodePtr;
+  assert(idx < nodes_.size());
   const auto& sp = nodes_[idx];
-  if (!sp)
-    return nullNodePtr;
-  assert((sp->nodeID == id));
+  assert(sp.get() != nullptr);
+  assert(sp->nodeID == id);
   return sp;
 }
 

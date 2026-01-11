@@ -296,8 +296,11 @@ TEST(SNLTruthTableTreeEvalTest, NullChildNodeThrowsViaIdMismatch) {
 
   // Now nodeFromId(childId) will return null (id mismatch), so eval should throw "Null child node"
   // Expect std::assert will be caught
-  
+  #ifndef NDEBUG
   EXPECT_DEATH(parent->eval({true}),"sp->nodeID == id");
+  #else 
+  GTEST_SKIP() << "Assert-based test skipped in release builds"; 
+  #endif
 }
 
 TEST(SNLTruthTableTreeApi_Additions, AllocateNodeAndEvalInput) {
@@ -340,7 +343,11 @@ TEST(SNLTruthTableTreeApi_Additions, NodeFromId_NodeIdMismatch) {
   // Corrupt nodeID to force nodeFromId to return null
   node->nodeID = SNLTruthTableTree::kInvalidId;
   //EXPECT_EQ(tree.nodeFromId(id).get(), nullptr);
+  #ifndef NDEBUG
   EXPECT_DEATH(tree.nodeFromId(id).get(),"sp->nodeID == id");
+  #else 
+  GTEST_SKIP() << "Assert-based test skipped in release builds"; 
+  #endif
 }
 
 TEST(SNLTruthTableTreeEval_Additions, TableNodeChildrenCountMismatchThrows) {
@@ -385,8 +392,11 @@ TEST(SNLTruthTableTreeEval_Additions, NullChildNodeThrowsViaIdMismatch) {
   parent->truthTable = makeMaskTable(1, 0b01);
   parent->childrenIds.push_back(childId);
   tree.allocateNode(parent);
-
+  #ifndef NDEBUG
   EXPECT_DEATH(parent->eval({true}), "sp->nodeID == id");
+  #else 
+  GTEST_SKIP() << "Assert-based test skipped in release builds"; 
+  #endif
 }
 
 TEST(SNLTruthTableTreeEval_Additions, InputChildIndexOutOfRangeThrows) {
