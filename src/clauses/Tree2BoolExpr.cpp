@@ -298,13 +298,16 @@ BoolExpr* Tree2BoolExpr::convert(
       uint32_t k = tbl.size();
       uint64_t rows = uint64_t{1} << k;
 
-      if (tbl.all0()) {
-        setMemoETS(id, BoolExpr::createFalse());
-        iso2boolExpr_[isoID] = BoolExpr::createFalse();
-      } else if (tbl.all1()) {
-        setMemoETS(id, BoolExpr::createTrue());
-        iso2boolExpr_[isoID] = BoolExpr::createTrue();
-      } else {
+      assert(!tbl.all0()); // Should be a PI
+      assert(!tbl.all1()); // Should be a PI
+      // if (tbl.all0()) {
+      //   setMemoETS(id, BoolExpr::createFalse());
+      //   iso2boolExpr_[isoID] = BoolExpr::createFalse();
+      // } else if (tbl.all1()) {
+      //   setMemoETS(id, BoolExpr::createTrue());
+      //   iso2boolExpr_[isoID] = BoolExpr::createTrue();
+      // } else 
+      {
         // gather children
         clearChildFETS();
         reserveChildFETS(k);
@@ -354,11 +357,13 @@ BoolExpr* Tree2BoolExpr::convert(
           }
 
           // guard against an empty terms list
-          if (emptyTermsETS()) { 
-            setMemoETS(id, BoolExpr::createFalse());
-            iso2boolExpr_[isoID] = BoolExpr::createFalse();
-          }
-          else {
+          assert(!emptyTermsETS()); // Should be a PI
+          // if (emptyTermsETS()) { 
+          //   setMemoETS(id, BoolExpr::createFalse());
+          //   iso2boolExpr_[isoID] = BoolExpr::createFalse();
+          // }
+          // else 
+          {
             // fold into OR
             BoolExpr* expr = getTErmsETS().first[0];
             for (size_t t = 1; t < sizeOfTermsETS(); ++t) {
