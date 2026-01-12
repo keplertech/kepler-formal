@@ -18,15 +18,26 @@ class SNLLogicCone {
  public:
   SNLLogicCone(naja::DNL::DNLID seedOutputTerm,
                std::vector<naja::DNL::DNLID> pis)
-      : seedOutputTerm_(seedOutputTerm), PIs_(pis) {
+      : PIs_(pis) {
     //naja::DNL::destroy();
+    seedOutputTerms_.push_back(seedOutputTerm);
+    dnl_ = naja::DNL::get();
+  }
+  SNLLogicCone(std::vector<naja::DNL::DNLID> seedOutputTerms,
+               std::vector<naja::DNL::DNLID> pis)
+      : PIs_(pis) {
+    //naja::DNL::destroy();
+    for (const auto& term : seedOutputTerms) {
+      seedOutputTerms_.push_back(term);
+    }
     dnl_ = naja::DNL::get();
   }
   SNLLogicCone(naja::DNL::DNLID seedOutputTerm,
                std::vector<naja::DNL::DNLID> pis,
                naja::DNL::DNLFull* dnl)
-      : seedOutputTerm_(seedOutputTerm), PIs_(pis) {
+      : PIs_(pis) {
     //naja::DNL::destroy();
+    seedOutputTerms_.push_back(seedOutputTerm);
     dnl_ = dnl;
   }
   void run();
@@ -41,7 +52,7 @@ class SNLLogicCone {
   }
 
  private:
-  naja::DNL::DNLID seedOutputTerm_;
+  std::vector<naja::DNL::DNLID> seedOutputTerms_;
   tbb::concurrent_unordered_set<naja::DNL::DNLID> coneIsos_;
   std::vector<naja::DNL::DNLID> PIs_;
   naja::DNL::DNLFull* dnl_;

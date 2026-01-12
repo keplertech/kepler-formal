@@ -6,6 +6,7 @@
 #include "RemoveLoadlessLogic.h"
 #include "SNLDesign.h"
 #include "SNLLogicCone.h"
+#include <tbb/enumerable_thread_specific.h>
 
 // #define DEBUG_PRINTS
 
@@ -233,30 +234,46 @@ void ScopeExtraction::cleanVerificationScopes(
     // After this loop the dnl variable contain deleted DNL as cone destroy it in constructor for safety 
     size_t readerCount = 0;
     std::vector<DNLID> readersVector;
-    readersVector.assign(readers.begin(), readers.end());
-    if (getenv("KEPLER_NO_MT")) {
-      for (const auto& reader : readersVector) {
-        readerCount++;
-        KEPLER_FORMAL::SNLLogicCone cone(reader, pis[i]);
-        cone.initConeIsos(isosToKeep);
-        cone.run();
-        for (const auto& isoID : cone.getConeIsoIDs()) {
-          isosToKeep.insert(isoID);
-        }
-      }
-    } else {
-      tbb::parallel_for(tbb::blocked_range<DNLID>(0, readersVector.size()),
-                        [&](const tbb::blocked_range<DNLID>& r) {
-                          for (DNLID j = r.begin(); j < r.end(); ++j) {
-                            KEPLER_FORMAL::SNLLogicCone cone(readersVector[j], pis[i]);
-                            cone.initConeIsos(isosToKeep);
-                            cone.run();
-                            for (const auto& isoID : cone.getConeIsoIDs()) {
-                              isosToKeep.insert(isoID);
-                            }
-                          }
-                        });
+    readersVector.assign(readers.begin(), readers.end());   
+    KEPLER_FORMAL::SNLLogicCone cone(readersVector, pis[i]);
+    cone.run();
+    for (const auto& isoID : cone.getConeIsoIDs()) {
+      isosToKeep.insert(isoID);
     }
+    // if (getenv("KEPLER_NO_MT") || true) {
+    //   for (const auto& reader : readersVector) {
+    //     printf("Processing reader %zu / %zu\r", readerCount + 1,
+    //            readersVector.size());
+    //     readerCount++;
+    //     KEPLER_FORMAL::SNLLogicCone cone(reader, pis[i]);
+    //     cone.initConeIsos(isosToKeep);
+    //     cone.run();
+    //     printf("inserting isos %zu\n", cone.getConeIsoIDs().size());
+    //     // for (const auto& isoID : cone.getConeIsoIDs()) {
+    //     //   isosToKeep.insert(isoID);
+    //     // }
+    //     printf("inserted\n");
+    //   }
+    // } else {
+    //   tbb::enumerable_thread_specific<std::set<DNLID>> localIsosToKeep;
+    //   tbb::parallel_for(tbb::blocked_range<DNLID>(0, readersVector.size()),
+    //                     [&](const tbb::blocked_range<DNLID>& r) {
+    //                       for (DNLID j = r.begin(); j < r.end(); ++j) {
+    //                         KEPLER_FORMAL::SNLLogicCone cone(readersVector[j], pis[i]);
+    //                         //cone.initConeIsos(isosToKeep);
+    //                         cone.run();
+    //                         auto& localIsosToKeepSet = localIsosToKeep.local();
+    //                         localIsosToKeepSet.insert(
+    //                             cone.getConeIsoIDs().begin(),
+    //                             cone.getConeIsoIDs().end());
+    //                       }
+    //                     });
+    //   for (const auto& localSet : localIsosToKeep) {
+    //     for (const auto& isoID : localSet) {
+    //       isosToKeep.insert(isoID);
+    //     }
+    //   }
+    // }
     naja::NAJA_OPT::LoadlessLogicRemover remover;
     auto loadlessInstances = remover.getLoadlessInstances(*naja::DNL::get(), isosToKeep);
     remover.removeLoadlessInstances(top, loadlessInstances);

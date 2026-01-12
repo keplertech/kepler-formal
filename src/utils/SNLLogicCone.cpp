@@ -10,8 +10,10 @@ using namespace naja::DNL;
 void SNLLogicCone::run() {
   std::vector<naja::DNL::DNLID> currentIterationDrivers;
   std::vector<naja::DNL::DNLID> newIterationIsos;
-  newIterationIsos.push_back(
-      dnl_->getDNLTerminalFromID(seedOutputTerm_).getIsoID());
+  for (const auto& seedOutputTerm : seedOutputTerms_) {
+    newIterationIsos.push_back(
+        dnl_->getDNLTerminalFromID(seedOutputTerm).getIsoID());
+  } 
   while (!newIterationIsos.empty()) {
     currentIterationDrivers.clear();
     for (const auto& isoID : newIterationIsos) {
