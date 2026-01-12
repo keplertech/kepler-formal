@@ -487,6 +487,8 @@ void MiterStrategy::init() {
   printf("Collecting POs for design 1: %s\n", top1_->getName().getString().c_str());
   builder1.collect();
   printf("Collected %lu POs for design 1\n", builder1.getOutputs().size());
+  PIs1_ = builder1_.getInputs();
+}
 
 bool MiterStrategy::run() {
   NLUniverse* univ = NLUniverse::get();
