@@ -308,7 +308,8 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In1"));
   auto topIn2 =
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In2"));
-  NLLibraryTruthTables::construct(library);
+  
+  
   // 7. create a and model
   SNLDesign* andModel =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
@@ -470,7 +471,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In3"));
   auto topIn4 =
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("In4"));
-  NLLibraryTruthTables::construct(library);
+  //NLLibraryTruthTables::construct(library);
   // 7. create a and model
   SNLDesign* andModel =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND"));
@@ -488,13 +489,16 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   // 8. create an inverter model
   SNLDesign* inverterModel =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
-  // set truth table for inverter model
-  auto invIn =
+  
+   auto invIn =
       SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
   auto invOut =
       SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
   SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
-
+  NLLibraryTruthTables::construct(library);
+  // set truth table for inverter model
+ 
+  
   // create and instance in top
   SNLInstance* instAnd = SNLInstance::create(top, andModel, NLName("and"));
 
@@ -896,6 +900,14 @@ TEST_F(MiterTests, CoverDiff) {
       SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
   SNLDesignModeling::setTruthTable(logic0, SNLTruthTable(0, 0));
   SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
+  SNLDesign* inverterModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
+  // set truth table for inverter model
+  auto invIn =
+      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
+  auto invOut =
+      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
   NLLibraryTruthTables::construct(library);
   // 5. create a logic_0 instace in top
   SNLInstance* inst1 = SNLInstance::create(top, logic0, NLName("logic0"));
@@ -956,14 +968,8 @@ TEST_F(MiterTests, CoverDiff) {
   andC1->getInstTerm(andIn1->getID())->setNet(netC1a);
   andC1->getInstTerm(andIn2->getID())->setNet(netC1b);
   SNLInstance* constC1 = SNLInstance::create(topClone1, logic0, NLName("logic0C1"));
-  SNLDesign* inverterModel =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
-  // set truth table for inverter model
-  auto invIn =
-      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Input, NLName("in"));
-  auto invOut =
-      SNLScalarTerm::create(inverterModel, SNLTerm::Direction::Output, NLName("out"));
-  SNLDesignModeling::setTruthTable(inverterModel, SNLTruthTable(1, 1));
+  
+  
   auto inverterC1 = SNLInstance::create(topClone1, inverterModel, NLName("inverterC1"));
   constC1->getInstTerm(logic0Out->getID())->setNet(netC1a);
   auto netC1invOut = SNLScalarNet::create(topClone1, NLName("netC1invOut"));
@@ -1011,7 +1017,7 @@ TEST_F(MiterTests, multiDriver) {
       SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
   SNLDesignModeling::setTruthTable(logic0, SNLTruthTable(0, 0));
   SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
-  NLLibraryTruthTables::construct(library);
+  //NLLibraryTruthTables::construct(library);
   // 5. create a logic_0 instace in top
   SNLInstance* inst1 = SNLInstance::create(top, logic0, NLName("logic0"));
   // 6. create a logic_1 instace in top
@@ -1032,6 +1038,7 @@ TEST_F(MiterTests, multiDriver) {
   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
   // set truth table for and model
   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  NLLibraryTruthTables::construct(library);
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("net1"));
   SNLNet* net2 = SNLScalarNet::create(top, NLName("net2"));
@@ -1053,6 +1060,7 @@ TEST_F(MiterTests, multiDriver) {
   auto topClone = top->clone(NLName("topClone"));
   // 11. create DNL
   MiterStrategy MiterS(top, topClone, "MultiDriver");
+  MiterS.init();
   // Expect throw in run
   EXPECT_THROW(MiterS.run(), std::runtime_error);
   naja::DNL::destroy();
@@ -1091,6 +1099,7 @@ TEST_F(MiterTests, tt65In) {
       SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
   SNLDesignModeling::setTruthTable(logic0, SNLTruthTable(0, 0));
   SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
+  //NLLibraryTruthTables::construct(library);
   // Create a model with 65 inputs and 1 output and set the truth table so 
   // output is 1 only when all inputs are 0
   SNLDesign* tt65InModel =
@@ -1119,6 +1128,7 @@ TEST_F(MiterTests, tt65In) {
     tt65InTables.push_back(SNLTruthTable(2, 8));
   }
   SNLDesignModeling::setTruthTables(tt65InModel,tt65InTables);
+  //NLLibraryTruthTables::construct(library);
   // create the instance of the model in top
   auto tt65InInst = SNLInstance::create(top, tt65InModel, NLName("tt65in"));
   // 5. create a logic_0 instace in top
@@ -1150,6 +1160,7 @@ TEST_F(MiterTests, tt65In) {
   SNLInstance* inst4 = SNLInstance::create(top, andModel, NLName("and2"));
   // set truth table for and model
   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  //NLLibraryTruthTables::construct(library);
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("net1"));
   SNLNet* net2 = SNLScalarNet::create(top, NLName("net2"));
@@ -1178,6 +1189,7 @@ TEST_F(MiterTests, tt65In) {
   auto topClone = top->clone(NLName("topClone"));
   // 11. create DNL
   MiterStrategy MiterS(top, topClone, "MultiDriver");
+  MiterS.init();
   // Expect throw in run
   EXPECT_THROW(MiterS.run(), std::runtime_error);
   naja::DNL::destroy();

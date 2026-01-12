@@ -10,8 +10,8 @@
 #include <thread>
 #include <tbb/global_control.h>
 
-// #define DEBUG_PRINTS
-// #define DEBUG_CHECKS
+//#define DEBUG_PRINTS
+//#define DEBUG_CHECKS
 
 #ifdef DEBUG_PRINTS
 #define DEBUG_LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)

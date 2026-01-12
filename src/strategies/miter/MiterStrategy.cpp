@@ -476,17 +476,15 @@ void MiterStrategy::init() {
   NLUniverse* univ = NLUniverse::get();
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
-  BuildPrimaryOutputClauses builder0;
   printf("Collecting POs for design 0: %s\n", top0_->getName().getString().c_str());
-  builder0.collect();
-  printf("Collected %lu POs for design 0\n", builder0.getOutputs().size());
-  naja::DNL::destroy();
+  builder0_.collect();
+  printf("Collected %lu POs for design 0\n", builder0_.getOutputs().size());
   PIs0_ = builder0_.getInputs();
+  naja::DNL::destroy();
   univ->setTopDesign(top1_);
-  BuildPrimaryOutputClauses builder1;
   printf("Collecting POs for design 1: %s\n", top1_->getName().getString().c_str());
-  builder1.collect();
-  printf("Collected %lu POs for design 1\n", builder1.getOutputs().size());
+  builder1_.collect();
+  printf("Collected %lu POs for design 1\n", builder1_.getOutputs().size());
   PIs1_ = builder1_.getInputs();
 }
 
