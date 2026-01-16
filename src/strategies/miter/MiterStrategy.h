@@ -25,7 +25,7 @@ class MiterStrategy {
 
   bool run();
 
-  void normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
+  size_t normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
                         const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& inputs0Map,
                         const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>& inputs1Map);
@@ -55,6 +55,7 @@ class MiterStrategy {
   std::string prefix_;
   naja::NL::SNLDesign* topInit_ = nullptr;
   std::vector<naja::DNL::DNLFull> dnls_;
+  size_t lastCommonVarID_ = 1;
 };
 
 }  // namespace KEPLER_FORMAL

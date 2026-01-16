@@ -51,9 +51,14 @@ class SNLLogicCone {
     coneIsos_ = isoIDs;
   }
 
+  const std::vector<naja::DNL::DNLID>& getCollectedTerms() const {
+    return collectedTerms_;
+  }
+
  private:
   std::vector<naja::DNL::DNLID> seedOutputTerms_;
   tbb::concurrent_unordered_set<naja::DNL::DNLID> coneIsos_;
+  std::vector<naja::DNL::DNLID> collectedTerms_;
   std::vector<naja::DNL::DNLID> PIs_;
   naja::DNL::DNLFull* dnl_;
 };

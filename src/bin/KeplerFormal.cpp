@@ -252,6 +252,7 @@ int main(int argc, char** argv) {
   }
 
   if (inputFormatType == FormatType::VERILOG) {
+    printf("Parsing verilog file: %s\n", inputPaths[1].c_str());
     auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
     SNLVRLConstructor constructor(designLibrary);
     constructor.construct(inputPaths[1].c_str());

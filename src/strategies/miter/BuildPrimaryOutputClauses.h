@@ -33,11 +33,11 @@ class BuildPrimaryOutputClauses {
     return outputs2outputsIDs_;
   }
   void setInputs(const std::vector<naja::DNL::DNLID>& inputs) {
-    inputs_ = inputs; /*sortInputs();*/
+    inputs_ = std::move(inputs); /*sortInputs();*/
     setInputs2InputsIDs();
   }
   void setOutputs(const std::vector<naja::DNL::DNLID>& outputs) {
-    outputs_ = outputs; /*sortOutputs();*/
+    outputs_ = std::move(outputs); /*sortOutputs();*/
     setOutputs2OutputsIDs();
   }
   const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
@@ -51,6 +51,14 @@ class BuildPrimaryOutputClauses {
   naja::DNL::DNLID getDNLIDforOutput(size_t index) const {
     return outputs_[index];
   }
+  naja::DNL::DNLID getDNLIDforInput(size_t index) const {
+    return inputs_[index];
+  }
+
+  const std::vector<size_t>& getTermDNLID2VarID() const {
+    return termDNLID2varID_;
+  }
+  void setLastCommonID(size_t id) { lastCommonID = id; }
 
  private:
   std::vector<naja::DNL::DNLID> collectInputs();
@@ -60,7 +68,7 @@ class BuildPrimaryOutputClauses {
   void setOutputs2OutputsIDs();
   void sortOutputs();
   void initVarNames();
-
+  
   tbb::concurrent_vector<BoolExpr*> POs_;
   std::vector<naja::DNL::DNLID> inputs_;
   std::vector<bool> IsPIs_;
@@ -75,6 +83,7 @@ class BuildPrimaryOutputClauses {
            std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>
       outputs2outputsIDs_;
   std::vector<size_t> termDNLID2varID_;  // Only for PIs
+  size_t lastCommonID = 1;
 };
 
 }  // namespace KEPLER_FORMAL
