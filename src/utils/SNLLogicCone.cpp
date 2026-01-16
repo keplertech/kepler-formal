@@ -21,17 +21,17 @@ void SNLLogicCone::run() {
         coneIsos_.insert(isoID);
         for (auto driver :
              dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID).getDrivers()) {
-          collectedTerms_.push_back(driver);
+          collectedTerms_.insert(driver);
           currentIterationDrivers.push_back(driver);
         }
       }
     }
     newIterationIsos.clear();
     for (auto driver : currentIterationDrivers) {
-      if (std::find(PIs_.begin(), PIs_.end(), driver) != PIs_.end()) {
+      if (isPIs_[driver]) {
         continue;  // Skip PIs and loops(?)
       }
-      collectedTerms_.push_back(driver);
+      collectedTerms_.insert(driver);
       const DNLInstanceFull& inst =
           dnl_->getDNLTerminalFromID(driver).getDNLInstance();
       for (DNLID termID = inst.getTermIndexes().first;
@@ -43,7 +43,7 @@ void SNLLogicCone::run() {
           if (coneIsos_.find(term.getIsoID())  ==
               coneIsos_.end()) {
             newIterationIsos.push_back(term.getIsoID());
-            collectedTerms_.push_back(termID);
+            collectedTerms_.insert(termID);
           }
         }
       }

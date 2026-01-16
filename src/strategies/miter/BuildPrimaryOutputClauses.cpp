@@ -40,7 +40,21 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   }
 
   for (DNLID leaf : dnl->getLeaves()) {
+    auto iter = modelCache_.find(dnl->getDNLInstanceFromID(leaf).getSNLModel());
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
+    if ((iter != modelCache_.end()) && iter->second.analyzedPIs) {
+      const auto& cache = iter->second;
+      for (DNLID termId = instance.getTermIndexes().first;
+         termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
+         termId++) {
+         const auto& term = dnl->getDNLTerminalFromID(termId);
+          if (cache.PIs.find(term.getSnlBitTerm()) != cache.PIs.end()) {
+            inputs.emplace_back(termId);
+          }
+      }
+      continue;
+    }
+    modelCache_[instance.getSNLModel()].analyzedPIs = true;
     size_t numberOfInputs = 0, numberOfOutputs = 0;
     for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
@@ -61,6 +75,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
             SNLBitTerm::Direction::Input) {
           assert(termId < naja::DNL::get()->getDNLTerms().size());
           inputs.emplace_back(termId);
+          modelCache_[instance.getSNLModel()].PIs.insert(
+              term.getSnlBitTerm());
           DEBUG_LOG(
               "Collecting input %s of model %s\n",
               term.getSnlBitTerm()->getName().getString().c_str(),
@@ -87,6 +103,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
             SNLBitTerm::Direction::Input) {
           assert(termId < naja::DNL::get()->getDNLTerms().size());
           inputs.emplace_back(termId);
+          modelCache_[instance.getSNLModel()].PIs.insert(
+              term.getSnlBitTerm());
           DEBUG_LOG(
               "Collecting seq input %s of model %s\n",
               term.getSnlBitTerm()->getName().getString().c_str(),
@@ -108,6 +126,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
           if (!tt.isInitialized()) {
             assert(termId < naja::DNL::get()->getDNLTerms().size());
             inputs.emplace_back(termId);
+            modelCache_[instance.getSNLModel()].PIs.insert(
+                term.getSnlBitTerm());
             DEBUG_LOG("Collecting input %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(),
                       term.getSnlBitTerm()
@@ -121,6 +141,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
               tt.all1()) {
             assert(termId < naja::DNL::get()->getDNLTerms().size());
             inputs.emplace_back(termId);
+            modelCache_[instance.getSNLModel()].PIs.insert(
+                term.getSnlBitTerm());
             DEBUG_LOG("Collecting constant input %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(),
                       term.getSnlBitTerm()
@@ -143,6 +165,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
                       term.getSnlBitTerm()) != seqBitTerms.end()) {
           assert(termId < naja::DNL::get()->getDNLTerms().size());
           inputs.emplace_back(termId);
+          modelCache_[instance.getSNLModel()].PIs.insert(
+              term.getSnlBitTerm());
           DEBUG_LOG(
               "Collecting seq input %s of model %s\n",
               term.getSnlBitTerm()->getName().getString().c_str(),
@@ -177,6 +201,20 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   }
   for (DNLID leaf : dnl->getLeaves()) {
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
+    auto iter = modelCache_.find(instance.getSNLModel());
+    if ((iter != modelCache_.end()) && iter->second.analyzedPOs) {
+      const auto& cache = iter->second;
+      for (DNLID termId = instance.getTermIndexes().first;
+         termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
+         termId++) {
+         const auto& term = dnl->getDNLTerminalFromID(termId);
+          if (cache.POs.find(term.getSnlBitTerm()) != cache.POs.end()) {
+            outputsSet.insert(termId);
+          }
+      }
+      continue;
+    }
+    modelCache_[instance.getSNLModel()].analyzedPOs = true;
     bool isSequential = false;
     std::vector<SNLBitTerm*> seqBitTerms;
 
@@ -194,6 +232,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
           outputsSet.insert(termId);
+          modelCache_[instance.getSNLModel()].POs.insert(
+              term.getSnlBitTerm());
           DEBUG_LOG(
               "Collecting seq output %s of model %s\n",
               term.getSnlBitTerm()->getName().getString().c_str(),
@@ -306,6 +346,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
           }
           if (/*deps.empty() &&*/ !inTermInTTDeps) {
             outputsSet.insert(termId);
+            modelCache_[instance.getSNLModel()].POs.insert(
+              term.getSnlBitTerm());
             DEBUG_LOG("Collecting output %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(),
                       term.getSnlBitTerm()
@@ -327,6 +369,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
         if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
                       term.getSnlBitTerm()) != seqBitTerms.end())
           outputsSet.insert(termId);
+          modelCache_[instance.getSNLModel()].POs.insert(
+              term.getSnlBitTerm());
         DEBUG_LOG(
             "Collecting seq output %s of model %s\n",
             term.getSnlBitTerm()->getName().getString().c_str(),
@@ -492,7 +536,7 @@ void BuildPrimaryOutputClauses::build() {
     std::chrono::duration<double> elapsed_seconds_comp = endComp - startComp;
     printf("Computation time for %lu: %f seconds\n", i, elapsed_seconds_comp.count());
     #endif
-    // //cloud.getTruthTable().print();
+    // //cloud.SNLDesignModeling::getTruthTable().print();
     // std::vector<DNLID> test1;
     // std::vector<DNLID> test2;
     // for (auto in : cloud.getAllInputs()) {
@@ -527,7 +571,7 @@ void BuildPrimaryOutputClauses::build() {
         }
         auto model = const_cast<SNLDesign*>(
             term.getSnlBitTerm()->getDesign());
-        auto tt = model->getTruthTable(term.getSnlBitTerm()->getOrderID());
+        auto tt = model->SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getOrderID());
         if (tt.isInitialized()) {
           if (tt.all0()) {
             varNames.emplace_back("0");
@@ -552,12 +596,12 @@ void BuildPrimaryOutputClauses::build() {
     which are reserved for constants
     }*/
 #ifdef DEBUG_CHECKS
-    assert(cloud.getTruthTable().isInitialized());
+    assert(cloud.SNLDesignModeling::getTruthTable().isInitialized());
 #endif
     // DEBUG_LOG("Truth Table: %s\n",
-    //           cloud.getTruthTable().print().c_str());
+    //           cloud.SNLDesignModeling::getTruthTable().print().c_str());
     /*std::shared_ptr<BoolExpr> expr = Tree2BoolExpr::convert(
-        cloud.getTruthTable(), varNames);*/
+        cloud.SNLDesignModeling::getTruthTable(), varNames);*/
     // BoolExpr::getMutex().lock();
     //  if (POs_.size() - 1 < i) {
     //    for (size_t j = POs_.size(); j <= i; ++j) {
@@ -676,3 +720,14 @@ void BuildPrimaryOutputClauses::sortOutputs() {
                outputs2outputsIDs_[a].second < outputs2outputsIDs_[b].second;
       });
 }
+
+// const naja::NL::SNLTruthTable& BuildPrimaryOutputClauses::getTruthTable(naja::NL::SNLDesign* design, size_t orderID) {
+//   auto designID = design->getID();
+//   auto iter = ttCache_.find({designID, orderID});
+//   if (iter != ttCache_.end()) {
+//     return iter->second;
+//   }
+//   const auto& tt = SNLDesignModeling::getTruthTable(design, orderID);
+//   ttCache_[{designID, orderID}] = tt;
+//   return tt;
+// }

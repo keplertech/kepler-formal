@@ -293,9 +293,9 @@ Glucose::Lit tseitinEncode(
 size_t MiterStrategy::normalizeInputs(
     std::vector<naja::DNL::DNLID>& inputs0,
     std::vector<naja::DNL::DNLID>& inputs1,
-    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
+    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         inputs0Map,
-    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
+    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         inputs1Map) {
   ensureLoggerInitialized();
   logger->info("normalizeInputs: starting");
@@ -368,9 +368,9 @@ size_t MiterStrategy::normalizeInputs(
 void MiterStrategy::normalizeOutputs(
     std::vector<naja::DNL::DNLID>& outputs0,
     std::vector<naja::DNL::DNLID>& outputs1,
-    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
+    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         outputs0Map,
-    const std::map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID>&
+    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         outputs1Map) {
   ensureLoggerInitialized();
   logger->info("normalizeOutputs: starting");
@@ -629,6 +629,10 @@ bool MiterStrategy::run() {
                                  " DNLIDs do not match");
         // LCOV_EXCL_STOP
       }
+      if (POs0[i] == POs1[i]) { // We can do this comparison because of the caching in, if they are the same, they are the same pointer
+        logger->info("PO index {} expressions are equal; skipping", i);
+        continue;
+      }
       tbb::concurrent_vector<BoolExpr*> singlePOs0S;
       singlePOs0S.emplace_back(POs0[i]);
       tbb::concurrent_vector<BoolExpr*> singlePOs1S;
@@ -644,6 +648,25 @@ bool MiterStrategy::run() {
 
       singleSolver.addClause(singleRootLit);
       if (singleSolver.solve()) {
+        bool unSupportedVar = false;
+        const auto&varSupportA = POs0[i]->getSupportVars();
+        for (const auto&var : varSupportA) {
+          if (lastCommonVarID_ < var) {
+            logger->warn("Unsupported var for PO0: {}", var);  
+            unSupportedVar = true;
+          }
+        }
+        const auto&varSupportB = POs1[i]->getSupportVars();
+        for (const auto&var : varSupportB) {
+          if (lastCommonVarID_ < var) {
+            logger->warn("Unsupported var for PO1: {}", var);  
+            unSupportedVar = true;
+          }
+        }
+        if (unSupportedVar) {
+          logger->warn("buildMiter skipping output index {} due to unsupported variable", i);
+          continue;
+        }
         failedPOs_.emplace_back(i);
         logger->info("Found difference for PO: {}", i);
         //logger->info("Clause 0 {}", POs0[i]->toString());
@@ -676,8 +699,8 @@ bool MiterStrategy::run() {
         PIs.emplace_back(PIs1);
         naja::NL::SNLEquipotential::Terms terms0;
         naja::NL::SNLEquipotential::Terms terms1;
-        std::vector<std::string> insTerms0;
-        std::vector<std::string> insTerms1;
+        std::unordered_set<std::string> insTerms0;
+        std::unordered_set<std::string> insTerms1;
         for (size_t j = 0; j < topModels.size(); ++j) {
           DNL::destroy();
           NLUniverse::get()->setTopDesign(topModels[j]);
@@ -753,9 +776,9 @@ bool MiterStrategy::run() {
               fullPath +=
                   std::to_string(termFull.getFullPathIDs().back());
               if (j == 0) {
-                insTerms0.emplace_back(fullPath);
+                insTerms0.insert(fullPath);
               } else {
-                insTerms1.emplace_back(fullPath);
+                insTerms1.insert(fullPath);
               }
             }
           }
@@ -824,7 +847,7 @@ bool MiterStrategy::run() {
         std::set<std::string> insTermsDiff;
         for (const auto& term0 : insTerms0) {
           bool found = false;
-          if (std::find(insTerms1.begin(), insTerms1.end(), term0) != insTerms1.end()) {
+          if (insTerms1.find(term0) != insTerms1.end()) {
             found = true;
           }
           if (found) {
@@ -837,7 +860,7 @@ bool MiterStrategy::run() {
         }
         for (const auto& term1 : insTerms1) {
           bool found = false;
-          if (std::find(insTerms0.begin(), insTerms0.end(), term1) != insTerms0.end()) {
+          if (insTerms0.find(term1) != insTerms0.end()) {
             found = true;
           }
           if (!found) {
