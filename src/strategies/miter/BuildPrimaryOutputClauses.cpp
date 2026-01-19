@@ -66,7 +66,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         numberOfOutputs++;
     }
 
-    if (numberOfInputs == 0 && numberOfOutputs > 1) {
+    if (numberOfInputs == 0 && numberOfOutputs > 0) {
+      // no inputs primtive, assuming generator so adding as PI
       for (DNLID termId = instance.getTermIndexes().first;
            termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
            termId++) {
@@ -480,16 +481,20 @@ void BuildPrimaryOutputClauses::build() {
   IsPIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
   for (auto pi : inputs_) {
     if (pi >= IsPIs_.size()) {
+      // LCOV_EXCL_START
       std::string error = "PI " + std::to_string(pi) + " is out of range";
       throw std::runtime_error(error);
+      // LCOV_EXCL_STOP
     }
     IsPIs_[pi] = true;
   }
   IsPOs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
   for (auto po : outputs_) {
     if (po >= IsPOs_.size()) {
+      // LCOV_EXCL_START
       std::string error = "PO " + std::to_string(po) + " is out of range";
       throw std::runtime_error(error);
+      // LCOV_EXCL_STOP
     }
     IsPOs_[po] = true;
   }
@@ -703,23 +708,25 @@ void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
   }
 }
 
-void BuildPrimaryOutputClauses::sortInputs() {
-  // Sort based on inputs2inputsIDs_ content
-  std::sort(inputs_.begin(), inputs_.end(),
-            [this](const DNLID& a, const DNLID& b) {
-              return inputs2inputsIDs_[a].first < inputs2inputsIDs_[b].first && 
-                      inputs2inputsIDs_[a].second < inputs2inputsIDs_[b].second;
-            });
-}
+// Sort functions are retierd for now as they break the mapping between the 2 circuits, normalize is used instead
 
-void BuildPrimaryOutputClauses::sortOutputs() {
-  // Sort based on outputs2outputsIDs_ content
-  std::sort(
-      outputs_.begin(), outputs_.end(), [this](const DNLID& a, const DNLID& b) {
-        return outputs2outputsIDs_[a].first < outputs2outputsIDs_[b].first && 
-               outputs2outputsIDs_[a].second < outputs2outputsIDs_[b].second;
-      });
-}
+// void BuildPrimaryOutputClauses::sortInputs() {
+//   // Sort based on inputs2inputsIDs_ content
+//   std::sort(inputs_.begin(), inputs_.end(),
+//             [this](const DNLID& a, const DNLID& b) {
+//               return inputs2inputsIDs_[a].first < inputs2inputsIDs_[b].first && 
+//                       inputs2inputsIDs_[a].second < inputs2inputsIDs_[b].second;
+//             });
+// }
+
+// void BuildPrimaryOutputClauses::sortOutputs() {
+//   // Sort based on outputs2outputsIDs_ content
+//   std::sort(
+//       outputs_.begin(), outputs_.end(), [this](const DNLID& a, const DNLID& b) {
+//         return outputs2outputsIDs_[a].first < outputs2outputsIDs_[b].first && 
+//                outputs2outputsIDs_[a].second < outputs2outputsIDs_[b].second;
+//       });
+// }
 
 // const naja::NL::SNLTruthTable& BuildPrimaryOutputClauses::getTruthTable(naja::NL::SNLDesign* design, size_t orderID) {
 //   auto designID = design->getID();

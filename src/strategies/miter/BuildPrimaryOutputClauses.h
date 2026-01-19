@@ -29,7 +29,7 @@ class BuildPrimaryOutputClauses {
       return res;
     }
   };
-  
+
   BuildPrimaryOutputClauses() = default;
   void collect();
   void build();
@@ -83,10 +83,10 @@ class BuildPrimaryOutputClauses {
   
   std::vector<naja::DNL::DNLID> collectInputs();
   void setInputs2InputsIDs();
-  void sortInputs();
+  // void sortInputs();
   std::vector<naja::DNL::DNLID> collectOutputs();
   void setOutputs2OutputsIDs();
-  void sortOutputs();
+  // void sortOutputs();
   void initVarNames();
   
   tbb::concurrent_vector<BoolExpr*> POs_;
