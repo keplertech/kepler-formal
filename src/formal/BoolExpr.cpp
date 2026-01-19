@@ -280,6 +280,30 @@ BoolExpr* BoolExpr::simplify(BoolExpr* e) {
     return memo.count(e) ? memo[e] : e;
 }
 
+std::set<size_t> BoolExpr::getSupportVars() const {
+    std::set<size_t> support;
+    std::unordered_map<const BoolExpr*, bool> visited;
+    std::vector<const BoolExpr*> stack;
+    stack.push_back(this);
+
+    while (!stack.empty()) {
+        const BoolExpr* node = stack.back();
+        stack.pop_back();
+
+        if (visited[node]) continue;
+        visited[node] = true;
+
+        if (node->getOp() == Op::VAR) {
+            support.insert(node->getId());
+        } else {
+            if (node->getLeft())  stack.push_back(node->getLeft());
+            if (node->getRight()) stack.push_back(node->getRight());
+        }
+    }
+
+    return support;
+}
+
 
 
 } // namespace KEPLER_FORMAL

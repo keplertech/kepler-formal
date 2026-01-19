@@ -23,6 +23,7 @@
 #include "SNLVRLConstructor.h"
 #include "SNLVRLDumper.h"
 #include "SNLUtils.h"
+#include "ScopeExtraction.h"
 
 static void print_usage(const char* prog) {
   std::printf(
@@ -43,7 +44,7 @@ static std::vector<std::string> yamlToVector(const YAML::Node& node) {
 
 int main(int argc, char** argv) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, SNL };
+  enum class FormatType { VERILOG, NAJA_IF };
 
   // Default values
   FormatType inputFormatType = FormatType::VERILOG;
@@ -62,6 +63,9 @@ int main(int argc, char** argv) {
 
   std::string logFileName;
 
+  bool useScopes = false;
+  bool cleanScopes = false;
+
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--config" || a == "-c") {
@@ -77,7 +81,7 @@ int main(int argc, char** argv) {
         if (cfg["format"] && cfg["format"].IsScalar()) {
           std::string fmt = cfg["format"].as<std::string>();
           if (fmt == "naja_if" || fmt == "naja-if" || fmt == "snl")
-            inputFormatType = FormatType::SNL;
+            inputFormatType = FormatType::NAJA_IF;
           else if (fmt == "verilog" || fmt == "v")
             inputFormatType = FormatType::VERILOG;
           else {
@@ -101,6 +105,16 @@ int main(int argc, char** argv) {
         if (cfg["log_file"] && cfg["log_file"].IsScalar()) {
           logFileName = cfg["log_file"].as<std::string>();
         }
+        
+        // use_scopes
+        if (cfg["use_scopes"] && cfg["use_scopes"].IsScalar()) {
+          useScopes = cfg["use_scopes"].as<bool>();
+        }
+
+        // clean_scopes
+        if (cfg["clean_scopes"] && cfg["clean_scopes"].IsScalar()) {
+          cleanScopes = cfg["clean_scopes"].as<bool>();
+        }
 
         usedConfig = true;
       } catch (const std::exception& e) {
@@ -121,7 +135,7 @@ int main(int argc, char** argv) {
 
     std::string formatType = argv[1];
     if (formatType == "-naja_if" || formatType == "-naja-if") {
-      inputFormatType = FormatType::SNL;
+      inputFormatType = FormatType::NAJA_IF;
     } else if (formatType == "-verilog") {
       inputFormatType = FormatType::VERILOG;
     } else {
@@ -162,7 +176,7 @@ int main(int argc, char** argv) {
     spdlog::set_level(spdlog::level::info);
 
   std::printf("KEPLER FORMAL: Run.\n");
-  std::printf("Input format: %s\n", (inputFormatType == FormatType::SNL) ? "SNL" : "VERILOG");
+  std::printf("Input format: %s\n", (inputFormatType == FormatType::NAJA_IF) ? "SNL" : "VERILOG");
   std::printf("Netlist 1: %s\n", inputPaths[0].c_str());
   std::printf("Netlist 2: %s\n", inputPaths[1].c_str());
   if (!libertyFiles.empty()) {
@@ -238,6 +252,7 @@ int main(int argc, char** argv) {
   }
 
   if (inputFormatType == FormatType::VERILOG) {
+    printf("Parsing verilog file: %s\n", inputPaths[1].c_str());
     auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
     SNLVRLConstructor constructor(designLibrary);
     constructor.construct(inputPaths[1].c_str());
@@ -274,18 +289,56 @@ int main(int argc, char** argv) {
   // --------------------------------------------------------------------------
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
-  try {
-    KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
-    if (MiterS.run()) {
-      SPDLOG_INFO("No difference was found.");
-    } else {
-      SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+  if (inputFormatType == FormatType::NAJA_IF && useScopes) {
+    KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
+    MiterS.init();
+    ScopeExtraction extractor(top0, top1);
+    extractor.collectVerificationScopes();
+    if (cleanScopes) {
+      extractor.cleanVerificationScopes(MiterS.getPIs0(), MiterS.getPIs1());
     }
-  } catch (const std::exception& e) {
-    // LCOV_EXCL_START
-    SPDLOG_ERROR("Workflow failed: {}", e.what());
-    return EXIT_FAILURE;
-    // LCOV_EXCL_STOP
+    for (auto scopes : extractor.getScopesToVerify()) {
+      SPDLOG_INFO("Looking at scope: {} ",
+                  scopes.first->getName().getString());
+      // std::string scopeLogFile = (logFileName.empty() ? "kf_" : logFileName) + "_" +
+      //                           scopes.first->getName().getString() + ".txt";
+      try {
+        KEPLER_FORMAL::MiterStrategy MiterScope(scopes.first, scopes.second, logFileName);
+        MiterScope.init();
+        if (MiterScope.run()) {
+          SPDLOG_INFO("No difference was found for scope: {} , {}",
+                      scopes.first->getName().getString(),
+                      scopes.second->getName().getString());
+        } else {
+          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log(miter_log_x.txt) for details.",
+                      scopes.first->getName().getString(),
+                      scopes.second->getName().getString());
+        }
+      } catch (const std::exception& e) {
+        // LCOV_EXCL_START
+        SPDLOG_ERROR("Workflow failed for scope: {} , {}: {}", 
+                      scopes.first->getName().getString(),
+                      scopes.second->getName().getString(),
+                      e.what());
+        return EXIT_FAILURE;
+        // LCOV_EXCL_STOP
+      }
+    }
+  } else {
+    try {
+      KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
+      MiterS.init();
+      if (MiterS.run()) {
+        SPDLOG_INFO("No difference was found.");
+      } else {
+        SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+      }
+    } catch (const std::exception& e) {
+      // LCOV_EXCL_START
+      SPDLOG_ERROR("Workflow failed: {}", e.what());
+      return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
+    }
   }
 
   return EXIT_SUCCESS;
