@@ -203,6 +203,7 @@ int main(int argc, char** argv) {
   }
 
   if (inputFormatType == FormatType::VERILOG) {
+    printf("Parsing verilog file: %s\n", inputPaths[0].c_str());
     auto designLibrary = NLLibrary::create(db0, NLName("DESIGN"));
     SNLVRLConstructor constructor(designLibrary);
     constructor.construct(inputPaths[0].c_str());
@@ -217,11 +218,11 @@ int main(int argc, char** argv) {
       // LCOV_EXCL_STOP
     }
   } else {  // SNL
-    std::printf("Loading SNL file: %s\n", inputPaths[0].c_str());
+    std::printf("Loading Naja IF: %s\n", inputPaths[0].c_str());
     db0 = SNLCapnP::load(inputPaths[0].c_str(), primitivesAreLoaded);
     if (!db0) {
       // LCOV_EXCL_START
-      SPDLOG_CRITICAL("Failed to load SNL file: {}", inputPaths[0]);
+      SPDLOG_CRITICAL("Failed to load Naja IF: {}", inputPaths[0]);
       return EXIT_FAILURE;
       // LCOV_EXCL_STOP
     }
@@ -267,11 +268,11 @@ int main(int argc, char** argv) {
       // LCOV_EXCL_STOP
     }
   } else {  // SNL
-    std::printf("Loading SNL file: %s\n", inputPaths[1].c_str());
+    std::printf("Loading Naja IF: %s\n", inputPaths[1].c_str());
     db1 = SNLCapnP::load(inputPaths[1].c_str(), primitivesAreLoaded);
     if (!db1) {
       // LCOV_EXCL_START
-      SPDLOG_CRITICAL("Failed to load SNL file: {}", inputPaths[1]);
+      SPDLOG_CRITICAL("Failed to load Naja IF: {}", inputPaths[1]);
       return EXIT_FAILURE;
       // LCOV_EXCL_STOP
     }
