@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include "BoolExprCache.h"
+#include <set>
 //#include "tbb/concurrent_unordered_map.h"
 
 namespace KEPLER_FORMAL {
@@ -84,6 +85,8 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   // Simplify/optimize an expression DAG (returns interned canonical node)
   // Memoized, safe on DAGs.
   static BoolExpr* simplify(BoolExpr* e);
+
+  std::set<size_t> getSupportVars() const;
 
  private:
   // Private ctor: use factory methods
