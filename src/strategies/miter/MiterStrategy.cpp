@@ -481,15 +481,15 @@ void MiterStrategy::init() {
   NLUniverse* univ = NLUniverse::get();
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
-  printf("Collecting POs for design 0: %s\n", top0_->getName().getString().c_str());
+  logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
   builder0_.collect();
-  printf("Collected %lu POs for design 0\n", builder0_.getOutputs().size());
+  logger->info("Collected {} POs for design 0\n", builder0_.getOutputs().size());
   PIs0_ = builder0_.getInputs();
   naja::DNL::destroy();
   univ->setTopDesign(top1_);
-  printf("Collecting POs for design 1: %s\n", top1_->getName().getString().c_str());
+  logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
   builder1_.collect();
-  printf("Collected %lu POs for design 1\n", builder1_.getOutputs().size());
+  logger->info("Collected {} POs for design 1\n", builder1_.getOutputs().size());
   PIs1_ = builder1_.getInputs();
 }
 
@@ -604,6 +604,10 @@ bool MiterStrategy::run() {
   if (sat) {
     logger->warn("Miter found a difference -> moving to analyze individual POs");
     for (size_t i = 0; i < POs0.size(); ++i) {
+      if (POs0[i] == POs1[i]) { // We can do this comparison because of the caching in, if they are the same, they are the same pointer
+        logger->info("PO index {} expressions are equal; skipping", i);
+        continue;
+      }
       if (builder0_.getOutputs2OutputsIDs().at(builder0_.getDNLIDforOutput(i)) !=
           builder1_.getOutputs2OutputsIDs().at(builder1_.getDNLIDforOutput(i))) {
         // LCOV_EXCL_START
@@ -628,10 +632,6 @@ bool MiterStrategy::run() {
         throw std::runtime_error("Miter PO index " + std::to_string(i) +
                                  " DNLIDs do not match");
         // LCOV_EXCL_STOP
-      }
-      if (POs0[i] == POs1[i]) { // We can do this comparison because of the caching in, if they are the same, they are the same pointer
-        logger->info("PO index {} expressions are equal; skipping", i);
-        continue;
       }
       tbb::concurrent_vector<BoolExpr*> singlePOs0S;
       singlePOs0S.emplace_back(POs0[i]);
@@ -753,7 +753,6 @@ bool MiterStrategy::run() {
           //     }
           //   }
           // }
-          printf("0\n");
           for (const auto& DNLID : cone.getCollectedTerms()) {
             const naja::DNL::DNLTerminalFull& termFull =
                 naja::DNL::get()->getDNLTerminalFromID(DNLID);
@@ -782,7 +781,6 @@ bool MiterStrategy::run() {
               }
             }
           }
-          printf("1\n");
           // snl2.process();
           // snl2.getNetlistGraph().dumpDotFile(dotFileNameEquis.c_str());
           // executeCommand(std::string(std::string("dot -Tsvg ") +
@@ -814,7 +812,6 @@ bool MiterStrategy::run() {
             logger->info("Diff 0 term: {}", term0->getString());
           }
         }
-        printf("2\n");
         for (const auto& term1 : terms1) {
           bool found = false;
           for (const auto& term0 : terms0) {
@@ -833,7 +830,6 @@ bool MiterStrategy::run() {
             logger->info("Diff 1 term: {}", term1->getString());
           }
         }
-        printf("3\n");
         // print termsDiff
         // for (const auto& term : termsDiff) {
         //   if (term->getDirection() ==

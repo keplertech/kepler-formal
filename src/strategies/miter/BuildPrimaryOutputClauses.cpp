@@ -495,7 +495,7 @@ void BuildPrimaryOutputClauses::build() {
   }
   auto processOutput = [&](size_t i) {
     DNLID out = outputs_[i];
-    //#ifdef DEBUG_PRINTS
+    #ifdef DEBUG_PRINTS
     printf("Procssing output %zu/%zu: %s\n", ++processedOutputs,
            outputs_.size(),
            get()
@@ -504,7 +504,7 @@ void BuildPrimaryOutputClauses::build() {
                ->getName()
                .getString()
                .c_str());
-    //#endif
+    #endif
 
     DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
     DEBUG_LOG("isoID: %zu\n", isoID);
