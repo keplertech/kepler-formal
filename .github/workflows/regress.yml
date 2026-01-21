@@ -65,6 +65,13 @@ jobs:
         ../../build/src/bin/kepler-formal --config objects/sky130hd/gcd/base/4_rsz_lec_test.yml 
         grep "Circuits are IDENTICAL" logs/sky130hd/gcd/base/4_rsz_lec_check.log 
     
+    - name: Run nangate45_black_parrot
+      working-directory: ${{github.workspace}}
+      run: |
+        cd kepler-formal-regress/nangate45_black_parrot
+        ../../build/src/bin/kepler-formal --config objects/nangate45/bp/base/4_rsz_lec_test.yml
+        grep "Circuits are IDENTICAL" logs/nangate45/bp/base/4_rsz_lec_check.log 
+  
     - name: Run on naja if
       working-directory: ${{github.workspace}}
       run: |
