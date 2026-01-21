@@ -93,7 +93,7 @@ jobs:
     
     - name: Run cts_aes_asap7_base
       working-directory: ${{github.workspace}}
-      run: 
+      run: |
         git clone https://github.com/keplertech/kepler-formal-examples
         ../build/src/bin/kepler-formal --config kepler-formal-examples/cts_aes_asap7_base/objects/asap7/aes/base/4_rsz_lec_test.yml
         grep "Circuits are IDENTICAL" kepler-formal-examples/cts_aes_asap7_base/logs/asap7/aes/base/4_rsz_lec_check.log
