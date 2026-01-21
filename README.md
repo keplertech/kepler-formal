@@ -53,6 +53,8 @@ cmake ..
 make
 ```
 
+For best runtime performance: 
+
 ```bash
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
