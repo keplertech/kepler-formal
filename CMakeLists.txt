@@ -55,8 +55,8 @@ target_link_libraries(formal_structures
   PRIVATE TBB::tbb
 )
 
-option(ENABLE_COVERAGE "Enable coverage flags" ON)
-if(ENABLE_COVERAGE AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
-  add_compile_options(--coverage -g)
-  add_link_options(--coverage)
-endif()
+# option(ENABLE_COVERAGE "Enable coverage flags" ON)
+# if(ENABLE_COVERAGE AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
+#   add_compile_options(--coverage -g)
+#   add_link_options(--coverage)
+# endif()
