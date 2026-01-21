@@ -348,21 +348,25 @@ size_t MiterStrategy::normalizeInputs(
     inputs0.emplace_back(inputs0Map.at(path));
   }
   inputs0.insert(inputs0.end(), diff0.begin(), diff0.end());
+  #ifdef DEBUG_CHECKS
   for (size_t i = 0; i < inputs0.size(); ++i) {
-    logger->info("normalized input0[{}]: {}:{}", i, 
+    logger->debug("normalized input0[{}]: {}:{}", i, 
       naja::DNL::get()->getDNLTerminalFromID(inputs0[i]).getDNLInstance().getPath().getString(), 
       naja::DNL::get()->getDNLTerminalFromID(inputs0[i]).getSnlBitTerm()->getName().getString());
   }
+  #endif
   inputs1.clear();
   for (const auto& path : pathsCommon) {
     inputs1.emplace_back(inputs1Map.at(path));
   }
   inputs1.insert(inputs1.end(), diff1.begin(), diff1.end());
+  #ifdef DEBUG_CHECKS
   for (size_t i = 0; i < inputs1.size(); ++i) {
-    logger->info("normalized input1[{}]: DNLID {}:{}", i, 
+    logger->debug("normalized input1[{}]: DNLID {}:{}", i, 
       naja::DNL::get()->getDNLTerminalFromID(inputs1[i]).getDNLInstance().getPath().getString(), 
       naja::DNL::get()->getDNLTerminalFromID(inputs1[i]).getSnlBitTerm()->getName().getString());
   }
+  #endif
   logger->info("size of common inputs: {}", pathsCommon.size());
   logger->info("size of diff0 inputs: {}", diff0.size());
   logger->info("size of diff1 inputs: {}", diff1.size());
