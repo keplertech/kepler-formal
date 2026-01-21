@@ -64,7 +64,6 @@ jobs:
         cd kepler-formal-regress/sky130hd_gcd
         ../../build/src/bin/kepler-formal --config objects/sky130hd/gcd/base/4_rsz_lec_test.yml 
         grep "Circuits are IDENTICAL" logs/sky130hd/gcd/base/4_rsz_lec_check.log 
-        grep "Circuits are IDENTICAL" logs/asap7/aes/base/4_rsz_lec_check.log
     
     - name: Run on naja if
       working-directory: ${{github.workspace}}
