@@ -90,7 +90,9 @@ jobs:
         mkdir -p regress-output
         # Run kepler-formal on the example files (files are in example/)
         ../build/src/bin/kepler-formal --config test_config_verilog.yaml
-
-
-
-          
+    
+    - name: Run cts_aes_asap7_base
+      working-directory: ${{github.workspace}}
+      run: 
+        git clone https://github.com/keplertech/kepler-formal-examples
+        ../build/src/bin/kepler-formal --config kepler-formal-examples/cts_aes_asap7_base/objects/asap7/aes/base/4_rsz_lec_test.yml
