@@ -1,5 +1,7 @@
 # kepler-formal
 
+[![codecov](https://app.codecov.io/gh/keplertech/kepler-formal/)
+
 ## Introduction
 
 Kepler-Formal is a logic equivalence checking (LEC) tool that operates on verilog and the naja interchange format(https://github.com/najaeda/naja-if) and focuses today on combinational equivalence checking only — sequential boundary changes are not supported yet and remain planned work.
