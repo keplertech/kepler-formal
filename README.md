@@ -1,6 +1,6 @@
 # kepler-formal
 
-[!codecov](https://codecov.io/gh/keplertech/kepler-formal/branch/main/graph/badge.svg?token=59ZKZ74HFP)
+[![codecov](https://codecov.io/gh/keplertech/kepler-formal/branch/main/graph/badge.svg?token=59ZKZ74HFP)]
 
 ## Introduction
 
