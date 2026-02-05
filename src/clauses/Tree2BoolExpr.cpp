@@ -38,113 +38,104 @@ using namespace KEPLER_FORMAL;
 tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> Tree2BoolExpr::iso2boolExpr_ =
     tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*>();
 
-// Helper typedefs for thread-local containers. Each pair stores a vector
-// allocated with TBB allocator and a size_t representing the logical size.
-// These thread-local containers avoid repeated allocations during traversal.
-
-typedef std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>> TermsPair;
-
-// Thread-local storage for DNF terms while building expressions for a node.
-thread_local TermsPair terms;
-
-TermsPair& getTErms() {
-  return terms;
+// Temporary storage for DNF terms (as BoolExpr*) while building expressions for a node.
+// Used to accumulate DNF terms before folding them into an OR expression.
+typedef std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>> TempDNFTermsVec;
+// Thread-local storage for DNF terms during node processing.
+thread_local TempDNFTermsVec tempDNFTerms;
+// Accessor for thread-local DNF terms vector.
+TempDNFTermsVec& getTempDNFTerms() {
+  return tempDNFTerms;
+}
+// Returns the number of DNF terms currently stored.
+size_t sizeOfTempDNFTerms() {
+  return getTempDNFTerms().size();
+}
+// Clears the DNF terms vector.
+void clearTempDNFTerms() {
+  auto& local = getTempDNFTerms();
+  local.clear();
+}
+// Appends a DNF term (BoolExpr*) to the vector.
+void pushTempDNFTerm(BoolExpr* term) {
+  getTempDNFTerms().emplace_back(term);
+}
+// Returns true if no DNF terms are present.
+bool emptyTempDNFTerms() {
+  return getTempDNFTerms().empty();
 }
 
-size_t sizeOfTerms() {
-  return getTErms().size();
+// Bitset per node indicating which child inputs actually affect the table (relevant inputs).
+// Used to optimize DNF generation by ignoring irrelevant inputs.
+typedef std::pair<std::vector<uint8_t, tbb::tbb_allocator<uint8_t>>, size_t> RelevantInputsPair;
+// Thread-local storage for relevant input bits and logical size.
+thread_local RelevantInputsPair relevantInputs;
+// Accessor for thread-local relevant input bits.
+RelevantInputsPair& getRelevantInputs() {
+  return relevantInputs;
 }
-
-void clearTerms() {
-  auto& termsLocal = getTErms();
-  termsLocal.clear();
+// Returns the current logical size of relevant inputs.
+size_t sizeOfRelevantInputs() {
+  return getRelevantInputs().second;
 }
-
-void pushBackTerms(BoolExpr* term) {
-  getTErms().emplace_back(term);
+// Clears the relevant inputs vector.
+void clearRelevantInputs() {
+  auto& local = getRelevantInputs();
+  local.first.clear();
 }
-
-bool emptyTerms() {
-  return getTErms().empty();
-}
-
-// Relevant inputs bitset per node: which child inputs actually affect the table.
-// Stored as a vector<uint8_t> (bool-like) with a logical size.
-typedef std::pair<std::vector<uint8_t, tbb::tbb_allocator<uint8_t>>, size_t> RelevantPair;
-
-thread_local RelevantPair relevant;
-
-RelevantPair& getRelevant() {
-  return relevant;
-}
-
-size_t sizeOfRelevant() {
-  return getRelevant().second;
-}
-
-void clearRelevant() {
-  auto& relevantLocal = getRelevant();
-  relevantLocal.first.clear();
-}
-
-void setRelevant(size_t i, bool b) {
-  auto& relevantLocal = getRelevant();
-  if (i >= relevantLocal.second) {
+// Sets the relevant flag for input i.
+void setRelevantInput(size_t i, bool b) {
+  auto& local = getRelevantInputs();
+  if (i >= local.second) {
     // LCOV_EXCL_START
-    assert(false && "setRelevant: index out of range");
+    assert(false && "setRelevantInput: index out of range");
     // LCOV_EXCL_STOP
   }
-  relevantLocal.first[i] = b;
+  local.first[i] = b;
 }
-
-bool getRelevant(size_t i) {
-  auto& relevantLocal = getRelevant();
-  if (i >= relevantLocal.second) {
+// Gets the relevant flag for input i.
+bool getRelevantInput(size_t i) {
+  auto& local = getRelevantInputs();
+  if (i >= local.second) {
     // LCOV_EXCL_START
-    throw std::out_of_range("getRelevant: index out of range");
+    throw std::out_of_range("getRelevantInput: index out of range");
     // LCOV_EXCL_STOP
   }
-  return relevantLocal.first[i];
+  return local.first[i];
 }
-
-// Ensure the relevant vector has at least n entries and initialize them to false.
-// The logical size is stored in the second element of the pair.
-void reserveRelevantwithFalse(size_t n) {
-  auto& relevantLocal = getRelevant();
-  auto& vec = relevantLocal.first;
-  auto& sz = relevantLocal.second;
+// Ensure the relevant inputs vector has at least n entries and initialize them to false.
+void reserveRelevantInputsWithFalse(size_t n) {
+  auto& local = getRelevantInputs();
+  auto& vec = local.first;
+  auto& sz = local.second;
   if (vec.size() >= n) {
     vec.assign(n, false);
     sz = n;
     return;
   }
-  size_t oldSize = vec.size();
   vec.resize(n, false);
   vec.assign(n, false);
   sz = n;
 }
 
 // Memoization table (thread-local) mapping node IDs to BoolExpr* results.
-// The vector is preallocated and indexed by node ID for O(1) lookup.
-typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> MemoPair;
-
-thread_local MemoPair memo;
-
-MemoPair& getMemo() {
-  return memo;
+// Used to cache results of subtrees during traversal.
+typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> NodeExprCachePair;
+thread_local NodeExprCachePair nodeExprCache;
+// Accessor for thread-local node expression cache.
+NodeExprCachePair& getNodeExprCache() {
+  return nodeExprCache;
 }
-
-void clearMemo() {
-  auto& memoLocal = getMemo();
-  memoLocal.first.clear();
+// Clears the node expression cache.
+void clearNodeExprCache() {
+  auto& local = getNodeExprCache();
+  local.first.clear();
 }
-
-// Reserve and initialize the memo table to a given logical size.
-// The vector elements are set to nullptr to indicate "not computed".
-void reserveMemo(size_t n) {
-  auto& memoLocal = getMemo();
-  auto& vec = memoLocal.first;
-  auto& sz = memoLocal.second;
+// Reserve and initialize the node expression cache to a given logical size.
+void reserveNodeExprCache(size_t n) {
+  auto& local = getNodeExprCache();
+  auto& vec = local.first;
+  auto& sz = local.second;
   if (vec.size() >= n) {
     sz = n;
     vec.assign(n, nullptr);
@@ -154,38 +145,37 @@ void reserveMemo(size_t n) {
   sz = n;
   vec.assign(n, nullptr);
 }
-
-void setMemo(size_t i, BoolExpr* expr) {
-  auto& memoLocal = getMemo();
-  assert(i < memoLocal.second && "setMemo: index out of range");
-  memoLocal.first[i] = expr;
+// Sets the cached BoolExpr* for node i.
+void setNodeExprCache(size_t i, BoolExpr* expr) {
+  auto& local = getNodeExprCache();
+  assert(i < local.second && "setNodeExprCache: index out of range");
+  local.first[i] = expr;
 }
-
-BoolExpr* getMemo(size_t i) {
-  auto& memoLocal = getMemo();
-  assert(i < memoLocal.second && "getMemo: index out of range");
-  return memoLocal.first[i];
+// Gets the cached BoolExpr* for node i.
+BoolExpr* getNodeExprCache(size_t i) {
+  auto& local = getNodeExprCache();
+  assert(i < local.second && "getNodeExprCache: index out of range");
+  return local.first[i];
 }
 
 // Temporary storage for child BoolExpr pointers while processing a table node.
-typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildFPair;
-
-thread_local ChildFPair childF;
-
-ChildFPair& getChildF() {
-  return childF;
+// Used to gather child expressions of the current node for DNF construction.
+typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildExprsPair;
+thread_local ChildExprsPair childExprs;
+// Accessor for thread-local child expressions.
+ChildExprsPair& getChildExprs() {
+  return childExprs;
 }
-
-void clearChildF() {
-  auto& childLocal = getChildF();
-  childLocal.second = 0;
+// Clears the child expressions (sets logical size to 0).
+void clearChildExprs() {
+  auto& local = getChildExprs();
+  local.second = 0;
 }
-
-// Reserve child storage and initialize entries to nullptr.
-void reserveChildF(size_t n) {
-  auto& childLocal = getChildF();
-  auto& vec = childLocal.first;
-  auto& sz = childLocal.second;
+// Reserve child expression storage and initialize entries to nullptr.
+void reserveChildExprs(size_t n) {
+  auto& local = getChildExprs();
+  auto& vec = local.first;
+  auto& sz = local.second;
   if (vec.size() >= n) {
     sz = n;
     vec.assign(n, nullptr);
@@ -195,27 +185,28 @@ void reserveChildF(size_t n) {
   sz = n;
   vec.assign(n, nullptr);
 }
-
-BoolExpr* getChildF(size_t i) {
-  auto& childLocal = getChildF();
-  assert(i < childLocal.second && "getChildF: index out of range");
-  return childLocal.first[i];
+// Gets the child expression at index i.
+BoolExpr* getChildExpr(size_t i) {
+  auto& local = getChildExprs();
+  assert(i < local.second && "getChildExpr: index out of range");
+  return local.first[i];
 }
-
-void setChildF(size_t i, BoolExpr* expr) {
-  auto& childLocal = getChildF();
-  assert(i < childLocal.second && "setChildF: index out of range");
-  childLocal.first[i] = expr;
+// Sets the child expression at index i.
+void setChildExpr(size_t i, BoolExpr* expr) {
+  auto& local = getChildExprs();
+  assert(i < local.second && "setChildExpr: index out of range");
+  local.first[i] = expr;
 }
 
 // Frame type used for explicit stack-based post-order traversal.
 // Each frame holds a pointer to a node and a boolean indicating whether
 // the node has been visited (post-visit) or not (pre-visit).
 using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
-thread_local std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
-
-std::vector<Frame, tbb::tbb_allocator<Frame>>& getStack() {
-  return stack;
+// Explicit traversal stack used to avoid recursion during tree traversal.
+thread_local std::vector<Frame, tbb::tbb_allocator<Frame>> traversalStack;
+// Accessor for thread-local traversal stack.
+std::vector<Frame, tbb::tbb_allocator<Frame>>& getTraversalStack() {
+  return traversalStack;
 }
 
 // Main conversion routine: converts an SNLTruthTableTree into a BoolExpr.
@@ -230,12 +221,12 @@ BoolExpr* Tree2BoolExpr::convert(
   // Determine maximum node ID to size memoization structures.
   size_t maxID = tree.getMaxID();
 
-  // 2) memo table: clear and reserve memoization storage for all node IDs.
-  clearMemo();
-  reserveMemo(maxID + 1);
+  // 2) node expression cache: clear and reserve memoization storage for all node IDs.
+  clearNodeExprCache();
+  reserveNodeExprCache(maxID + 1);
 
   // 3) post-order build using an explicit stack to avoid recursion.
-  auto & stack = getStack();
+  auto & stack = getTraversalStack();
   stack.clear();
   stack.emplace_back(root.get(), false);
 
@@ -260,11 +251,11 @@ BoolExpr* Tree2BoolExpr::convert(
       if (node->type != SNLTruthTableTree::Node::Type::Input) {
         isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
         if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end() && isoID != naja::DNL::DNLID_MAX) {
-          setMemo(id, iso2boolExpr_[isoID]);
+          setNodeExprCache(id, iso2boolExpr_[isoID]);
         }
       }
       // If memo already contains an expression for this node, skip processing.
-      if (getMemo(id) != nullptr) continue;
+      if (getNodeExprCache(id) != nullptr) continue;
 
       // If node is a Table or P node, push it back as visited and push children.
       if (node->type == SNLTruthTableTree::Node::Type::Table || node->type == SNLTruthTableTree::Node::Type::P) {
@@ -301,14 +292,14 @@ BoolExpr* Tree2BoolExpr::convert(
         }
         // Special handling for constant mappings: 0 -> false, 1 -> true.
         if (name == 0) {
-           setMemo(id, BoolExpr::createFalse());
+           setNodeExprCache(id, BoolExpr::createFalse());
            iso2boolExpr_[isoID] = BoolExpr::createFalse();
         } else if (name == 1) {
-           setMemo(id, BoolExpr::createTrue());
+           setNodeExprCache(id, BoolExpr::createTrue());
            iso2boolExpr_[isoID] = BoolExpr::createTrue();
         } else {
           // Normal variable mapping.
-          setMemo(id, BoolExpr::Var(name));
+          setNodeExprCache(id, BoolExpr::Var(name));
           iso2boolExpr_[isoID] = BoolExpr::Var(name);
         }
       }
@@ -326,35 +317,40 @@ BoolExpr* Tree2BoolExpr::convert(
 
       {
         // Gather child BoolExpr pointers into a temporary array for quick access.
-        clearChildF();
-        reserveChildF(k);
+        clearChildExprs();
+        reserveChildExprs(k);
         for (uint32_t i = 0; i < k; ++i) {
           size_t cid = node->tree->nodeFromId(node->childrenIds[i])->nodeID;
-          setChildF(i, getMemo(cid));
+          setChildExpr(i, getNodeExprCache(cid));
         }
 
         // Determine which inputs actually matter for this truth table.
         // For each input j, check if flipping bit j changes the table output.
-        clearRelevant();
-        reserveRelevantwithFalse(k);
+        clearRelevantInputs();
+        reserveRelevantInputsWithFalse(k);
         for (uint32_t j = 0; j < k; ++j) {
           for (uint64_t m = 0; m < rows; ++m) {
             bool b0 = tbl.bits().bit(m);
             bool b1 = tbl.bits().bit(m ^ (uint64_t{1} << j));
-            if (b0 != b1) { setRelevant(j, true); break; }
+            if (b0 != b1) { setRelevantInput(j, true); break; }
           }
         }
 
         // Count how many inputs are relevant.
         size_t numRelIdx = 0;
-        for (uint32_t j = 0; j < k; ++j) { if (getRelevant(j)) numRelIdx++; }
+        for (uint32_t j = 0; j < k; ++j) { if (getRelevantInput(j)) numRelIdx++; }
 
         // The algorithm expects at least one relevant input for a PI node.
         assert(numRelIdx > 0 && "No relevant inputs for node");
         {
+          // DNF (Disjunctive Normal Form) construction:
+          // For each row in the truth table where the output is 1, create a term that is
+          // an AND of literals corresponding to the relevant inputs (child expressions
+          // or their negations depending on the row). Then these terms will be OR-ed
+          // together to form the full expression for this node.
           // Build DNF terms by iterating over rows where the table output is 1.
           // For each such row, create a conjunction of literals for relevant inputs.
-          clearTerms();
+          clearTempDNFTerms();
           for (uint64_t m = 0; m < rows; ++m) {
             if (!tbl.bits().bit(m)) continue;
             BoolExpr* term = nullptr;
@@ -363,31 +359,31 @@ BoolExpr* Tree2BoolExpr::convert(
             // For each relevant input, pick the literal (child or its negation)
             // according to the bit value in row m.
             for (uint32_t j = 0; j < k; ++j) { 
-              if (!getRelevant(j)) {
+              if (!getRelevantInput(j)) {
                 continue;
               }
               bool bit1 = ((m >> j) & 1) != 0;
-              lit = bit1 ? getChildF(j) : BoolExpr::Not(getChildF(j));
+              lit = bit1 ? getChildExpr(j) : BoolExpr::Not(getChildExpr(j));
               if (firstLit) { term = lit; firstLit = false; }
               else { assert(term != nullptr); assert(lit != nullptr); term = BoolExpr::And(term, lit); }
             }
             // Only push the term if at least one literal was included.
-            if (term) { pushBackTerms(std::move(term)); }
+            if (term) { pushTempDNFTerm(std::move(term)); }
           }
 
           // There must be at least one term for a PI node.
-          assert(!emptyTerms()); // Should be a PI
+          assert(!emptyTempDNFTerms()); // Should be a PI
 
           {
             // Fold the list of terms into a single expression by OR-ing them.
-            BoolExpr* expr = getTErms()[0];
-            DEBUG_LOG("number of rows for node ID %zu: %zu\n", id, sizeOfTerms());
-            for (size_t t = 1; t < sizeOfTerms(); ++t) {
-              expr = BoolExpr::Or(expr, getTErms()[t]);
+            BoolExpr* expr = getTempDNFTerms()[0];
+            DEBUG_LOG("number of rows for node ID %zu: %zu\n", id, sizeOfTempDNFTerms());
+            for (size_t t = 1; t < sizeOfTempDNFTerms(); ++t) {
+              expr = BoolExpr::Or(expr, getTempDNFTerms()[t]);
               DEBUG_LOG("Intermediate OR expr for node ID %zu: %s\n", id, expr->toString().c_str());
             }
-            // Store the resulting expression in the memo table and in the iso map.
-            setMemo(id, expr);
+            // Store the resulting expression in the node expression cache and in the iso map.
+            setNodeExprCache(id, expr);
             iso2boolExpr_[isoID] = expr;
             DEBUG_LOG("Bool expression for node ID %zu: %s\n", id, expr->toString().c_str());
           }
@@ -396,6 +392,6 @@ BoolExpr* Tree2BoolExpr::convert(
     }
   }
 
-  // 4) return root expression from memo table.
-  return getMemo(root->nodeID);
+  // 4) return root expression from node expression cache.
+  return getNodeExprCache(root->nodeID);
 }
