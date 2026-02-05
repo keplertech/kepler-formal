@@ -122,7 +122,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
             SNLBitTerm::Direction::Input) {
           auto deps =
               SNLDesignModeling::getCombinatorialInputs(term.getSnlBitTerm());
-          const auto& tt = SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getDesign(), 
+          const auto tt = SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getDesign(), 
               term.getSnlBitTerm()->getOrderID());
           if (!tt.isInitialized()) {
             assert(termId < naja::DNL::get()->getDNLTerms().size());
@@ -266,7 +266,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                 SNLBitTerm::Direction::Input) {
               continue;
             }
-            const auto& tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
+            const auto tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
               tTerm.getSnlBitTerm()->getOrderID());
             if (tt.isInitialized()) {
               tts.emplace_back(tt);
@@ -279,8 +279,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
             }
           }
           bool inTermInTTDeps = false;
-          for (const auto& tt : tts) {
-            const auto& ttDeps =
+          for (const auto tt : tts) {
+            const auto ttDeps =
                 tt.getDependencies();  // expect std::vector<uint64_t>
             // WRONG!!! We need the input's "orderID" not general terminal orderID
             //uint64_t orderID =
@@ -443,7 +443,7 @@ void BuildPrimaryOutputClauses::initVarNames() {
     const DNLTerminalFull& tTerm = naja::DNL::get()->getDNLTerminalFromID(inputs_[i]);
     // If direction is input, skip
     if (!tTerm.isTopPort()) {
-      const auto& tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
+      const auto tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
       tTerm.getSnlBitTerm()->getOrderID());
       if (tt.isInitialized()) {
         if (tt.all0()) {
@@ -734,7 +734,7 @@ void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
 //   if (iter != ttCache_.end()) {
 //     return iter->second;
 //   }
-//   const auto& tt = SNLDesignModeling::getTruthTable(design, orderID);
+//   const auto tt = SNLDesignModeling::getTruthTable(design, orderID);
 //   ttCache_[{designID, orderID}] = tt;
 //   return tt;
 // }
