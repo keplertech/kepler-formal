@@ -29,55 +29,22 @@ using namespace KEPLER_FORMAL;
 
 typedef std::pair<std::vector<KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf, tbb::tbb_allocator<KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf>>, size_t> BorderLeavesPair;
 
-// ets for std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> newBorderLeaves;
-// tbb::enumerable_thread_specific<BorderLeavesPair> newBorderLeavesETS;
+thread_local BorderLeavesPair newBorderLeavesTLS;
 
-// tbb::concurrent_vector<BorderLeavesPair*>
-//     newBorderLeavesETSVector =
-//         tbb::concurrent_vector<BorderLeavesPair*>(40, nullptr);
-
-// void initNewBorderLeavesETS() {
-//  size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-//  if (newBorderLeavesETSVector.size() <= idx) {
-//     for (size_t i = newBorderLeavesETSVector.size(); i <= idx; i++) {
-//       newBorderLeavesETSVector.emplace_back(nullptr);
-//     }
-//   }
-//   if (newBorderLeavesETSVector
-//           [idx] == nullptr) {
-//     newBorderLeavesETSVector[idx] =
-//         &newBorderLeavesETS.local();
-//   }
-// }
-
-thread_local BorderLeavesPair newBorderLeavesETS;
-
-BorderLeavesPair& getNewBorderLeavesETS() {
-  //size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-  //return *newBorderLeavesETSVector[idx];
-  return newBorderLeavesETS;
+BorderLeavesPair& getNewBorderLeaves() {
+  return newBorderLeavesTLS;
 }
 
-size_t getSizeOfNewBorderLeavesETS() {
-  return getNewBorderLeavesETS().first.size();
+size_t getSizeOfNewBorderLeaves() {
+  return getNewBorderLeaves().first.size();
 }
 
-void pushBackNewBorderLeavesETS(const KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf& leaf) {
-  // auto& pair = getNewBorderLeavesETS();
-  // auto& vec = pair.first;
-  // auto& sz = pair.second;
-  // if (vec.size() > sz) {
-  //   vec[sz] = leaf;
-  //   sz++;
-  //   return;
-  // }
-  // vec.emplace_back(leaf);
-  // sz++;
-  getNewBorderLeavesETS().first.emplace_back(leaf);
+void pushBackNewBorderLeaves(const KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf& leaf) {
+  getNewBorderLeaves().first.emplace_back(leaf);
 }
 
-void clearNewBorderLeavesETS() {
-  auto& pair = getNewBorderLeavesETS();
+void clearNewBorderLeaves() {
+  auto& pair = getNewBorderLeaves();
   pair.first.clear();
 }
 
@@ -91,39 +58,14 @@ using NodeRaw = SNLTruthTableTree::Node*;
 using NodeVecRaw = std::vector<NodeRaw, tbb::tbb_allocator<NodeRaw>>;
 using NodeVecVecRaw = std::vector<NodeVecRaw, tbb::tbb_allocator<NodeVecRaw>>;
 using ResolvedChildrenPairRaw = std::pair<NodeVecVecRaw, size_t>;
-// tbb::enumerable_thread_specific<ResolvedChildrenPairRaw> resolvedChildrenETS;
+thread_local ResolvedChildrenPairRaw resolvedChildrenTLS;
 
-// tbb::concurrent_vector<ResolvedChildrenPairRaw*>
-//     resolvedChildrenETSVector =
-//         tbb::concurrent_vector<ResolvedChildrenPairRaw*>(40, nullptr);
-
-// void initResolvedChildrenETS() {
-//   size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-//   if (resolvedChildrenETSVector.size() <=
-//       idx) {
-//     for (size_t i = resolvedChildrenETSVector.size();
-//          i <= idx; i++) {
-//       resolvedChildrenETSVector.emplace_back(nullptr);
-//     }
-//   }
-//   if (resolvedChildrenETSVector
-//           [idx] == nullptr) {
-//     resolvedChildrenETSVector[idx] =
-//         &resolvedChildrenETS.local();
-//   }
-// }
-
-thread_local ResolvedChildrenPairRaw resolvedChildrenETS;
-
-ResolvedChildrenPairRaw& getResolvedChildrenETS() {
-  //size_t idx = tbb::this_task_arena::current_thread_index() >= 0 ? tbb::this_task_arena::current_thread_index() : 0;
-  //return *resolvedChildrenETSVector
-  //    [idx];
-  return resolvedChildrenETS;
+ResolvedChildrenPairRaw& getResolvedChildren() {
+  return resolvedChildrenTLS;
 }
 
-void reserveResolvedChildrenETS(size_t n) {
-  auto& pair = getResolvedChildrenETS();
+void reserveResolvedChildren(size_t n) {
+  auto& pair = getResolvedChildren();
   for (size_t i = 0; i < pair.first.size(); ++i) {
     pair.first[i].clear();
   }
@@ -412,15 +354,11 @@ void SNLTruthTableTree::updateBorderLeaves() {
 //----------------------------------------------------------------------
 SNLTruthTableTree::SNLTruthTableTree()
     : rootId_(kInvalidId), numExternalInputs_(0) {
-      //initNewBorderLeavesETS();
-      //initResolvedChildrenETS();
     }
 
 SNLTruthTableTree::SNLTruthTableTree(naja::DNL::DNLID instid,
                                      naja::DNL::DNLID termid,
                                      Node::Type type) {
-  //initNewBorderLeavesETS();
-  //initResolvedChildrenETS();
   auto rootNode = std::make_shared<Node>(this, instid, termid, type);
   uint32_t id = allocateNode(rootNode);
   rootId_ = id;
@@ -758,47 +696,27 @@ void SNLTruthTableTree::concatFull(
 #endif
   // FUNC START
 
-  //std::vector<BorderLeaf, tbb::tbb_allocator<BorderLeaf>> newBorderLeaves;
-  auto& newBorderLeaves = getNewBorderLeavesETS();
-  clearNewBorderLeavesETS();
+  auto& newBorderLeaves = getNewBorderLeaves();
+  clearNewBorderLeaves();
   size_t newInputs = 0;
   size_t index = 0;
   assert(size == borderLeaves_.size());
   numExternalInputs_ = 0;
   for (size_t i = 0; i < size; ++i) {
-    // For each entry in table to merge
-    //assert(newBorderLeaves.size() == newInputs);
-    assert(getSizeOfNewBorderLeavesETS() == newInputs);
-    // Get the relevant border leaf based on order -> assuming identical order
-    // between tables and border leaves
+    assert(getSizeOfNewBorderLeaves() == newInputs);
     const auto& borderLeaf = borderLeaves_[i];
-    // Get parent node of current border leaf
     auto parentPtr = nodeFromId(borderLeaf.parentId).get();
-    // if (!parentPtr) {
-    //   // No parent so it is the root
-    //   index++;
-    //   newBorderLeaves.emplace_back(borderLeaf);
-    //   DEBUG_LOG("--- concatBody: null parent for border leaf index %zu\n",
-    //   index-1); newInputs += 1; assert(newBorderLeaves.size() == newInputs);
-    //   assert(rootId_ == borderLeaf.parentId && "concatFull: null parent is
-    //   not root"); continue;
-    // }
     if (parentPtr->type == Node::Type::P) {
-      // If it is a PI border leaf, keep the same leaf and continue, no need to
-      // chain PIs
       index++;
-      //newBorderLeaves.emplace_back(borderLeaf);
-      pushBackNewBorderLeavesETS(borderLeaf);
+      pushBackNewBorderLeaves(borderLeaf);
       DEBUG_LOG("--- concatBody: skipping PI border leaf index %zu\n",
                 index - 1);
       newInputs += 1;
-      //assert(newBorderLeaves.size() == newInputs);
-      assert(getSizeOfNewBorderLeavesETS() == newInputs);
+      assert(getSizeOfNewBorderLeaves() == newInputs);
       continue;
     }
     const auto& n = concatBody(index, tables[i].first, tables[i].second);
     if (n.parentIds.size() <= 1 || n.type == Node::Type::P) {
-      // if new node is not reused, expand border leaves
       DEBUG_LOG("ConcatBody expanding border leaf index %zu termid %zu %s %s\n",
                 index, tables[i].second,
                 naja::DNL::get()
@@ -814,16 +732,10 @@ void SNLTruthTableTree::concatFull(
                     ->getName()
                     .getString()
                     .c_str());
-      // Now we will create new border leaves for each input of the newly
-      // inserted node It is in the place of the original border leaf
       uint32_t insertedId = parentPtr->childrenIds[borderLeaf.childPos];
-      // assert that insertedId is an input node
-      // assert(nodeFromId(insertedId)->type != Node::Type::Input &&
-      //  "concatFull: inserted node is input after concatBody");
       auto insertedSp = nodeFromId(insertedId).get();
       assert(insertedSp->type != Node::Type::Input &&
              "concatFull: inserted node is input after concatBody");
-      // assert the input node have only one parent
       assert(insertedSp->parentIds.size() == 1 &&
              "concatFull: inserted node has multiple parents after concatBody");
       if (!insertedSp) {
@@ -838,23 +750,18 @@ void SNLTruthTableTree::concatFull(
                     .getString()
                     .c_str());
       DEBUG_LOG("children count: %zu\n", insertedSp->childrenIds.size());
-      // now next is to add border leaf on top of each input node of insertedSp
       for (size_t j = 0; j < insertedSp->childrenIds.size(); ++j) {
         uint32_t cid = insertedSp->childrenIds[j];
-
         auto ch = nodeFromId(cid).get();
         assert(ch);
-        // assert that cid is an input node
         assert(ch->type == Node::Type::Input &&
                "concatFull: inserted node child is not input after concatBody");
-
         if (ch->type == Node::Type::Input) {
-          // Now concat a border leaf for this input
           BorderLeaf bl;
           bl.parentId = (insertedId);
           bl.childPos = j;
-          bl.extIndex = ch->data.inputIndex;  // Set correctly in concatBody
-          pushBackNewBorderLeavesETS(bl);
+          bl.extIndex = ch->data.inputIndex;
+          pushBackNewBorderLeaves(bl);
           DEBUG_LOG(
               "--- new border leaf extIndex %zu from inserted node id %u "
               "childPos %zu\n",
@@ -874,8 +781,7 @@ void SNLTruthTableTree::concatFull(
                         .getString()
                         .c_str());
           newInputs += 1;
-          //assert(newBorderLeaves.size() == newInputs);
-          assert(getSizeOfNewBorderLeavesETS() == newInputs); 
+          assert(getSizeOfNewBorderLeaves() == newInputs); 
         } else {
           assert(false);
         }
@@ -1185,12 +1091,12 @@ void SNLTruthTableTree::finalize() {
     if (sp->nodeID != 0)
       mapByNodeID[sp->nodeID] = sp;
   }
-  reserveResolvedChildrenETS(nodeSize);
+  reserveResolvedChildren(nodeSize);
   for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
     if (!sp)
       continue;
-    getResolvedChildrenETS().first[i].reserve(sp->childrenIds.size());
+    getResolvedChildren().first[i].reserve(sp->childrenIds.size());
     for (size_t j = 0; j < sp->childrenIds.size(); ++j) {
       uint32_t cid = sp->childrenIds[j];
       Node* target = nullptr;
@@ -1225,7 +1131,7 @@ void SNLTruthTableTree::finalize() {
         // LCOV_EXCL_STOP
       }
       //resolvedChildren[i].emplace_back(target);
-      getResolvedChildrenETS().first[i].emplace_back(target);
+      getResolvedChildren().first[i].emplace_back(target);
     }
   }
 
@@ -1250,7 +1156,7 @@ void SNLTruthTableTree::finalize() {
   for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
     sp->childrenIds.clear();
-    const auto& resolvedChilde = getResolvedChildrenETS().first[i];
+    const auto& resolvedChilde = getResolvedChildren().first[i];
     sp->childrenIds.reserve(resolvedChilde.size());
     for (size_t j = 0; j < resolvedChilde.size(); ++j) {
       auto targ = resolvedChilde[j];

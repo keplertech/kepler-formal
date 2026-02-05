@@ -45,63 +45,63 @@ tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> Tree2BoolExpr::iso2bo
 typedef std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>> TermsPair;
 
 // Thread-local storage for DNF terms while building expressions for a node.
-thread_local TermsPair termsETS;
+thread_local TermsPair terms;
 
-TermsPair& getTErmsETS() {
-  return termsETS;
+TermsPair& getTErms() {
+  return terms;
 }
 
-size_t sizeOfTermsETS() {
-  return getTErmsETS().size();
+size_t sizeOfTerms() {
+  return getTErms().size();
 }
 
-void clearTermsETS() {
-  auto& termsLocal = getTErmsETS();
+void clearTerms() {
+  auto& termsLocal = getTErms();
   termsLocal.clear();
 }
 
-void pushBackTermsETS(BoolExpr* term) {
-  getTErmsETS().emplace_back(term);
+void pushBackTerms(BoolExpr* term) {
+  getTErms().emplace_back(term);
 }
 
-bool emptyTermsETS() {
-  return getTErmsETS().empty();
+bool emptyTerms() {
+  return getTErms().empty();
 }
 
 // Relevant inputs bitset per node: which child inputs actually affect the table.
 // Stored as a vector<uint8_t> (bool-like) with a logical size.
 typedef std::pair<std::vector<uint8_t, tbb::tbb_allocator<uint8_t>>, size_t> RelevantPair;
 
-thread_local RelevantPair relevantETS;
+thread_local RelevantPair relevant;
 
-RelevantPair& getRelevantETS() {
-  return relevantETS;
+RelevantPair& getRelevant() {
+  return relevant;
 }
 
-size_t sizeOfRelevantETS() {
-  return getRelevantETS().second;
+size_t sizeOfRelevant() {
+  return getRelevant().second;
 }
 
-void clearRelevantETS() {
-  auto& relevantLocal = getRelevantETS();
+void clearRelevant() {
+  auto& relevantLocal = getRelevant();
   relevantLocal.first.clear();
 }
 
-void setRelevantETS(size_t i, bool b) {
-  auto& relevantLocal = getRelevantETS();
+void setRelevant(size_t i, bool b) {
+  auto& relevantLocal = getRelevant();
   if (i >= relevantLocal.second) {
     // LCOV_EXCL_START
-    assert(false && "setRelevantETS: index out of range");
+    assert(false && "setRelevant: index out of range");
     // LCOV_EXCL_STOP
   }
   relevantLocal.first[i] = b;
 }
 
-bool getRelevantETS(size_t i) {
-  auto& relevantLocal = getRelevantETS();
+bool getRelevant(size_t i) {
+  auto& relevantLocal = getRelevant();
   if (i >= relevantLocal.second) {
     // LCOV_EXCL_START
-    throw std::out_of_range("getRelevantETS: index out of range");
+    throw std::out_of_range("getRelevant: index out of range");
     // LCOV_EXCL_STOP
   }
   return relevantLocal.first[i];
@@ -109,8 +109,8 @@ bool getRelevantETS(size_t i) {
 
 // Ensure the relevant vector has at least n entries and initialize them to false.
 // The logical size is stored in the second element of the pair.
-void reserveRelevantETSwithFalse(size_t n) {
-  auto& relevantLocal = getRelevantETS();
+void reserveRelevantwithFalse(size_t n) {
+  auto& relevantLocal = getRelevant();
   auto& vec = relevantLocal.first;
   auto& sz = relevantLocal.second;
   if (vec.size() >= n) {
@@ -128,21 +128,21 @@ void reserveRelevantETSwithFalse(size_t n) {
 // The vector is preallocated and indexed by node ID for O(1) lookup.
 typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> MemoPair;
 
-thread_local MemoPair memoETS;
+thread_local MemoPair memo;
 
-MemoPair& getMemoETS() {
-  return memoETS;
+MemoPair& getMemo() {
+  return memo;
 }
 
-void clearMemoETS() {
-  auto& memoLocal = getMemoETS();
+void clearMemo() {
+  auto& memoLocal = getMemo();
   memoLocal.first.clear();
 }
 
 // Reserve and initialize the memo table to a given logical size.
 // The vector elements are set to nullptr to indicate "not computed".
-void reserveMemoETS(size_t n) {
-  auto& memoLocal = getMemoETS();
+void reserveMemo(size_t n) {
+  auto& memoLocal = getMemo();
   auto& vec = memoLocal.first;
   auto& sz = memoLocal.second;
   if (vec.size() >= n) {
@@ -155,35 +155,35 @@ void reserveMemoETS(size_t n) {
   vec.assign(n, nullptr);
 }
 
-void setMemoETS(size_t i, BoolExpr* expr) {
-  auto& memoLocal = getMemoETS();
-  assert(i < memoLocal.second && "setMemoETS: index out of range");
+void setMemo(size_t i, BoolExpr* expr) {
+  auto& memoLocal = getMemo();
+  assert(i < memoLocal.second && "setMemo: index out of range");
   memoLocal.first[i] = expr;
 }
 
-BoolExpr* getMemoETS(size_t i) {
-  auto& memoLocal = getMemoETS();
-  assert(i < memoLocal.second && "getMemoETS: index out of range");
+BoolExpr* getMemo(size_t i) {
+  auto& memoLocal = getMemo();
+  assert(i < memoLocal.second && "getMemo: index out of range");
   return memoLocal.first[i];
 }
 
 // Temporary storage for child BoolExpr pointers while processing a table node.
-typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildFETSPair;
+typedef std::pair<std::vector<BoolExpr*, tbb::tbb_allocator<BoolExpr*>>, size_t> ChildFPair;
 
-thread_local ChildFETSPair childFETS;
+thread_local ChildFPair childF;
 
-ChildFETSPair& getChildFETS() {
-  return childFETS;
+ChildFPair& getChildF() {
+  return childF;
 }
 
-void clearChildFETS() {
-  auto& childLocal = getChildFETS();
+void clearChildF() {
+  auto& childLocal = getChildF();
   childLocal.second = 0;
 }
 
 // Reserve child storage and initialize entries to nullptr.
-void reserveChildFETS(size_t n) {
-  auto& childLocal = getChildFETS();
+void reserveChildF(size_t n) {
+  auto& childLocal = getChildF();
   auto& vec = childLocal.first;
   auto& sz = childLocal.second;
   if (vec.size() >= n) {
@@ -196,15 +196,15 @@ void reserveChildFETS(size_t n) {
   vec.assign(n, nullptr);
 }
 
-BoolExpr* getChildFETS(size_t i) {
-  auto& childLocal = getChildFETS();
-  assert(i < childLocal.second && "getChildFETS: index out of range");
+BoolExpr* getChildF(size_t i) {
+  auto& childLocal = getChildF();
+  assert(i < childLocal.second && "getChildF: index out of range");
   return childLocal.first[i];
 }
 
-void setChildFETS(size_t i, BoolExpr* expr) {
-  auto& childLocal = getChildFETS();
-  assert(i < childLocal.second && "setChildFETS: index out of range");
+void setChildF(size_t i, BoolExpr* expr) {
+  auto& childLocal = getChildF();
+  assert(i < childLocal.second && "setChildF: index out of range");
   childLocal.first[i] = expr;
 }
 
@@ -212,10 +212,10 @@ void setChildFETS(size_t i, BoolExpr* expr) {
 // Each frame holds a pointer to a node and a boolean indicating whether
 // the node has been visited (post-visit) or not (pre-visit).
 using Frame = std::pair<const SNLTruthTableTree::Node*, bool>;
-thread_local std::vector<Frame, tbb::tbb_allocator<Frame>> stackETS;
+thread_local std::vector<Frame, tbb::tbb_allocator<Frame>> stack;
 
-std::vector<Frame, tbb::tbb_allocator<Frame>>& getStackETS() {
-  return stackETS;
+std::vector<Frame, tbb::tbb_allocator<Frame>>& getStack() {
+  return stack;
 }
 
 // Main conversion routine: converts an SNLTruthTableTree into a BoolExpr.
@@ -231,11 +231,11 @@ BoolExpr* Tree2BoolExpr::convert(
   size_t maxID = tree.getMaxID();
 
   // 2) memo table: clear and reserve memoization storage for all node IDs.
-  clearMemoETS();
-  reserveMemoETS(maxID + 1);
+  clearMemo();
+  reserveMemo(maxID + 1);
 
   // 3) post-order build using an explicit stack to avoid recursion.
-  auto & stack = getStackETS();
+  auto & stack = getStack();
   stack.clear();
   stack.emplace_back(root.get(), false);
 
@@ -260,11 +260,11 @@ BoolExpr* Tree2BoolExpr::convert(
       if (node->type != SNLTruthTableTree::Node::Type::Input) {
         isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
         if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end() && isoID != naja::DNL::DNLID_MAX) {
-          setMemoETS(id, iso2boolExpr_[isoID]);
+          setMemo(id, iso2boolExpr_[isoID]);
         }
       }
       // If memo already contains an expression for this node, skip processing.
-      if (getMemoETS(id) != nullptr) continue;
+      if (getMemo(id) != nullptr) continue;
 
       // If node is a Table or P node, push it back as visited and push children.
       if (node->type == SNLTruthTableTree::Node::Type::Table || node->type == SNLTruthTableTree::Node::Type::P) {
@@ -301,14 +301,14 @@ BoolExpr* Tree2BoolExpr::convert(
         }
         // Special handling for constant mappings: 0 -> false, 1 -> true.
         if (name == 0) {
-           setMemoETS(id, BoolExpr::createFalse());
+           setMemo(id, BoolExpr::createFalse());
            iso2boolExpr_[isoID] = BoolExpr::createFalse();
         } else if (name == 1) {
-           setMemoETS(id, BoolExpr::createTrue());
+           setMemo(id, BoolExpr::createTrue());
            iso2boolExpr_[isoID] = BoolExpr::createTrue();
         } else {
           // Normal variable mapping.
-          setMemoETS(id, BoolExpr::Var(name));
+          setMemo(id, BoolExpr::Var(name));
           iso2boolExpr_[isoID] = BoolExpr::Var(name);
         }
       }
@@ -326,35 +326,35 @@ BoolExpr* Tree2BoolExpr::convert(
 
       {
         // Gather child BoolExpr pointers into a temporary array for quick access.
-        clearChildFETS();
-        reserveChildFETS(k);
+        clearChildF();
+        reserveChildF(k);
         for (uint32_t i = 0; i < k; ++i) {
           size_t cid = node->tree->nodeFromId(node->childrenIds[i])->nodeID;
-          setChildFETS(i, getMemoETS(cid));
+          setChildF(i, getMemo(cid));
         }
 
         // Determine which inputs actually matter for this truth table.
         // For each input j, check if flipping bit j changes the table output.
-        clearRelevantETS();
-        reserveRelevantETSwithFalse(k);
+        clearRelevant();
+        reserveRelevantwithFalse(k);
         for (uint32_t j = 0; j < k; ++j) {
           for (uint64_t m = 0; m < rows; ++m) {
             bool b0 = tbl.bits().bit(m);
             bool b1 = tbl.bits().bit(m ^ (uint64_t{1} << j));
-            if (b0 != b1) { setRelevantETS(j, true); break; }
+            if (b0 != b1) { setRelevant(j, true); break; }
           }
         }
 
         // Count how many inputs are relevant.
         size_t numRelIdx = 0;
-        for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) numRelIdx++; }
+        for (uint32_t j = 0; j < k; ++j) { if (getRelevant(j)) numRelIdx++; }
 
         // The algorithm expects at least one relevant input for a PI node.
         assert(numRelIdx > 0 && "No relevant inputs for node");
         {
           // Build DNF terms by iterating over rows where the table output is 1.
           // For each such row, create a conjunction of literals for relevant inputs.
-          clearTermsETS();
+          clearTerms();
           for (uint64_t m = 0; m < rows; ++m) {
             if (!tbl.bits().bit(m)) continue;
             BoolExpr* term = nullptr;
@@ -363,31 +363,31 @@ BoolExpr* Tree2BoolExpr::convert(
             // For each relevant input, pick the literal (child or its negation)
             // according to the bit value in row m.
             for (uint32_t j = 0; j < k; ++j) { 
-              if (!getRelevantETS(j)) {
+              if (!getRelevant(j)) {
                 continue;
               }
               bool bit1 = ((m >> j) & 1) != 0;
-              lit = bit1 ? getChildFETS(j) : BoolExpr::Not(getChildFETS(j));
+              lit = bit1 ? getChildF(j) : BoolExpr::Not(getChildF(j));
               if (firstLit) { term = lit; firstLit = false; }
               else { assert(term != nullptr); assert(lit != nullptr); term = BoolExpr::And(term, lit); }
             }
             // Only push the term if at least one literal was included.
-            if (term) { pushBackTermsETS(std::move(term)); }
+            if (term) { pushBackTerms(std::move(term)); }
           }
 
           // There must be at least one term for a PI node.
-          assert(!emptyTermsETS()); // Should be a PI
+          assert(!emptyTerms()); // Should be a PI
 
           {
             // Fold the list of terms into a single expression by OR-ing them.
-            BoolExpr* expr = getTErmsETS()[0];
-            DEBUG_LOG("number of rows for node ID %zu: %zu\n", id, sizeOfTermsETS());
-            for (size_t t = 1; t < sizeOfTermsETS(); ++t) {
-              expr = BoolExpr::Or(expr, getTErmsETS()[t]);
+            BoolExpr* expr = getTErms()[0];
+            DEBUG_LOG("number of rows for node ID %zu: %zu\n", id, sizeOfTerms());
+            for (size_t t = 1; t < sizeOfTerms(); ++t) {
+              expr = BoolExpr::Or(expr, getTErms()[t]);
               DEBUG_LOG("Intermediate OR expr for node ID %zu: %s\n", id, expr->toString().c_str());
             }
             // Store the resulting expression in the memo table and in the iso map.
-            setMemoETS(id, expr);
+            setMemo(id, expr);
             iso2boolExpr_[isoID] = expr;
             DEBUG_LOG("Bool expression for node ID %zu: %s\n", id, expr->toString().c_str());
           }
@@ -397,5 +397,5 @@ BoolExpr* Tree2BoolExpr::convert(
   }
 
   // 4) return root expression from memo table.
-  return getMemoETS(root->nodeID);
+  return getMemo(root->nodeID);
 }
