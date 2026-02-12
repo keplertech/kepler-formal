@@ -29,10 +29,10 @@ using namespace KEPLER_FORMAL;
 
 typedef std::pair<std::vector<KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf, tbb::tbb_allocator<KEPLER_FORMAL::SNLTruthTableTree::BorderLeaf>>, size_t> BorderLeavesPair;
 
-thread_local BorderLeavesPair newBorderLeavesTLS;
+thread_local BorderLeavesPair newBorderLeaves;
 
 BorderLeavesPair& getNewBorderLeaves() {
-  return newBorderLeavesTLS;
+  return newBorderLeaves;
 }
 
 size_t getSizeOfNewBorderLeaves() {
@@ -58,10 +58,10 @@ using NodeRaw = SNLTruthTableTree::Node*;
 using NodeVecRaw = std::vector<NodeRaw, tbb::tbb_allocator<NodeRaw>>;
 using NodeVecVecRaw = std::vector<NodeVecRaw, tbb::tbb_allocator<NodeVecRaw>>;
 using ResolvedChildrenPairRaw = std::pair<NodeVecVecRaw, size_t>;
-thread_local ResolvedChildrenPairRaw resolvedChildrenTLS;
+thread_local ResolvedChildrenPairRaw resolvedChildren;
 
 ResolvedChildrenPairRaw& getResolvedChildren() {
-  return resolvedChildrenTLS;
+  return resolvedChildren;
 }
 
 void reserveResolvedChildren(size_t n) {
