@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
     naja::NL::SNLCapnP::LoadingConfiguration config;
     config.primitiveConflictPolicy_ = primitivesAreLoaded ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting :
                                                             naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
-    db0 = SNLCapnP::load(inputPaths[1].c_str(), config);
+    db1 = SNLCapnP::load(inputPaths[1].c_str(), config);
     if (!db1) {
       // LCOV_EXCL_START
       SPDLOG_CRITICAL("Failed to load Naja IF: {}", inputPaths[1]);
