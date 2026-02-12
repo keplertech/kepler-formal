@@ -219,7 +219,10 @@ int main(int argc, char** argv) {
     }
   } else {  // SNL
     std::printf("Loading Naja IF: %s\n", inputPaths[0].c_str());
-    db0 = SNLCapnP::load(inputPaths[0].c_str(), primitivesAreLoaded);
+    naja::NL::SNLCapnP::LoadingConfiguration config;
+    config.primitiveConflictPolicy_ = primitivesAreLoaded ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting :
+                                                            naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
+    db0 = SNLCapnP::load(inputPaths[0].c_str(), config);
     if (!db0) {
       // LCOV_EXCL_START
       SPDLOG_CRITICAL("Failed to load Naja IF: {}", inputPaths[0]);
@@ -269,7 +272,10 @@ int main(int argc, char** argv) {
     }
   } else {  // SNL
     std::printf("Loading Naja IF: %s\n", inputPaths[1].c_str());
-    db1 = SNLCapnP::load(inputPaths[1].c_str(), primitivesAreLoaded);
+    naja::NL::SNLCapnP::LoadingConfiguration config;
+    config.primitiveConflictPolicy_ = primitivesAreLoaded ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting :
+                                                            naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
+    db0 = SNLCapnP::load(inputPaths[1].c_str(), config);
     if (!db1) {
       // LCOV_EXCL_START
       SPDLOG_CRITICAL("Failed to load Naja IF: {}", inputPaths[1]);

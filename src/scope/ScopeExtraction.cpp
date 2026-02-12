@@ -6,6 +6,7 @@
 #include "RemoveLoadlessLogic.h"
 #include "SNLDesign.h"
 #include "SNLLogicCone.h"
+#include "SNLBitNet.h"
 #include <tbb/enumerable_thread_specific.h>
 
 // #define DEBUG_PRINTS
