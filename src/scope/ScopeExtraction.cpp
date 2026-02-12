@@ -7,6 +7,7 @@
 #include "SNLDesign.h"
 #include "SNLLogicCone.h"
 #include <tbb/enumerable_thread_specific.h>
+#include "SNLBitNet.h"
 
 // #define DEBUG_PRINTS
 
