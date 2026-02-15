@@ -10,6 +10,7 @@
 #include "SNLPath.h"
 #include "Tree2BoolExpr.h"
 
+
 // #define DEBUG_CHECKS
 // #define DEBUG_PRINTS
 
@@ -352,7 +353,7 @@ void SNLLogicCloud::compute() {
       
       if (isInput(driver) /* || isOutput(driver)*/
         || (Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
-          Tree2BoolExpr::iso2boolExpr_.end() && iter > 0)) {
+            Tree2BoolExpr::iso2boolExpr_.end() && iter > 0)) {
         pushBackNewIterationInputsETS(driver);
         DEBUG_LOG(
             "- %lu After analyzing input %s(%lu), addings driver %s(%lu) is a "
@@ -439,10 +440,10 @@ void SNLLogicCloud::compute() {
               .getIsoID());
       if (!isInput(getNewIterationInputsETS().first[i]) &&
         (Tree2BoolExpr::iso2boolExpr_.find(
-            dnl_.getDNLTerminalFromID(
-                getNewIterationInputsETS().first[i])
-                .getIsoID()) == Tree2BoolExpr::iso2boolExpr_.end() || 
-                iso.getDrivers().front() != getNewIterationInputsETS().first[i])) {
+             dnl_.getDNLTerminalFromID(
+                 getNewIterationInputsETS().first[i])
+                 .getIsoID()) == Tree2BoolExpr::iso2boolExpr_.end() ||
+         iso.getDrivers().front() != getNewIterationInputsETS().first[i])) {
         reachedPIs = false;
         break;
       }
@@ -465,8 +466,8 @@ void SNLLogicCloud::compute() {
         dnl_.getDNLTerminalFromID(input).getIsoID());
     assert(isInput(input) || (Tree2BoolExpr::iso2boolExpr_.find(
             dnl_.getDNLTerminalFromID(input)
-                .getIsoID()) != Tree2BoolExpr::iso2boolExpr_.end() && 
-                iso.getDrivers().front() == input));
+                .getIsoID()) != Tree2BoolExpr::iso2boolExpr_.end() &&
+            iso.getDrivers().front() == input));
   }
   #endif
 }

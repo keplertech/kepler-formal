@@ -259,8 +259,9 @@ BoolExpr* Tree2BoolExpr::convert(
       naja::DNL::DNLID isoID = naja::DNL::DNLID_MAX;
       if (node->type != SNLTruthTableTree::Node::Type::Input) {
         isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
-        if (iso2boolExpr_.find(isoID) != iso2boolExpr_.end() && isoID != naja::DNL::DNLID_MAX) {
-          setMemoETS(id, iso2boolExpr_[isoID]);
+        auto it = iso2boolExpr_.find(isoID);
+        if (it != iso2boolExpr_.end() && isoID != naja::DNL::DNLID_MAX) {
+          setMemoETS(id, it->second);
         }
       }
       // If memo already contains an expression for this node, skip processing.
@@ -301,15 +302,39 @@ BoolExpr* Tree2BoolExpr::convert(
         }
         // Special handling for constant mappings: 0 -> false, 1 -> true.
         if (name == 0) {
-           setMemoETS(id, BoolExpr::createFalse());
-           iso2boolExpr_[isoID] = BoolExpr::createFalse();
+           BoolExpr* expr = BoolExpr::createFalse();
+           if (isoID != naja::DNL::DNLID_MAX) {
+               auto result = iso2boolExpr_.insert({isoID, expr});
+               if (!result.second) {
+                   // Another thread inserted concurrently.
+                   // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
+                   expr = result.first->second;
+               }
+           }
+           setMemoETS(id, expr);
         } else if (name == 1) {
-           setMemoETS(id, BoolExpr::createTrue());
-           iso2boolExpr_[isoID] = BoolExpr::createTrue();
+           BoolExpr* expr = BoolExpr::createTrue();
+           if (isoID != naja::DNL::DNLID_MAX) {
+               auto result = iso2boolExpr_.insert({isoID, expr});
+               if (!result.second) {
+                   // Another thread inserted concurrently.
+                   // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
+                   expr = result.first->second;
+               }
+           }
+           setMemoETS(id, expr);
         } else {
           // Normal variable mapping.
-          setMemoETS(id, BoolExpr::Var(name));
-          iso2boolExpr_[isoID] = BoolExpr::Var(name);
+          BoolExpr* expr = BoolExpr::Var(name);
+          if (isoID != naja::DNL::DNLID_MAX) {
+              auto result = iso2boolExpr_.insert({isoID, expr});
+              if (!result.second) {
+                  // Another thread inserted concurrently.
+                  // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
+                  expr = result.first->second;
+              }
+          }
+          setMemoETS(id, expr);
         }
       }
     } else {
@@ -387,8 +412,15 @@ BoolExpr* Tree2BoolExpr::convert(
               DEBUG_LOG("Intermediate OR expr for node ID %zu: %s\n", id, expr->toString().c_str());
             }
             // Store the resulting expression in the memo table and in the iso map.
+            if (isoID != naja::DNL::DNLID_MAX) {
+                auto result = iso2boolExpr_.insert({isoID, expr});
+                if (!result.second) {
+                    // Another thread inserted concurrently.
+                    // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
+                    expr = result.first->second;
+                }
+            }
             setMemoETS(id, expr);
-            iso2boolExpr_[isoID] = expr;
             DEBUG_LOG("Bool expression for node ID %zu: %s\n", id, expr->toString().c_str());
           }
         }
