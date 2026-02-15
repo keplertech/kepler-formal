@@ -303,6 +303,8 @@ BoolExpr* Tree2BoolExpr::convert(
         // Special handling for constant mappings: 0 -> false, 1 -> true.
         if (name == 0) {
            BoolExpr* expr = BoolExpr::createFalse();
+           // LCOV_EXCL_START
+           // Impossible to catch in unit tests as it is an mt race condition
            if (isoID != naja::DNL::DNLID_MAX) {
                auto result = iso2boolExpr_.insert({isoID, expr});
                if (!result.second) {
@@ -311,28 +313,35 @@ BoolExpr* Tree2BoolExpr::convert(
                    expr = result.first->second;
                }
            }
+            // LCOV_EXCL_STOP
            setMemoETS(id, expr);
         } else if (name == 1) {
            BoolExpr* expr = BoolExpr::createTrue();
            if (isoID != naja::DNL::DNLID_MAX) {
-               auto result = iso2boolExpr_.insert({isoID, expr});
-               if (!result.second) {
-                   // Another thread inserted concurrently.
-                   // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
-                   expr = result.first->second;
-               }
-           }
-           setMemoETS(id, expr);
-        } else {
-          // Normal variable mapping.
-          BoolExpr* expr = BoolExpr::Var(name);
-          if (isoID != naja::DNL::DNLID_MAX) {
+              // LCOV_EXCL_START
+              // Impossible to catch in unit tests as it is an mt race condition
               auto result = iso2boolExpr_.insert({isoID, expr});
               if (!result.second) {
                   // Another thread inserted concurrently.
                   // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
                   expr = result.first->second;
               }
+              // LCOV_EXCL_STOP
+           }
+           setMemoETS(id, expr);
+        } else {
+          // Normal variable mapping.
+          BoolExpr* expr = BoolExpr::Var(name);
+          if (isoID != naja::DNL::DNLID_MAX) {
+            // LCOV_EXCL_START
+            // Impossible to catch in unit tests as it is an mt race condition
+            auto result = iso2boolExpr_.insert({isoID, expr});
+            if (!result.second) {
+                // Another thread inserted concurrently.
+                // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
+                expr = result.first->second;
+            }
+            // LCOV_EXCL_STOP
           }
           setMemoETS(id, expr);
         }
