@@ -46,6 +46,79 @@ struct MultiFileVerilogFixture {
   std::filesystem::path cfgPath;
 };
 
+MultiFileVerilogFixture createVerilogPreprocessingFixture(bool enablePreprocessing) {
+  MultiFileVerilogFixture fixture;
+  fixture.tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_cli_preproc_v";
+  std::filesystem::create_directories(fixture.tmpDir);
+
+  const auto design0Aux = fixture.tmpDir / "design0_aux.v";
+  const auto design0Top = fixture.tmpDir / "design0_top.v";
+  const auto design1Aux = fixture.tmpDir / "design1_aux.v";
+  const auto design1Top = fixture.tmpDir / "design1_top.v";
+  fixture.cfgPath = fixture.tmpDir / "config.yaml";
+
+  {
+    std::ofstream f(design0Aux);
+    f << "`timescale 1ns / 1ps\n";
+    f << "`default_nettype none\n";
+    f << "\n";
+    f << "module AUX_MACRO (\n";
+    f << "    input a,\n";
+    f << "    output y\n";
+    f << ");\n";
+    f << "  assign y = a;\n";
+    f << "endmodule\n";
+  }
+  {
+    std::ofstream f(design1Aux);
+    f << "`timescale 1ns / 1ps\n";
+    f << "`default_nettype none\n";
+    f << "\n";
+    f << "module AUX_MACRO (\n";
+    f << "    input a,\n";
+    f << "    output y\n";
+    f << ");\n";
+    f << "  assign y = a;\n";
+    f << "endmodule\n";
+  }
+  {
+    std::ofstream f(design0Top);
+    f << "`define PASS(sig) sig\n";
+    f << "module top(input a, output y);\n";
+    f << "  wire y_aux;\n";
+    f << "  AUX_MACRO u_aux(.a(`PASS(a)), .y(y_aux));\n";
+    f << "  assign y = y_aux;\n";
+    f << "endmodule\n";
+    f << "`default_nettype wire\n";
+  }
+  {
+    std::ofstream f(design1Top);
+    f << "`define PASS(sig) sig\n";
+    f << "module top(input a, output y);\n";
+    f << "  wire y_aux;\n";
+    f << "  AUX_MACRO u_aux(.a(`PASS(a)), .y(y_aux));\n";
+    f << "  assign y = y_aux;\n";
+    f << "endmodule\n";
+    f << "`default_nettype wire\n";
+  }
+
+  std::ofstream cfg(fixture.cfgPath);
+  cfg << "format: verilog\n";
+  cfg << "input_paths:\n";
+  cfg << "  -\n";
+  cfg << "    - " << design0Aux.string() << "\n";
+  cfg << "    - " << design0Top.string() << "\n";
+  cfg << "  -\n";
+  cfg << "    - " << design1Aux.string() << "\n";
+  cfg << "    - " << design1Top.string() << "\n";
+  cfg << "verilog_preprocessing: " << (enablePreprocessing ? "true" : "false")
+      << "\n";
+  cfg.close();
+
+  return fixture;
+}
+
 MultiFileVerilogFixture createMultiFileVerilogFixture() {
   MultiFileVerilogFixture fixture;
   fixture.tmpDir =
@@ -195,6 +268,22 @@ TEST(KeplerFormalCliTests, YamlMultiFileVerilogConfig) {
   const auto fixture = createMultiFileVerilogFixture();
   int rc = runWithConfigFile(fixture.cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, VerilogPreprocessingEnabledParsesDirectiveInput) {
+  const auto fixture = createVerilogPreprocessingFixture(true);
+  int rc = runWithConfigFile(fixture.cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, VerilogPreprocessingDisabledFailsOnDirectiveInput) {
+  const auto fixture = createVerilogPreprocessingFixture(false);
+  int rc = runWithConfigFile(fixture.cfgPath);
+  EXPECT_EQ(rc, EXIT_FAILURE);
 
   std::filesystem::remove_all(fixture.tmpDir);
 }

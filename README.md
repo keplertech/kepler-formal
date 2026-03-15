@@ -96,6 +96,7 @@ input_paths:
   - [design1_part1.v, design1_part2.v]
 liberty_files:
   - NangateOpenCellLibrary_typical.lib
+verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ```
 
 ## Example 

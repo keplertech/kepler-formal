@@ -56,6 +56,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "format",
       "input_paths",
       "liberty_files",
+      "verilog_preprocessing",
       "log_level",
       "log_file",
       "use_scopes",
@@ -210,6 +211,7 @@ int KeplerFormalMain(int argc, char** argv) {
   bool useScopes = false;
   bool cleanScopes = false;
   bool dumpCnf = false;
+  bool verilogPreprocessing = false;
   std::string dumpCnfPath;
 
   for (int i = 1; i < argc; ++i) {
@@ -279,6 +281,11 @@ int KeplerFormalMain(int argc, char** argv) {
         // cnf_export_path (optional)
         if (cfg["cnf_export_path"] && cfg["cnf_export_path"].IsScalar()) {
           dumpCnfPath = cfg["cnf_export_path"].as<std::string>();
+        }
+
+        // verilog_preprocessing (optional)
+        if (cfg["verilog_preprocessing"] && cfg["verilog_preprocessing"].IsScalar()) {
+          verilogPreprocessing = cfg["verilog_preprocessing"].as<bool>();
         }
 
         // solver (glucose | kissat)
@@ -445,6 +452,7 @@ int KeplerFormalMain(int argc, char** argv) {
       SPDLOG_INFO("Parsing verilog file(s) for design 1");
       auto designLibrary = NLLibrary::create(db0, NLName("DESIGN"));
       SNLVRLConstructor constructor(designLibrary);
+      constructor.config_.preprocessEnabled_ = verilogPreprocessing;
       constructor.construct(design0Paths);
       auto top = SNLUtils::findTop(designLibrary);
       if (top) {
@@ -502,6 +510,7 @@ int KeplerFormalMain(int argc, char** argv) {
       SPDLOG_INFO("Parsing verilog file(s) for design 2");
       auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
       SNLVRLConstructor constructor(designLibrary);
+      constructor.config_.preprocessEnabled_ = verilogPreprocessing;
       constructor.construct(design1Paths);
       auto top = SNLUtils::findTop(designLibrary);
       if (top) {
