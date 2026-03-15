@@ -92,10 +92,11 @@ Example:
 ```yaml
 format: verilog
 input_paths:
-  - [design0_part1.v, design0_part2.v]
-  - [design1_part1.v, design1_part2.v]
+  - [design0_part1.v, design0_part2.v] # design 0
+  - [design1_part1.v, design1_part2.v] # design 1
 liberty_files:
-  - NangateOpenCellLibrary_typical.lib
+  - library_file0.lib
+  - library_file1.lib
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ```
 
