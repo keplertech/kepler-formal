@@ -70,15 +70,17 @@ cmake .. \
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-naja_if> <netlist1> <netlist2> [<liberty-file>...]
+build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] <netlist1> <netlist2> [<liberty-file>...]
 
 # Multi-file Verilog designs
-build/src/bin/kepler-formal -verilog --design1 <file...> --design2 <file...> \
+build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
   [--liberty <liberty-file>...]
 
 # Through yaml config file
 build/src/bin/kepler-formal --config <yaml file>
 ```
+
+`--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
 
 ### YAML Input Paths
 

@@ -335,6 +335,56 @@ TEST(KeplerFormalCliTests, VerilogPreprocessingDisabledDefaultNettypeIsRejected)
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST(KeplerFormalCliTests, CliVerilogPreprocessingFlagEnablesDirectiveInput) {
+  const auto fixture = createVerilogPreprocessingFixture(true);
+  const auto design0Aux = fixture.tmpDir / "design0_aux.v";
+  const auto design0Top = fixture.tmpDir / "design0_top.v";
+  const auto design1Aux = fixture.tmpDir / "design1_aux.v";
+  const auto design1Top = fixture.tmpDir / "design1_top.v";
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = "--design1";
+  std::string argv3 = design0Aux.string();
+  std::string argv4 = design0Top.string();
+  std::string argv5 = "--design2";
+  std::string argv6 = design1Aux.string();
+  std::string argv7 = design1Top.string();
+  std::string argv8 = "--verilog_preprocessing";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(),
+                  argv4.data(), argv5.data(), argv6.data(), argv7.data(),
+                  argv8.data()};
+  int argc = 9;
+
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, CliWithoutVerilogPreprocessingFlagFailsOnDirectiveInput) {
+  const auto fixture = createVerilogPreprocessingFixture(true);
+  const auto design0Aux = fixture.tmpDir / "design0_aux.v";
+  const auto design0Top = fixture.tmpDir / "design0_top.v";
+  const auto design1Aux = fixture.tmpDir / "design1_aux.v";
+  const auto design1Top = fixture.tmpDir / "design1_top.v";
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = "--design1";
+  std::string argv3 = design0Aux.string();
+  std::string argv4 = design0Top.string();
+  std::string argv5 = "--design2";
+  std::string argv6 = design1Aux.string();
+  std::string argv7 = design1Top.string();
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(),
+                  argv4.data(), argv5.data(), argv6.data(), argv7.data()};
+  int argc = 8;
+
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST(KeplerFormalCliTests, ConfigMissingInputPathsFails) {
   const auto cfgPath = writeTempConfig("format: verilog\nlog_level: info\n");
   int rc = runWithConfigFile(cfgPath);

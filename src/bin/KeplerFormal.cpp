@@ -353,6 +353,10 @@ int KeplerFormalMain(int argc, char** argv) {
         currentLiberty = true;
         continue;
       }
+      if (arg == "--verilog_preprocessing" || arg == "--verilog-preprocessing") {
+        verilogPreprocessing = true;
+        continue;
+      }
 
       if (!arg.empty() && arg[0] == '-') {
         SPDLOG_CRITICAL("Unrecognized option: {}", arg);
