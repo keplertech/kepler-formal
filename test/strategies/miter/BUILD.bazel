@@ -1,0 +1,23 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_test(
+    name = "MiterTests",
+    srcs = ["MiterTests.cpp"],
+    data = [
+        "//src/bin:kepler-formal",
+        "//example:testdata",
+    ] + glob(["*.yaml"]),
+    env = {
+        "KEPLER_BIN": "$(rootpath //src/bin:kepler-formal)",
+        "TEST_DATA_PREFIX": "",
+    },
+    linkopts = ["-ltbb", "-ltbbmalloc", "-lz", "-lcapnp", "-lkj"],
+    deps = [
+        "//src/clauses:kepler_clauses",
+        "//src/config:kepler_config",
+        "//src/formal:formal_structures",
+        "//src/strategies:formal_strategies",
+        "@naja",
+        "@googletest//:gtest_main",
+    ],
+)

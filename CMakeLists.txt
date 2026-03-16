@@ -55,12 +55,19 @@ add_dependencies(kissat kissat_external)
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 
-# option(ENABLE_UNIT_TESTS ON)
-# if(ENABLE_UNIT_TESTS)
-include(CTest)
-enable_testing()
-add_subdirectory(test)
-# endif()
+option(ENABLE_UNIT_TESTS "Enable unit tests" ON)
+if(ENABLE_UNIT_TESTS)
+ include(CTest)
+ enable_testing()
+ add_subdirectory(test)
+endif()
+
+option(KEPLER_STATIC "Statically link libstdc++, libgcc, and Cap'n Proto" OFF)
+if(KEPLER_STATIC)
+  add_link_options(-static-libstdc++ -static-libgcc)
+  # Cap'n Proto: prefer static libs when available
+  set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+endif()
 
 option(CODE_COVERAGE "Enable coverage reporting" OFF)
 if(CODE_COVERAGE)
@@ -85,9 +92,3 @@ target_include_directories(formal_structures
 target_link_libraries(formal_structures
   PRIVATE TBB::tbb
 )
-
-# option(ENABLE_COVERAGE "Enable coverage flags" ON)
-# if(ENABLE_COVERAGE AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
-#   add_compile_options(--coverage -g)
-#   add_link_options(--coverage)
-# endif()

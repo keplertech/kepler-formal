@@ -1,0 +1,43 @@
+name: bazel
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+      # No submodules needed — Bazel fetches deps via http_archive
+
+    - name: Cache Bazel outputs
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/bazel
+        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/naja.BUILD.bazel') }}
+        restore-keys: |
+          bazel-${{ runner.os }}-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -yq \
+          build-essential pkg-config \
+          libboost-all-dev libtbb-dev capnproto libcapnp-dev \
+          libfl-dev zlib1g-dev python3-dev
+
+    - name: Build kepler-formal
+      run: bazelisk build //src/bin:kepler-formal
+
+    - name: Dump rules_foreign_cc CMake log on failure
+      if: failure()
+      run: |
+        find bazel-out -type f -name CMake.log -print -exec sed -n '1,260p' {} \; || true
+
+    - name: Run tests
+      run: bazelisk test //test/...

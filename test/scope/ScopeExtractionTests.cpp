@@ -13,25 +13,16 @@
 
 #include "ScopeExtraction.h"
 
-#include "BuildPrimaryOutputClauses.h"
-#include "ConstantPropagation.h"
-#include "DNL.h"
-#include "MiterStrategy.h"
 #include "NLLibraryTruthTables.h"
 #include "NLUniverse.h"
-#include "NetlistGraph.h"
-#include "SNLCapnP.h"
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLInstance.h"
-#include "SNLPath.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 
 using namespace naja;
 using namespace naja::NL;
-using namespace naja::NAJA_OPT;
-using namespace KEPLER_FORMAL;
 
 // Helper to run shell commands (used by the original test for dot->svg).
 static void executeCommand(const std::string& command) {

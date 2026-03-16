@@ -24,6 +24,8 @@
 #include "MiterStrategy.h"
 #include "SNLCapnP.h"
 #include "SNLLibertyConstructor.h"
+#include "SNLPyLoader.h"
+#include "SNLSVConstructor.h"
 #include "SNLVRLConstructor.h"
 #include "SNLVRLDumper.h"
 #include "SNLUtils.h"
@@ -32,9 +34,10 @@
 
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
-      "Usage: {} [--config <file>] | <-naja_if/-verilog> <netlist1> <netlist2> "
-      "[<liberty-file>...] | <-naja_if/-verilog> --design1 <file...> --design2 "
-      "<file...> [--liberty <liberty-file>...]",
+      "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv> "
+      "<netlist1> <netlist2> [<library-file>...] | "
+      "<-naja_if/-verilog/-systemverilog/-sv> --design1 <file...> --design2 "
+      "<file...> [--liberty <library-file>...]",
       prog);
 }
 
@@ -189,7 +192,18 @@ static std::vector<std::filesystem::path> toPathVector(
 
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, NAJA_IF };
+  enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF };
+  const auto cleanupNajaState = []() {
+    naja::DNL::destroy();
+    if (NLUniverse::get()) {
+      NLUniverse::get()->destroy();
+    }
+  };
+  cleanupNajaState();
+  struct CleanupGuard {
+    decltype(cleanupNajaState) cleanup;
+    ~CleanupGuard() { cleanup(); }
+  } cleanupGuard{cleanupNajaState};
 
   // Default values
   FormatType inputFormatType = FormatType::VERILOG;
@@ -231,10 +245,12 @@ int KeplerFormalMain(int argc, char** argv) {
         // format
         if (cfg["format"] && cfg["format"].IsScalar()) {
           std::string fmt = cfg["format"].as<std::string>();
-          if (fmt == "naja_if" || fmt == "naja-if" || fmt == "snl")
+          if (fmt == "naja_if")
             inputFormatType = FormatType::NAJA_IF;
           else if (fmt == "verilog" || fmt == "v")
             inputFormatType = FormatType::VERILOG;
+          else if (fmt == "systemverilog" || fmt == "sv")
+            inputFormatType = FormatType::SYSTEMVERILOG;
           else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
@@ -319,10 +335,12 @@ int KeplerFormalMain(int argc, char** argv) {
     }
 
     std::string formatType = argv[1];
-    if (formatType == "-naja_if" || formatType == "-naja-if") {
+    if (formatType == "-naja_if") {
       inputFormatType = FormatType::NAJA_IF;
     } else if (formatType == "-verilog") {
       inputFormatType = FormatType::VERILOG;
+    } else if (formatType == "-systemverilog" || formatType == "-sv") {
+      inputFormatType = FormatType::SYSTEMVERILOG;
     } else {
       SPDLOG_CRITICAL("Unrecognized input format type: {}", formatType);
       return EXIT_FAILURE;
@@ -369,8 +387,10 @@ int KeplerFormalMain(int argc, char** argv) {
         } else if (currentDesign) {
           currentDesign->push_back(arg);
         } else {
+          // LCOV_EXCL_START
           SPDLOG_CRITICAL("Provide --design1 or --design2 before netlist paths");
           return EXIT_FAILURE;
+          // LCOV_EXCL_STOP
         }
       } else {
         inputPaths.emplace_back(arg);
@@ -388,7 +408,10 @@ int KeplerFormalMain(int argc, char** argv) {
   }
 
   // Configure logging level
-  auto console = spdlog::stdout_color_mt("console");
+  auto console = spdlog::get("console");
+  if (!console) {
+    console = spdlog::stdout_color_mt("console");
+  }
   if (logLevel == "debug")
     spdlog::set_level(spdlog::level::debug);
   else if (logLevel == "info")
@@ -403,7 +426,10 @@ int KeplerFormalMain(int argc, char** argv) {
     spdlog::set_level(spdlog::level::info);
 
   SPDLOG_INFO("KEPLER FORMAL: Run.");
-  SPDLOG_INFO("Input format: {}", (inputFormatType == FormatType::NAJA_IF) ? "SNL" : "VERILOG");
+  std::string inputFormatName = "VERILOG";
+  if (inputFormatType == FormatType::NAJA_IF) inputFormatName = "SNL";
+  if (inputFormatType == FormatType::SYSTEMVERILOG) inputFormatName = "SYSTEMVERILOG";
+  SPDLOG_INFO("Input format: {}", inputFormatName);
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);
 
@@ -423,7 +449,7 @@ int KeplerFormalMain(int argc, char** argv) {
   SPDLOG_INFO("Solver: {}",
               solverType == KEPLER_FORMAL::Config::SolverType::KISSAT ? "KISSAT" : "GLUCOSE");
   if (!libertyFiles.empty()) {
-    for (const auto& lf : libertyFiles) SPDLOG_INFO("Liberty: {}", lf);
+    for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
 
   // --------------------------------------------------------------------------
@@ -436,43 +462,74 @@ int KeplerFormalMain(int argc, char** argv) {
     NLDB* db0 = nullptr;
     bool primitivesAreLoaded = false;
 
+    auto loadLibraries = [&](NLDB* db) -> bool {
+      if (libertyFiles.empty()) {
+        // LCOV_EXCL_START
+        return false;
+        // LCOV_EXCL_STOP
+      }
+      auto primitivesLibrary =
+          NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+      for (const auto& libraryFile : libertyFiles) {
+        std::filesystem::path libraryPath(libraryFile);
+        const auto extension = libraryPath.extension();
+        const bool isLibertyFile =
+            extension == ".lib" ||
+            (extension == ".gz" && libraryPath.stem().extension() == ".lib");
+        SPDLOG_INFO("Loading library file: {}", libraryFile);
+        if (extension == ".py") {
+          SNLPyLoader::loadPrimitives(primitivesLibrary, libraryPath);
+        } else if (isLibertyFile) {
+          SNLLibertyConstructor constructor(primitivesLibrary);
+          constructor.construct(libraryPath);
+        } else {
+          SPDLOG_CRITICAL("Unsupported library file extension: {}", libraryPath.string());
+          return false;
+        }
+      }
+      return true;
+    };
+
     if (!libertyFiles.empty()) {
       db0 = NLDB::create(NLUniverse::get());
-      auto primitivesLibrary =
-          NLLibrary::create(db0, NLLibrary::Type::Primitives, NLName("PRIMS"));
-      SNLLibertyConstructor constructor(primitivesLibrary);
-      for (const auto& lf : libertyFiles) {
-        SPDLOG_INFO("Loading liberty file: {}", lf);
-        constructor.construct(lf.c_str());
+      primitivesAreLoaded = loadLibraries(db0);
+      if (!primitivesAreLoaded) {
+        return EXIT_FAILURE;
       }
-      primitivesAreLoaded = true;
     }
 
-    if (inputFormatType == FormatType::VERILOG) {
+    if (inputFormatType == FormatType::VERILOG ||
+        inputFormatType == FormatType::SYSTEMVERILOG) {
       if (!db0) {
         db0 = NLDB::create(NLUniverse::get());
       }
       const auto design0Paths = toPathVector(designInputs.design0);
-      SPDLOG_INFO("Parsing verilog file(s) for design 1");
+      SPDLOG_INFO("Parsing {} file(s) for design 1",
+                  inputFormatType == FormatType::SYSTEMVERILOG ? "systemverilog" : "verilog");
       auto designLibrary = NLLibrary::create(db0, NLName("DESIGN"));
-      SNLVRLConstructor constructor(designLibrary);
-      constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-      constructor.construct(design0Paths);
+      if (inputFormatType == FormatType::SYSTEMVERILOG) {
+        SNLSVConstructor constructor(designLibrary);
+        constructor.construct(design0Paths);
+      } else {
+        SNLVRLConstructor constructor(designLibrary);
+        constructor.config_.preprocessEnabled_ = verilogPreprocessing;
+        constructor.construct(design0Paths);
+      }
       auto top = SNLUtils::findTop(designLibrary);
       if (top) {
         db0->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
       } else {
-        // LCOV_EXCL_START
-        SPDLOG_CRITICAL("No top design was found after parsing verilog");
+        SPDLOG_CRITICAL("No top design was found after parsing input");
         return EXIT_FAILURE;
-        // LCOV_EXCL_STOP
       }
-    } else {  // SNL
+    } else {
       SPDLOG_INFO("Loading Naja IF: {}", designInputs.design0[0]);
       naja::NL::SNLCapnP::LoadingConfiguration config;
-      config.primitiveConflictPolicy_ = primitivesAreLoaded ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting :
-                                                              naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
+      config.primitiveConflictPolicy_ =
+          primitivesAreLoaded
+              ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting
+              : naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
       db0 = SNLCapnP::load(designInputs.design0[0].c_str(), config);
       if (!db0) {
         // LCOV_EXCL_START
@@ -498,39 +555,45 @@ int KeplerFormalMain(int argc, char** argv) {
     if (!libertyFiles.empty()) {
       db1 = NLDB::create(NLUniverse::get());
       db1->setID(1);
-      auto primitivesLibrary =
-          NLLibrary::create(db1, NLLibrary::Type::Primitives, NLName("PRIMS"));
-      SNLLibertyConstructor constructor(primitivesLibrary);
-      for (const auto& lf : libertyFiles) {
-        constructor.construct(lf.c_str());
+      if (!loadLibraries(db1)) {
+        // LCOV_EXCL_START
+        return EXIT_FAILURE;
+        // LCOV_EXCL_STOP
       }
     }
 
-    if (inputFormatType == FormatType::VERILOG) {
+    if (inputFormatType == FormatType::VERILOG ||
+        inputFormatType == FormatType::SYSTEMVERILOG) {
       if (!db1) {
         db1 = NLDB::create(NLUniverse::get());
       }
       const auto design1Paths = toPathVector(designInputs.design1);
-      SPDLOG_INFO("Parsing verilog file(s) for design 2");
+      SPDLOG_INFO("Parsing {} file(s) for design 2",
+                  inputFormatType == FormatType::SYSTEMVERILOG ? "systemverilog" : "verilog");
       auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
-      SNLVRLConstructor constructor(designLibrary);
-      constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-      constructor.construct(design1Paths);
+      if (inputFormatType == FormatType::SYSTEMVERILOG) {
+        SNLSVConstructor constructor(designLibrary);
+        constructor.construct(design1Paths);
+      } else {
+        SNLVRLConstructor constructor(designLibrary);
+        constructor.config_.preprocessEnabled_ = verilogPreprocessing;
+        constructor.construct(design1Paths);
+      }
       auto top = SNLUtils::findTop(designLibrary);
       if (top) {
         db1->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
       } else {
-        // LCOV_EXCL_START
-        SPDLOG_CRITICAL("No top design was found after parsing verilog");
+        SPDLOG_CRITICAL("No top design was found after parsing input");
         return EXIT_FAILURE;
-        // LCOV_EXCL_STOP
       }
-    } else {  // SNL
+    } else {
       SPDLOG_INFO("Loading Naja IF: {}", designInputs.design1[0]);
       naja::NL::SNLCapnP::LoadingConfiguration config;
-      config.primitiveConflictPolicy_ = primitivesAreLoaded ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting :
-                                                              naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
+      config.primitiveConflictPolicy_ =
+          primitivesAreLoaded
+              ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting
+              : naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
       db1 = SNLCapnP::load(designInputs.design1[0].c_str(), config);
       if (!db1) {
         // LCOV_EXCL_START

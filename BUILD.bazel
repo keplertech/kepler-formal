@@ -1,0 +1,10 @@
+# Root BUILD file for kepler-formal
+
+sh_binary(
+    name = "release",
+    srcs = ["tools/release.sh"],
+    data = [
+        "MODULE.bazel",
+        "CMakeLists.txt",
+    ],
+)

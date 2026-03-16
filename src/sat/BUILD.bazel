@@ -1,0 +1,12 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "sat_solver_wrapper",
+    hdrs = ["SATSolverWrapper.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@glucose",
+        "@kissat",
+    ],
+)

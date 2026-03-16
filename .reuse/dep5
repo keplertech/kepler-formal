@@ -7,6 +7,22 @@ Files: src/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
 
-FILES: example/* .github/workflows/* .gitmodules README.md
+Files: example/* .github/workflows/* .gitmodules README.md docs/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
+
+Files: test/*
+Copyright: 2025 keplertech.io
+License: GPL-3.0-only
+
+Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore
+Copyright: 2025 keplertech.io
+License: GPL-3.0-only
+
+Files: bazel/*
+Copyright: 2025 keplertech.io
+License: GPL-3.0-only
+
+Files: tools/*
+Copyright: 2025 keplertech.io
+License: GPL-3.0-only

@@ -1,0 +1,18 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "formal_structures",
+    srcs = [
+        "BoolExpr.cpp",
+        "BoolExprCache.cpp",
+        "BoolExprCnfWriter.cpp",
+    ],
+    hdrs = [
+        "BoolExpr.h",
+        "BoolExprCache.h",
+        "BoolExprCnfWriter.h",
+    ],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+    linkopts = ["-ltbb"],
+)

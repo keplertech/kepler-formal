@@ -28,6 +28,23 @@ using namespace naja::NL;
 using namespace naja::NAJA_OPT;
 using namespace KEPLER_FORMAL;
 
+// Path to the kepler-formal CLI binary used by the project tests.
+// Bazel sets KEPLER_BIN env var via the test's BUILD.bazel; CMake uses
+// the default relative path from the build directory.
+static std::string get_kepler_bin() {
+  const char* env = std::getenv("KEPLER_BIN");
+  return env ? env : "../../../src/bin/kepler-formal";
+}
+static const std::string KEPLER_BIN_STR = get_kepler_bin();
+static const char* KEPLER_BIN = KEPLER_BIN_STR.c_str();
+
+// Prefix for test data paths. Bazel sets TEST_DATA_PREFIX="" (files are
+// in runfiles at workspace-relative paths); CMake uses "../../../../".
+static std::string get_test_data_prefix() {
+  const char* env = std::getenv("TEST_DATA_PREFIX");
+  return env ? env : "../../../../";
+}
+
 namespace {
 
 void executeCommand(const std::string& command) {
@@ -116,9 +133,9 @@ TEST_F(MiterTests, TestMiterAND) {
   SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("logic_0_net"));
-  net1->setType(SNLNet::Type::Assign0);
+  //net1->setType(SNLNet::Type::Assign0);
   SNLNet* net2 = SNLScalarNet::create(top, NLName("logic_1_net"));
-  net2->setType(SNLNet::Type::Assign1);
+  //net2->setType(SNLNet::Type::Assign1);
   SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
   SNLNet* net4 = SNLScalarNet::create(top, NLName("and2_output_net"));
   // connect logic0 to and
@@ -335,8 +352,8 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   auto ffQ =
       SNLScalarTerm::create(ffModel, SNLTerm::Direction::Output, NLName("Q"));
   // Set sequential dependecies to CLK
-  SNLDesignModeling::addInputsToClockArcs({ffD}, {ffCLK});
-  SNLDesignModeling::addClockToOutputsArcs({ffCLK}, {ffQ});
+  SNLDesignModeling::addInputsToClockArcs({ffD}, ffCLK);
+  SNLDesignModeling::addClockToOutputsArcs(ffCLK, {ffQ});
 
   // Create ff instance under top
   SNLInstance* instFF = SNLInstance::create(top, ffModel, NLName("ff0"));
@@ -593,10 +610,10 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     std::filesystem::path outputPath("./topEdited1.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-  //Check output of binary ../../../src/bin/kepler-formal on the 2 capnp files
+  //Check output of binary kepler-formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler-formal -naja_if ./top.capnp ./topEdited1.capnp")
-          .c_str());  
+      (get_kepler_bin() + " -naja_if ./top.capnp ./topEdited1.capnp")
+          .c_str());
   // look for "DIFFERENT" in the file ./miter_log_1.txt
   // open the file  
   std::ifstream miterLogFile("./miter_log_0.txt");
@@ -643,10 +660,10 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     SNLCapnP::dump(db, outputPath);
   }
 
-  //Check output of binary ../../../src/bin/kepler-formal on the 2 capnp files
+  //Check output of binary kepler-formal on the 2 capnp files
   executeCommand(
-      std::string("../../../src/bin/kepler-formal -naja_if ./top.capnp ./topEdited2.capnp")
-          .c_str()); 
+      (get_kepler_bin() + " -naja_if ./top.capnp ./topEdited2.capnp")
+          .c_str());
   // look for "IDENTICAL" in the file ./miter_log_2.txt
   // open the file
   std::ifstream miterLogFile2("./miter_log_1.txt");
@@ -674,10 +691,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
 #include <string>
 #include <cstdlib>
 #include <cstdio>
-
-// Path to the kepler-formal CLI binary used by the project tests.
-// Adjust this path if your binary is located elsewhere.
-static const char* KEPLER_BIN = "../../../src/bin/kepler-formal";
 
 // Helper to run the CLI binary with arguments in a subprocess using std::system.
 // Returns the program's exit code (child exit status) when available, otherwise EXIT_FAILURE.
@@ -958,9 +971,9 @@ TEST_F(MiterTests, CoverDiff) {
   //SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
   // 9. connect all instances inputs
   SNLNet* net1 = SNLScalarNet::create(top, NLName("logic_0_net"));
-  net1->setType(SNLNet::Type::Assign0);
+  //net1->setType(SNLNet::Type::Assign0);
   SNLNet* net2 = SNLScalarNet::create(top, NLName("logic_1_net"));
-  net2->setType(SNLNet::Type::Assign1);
+  //net2->setType(SNLNet::Type::Assign1);
   SNLNet* net3 = SNLScalarNet::create(top, NLName("and_output_net"));
   SNLNet* net4 = SNLScalarNet::create(top, NLName("and2_output_net"));
   // connect logic0 to and
@@ -1267,7 +1280,10 @@ TEST(KeplerCliSubprocessTests, ExampleTestRun) {
   std::filesystem::path p(KEPLER_BIN);
   if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
 
-  int rc = run_kepler_cli_with_args({"--config", "../../../../test/strategies/miter/test_config_verilog.yaml"});
+  std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog.yaml";
+  if (std::getenv("TEST_DATA_PREFIX"))
+    config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog_bazel.yaml";
+  int rc = run_kepler_cli_with_args({"--config", config});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
@@ -1275,11 +1291,14 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
   std::filesystem::path p(KEPLER_BIN);
   if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
 
-  int rc = run_kepler_cli_with_args({"-verilog", "../../../../example/tinyrocket.v", "../../../../example/tinyrocket_edited.v", 
-                                         "../../../../example/NangateOpenCellLibrary_typical.lib",
-                                         "../../../../example/fakeram45_64x15.lib",
-                                         "../../../../example/fakeram45_64x32.lib",
-                                         "../../../../example/fakeram45_1024x32.lib"});
+  std::string pfx = get_test_data_prefix();
+  int rc = run_kepler_cli_with_args({"-verilog",
+                                         pfx + "example/tinyrocket.v",
+                                         pfx + "example/tinyrocket_edited.v",
+                                         pfx + "example/NangateOpenCellLibrary_typical.lib",
+                                         pfx + "example/fakeram45_64x15.lib",
+                                         pfx + "example/fakeram45_64x32.lib",
+                                         pfx + "example/fakeram45_1024x32.lib"});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
@@ -1287,16 +1306,22 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
   std::filesystem::path p(KEPLER_BIN);
   if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
 
-  int rc = run_kepler_cli_with_args({"--config", "../../../../test/strategies/miter/test_config_naja_if_with_se.yaml"});
+  std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se.yaml";
+  if (std::getenv("TEST_DATA_PREFIX"))
+    config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se_bazel.yaml";
+  int rc = run_kepler_cli_with_args({"--config", config});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
-// test failure with ../../../../test/strategies/miter/test_config_failure.yaml
+// test failure with test_config_failure.yaml
 TEST(KeplerCliSubprocessTests, ExampleTestRunFailure) {
   std::filesystem::path p(KEPLER_BIN);
   if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
 
-  int rc = run_kepler_cli_with_args({"--config", "../../../../test/strategies/miter/test_config_failure.yaml"});
+  std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_failure.yaml";
+  if (std::getenv("TEST_DATA_PREFIX"))
+    config = get_test_data_prefix() + "test/strategies/miter/test_config_failure_bazel.yaml";
+  int rc = run_kepler_cli_with_args({"--config", config});
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 

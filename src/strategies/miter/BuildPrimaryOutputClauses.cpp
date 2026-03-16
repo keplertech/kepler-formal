@@ -488,6 +488,24 @@ void BuildPrimaryOutputClauses::initVarNames() {
     termDNLID2varID_[inputs_[i]] =
         i + 2;  // +2 to avoid 0 and 1 which are reserved for constants
   }
+  for (DNLID constIsoID : naja::DNL::get()->getDNLIsoDB().getConstant0Isos()) {
+    const auto& constIso = naja::DNL::get()->getDNLIsoDB().getIsoFromIsoIDconst(constIsoID);
+    for (auto termID : constIso.getReaders()) {
+        termDNLID2varID_[termID] = 0;
+    }
+    for (auto termID : constIso.getDrivers()) {
+        termDNLID2varID_[termID] = 0;
+    }
+  }
+  for (DNLID constIsoID : naja::DNL::get()->getDNLIsoDB().getConstant1Isos()) {
+    const auto& constIso = naja::DNL::get()->getDNLIsoDB().getIsoFromIsoIDconst(constIsoID);
+    for (auto termID : constIso.getReaders()) {
+        termDNLID2varID_[termID] = 1;
+    }
+    for (auto termID : constIso.getDrivers()) {
+        termDNLID2varID_[termID] = 1;
+    }
+  }
 }
 
 void BuildPrimaryOutputClauses::build() {
