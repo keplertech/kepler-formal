@@ -10,7 +10,12 @@
 #include <string>
 #include <vector>
 
+#include "DNL.h"
 #include "KeplerFormalUtils.h"
+#include "SNLCapnP.h"
+#include "SNLLibertyConstructor.h"
+#include "SNLUtils.h"
+#include "SNLVRLConstructor.h"
 
 extern int KeplerFormalMain(int argc, char** argv);
 
@@ -149,6 +154,44 @@ MultiFileVerilogFixture createDefaultNettypeDirectiveFixture(bool enablePreproce
 
   return fixture;
 }
+struct SimpleCliFixture {
+  std::filesystem::path tmpDir;
+  std::filesystem::path design0Path;
+  std::filesystem::path design1Path;
+};
+
+struct ScopedNajaIfFixture {
+  std::filesystem::path tmpDir;
+  std::filesystem::path design0IfPath;
+  std::filesystem::path design1IfPath;
+  std::filesystem::path libertyPath;
+};
+
+struct EnvVarGuard {
+  explicit EnvVarGuard(const char* name): name_(name) {
+    const char* current = std::getenv(name_);
+    if (current) {
+      hadValue_ = true;
+      oldValue_ = current;
+    }
+  }
+
+  void set(const std::string& value) const {
+    setenv(name_, value.c_str(), 1);
+  }
+
+  ~EnvVarGuard() {
+    if (hadValue_) {
+      setenv(name_, oldValue_.c_str(), 1);
+    } else {
+      unsetenv(name_);
+    }
+  }
+
+  const char* name_;
+  bool hadValue_ = false;
+  std::string oldValue_;
+};
 
 MultiFileVerilogFixture createMultiFileVerilogFixture() {
   MultiFileVerilogFixture fixture;
@@ -217,6 +260,101 @@ MultiFileVerilogFixture createMultiFileVerilogFixture() {
   cfg << "  - " << lib3.string() << "\n";
   cfg << "log_level: info\n";
   cfg.close();
+
+  return fixture;
+}
+
+SimpleCliFixture createEquivalentDesignFixture(const std::string& extension,
+                                               const std::string& moduleBody) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_cli_simple";
+  std::filesystem::create_directories(fixture.tmpDir);
+
+  fixture.design0Path = fixture.tmpDir / ("design0." + extension);
+  fixture.design1Path = fixture.tmpDir / ("design1." + extension);
+
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << moduleBody;
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << moduleBody;
+  }
+
+  return fixture;
+}
+
+void cleanupNajaTestState() {
+  naja::DNL::destroy();
+  if (NLUniverse::get()) {
+    NLUniverse::get()->destroy();
+  }
+}
+
+ScopedNajaIfFixture createEquivalentScopedNajaIfFixture() {
+  ScopedNajaIfFixture fixture;
+  fixture.tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_cli_scope_if";
+  std::filesystem::create_directories(fixture.tmpDir);
+  fixture.design0IfPath = fixture.tmpDir / "design0.capnp";
+  fixture.design1IfPath = fixture.tmpDir / "design1.capnp";
+  fixture.libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+
+  const auto design0Child = fixture.tmpDir / "design0_child.v";
+  const auto design0Top = fixture.tmpDir / "design0_top.v";
+  const auto design1Child = fixture.tmpDir / "design1_child.v";
+  const auto design1Top = fixture.tmpDir / "design1_top.v";
+
+  {
+    std::ofstream child(design0Child);
+    child << "module child(input a, output y);\n";
+    child << "  assign y = a;\n";
+    child << "endmodule\n";
+  }
+  {
+    std::ofstream top(design0Top);
+    top << "module top(input a, output y);\n";
+    top << "  child u_child(.a(a), .y(y));\n";
+    top << "endmodule\n";
+  }
+  {
+    std::ofstream child(design1Child);
+    child << "module child(input a, output y);\n";
+    child << "  wire n;\n";
+    child << "  INV_X1 u0(.A(a), .ZN(n));\n";
+    child << "  INV_X1 u1(.A(n), .ZN(y));\n";
+    child << "endmodule\n";
+  }
+  {
+    std::ofstream top(design1Top);
+    top << "module top(input a, output y);\n";
+    top << "  child u_child(.a(a), .y(y));\n";
+    top << "endmodule\n";
+  }
+
+  const auto dumpDesign = [&](const std::vector<std::filesystem::path>& designPaths,
+                              const std::filesystem::path& dumpPath) {
+    cleanupNajaTestState();
+    NLUniverse::create();
+    auto* db = NLDB::create(NLUniverse::get());
+    auto* primitivesLibrary =
+        NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+    SNLLibertyConstructor libertyConstructor(primitivesLibrary);
+    libertyConstructor.construct(fixture.libertyPath);
+    auto* designLibrary = NLLibrary::create(db, NLName("DESIGN"));
+    SNLVRLConstructor constructor(designLibrary);
+    constructor.construct(designPaths);
+    auto* top = SNLUtils::findTop(designLibrary);
+    ASSERT_NE(top, nullptr);
+    db->setTopDesign(top);
+    SNLCapnP::dump(db, dumpPath);
+    cleanupNajaTestState();
+  };
+
+  dumpDesign({design0Child, design0Top}, fixture.design0IfPath);
+  dumpDesign({design1Child, design1Top}, fixture.design1IfPath);
 
   return fixture;
 }
@@ -461,6 +599,108 @@ TEST(KeplerFormalCliTests, ConfigUnknownFormatFails) {
   std::filesystem::remove(cfgPath);
 }
 
+TEST(KeplerFormalCliTests, ConfigSystemVerilogAccepted) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic a, output logic y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, CliSvAliasAccepted) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic a, output logic y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-sv";
+  std::string argv2 = fixture.design0Path.string();
+  std::string argv3 = fixture.design1Path.string();
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data()};
+  int argc = 4;
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, FirstVerilogDesignWithoutTopFails) {
+  const auto tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_no_top_first";
+  std::filesystem::create_directories(tmpDir);
+  const auto design0 = tmpDir / "design0.v";
+  const auto design1 = tmpDir / "design1.v";
+  {
+    std::ofstream f(design0);
+    f << "module a(input x, output y);\n";
+    f << "  assign y = x;\n";
+    f << "endmodule\n";
+    f << "module b(input x, output y);\n";
+    f << "  assign y = x;\n";
+    f << "endmodule\n";
+  }
+  {
+    std::ofstream f(design1);
+    f << "module top(input a, output y);\n";
+    f << "  assign y = a;\n";
+    f << "endmodule\n";
+  }
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = design0.string();
+  std::string argv3 = design1.string();
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data()};
+  int argc = 4;
+
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST(KeplerFormalCliTests, SecondVerilogDesignWithoutTopFails) {
+  const auto tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_no_top_second";
+  std::filesystem::create_directories(tmpDir);
+  const auto design0 = tmpDir / "design0.v";
+  const auto design1 = tmpDir / "design1.v";
+  {
+    std::ofstream f(design0);
+    f << "module top(input a, output y);\n";
+    f << "  assign y = a;\n";
+    f << "endmodule\n";
+  }
+  {
+    std::ofstream f(design1);
+    f << "module a(input x, output y);\n";
+    f << "  assign y = x;\n";
+    f << "endmodule\n";
+    f << "module b(input x, output y);\n";
+    f << "  assign y = x;\n";
+    f << "endmodule\n";
+  }
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = design0.string();
+  std::string argv3 = design1.string();
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data()};
+  int argc = 4;
+
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST(KeplerFormalCliTests, ConfigUnknownSolverFails) {
   const auto cfgPath = writeTempConfig(
       "format: verilog\n"
@@ -536,6 +776,38 @@ TEST(KeplerFormalCliTests, SnlMultiFileRejected) {
   std::filesystem::remove(cfgPath);
 }
 
+TEST(KeplerFormalCliTests, MissingFirstNajaIfFails) {
+  const auto root = repoRoot();
+  const auto exampleDir = root / "example";
+  const auto design1 = exampleDir / "tinyrocket_naja.if";
+  ASSERT_TRUE(std::filesystem::exists(design1));
+
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "input_paths:\n"
+      "  - /definitely/missing/first.if\n"
+      "  - " + design1.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST(KeplerFormalCliTests, MissingSecondNajaIfFails) {
+  const auto root = repoRoot();
+  const auto exampleDir = root / "example";
+  const auto design0 = exampleDir / "tinyrocket_naja.if";
+  ASSERT_TRUE(std::filesystem::exists(design0));
+
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "input_paths:\n"
+      "  - " + design0.string() + "\n"
+      "  - /definitely/missing/second.if\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
 TEST(KeplerFormalCliTests, CliUnknownOptionFails) {
   std::string argv0 = "kepler-formal";
   std::string argv1 = "-verilog";
@@ -574,6 +846,84 @@ TEST(KeplerFormalCliTests, CliLibertyFlagCollectsPaths) {
   int argc = 8;
   int rc = KeplerFormalMain(argc, argv);
   EXPECT_EQ(rc, EXIT_FAILURE);
+}
+
+TEST(KeplerFormalCliTests, PythonLibraryFilesAreLoadedByExtension) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(output y);\n"
+      "  wire z;\n"
+      "  LOGIC1 c0(.Z(z));\n"
+      "  BUF c1(.A(z), .Z(y));\n"
+      "endmodule\n");
+  const auto pyPrimitives =
+      repoRoot() / "thirdparty/naja/test/nl/python/pyloader/scripts/primitives1.py";
+  const auto pyModuleDir =
+      repoRoot() / "buildD/thirdparty/naja/src/nl/python/naja_wrapping";
+  ASSERT_TRUE(std::filesystem::exists(pyPrimitives));
+  ASSERT_TRUE(std::filesystem::exists(pyModuleDir / "naja.so"));
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files:\n"
+      "  - " + pyPrimitives.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, GzippedLibertyFilesAreLoadedByExtension) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto gzLiberty =
+      repoRoot() / "thirdparty/naja/test/nl/formats/liberty/benchmarks/tests/small.lib.gz";
+  ASSERT_TRUE(std::filesystem::exists(gzLiberty));
+
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files:\n"
+      "  - " + gzLiberty.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, UnsupportedLibraryExtensionFails) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto badLibPath = fixture.tmpDir / "bad_library.txt";
+  {
+    std::ofstream badLib(badLibPath);
+    badLib << "not a supported library file\n";
+  }
+
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files:\n"
+      "  - " + badLibPath.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
 }
 
 TEST(KeplerFormalCliTests, CliExplicitMissingDesignsFails) {
@@ -659,4 +1009,25 @@ TEST(KeplerFormalCliTests, SnlScopesNoDifference) {
   int rc = runWithConfigFile(cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
+}
+
+TEST(KeplerFormalCliTests, SnlScopesEquivalentEditedScopeNoDifference) {
+  const auto fixture = createEquivalentScopedNajaIfFixture();
+  ASSERT_TRUE(std::filesystem::exists(fixture.design0IfPath));
+  ASSERT_TRUE(std::filesystem::exists(fixture.design1IfPath));
+  ASSERT_TRUE(std::filesystem::exists(fixture.libertyPath));
+
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "input_paths:\n"
+      "  - " + fixture.design0IfPath.string() + "\n"
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "liberty_files:\n"
+      "  - " + fixture.libertyPath.string() + "\n"
+      "use_scopes: true\n");
+
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
 }

@@ -1,0 +1,84 @@
+# Copyright 2024-2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache Bazel outputs
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/bazel
+        key: bazel-release-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/naja.BUILD.bazel') }}
+        restore-keys: |
+          bazel-release-${{ runner.os }}-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -yq \
+          build-essential pkg-config \
+          libboost-dev libtbb-dev capnproto libcapnp-dev \
+          libfl-dev zlib1g-dev python3-dev
+
+    - name: Build (optimized)
+      run: bazelisk build -c opt //src/bin:kepler-formal
+
+    - name: Package
+      run: |
+        VERSION="${GITHUB_REF_NAME#v}"
+        DIST="kepler-formal-${VERSION}-linux-x86_64"
+        mkdir -p "${DIST}/bin" "${DIST}/lib"
+
+        # Copy the binary
+        cp bazel-bin/src/bin/kepler-formal "${DIST}/bin/"
+
+        # Bundle naja shared libs (built by rules_foreign_cc cmake)
+        find bazel-bin/ -name 'libnaja_*.so' -exec cp {} "${DIST}/lib/" \;
+
+        # Bundle TBB (no static libs available by design)
+        for lib in libtbb.so.12 libtbbmalloc.so.2; do
+          cp "/lib/x86_64-linux-gnu/${lib}" "${DIST}/lib/"
+        done
+
+        # Create wrapper script that sets LD_LIBRARY_PATH for bundled libs
+        cat > "${DIST}/kepler-formal" <<'WRAPPER'
+#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "${SCRIPT_DIR}/bin/kepler-formal" "$@"
+WRAPPER
+        chmod +x "${DIST}/kepler-formal"
+
+        tar czf "${DIST}.tar.gz" "${DIST}"
+
+    - name: Verify
+      run: |
+        VERSION="${GITHUB_REF_NAME#v}"
+        DIST="kepler-formal-${VERSION}-linux-x86_64"
+        echo "=== ldd output ==="
+        ldd "${DIST}/bin/kepler-formal"
+        echo "=== smoke test ==="
+        "./${DIST}/kepler-formal" --help || true
+
+    - name: Create GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION="${GITHUB_REF_NAME#v}"
+        gh release create "${GITHUB_REF_NAME}" \
+          --title "kepler-formal ${VERSION}" \
+          --generate-notes \
+          "kepler-formal-${VERSION}-linux-x86_64.tar.gz"

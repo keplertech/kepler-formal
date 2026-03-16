@@ -1,0 +1,9 @@
+filegroup(
+    name = "testdata",
+    srcs = glob([
+        "*.v",
+        "*.lib",
+        "*.if/**",
+    ]),
+    visibility = ["//visibility:public"],
+)

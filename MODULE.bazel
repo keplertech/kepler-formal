@@ -1,0 +1,33 @@
+module(
+    name = "kepler-formal",
+    version = "1.0.0",
+)
+
+# Infrastructure
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+# Direct dependencies from BCR
+bazel_dep(name = "yaml-cpp", version = "0.8.0")
+bazel_dep(name = "googletest", version = "1.17.0", dev_dependency = True)
+bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
+bazel_dep(name = "spdlog", version = "1.15.1")
+# onetbb BCR module is incompatible with Bazel 8/9.
+# Use system TBB via linkopts instead.
+
+# Use preinstalled cmake/make/pkg-config instead of bootstrapping.
+# The bundled glib in rules_foreign_cc pkg-config bootstrap fails
+# with modern GCC 15 (C23 bool keyword collision in glib source).
+register_toolchains(
+    "@rules_foreign_cc//toolchains:preinstalled_cmake_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_make_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
+)
+
+# Third-party dependencies fetched via http_archive for BCR compatibility.
+# BUILD file overlays live in bazel/*.BUILD.bazel.
+# The cmake flow uses git submodules (thirdparty/) directly.
+# See docs/bcr-roadmap.md for the full BCR publication plan.
+deps = use_extension("//bazel:deps.bzl", "deps")
+use_repo(deps, "glucose", "kissat", "naja")

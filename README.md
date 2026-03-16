@@ -4,7 +4,7 @@
 
 ## Introduction
 
-Kepler-Formal is a logic equivalence checking (LEC) tool that operates on verilog and the naja interchange format(https://github.com/najaeda/naja-if) and focuses today on combinational equivalence checking only — sequential boundary changes are not supported yet and remain planned work.
+Kepler-Formal is a logic equivalence checking (LEC) tool that operates on Verilog, SystemVerilog, and the [Naja interchange format](https://github.com/najaeda/naja-if). It focuses today on combinational equivalence checking only; sequential boundary changes are not supported yet and remain planned work.
 
 ### Acknowledgement
 
@@ -15,7 +15,7 @@ This project is supported and funded by NLNet through the [NGI0 Entrust](https:/
 
 ## Requirements 
 
-### For Verilog:
+### For Verilog and SystemVerilog:
 
 - No change of sequential boundaries. 
 - No change in names of hierarchical instances, sequential instances and top terminals.
@@ -46,16 +46,18 @@ export PATH="/opt/homebrew/opt/flex/bin:/opt/homebrew/opt/bison/bin:$PATH"
 ```
 ## Build
 
+### CMake (primary)
+
 ```bash
 git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
 cd kepler-formal
 mkdir build
 cd build
-cmake .. 
+cmake ..
 make
 ```
 
-For best runtime performance: 
+For best runtime performance:
 
 ```bash
 cmake .. \
@@ -66,21 +68,79 @@ cmake .. \
   -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
+### Bazel (experimental)
+
+Bazel build support is available alongside CMake. It uses [bzlmod](https://bazel.build/external/overview#bzlmod) (MODULE.bazel) and pulls most dependencies from the [Bazel Central Registry](https://registry.bazel.build/).
+
+```bash
+git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
+cd kepler-formal
+bazel build //src/bin:kepler-formal
+```
+
+Run tests:
+
+```bash
+bazel test //test/...
+```
+
+**Dependency strategy:**
+- **BCR**: yaml-cpp, googletest, zlib, spdlog, oneTBB (pulled automatically by Bazel)
+- **Native BUILD files**: kissat and glucose SAT solvers (simple C/C++ libraries)
+- **rules_foreign_cc** (cmake wrapper): naja (too complex for native BUILD files — uses flex/bison codegen, Cap'n Proto, nested submodules)
+- **System packages still required**: Boost headers, Cap'n Proto, Python3 (used by naja's cmake build inside the rules_foreign_cc sandbox)
+
+### Future work: bazel-orfs integration
+
+Once kepler-formal is fully buildable with Bazel, it can be consumed directly by [bazel-orfs](https://github.com/The-OpenROAD-Project/bazel-orfs) as a proper Bazel dependency instead of the current `$PATH`-based wrapper ([bazel-orfs#523](https://github.com/The-OpenROAD-Project/bazel-orfs/pull/523)). This enables:
+
+- **`bazel_dep` or `git_override`** in bazel-orfs MODULE.bazel to pin kepler-formal to a specific version or commit
+- **Hermetic LEC tests** in bazel-orfs CI without requiring a pre-installed kepler-formal binary
+- **Remote caching** of kepler-formal build artifacts shared across bazel-orfs users
+- **Eventual BCR publication** of kepler-formal as a first-class Bazel module
+
 ## Usage
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] <netlist1> <netlist2> [<liberty-file>...]
+build/src/bin/kepler-formal <-verilog/-systemverilog/-sv/-naja_if> [--verilog_preprocessing] <netlist1> <netlist2> [<library-file>...]
 
-# Multi-file Verilog designs
-build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
-  [--liberty <liberty-file>...]
+# Multi-file Verilog / SystemVerilog designs
+build/src/bin/kepler-formal <-verilog/-systemverilog/-sv> [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
+  [--liberty <library-file>...]
 
 # Through yaml config file
 build/src/bin/kepler-formal --config <yaml file>
 ```
 
 `--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
+### Supported formats
+
+- CLI:
+  - `-verilog`
+  - `-systemverilog`
+  - `-sv`
+  - `-naja_if`
+- YAML `format`:
+  - `verilog`
+  - `systemverilog`
+  - `sv`
+  - `naja_if`
+
+### Library files
+
+Library files continue to use the existing `--liberty` CLI flag and `liberty_files` YAML field.
+
+Supported file types are:
+
+- `.lib`
+- `.lib.gz`
+- `.py`
+
+Behavior:
+
+- `.lib` and `.lib.gz` are loaded through `SNLLibertyConstructor`
+- `.py` is loaded through `SNLPyLoader`
 
 ### YAML Input Paths
 
@@ -100,6 +160,18 @@ liberty_files:
   - library_file0.lib
   - library_file1.lib
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
+```
+
+SystemVerilog example:
+
+```yaml
+format: systemverilog
+input_paths:
+  - [design0_pkg.sv, design0_top.sv]
+  - [design1_pkg.sv, design1_top.sv]
+liberty_files:
+  - stdcells.lib.gz
+  - primitives.py
 ```
 
 ## Example 

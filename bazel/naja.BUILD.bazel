@@ -1,0 +1,99 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(["src/**"]),
+)
+
+cmake(
+    name = "naja",
+    # All naja sources including nested submodules (under src/ symlink)
+    lib_source = ":all_srcs",
+    # Naja builds these 5 as explicitly SHARED — cannot be made static.
+    # The release tarball bundles them alongside the binary with RPATH.
+    out_shared_libs = [
+        "libnaja_nl.so",
+        "libnaja_dnl.so",
+        "libnaja_bne.so",
+        "libnaja_opt.so",
+        "libnaja_metrics.so",
+        "libnaja_python.so",
+        "libnaja_snl_pyloader.so",
+    ],
+    # Output static libraries
+    out_static_libs = [
+        "libnaja_core.a",
+        "libnaja_snl_visual.a",
+        "libnaja_snl_verilog.a",
+        "libnaja_snl_systemverilog.a",
+        "libsvlang.a",
+        "libnaja_snl_liberty.a",
+        "libnaja_lefdef.a",
+        "libnaja_nl_dump.a",
+        "libnaja_verilog.a",
+        "libyosys_liberty.a",
+    ],
+    build_args = ["-j2"],
+    cache_entries = {
+        "CMAKE_CXX_STANDARD": "20",
+        "BUILD_NAJA_PYTHON": "OFF",
+        "BUILD_ONLY_DOC": "OFF",
+        "BUILD_BENCHMARKS": "OFF",
+        "CODE_COVERAGE": "OFF",
+        "ENABLE_SANITIZERS": "OFF",
+        # rules_foreign_cc sandbox doesn't propagate implicit libs for executables
+        "CMAKE_EXE_LINKER_FLAGS": "-lstdc++ -lm",
+    },
+    # Copy static libs that cmake builds but doesn't install
+    # (naja_nl_dump has no install() command; naja_verilog's is guarded by PROJECT_IS_TOP_LEVEL)
+    postfix_script = " && ".join([
+        "cp src/nl/nl/serialization/capnp/libnaja_nl_dump.a $$INSTALLDIR/lib/",
+        "cp thirdparty/naja-verilog/src/libnaja_verilog.a $$INSTALLDIR/lib/",
+        "cp thirdparty/slang/lib/libsvlang.a $$INSTALLDIR/lib/",
+    ]),
+    # Let cmake find system-installed Boost, TBB, CapnProto, Python3
+    # This is the pragmatic approach (same as OpenROAD's initial Bazel adoption)
+    # Tighten hermeticity later by providing these through Bazel
+    tags = ["requires-network"],
+    visibility = ["//visibility:public"],
+)
+
+# Headers that naja's cmake doesn't install but kepler-formal needs.
+# Naja's cmake only installs "public API" headers; many internal headers
+# (used transitively) are missing. Expose all source headers directly.
+cc_library(
+    name = "naja_extra_headers",
+    hdrs = glob([
+        "src/src/**/*.h",
+        "src/thirdparty/cpptrace/include/**/*.hpp",
+        "src/thirdparty/naja-verilog/src/**/*.h",
+        "src/thirdparty/yosys-liberty/src/**/*.h",
+        "src/thirdparty/lefdef/src/**/*.h",
+    ]),
+    includes = [
+        "src/src/core",
+        "src/src/bne",
+        "src/src/dnl",
+        "src/src/metrics",
+        "src/src/nl/formats/lefdef",
+        "src/src/nl/formats/liberty",
+        "src/src/nl/formats/systemverilog/frontend",
+        "src/src/nl/formats/verilog/backend",
+        "src/src/nl/formats/verilog/frontend",
+        "src/src/nl/nl/decorators",
+        "src/src/nl/nl/nl",
+        "src/src/nl/nl/pnl",
+        "src/src/nl/nl/serialization/capnp",
+        "src/src/nl/nl/snl",
+        "src/src/nl/nl/visual",
+        "src/src/nl/python/pyloader",
+        "src/src/optimization",
+        "src/thirdparty/cpptrace/include",
+        "src/thirdparty/naja-verilog/src",
+        "src/thirdparty/yosys-liberty/src",
+        "src/thirdparty/lefdef/src/def/def",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":naja"],
+)

@@ -1,0 +1,10 @@
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
+
+# Force C11 for host tools to work around rules_foreign_cc pkg-config
+# bootstrap failure: bundled glib uses 'bool' as a struct field name,
+# which is a keyword in GCC 15's default C23 mode.
+build --host_conlyopt=-std=c11
+
+# Recommended: show test output on failure
+test --test_output=errors

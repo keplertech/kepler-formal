@@ -1,0 +1,51 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# Generate build.h with version info (replaces scripts/generate-build-header.sh)
+genrule(
+    name = "build_header",
+    srcs = ["VERSION"],
+    outs = ["src/build.h"],
+    cmd = """
+        VERSION=$$(cat $(location VERSION))
+        cat > $@ <<HEADER
+#define VERSION "$$VERSION"
+#define COMPILER "bazel"
+#define ID "bazel"
+#define BUILD "bazel"
+#define DIR "."
+HEADER
+    """,
+)
+
+# Library sources: all src/*.c except main.c and APPSRC (application.c, handle.c, parse.c, witness.c)
+_EXCLUDE_SRCS = [
+    "src/main.c",
+    "src/application.c",
+    "src/handle.c",
+    "src/parse.c",
+    "src/witness.c",
+]
+
+cc_library(
+    name = "kissat",
+    srcs = glob(
+        ["src/*.c"],
+        exclude = _EXCLUDE_SRCS,
+    ) + glob(
+        ["src/*.h"],
+        exclude = ["src/kissat.h"],
+    ) + [":build_header"],
+    # Only the public API header is exposed to dependents
+    hdrs = ["src/kissat.h"],
+    # sort.c is #included by other .c files (static inline functions)
+    textual_hdrs = ["src/sort.c"],
+    copts = [
+        "-O3",
+        "-DNDEBUG",
+        "-DNMETRICS",
+        "-DNSTATISTICS",
+        "-DQUIET",
+    ],
+    includes = ["src"],
+    visibility = ["//visibility:public"],
+)

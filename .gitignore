@@ -2,3 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 build
 
+# Bazel
+bazel-*
+MODULE.bazel.lock
+.vscode/

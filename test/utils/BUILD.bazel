@@ -1,0 +1,22 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_test(
+    name = "SNLTruthTableTreeTests",
+    srcs = ["SNLTruthTableTreeTests.cpp"],
+    linkopts = ["-ltbb", "-ltbbmalloc", "-lz", "-lcapnp", "-lkj"],
+    deps = [
+        "//src/clauses:kepler_clauses",
+        "//src/formal:formal_structures",
+        "//src/strategies:formal_strategies",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "BoolExprCnfWriterTests",
+    srcs = ["BoolExprCnfWriterTests.cpp"],
+    deps = [
+        "//src/formal:formal_structures",
+        "@googletest//:gtest_main",
+    ],
+)

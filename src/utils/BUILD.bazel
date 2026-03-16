@@ -1,0 +1,13 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "kepler_formal_utils",
+    srcs = ["SNLLogicCone.cpp"],
+    hdrs = ["SNLLogicCone.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/formal:formal_structures",
+        "@naja",
+    ],
+)

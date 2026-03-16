@@ -1,0 +1,29 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "formal_strategies",
+    srcs = [
+        "miter/BuildPrimaryOutputClauses.cpp",
+        "miter/MiterStrategy.cpp",
+    ],
+    hdrs = [
+        "miter/BuildPrimaryOutputClauses.h",
+        "miter/MiterStrategy.h",
+    ],
+    includes = [
+        "miter",
+        "..",  # for ../sat/SATSolverWrapper.h relative includes
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/clauses:kepler_clauses",
+        "//src/config:kepler_config",
+        "//src/formal:formal_structures",
+        "//src/utils:kepler_formal_utils",
+        "//src/sat:sat_solver_wrapper",
+        "@glucose",
+        "@kissat",
+        "@naja",
+        "@spdlog",
+    ],
+)
