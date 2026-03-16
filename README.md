@@ -80,8 +80,6 @@ build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file..
 build/src/bin/kepler-formal --config <yaml file>
 ```
 
-`--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
-
 ### YAML Input Paths
 
 The YAML `input_paths` field accepts either:

@@ -353,7 +353,7 @@ int KeplerFormalMain(int argc, char** argv) {
         currentLiberty = true;
         continue;
       }
-      if (arg == "--verilog_preprocessing" || arg == "--verilog-preprocessing") {
+      if (arg == "--verilog_preprocessing") {
         verilogPreprocessing = true;
         continue;
       }
