@@ -66,12 +66,12 @@ jobs:
         done
 
         # Create wrapper script that sets LD_LIBRARY_PATH for bundled libs
-        cat > "${DIST}/kepler-formal" <<'WRAPPER'
-#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "${SCRIPT_DIR}/bin/kepler-formal" "$@"
-WRAPPER
+        printf '%s\n' \
+          '#!/usr/bin/env bash' \
+          'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"' \
+          'export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+          'exec "${SCRIPT_DIR}/bin/kepler-formal" "$@"' \
+          > "${DIST}/kepler-formal"
         chmod +x "${DIST}/kepler-formal"
 
         tar czf "${DIST}.tar.gz" "${DIST}"
