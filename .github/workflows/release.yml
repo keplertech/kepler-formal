@@ -17,6 +17,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Set up Bazelisk
+      uses: bazel-contrib/setup-bazel@v0.15.0
+      with:
+        bazelisk-version: latest
+
     - name: Cache Bazel outputs
       uses: actions/cache@v4
       with:
@@ -45,8 +50,15 @@ jobs:
         # Copy the binary
         cp bazel-bin/src/bin/kepler-formal "${DIST}/bin/"
 
+        # Ship the top-level docs users expect alongside a binary release.
+        cp README.md LICENSE.rst "${DIST}/"
+
         # Bundle naja shared libs (built by rules_foreign_cc cmake)
         find bazel-bin/ -name 'libnaja_*.so' -exec cp {} "${DIST}/lib/" \;
+        if ! find "${DIST}/lib" -maxdepth 1 -name 'libnaja_*.so' | grep -q .; then
+          echo "Expected bundled naja shared libraries were not found."
+          exit 1
+        fi
 
         # Bundle TBB (no static libs available by design)
         for lib in libtbb.so.12 libtbbmalloc.so.2; do
@@ -63,6 +75,7 @@ WRAPPER
         chmod +x "${DIST}/kepler-formal"
 
         tar czf "${DIST}.tar.gz" "${DIST}"
+        sha256sum "${DIST}.tar.gz" > "${DIST}.tar.gz.sha256"
 
     - name: Verify
       run: |
@@ -81,4 +94,5 @@ WRAPPER
         gh release create "${GITHUB_REF_NAME}" \
           --title "kepler-formal ${VERSION}" \
           --generate-notes \
-          "kepler-formal-${VERSION}-linux-x86_64.tar.gz"
+          "kepler-formal-${VERSION}-linux-x86_64.tar.gz" \
+          "kepler-formal-${VERSION}-linux-x86_64.tar.gz.sha256"

@@ -6,11 +6,13 @@ This document explains how to set up and perform binary releases.
 
 1. A maintainer runs `bazelisk run //:release` locally.
 2. The script validates that MODULE.bazel and CMakeLists.txt have the same
-   version, creates an annotated git tag (`v1.0.0`), and pushes it.
+   version, ensures the working tree has no tracked or untracked changes,
+   creates an annotated git tag (`v1.0.0`), and pushes it.
 3. GitHub Actions (`.github/workflows/release.yml`) triggers on the tag,
    builds an optimized binary with `bazelisk build -c opt`, packages it
-   into a tarball with bundled naja shared libraries, and creates a GitHub
-   Release with the tarball attached.
+   into a tarball with bundled naja shared libraries plus `README.md` and
+   `LICENSE.rst`, writes a SHA-256 checksum file, and creates a GitHub
+   Release with both assets attached.
 
 The binary statically links libstdc++, libgcc, TBB, and Cap'n Proto.
 Only the naja shared libraries (which naja builds as explicitly `SHARED`)
@@ -57,7 +59,7 @@ bazelisk run //:release
 
 The script will:
 - Verify MODULE.bazel and CMakeLists.txt versions match
-- Check that the working tree is clean
+- Check that the working tree is clean (including untracked files)
 - Check that the tag doesn't already exist
 - Create and push `v1.1.0`
 
@@ -66,6 +68,8 @@ The script will:
 The GitHub Actions workflow will:
 - Build `//src/bin:kepler-formal` with `-c opt`
 - Package the binary with bundled naja shared libraries
+- Include `README.md` and `LICENSE.rst` in the release tarball
+- Publish a `kepler-formal-1.1.0-linux-x86_64.tar.gz.sha256` checksum file
 - Create a GitHub Release at
   `https://github.com/keplertech/kepler-formal/releases/tag/v1.1.0`
   with auto-generated release notes
@@ -77,6 +81,12 @@ Download the tarball and test on a clean system:
 ```bash
 tar xzf kepler-formal-1.1.0-linux-x86_64.tar.gz
 ./kepler-formal-1.1.0-linux-x86_64/kepler-formal --help
+```
+
+Optionally verify the checksum before unpacking:
+
+```bash
+sha256sum -c kepler-formal-1.1.0-linux-x86_64.tar.gz.sha256
 ```
 
 ## Versioning
