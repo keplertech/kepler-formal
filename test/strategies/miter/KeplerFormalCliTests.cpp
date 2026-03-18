@@ -160,6 +160,16 @@ struct SimpleCliFixture {
   std::filesystem::path design1Path;
 };
 
+struct SystemVerilogFlistFixture {
+  std::filesystem::path tmpDir;
+  std::filesystem::path design0ChildPath;
+  std::filesystem::path design0TopPath;
+  std::filesystem::path design1ChildPath;
+  std::filesystem::path design1TopPath;
+  std::filesystem::path design0FlistPath;
+  std::filesystem::path design1FlistPath;
+};
+
 struct ScopedNajaIfFixture {
   std::filesystem::path tmpDir;
   std::filesystem::path design0IfPath;
@@ -281,6 +291,57 @@ SimpleCliFixture createEquivalentDesignFixture(const std::string& extension,
   {
     std::ofstream design1(fixture.design1Path);
     design1 << moduleBody;
+  }
+
+  return fixture;
+}
+
+SystemVerilogFlistFixture createSystemVerilogFlistFixture() {
+  SystemVerilogFlistFixture fixture;
+  fixture.tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_cli_sv_flist";
+  std::filesystem::create_directories(fixture.tmpDir);
+
+  fixture.design0ChildPath = fixture.tmpDir / "design0_child.sv";
+  fixture.design0TopPath = fixture.tmpDir / "design0_top.sv";
+  fixture.design1ChildPath = fixture.tmpDir / "design1_child.sv";
+  fixture.design1TopPath = fixture.tmpDir / "design1_top.sv";
+  fixture.design0FlistPath = fixture.tmpDir / "design0.f";
+  fixture.design1FlistPath = fixture.tmpDir / "design1.f";
+
+  {
+    std::ofstream child(fixture.design0ChildPath);
+    child << "module leaf(input logic a, output logic y);\n";
+    child << "  assign y = a;\n";
+    child << "endmodule\n";
+  }
+  {
+    std::ofstream top(fixture.design0TopPath);
+    top << "module cva6(input logic a, output logic y);\n";
+    top << "  leaf u_leaf(.a(a), .y(y));\n";
+    top << "endmodule\n";
+  }
+  {
+    std::ofstream child(fixture.design1ChildPath);
+    child << "module leaf(input logic a, output logic y);\n";
+    child << "  assign y = a;\n";
+    child << "endmodule\n";
+  }
+  {
+    std::ofstream top(fixture.design1TopPath);
+    top << "module cva6(input logic a, output logic y);\n";
+    top << "  leaf u_leaf(.a(a), .y(y));\n";
+    top << "endmodule\n";
+  }
+  {
+    std::ofstream flist(fixture.design0FlistPath);
+    flist << fixture.design0ChildPath.string() << "\n";
+    flist << fixture.design0TopPath.string() << "\n";
+  }
+  {
+    std::ofstream flist(fixture.design1FlistPath);
+    flist << fixture.design1ChildPath.string() << "\n";
+    flist << fixture.design1TopPath.string() << "\n";
   }
 
   return fixture;
@@ -628,6 +689,40 @@ TEST(KeplerFormalCliTests, CliSvAliasAccepted) {
   std::string argv3 = fixture.design1Path.string();
   char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data()};
   int argc = 4;
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistAndTopAccepted) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
+      "sv_design2_flist: " + fixture.design1FlistPath.string() + "\n"
+      "sv_design1_top: cva6\n"
+      "sv_design2_top: cva6\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, CliSystemVerilogFlistAndTopAccepted) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-systemverilog";
+  std::string argv2 = "--sv_design1_flist";
+  std::string argv3 = fixture.design0FlistPath.string();
+  std::string argv4 = "--sv_design1_top";
+  std::string argv5 = "cva6";
+  std::string argv6 = "--sv_design2_flist";
+  std::string argv7 = fixture.design1FlistPath.string();
+  std::string argv8 = "--sv_design2_top";
+  std::string argv9 = "cva6";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(), argv4.data(),
+                  argv5.data(), argv6.data(), argv7.data(), argv8.data(), argv9.data()};
+  int argc = 10;
   int rc = KeplerFormalMain(argc, argv);
   EXPECT_EQ(rc, EXIT_SUCCESS);
   std::filesystem::remove_all(fixture.tmpDir);

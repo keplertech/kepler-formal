@@ -8,6 +8,7 @@
 #include <iostream>
 #include <optional>
 #include <cctype>
+#include <stdexcept>
 #include <unordered_set>
 #include <filesystem>
 #include <sstream>
@@ -37,7 +38,10 @@ static void print_usage(const char* prog) {
       "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv> "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...]",
+      "<file...> [--liberty <library-file>...] | "
+      "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] "
+      "[--design1 <file...>] [--design2 <file...>]",
       prog);
 }
 
@@ -69,6 +73,10 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf",
       "dump_cnf_path",
       "solver",
+      "sv_design1_flist",
+      "sv_design2_flist",
+      "sv_design1_top",
+      "sv_design2_top",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -104,6 +112,16 @@ std::string sanitizeFileToken(const std::string& input) {
 struct DesignInputs {
   std::vector<std::string> design0;
   std::vector<std::string> design1;
+};
+
+struct SystemVerilogDesignOptions {
+  std::optional<std::string> flist;
+  std::optional<std::string> top;
+};
+
+struct SystemVerilogOptions {
+  SystemVerilogDesignOptions design0;
+  SystemVerilogDesignOptions design1;
 };
 
 static bool parseConfigInputPaths(const YAML::Node& node,
@@ -190,6 +208,106 @@ static std::vector<std::filesystem::path> toPathVector(
   return out;
 }
 
+static bool applySystemVerilogConfigOption(const YAML::Node& cfg,
+                                           const char* key,
+                                           std::optional<std::string>& target,
+                                           std::string& error) {
+  const auto node = cfg[key];
+  if (!node) {
+    return true;
+  }
+  if (!node.IsScalar()) {
+    error = std::string(key) + " must be a scalar";
+    return false;
+  }
+  const auto value = node.as<std::string>();
+  if (value.empty()) {
+    error = std::string(key) + " must not be empty";
+    return false;
+  }
+  target = value;
+  return true;
+}
+
+static bool validateSystemVerilogOptions(const SystemVerilogOptions& options,
+                                         std::string& error) {
+  const auto validateDesign = [&](const SystemVerilogDesignOptions& designOptions,
+                                  const char* designLabel) {
+    if (designOptions.top && designOptions.top->empty()) {
+      error = std::string(designLabel) + " top must not be empty";
+      return false;
+    }
+    if (designOptions.flist && designOptions.flist->empty()) {
+      error = std::string(designLabel) + " flist must not be empty";
+      return false;
+    }
+    return true;
+  };
+
+  return validateDesign(options.design0, "design1") &&
+         validateDesign(options.design1, "design2");
+}
+
+static bool hasSystemVerilogSources(const std::vector<std::string>& designInputs,
+                                    const SystemVerilogDesignOptions& designOptions) {
+  return !designInputs.empty() || designOptions.flist.has_value();
+}
+
+static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
+    const std::vector<std::string>& designInputs,
+    const SystemVerilogDesignOptions& designOptions,
+    std::vector<std::filesystem::path>& temporaryFiles) {
+  std::vector<std::filesystem::path> svInputPaths = toPathVector(designInputs);
+
+  const auto quotePathForSlangCommandFile = [](const std::filesystem::path& path) {
+    std::string quoted;
+    quoted.reserve(path.string().size() + 2);
+    quoted.push_back('"');
+    for (const auto c : path.string()) {
+      if (c == '\\' || c == '"') {
+        quoted.push_back('\\');
+      }
+      quoted.push_back(c);
+    }
+    quoted.push_back('"');
+    return quoted;
+  };
+
+  if (designOptions.top) {
+    const auto temporaryTopFlistPath =
+        std::filesystem::temp_directory_path() /
+        std::filesystem::path(
+            "kepler_formal_sv_top_" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+            ".f");
+    std::ofstream topFlist(temporaryTopFlistPath, std::ios::out | std::ios::trunc);
+    if (!topFlist) {
+      throw std::runtime_error(
+          "Failed to create temporary SystemVerilog command file: " +
+          temporaryTopFlistPath.string());
+    }
+    topFlist << "--top " << *designOptions.top << "\n";
+    if (designOptions.flist) {
+      topFlist << "-f "
+               << quotePathForSlangCommandFile(std::filesystem::path(*designOptions.flist))
+               << "\n";
+    }
+    for (const auto& svInputPath : svInputPaths) {
+      topFlist << quotePathForSlangCommandFile(svInputPath) << "\n";
+    }
+    topFlist.close();
+    temporaryFiles.push_back(temporaryTopFlistPath);
+    return {std::filesystem::path("-f"), temporaryTopFlistPath};
+  }
+
+  if (designOptions.flist) {
+    svInputPaths.insert(svInputPaths.begin(), std::filesystem::path(*designOptions.flist));
+    svInputPaths.insert(svInputPaths.begin(), std::filesystem::path("-f"));
+  }
+
+  return svInputPaths;
+}
+
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
   enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF };
@@ -208,6 +326,7 @@ int KeplerFormalMain(int argc, char** argv) {
   // Default values
   FormatType inputFormatType = FormatType::VERILOG;
   DesignInputs designInputs;
+  SystemVerilogOptions systemVerilogOptions;
   std::vector<std::string> libertyFiles;
   std::string logLevel = "info";
 
@@ -258,7 +377,7 @@ int KeplerFormalMain(int argc, char** argv) {
         }
 
         // input_paths
-        {
+        if (cfg["input_paths"]) {
           std::string inputError;
           if (!parseConfigInputPaths(cfg["input_paths"], designInputs, inputError)) {
             SPDLOG_CRITICAL("Invalid input_paths in config: {}", inputError);
@@ -317,6 +436,19 @@ int KeplerFormalMain(int argc, char** argv) {
           }
         }
 
+        std::string svConfigError;
+        if (!applySystemVerilogConfigOption(
+                cfg, "sv_design1_flist", systemVerilogOptions.design0.flist, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "sv_design2_flist", systemVerilogOptions.design1.flist, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "sv_design1_top", systemVerilogOptions.design0.top, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "sv_design2_top", systemVerilogOptions.design1.top, svConfigError)) {
+          SPDLOG_CRITICAL("Invalid SystemVerilog config option: {}", svConfigError);
+          return EXIT_FAILURE;
+        }
+
         usedConfig = true;
       } catch (const std::exception& e) {
         SPDLOG_CRITICAL("Failed to parse config {}: {}", cfgPath, e.what());
@@ -328,7 +460,7 @@ int KeplerFormalMain(int argc, char** argv) {
 
   // If not using config, fall back to original CLI parsing
   if (!usedConfig) {
-    if (argc < 4 || (std::string(argv[1]) == "--help") ||
+    if ((std::string(argv[1]) == "--help") ||
         (std::string(argv[1]) == "-h")) {
       print_usage(argv[0]);
       return EXIT_SUCCESS;
@@ -373,6 +505,28 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       if (arg == "--verilog_preprocessing") {
         verilogPreprocessing = true;
+        continue;
+      }
+      if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
+          arg == "--sv_design1_top" || arg == "--sv_design2_top") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string value = argv[++i];
+        if (value.empty()) {
+          SPDLOG_CRITICAL("Empty value provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        if (arg == "--sv_design1_flist") {
+          systemVerilogOptions.design0.flist = value;
+        } else if (arg == "--sv_design2_flist") {
+          systemVerilogOptions.design1.flist = value;
+        } else if (arg == "--sv_design1_top") {
+          systemVerilogOptions.design0.top = value;
+        } else {
+          systemVerilogOptions.design1.top = value;
+        }
         continue;
       }
 
@@ -434,7 +588,15 @@ int KeplerFormalMain(int argc, char** argv) {
   logDesignPaths("Netlist 2", designInputs.design1);
 
   // Basic validation
-  if (designInputs.design0.empty() || designInputs.design1.empty()) {
+  if (inputFormatType == FormatType::SYSTEMVERILOG) {
+    if (!hasSystemVerilogSources(designInputs.design0, systemVerilogOptions.design0) ||
+        !hasSystemVerilogSources(designInputs.design1, systemVerilogOptions.design1)) {
+      SPDLOG_CRITICAL(
+          "Need SystemVerilog input sources for both designs (files and/or per-design flists)");
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+  } else if (designInputs.design0.empty() || designInputs.design1.empty()) {
     SPDLOG_CRITICAL("Need two input netlist paths (one per design)");
     print_usage(argv[0]);
     return EXIT_FAILURE;
@@ -442,6 +604,17 @@ int KeplerFormalMain(int argc, char** argv) {
   if (inputFormatType == FormatType::NAJA_IF &&
       (designInputs.design0.size() != 1 || designInputs.design1.size() != 1)) {
     SPDLOG_CRITICAL("SNL input only supports one file per design");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType != FormatType::SYSTEMVERILOG &&
+      (systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
+       systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
+    SPDLOG_CRITICAL("SystemVerilog design options are only valid with -systemverilog/-sv input");
+    return EXIT_FAILURE;
+  }
+  std::string svValidationError;
+  if (!validateSystemVerilogOptions(systemVerilogOptions, svValidationError)) {
+    SPDLOG_CRITICAL("Invalid SystemVerilog options: {}", svValidationError);
     return EXIT_FAILURE;
   }
 
@@ -509,7 +682,22 @@ int KeplerFormalMain(int argc, char** argv) {
       auto designLibrary = NLLibrary::create(db0, NLName("DESIGN"));
       if (inputFormatType == FormatType::SYSTEMVERILOG) {
         SNLSVConstructor constructor(designLibrary);
-        constructor.construct(design0Paths);
+        std::vector<std::filesystem::path> temporaryFiles;
+        const auto svInputPaths = buildSystemVerilogInputPaths(
+            designInputs.design0, systemVerilogOptions.design0, temporaryFiles);
+        try {
+          constructor.construct(svInputPaths);
+        } catch (...) {
+          for (const auto& temporaryFile : temporaryFiles) {
+            std::error_code ec;
+            std::filesystem::remove(temporaryFile, ec);
+          }
+          throw;
+        }
+        for (const auto& temporaryFile : temporaryFiles) {
+          std::error_code ec;
+          std::filesystem::remove(temporaryFile, ec);
+        }
       } else {
         SNLVRLConstructor constructor(designLibrary);
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
@@ -573,7 +761,22 @@ int KeplerFormalMain(int argc, char** argv) {
       auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
       if (inputFormatType == FormatType::SYSTEMVERILOG) {
         SNLSVConstructor constructor(designLibrary);
-        constructor.construct(design1Paths);
+        std::vector<std::filesystem::path> temporaryFiles;
+        const auto svInputPaths = buildSystemVerilogInputPaths(
+            designInputs.design1, systemVerilogOptions.design1, temporaryFiles);
+        try {
+          constructor.construct(svInputPaths);
+        } catch (...) {
+          for (const auto& temporaryFile : temporaryFiles) {
+            std::error_code ec;
+            std::filesystem::remove(temporaryFile, ec);
+          }
+          throw;
+        }
+        for (const auto& temporaryFile : temporaryFiles) {
+          std::error_code ec;
+          std::filesystem::remove(temporaryFile, ec);
+        }
       } else {
         SNLVRLConstructor constructor(designLibrary);
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
