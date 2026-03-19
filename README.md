@@ -109,11 +109,20 @@ build/src/bin/kepler-formal <-verilog/-systemverilog/-sv/-naja_if> [--verilog_pr
 build/src/bin/kepler-formal <-verilog/-systemverilog/-sv> [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
   [--liberty <library-file>...]
 
+# SystemVerilog slang flists with explicit tops
+build/src/bin/kepler-formal -systemverilog \
+  --sv_design1_flist <file> --sv_design1_top <name> \
+  --sv_design2_flist <file> --sv_design2_top <name>
+
 # Through yaml config file
 build/src/bin/kepler-formal --config <yaml file>
 ```
 
 `--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
+
+For SystemVerilog designs that are already driven by a slang command file / flist, use
+`sv_design1_flist`, `sv_design2_flist`, `sv_design1_top`, and `sv_design2_top`.
+This mode is flist-based; do not combine it with `input_paths` / `--design1` / `--design2`.
 ### Supported formats
 
 - CLI:
@@ -172,6 +181,18 @@ input_paths:
 liberty_files:
   - stdcells.lib.gz
   - primitives.py
+```
+
+SystemVerilog flist example:
+
+```yaml
+format: systemverilog
+sv_design1_flist: /path/to/design1.f
+sv_design1_top: top1
+sv_design2_flist: /path/to/design2.f
+sv_design2_top: top2
+liberty_files:
+  - stdcells.lib.gz
 ```
 
 ## Example 
