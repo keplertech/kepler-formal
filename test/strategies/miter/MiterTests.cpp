@@ -825,12 +825,11 @@ TEST(KeplerCliSubprocessTests, CliUnrecognizedFormatReturnsFailure) {
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
-// Program prints usage and returns success when argc < 4; keep that behavior expected.
-TEST(KeplerCliSubprocessTests, CliNotEnoughPathsReturnsSuccess) {
+TEST(KeplerCliSubprocessTests, CliNotEnoughPathsReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
   if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
   int rc = run_kepler_cli_with_args({"-verilog", "only_one_path.v"});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, CliNajaIfFormatButMissingFilesReturnsFailure) {
