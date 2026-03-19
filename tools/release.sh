@@ -29,7 +29,7 @@ fi
 
 TAG="v${BAZEL_VERSION}"
 
-if ! git diff --quiet HEAD 2>/dev/null; then
+if [ -n "$(git status --porcelain)" ]; then
   echo "ERROR: Working tree is dirty. Commit or stash changes first."
   exit 1
 fi
