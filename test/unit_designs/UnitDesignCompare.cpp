@@ -107,8 +107,10 @@ TEST_F(UnitDesignCompare, testDifferentDesigns) {
   auto ttSum1 = SNLDesignModeling::getTruthTable(sumXor1->getModel());
   printf("TT sum1: %s\n", ttSum1.getString().c_str());
 
-  EXPECT_EQ(ttSum0, SNLTruthTable(2, 6));   // xor
-  EXPECT_EQ(ttSum1, SNLTruthTable(2, 14));  // or (bug)
+  EXPECT_TRUE(ttSum0.isGeneric());
+  EXPECT_EQ(ttSum0.getGenericType(), SNLTruthTable::GenericType::XOR);
+  EXPECT_TRUE(ttSum1.isGeneric());
+  EXPECT_EQ(ttSum1.getGenericType(), SNLTruthTable::GenericType::OR);
 
   KEPLER_FORMAL::MiterStrategy miterS(top0, top1, "./logB");
   miterS.init();
