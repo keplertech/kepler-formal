@@ -32,9 +32,28 @@ using namespace KEPLER_FORMAL;
 // Path to the kepler-formal CLI binary used by the project tests.
 // Bazel sets KEPLER_BIN env var via the test's BUILD.bazel; CMake uses
 // the default relative path from the build directory.
+static std::filesystem::path repoRoot() {
+  return std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+}
+
 static std::string get_kepler_bin() {
   const char* env = std::getenv("KEPLER_BIN");
-  return env ? env : "../../../src/bin/kepler-formal";
+  if (env && *env) {
+    return env;
+  }
+  const auto root = repoRoot();
+  const std::vector<std::filesystem::path> candidates = {
+      root / "build/src/bin/kepler-formal",
+      root / "buildR/src/bin/kepler-formal",
+      root / "buildD/src/bin/kepler-formal",
+      root / "src/bin/kepler-formal",
+  };
+  for (const auto& candidate : candidates) {
+    if (std::filesystem::exists(candidate)) {
+      return candidate.string();
+    }
+  }
+  return (root / "build/src/bin/kepler-formal").string();
 }
 static const std::string KEPLER_BIN_STR = get_kepler_bin();
 static const char* KEPLER_BIN = KEPLER_BIN_STR.c_str();
