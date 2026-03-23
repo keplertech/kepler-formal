@@ -1450,6 +1450,47 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunFailure) {
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
+TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+
+  const auto tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_subprocess_log";
+  std::filesystem::create_directories(tmpDir);
+  const auto logPath = tmpDir / "configured_miter.log";
+  const auto configPath = tmpDir / "config.yaml";
+  const auto root = repoRoot();
+
+  {
+    std::ofstream cfg(configPath);
+    cfg << "format: verilog\n";
+    cfg << "input_paths:\n";
+    cfg << "  - " << (root / "example/tinyrocket.v").string() << "\n";
+    cfg << "  - " << (root / "example/tinyrocket_edited.v").string() << "\n";
+    cfg << "liberty_files:\n";
+    cfg << "  - " << (root / "example/NangateOpenCellLibrary_typical.lib").string() << "\n";
+    cfg << "  - " << (root / "example/fakeram45_1024x32.lib").string() << "\n";
+    cfg << "  - " << (root / "example/fakeram45_64x32.lib").string() << "\n";
+    cfg << "  - " << (root / "example/fakeram45_64x15.lib").string() << "\n";
+    cfg << "log_file: " << logPath.string() << "\n";
+  }
+
+  if (std::filesystem::exists(logPath)) {
+    std::filesystem::remove(logPath);
+  }
+
+  int rc = run_kepler_cli_with_args({"--config", configPath.string()});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  ASSERT_TRUE(std::filesystem::exists(logPath));
+
+  std::ifstream logFile(logPath);
+  std::string contents((std::istreambuf_iterator<char>(logFile)),
+                       std::istreambuf_iterator<char>());
+  EXPECT_NE(contents.find("DIFFERENT"), std::string::npos);
+
+  std::filesystem::remove_all(tmpDir);
+}
+
 // Required main function for Google Test
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);

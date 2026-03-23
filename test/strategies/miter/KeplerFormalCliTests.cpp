@@ -735,6 +735,16 @@ TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistMustBeScalar) {
   std::filesystem::remove(cfgPath);
 }
 
+TEST(KeplerFormalCliTests, ConfigSystemVerilogSecondFlistMustBeScalar) {
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "sv_design1_flist: design0.f\n"
+      "sv_design2_flist:\n"
+      "  - bad\n");
+  EXPECT_NE(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+}
+
 TEST(KeplerFormalCliTests, ConfigSystemVerilogTopMustNotBeEmpty) {
   const auto fixture = createSystemVerilogFlistFixture();
   const auto cfgPath = writeTempConfig(
@@ -774,6 +784,16 @@ TEST(KeplerFormalCliTests, CliSystemVerilogFlagMissingValueFails) {
   std::string argv2 = "--sv_design1_flist";
   char* argv[] = {argv0.data(), argv1.data(), argv2.data()};
   int argc = 3;
+  EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+}
+
+TEST(KeplerFormalCliTests, CliSystemVerilogEmptyValueFails) {
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-systemverilog";
+  std::string argv2 = "--sv_design1_top";
+  std::string argv3;
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data()};
+  int argc = 4;
   EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
 }
 
@@ -1020,6 +1040,22 @@ TEST(KeplerFormalCliTests, CliLibertyFlagCollectsPaths) {
   EXPECT_EQ(rc, EXIT_FAILURE);
 }
 
+TEST(KeplerFormalCliTests, CliLibAliasCollectsPaths) {
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = "--design1";
+  std::string argv3 = "a.v";
+  std::string argv4 = "--design2";
+  std::string argv5 = "b.v";
+  std::string argv6 = "--lib";
+  std::string argv7 = "lib1.lib";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(),
+                  argv4.data(), argv5.data(), argv6.data(), argv7.data()};
+  int argc = 8;
+  int rc = KeplerFormalMain(argc, argv);
+  EXPECT_EQ(rc, EXIT_FAILURE);
+}
+
 TEST(KeplerFormalCliTests, PythonLibraryFilesAreLoadedByExtension) {
   const auto fixture = createEquivalentDesignFixture(
       "v",
@@ -1200,6 +1236,29 @@ TEST(KeplerFormalCliTests, SnlScopesEquivalentEditedScopeNoDifference) {
 
   int rc = runWithConfigFile(cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, SnlScopesCanCleanAndDumpCnf) {
+  const auto fixture = createEquivalentScopedNajaIfFixture();
+  const auto cnfPath = fixture.tmpDir / "scoped_miter.cnf";
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "input_paths:\n"
+      "  - " + fixture.design0IfPath.string() + "\n"
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "liberty_files:\n"
+      "  - " + fixture.libertyPath.string() + "\n"
+      "use_scopes: true\n"
+      "clean_scopes: true\n"
+      "cnf_export: true\n"
+      "cnf_export_path: " + cnfPath.string() + "\n");
+
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_TRUE(std::filesystem::exists(cnfPath));
+
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
