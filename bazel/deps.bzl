@@ -107,11 +107,11 @@ naja_repo = repository_rule(
 # to verify, then update the sha256 hashes.
 _GLUCOSE_COMMIT = "7f887abba7cf13636a5ac2d28653668a20a91b25"
 _KISSAT_COMMIT = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
-_NAJA_COMMIT = "1eef7310308ab9d0ffa7a1764281f39dd07b5ba6"
+_NAJA_COMMIT = "cebbf0caccae1ea7fa35394af0b39a64d1d7924d"
 _NAJA_VERILOG_COMMIT = "a377d7f2644bbbf98ff1ae9e8511d52eba8dd6ca"
 _NAJA_IF_COMMIT = "27ea776a0c3022fea0c29ccd14a4fb7daea941f0"
 _CPPTRACE_COMMIT = "3db8da80111171c219ab5839905771386bee06b3"
-_SLANG_COMMIT = "79215d82c684d4d489b8ed573e6c34cfbb9d2f6d"
+_SLANG_COMMIT = "7d36365b4ee32c615f30b971bf2fa69d7d5debc6"
 _GOOGLETEST_COMMIT = "52eb8108c5bdec04579160ae17225d66034bd723"
 
 def _deps_impl(_module_ctx):
@@ -134,7 +134,7 @@ def _deps_impl(_module_ctx):
     naja_repo(
         name = "naja",
         naja_url = "https://github.com/nanocoh/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
-        naja_sha256 = "97dff2a9f4f7361dff240272b3a6c63f28bef32084cd7f1aa2d87af149217e57",
+        naja_sha256 = "614f9670cdf78927cffdf962e51b539b3110dd944c8c963e64f4771ef1b42124",
         naja_strip_prefix = "naja-{}".format(_NAJA_COMMIT),
         naja_verilog_url = "https://github.com/najaeda/naja-verilog/archive/{}.tar.gz".format(_NAJA_VERILOG_COMMIT),
         naja_verilog_sha256 = "beffd84e14da4b146d9a0dc4699ebf44596cd437cf8157e3b39430a4080c606d",
@@ -146,7 +146,7 @@ def _deps_impl(_module_ctx):
         cpptrace_sha256 = "77d689fd7956ff80351a079d83e86a03865dbbe2433b4559cc6cea50bed77390",
         cpptrace_strip_prefix = "cpptrace-{}".format(_CPPTRACE_COMMIT),
         slang_url = "https://github.com/najaeda/slang/archive/{}.tar.gz".format(_SLANG_COMMIT),
-        slang_sha256 = "3e8d0369dc10717de430579a664cded3e4a88163d5c7dc36fafbed56752e56f9",
+        slang_sha256 = "31e36f3b53be8bff17b6d1cbb10e7460b24a7866a68c3aea157c697f329548f3",
         slang_strip_prefix = "slang-{}".format(_SLANG_COMMIT),
         googletest_url = "https://github.com/google/googletest/archive/{}.tar.gz".format(_GOOGLETEST_COMMIT),
         googletest_sha256 = "745c55415660044610f7fcd3af7a6420d5de16a7dbb9ebfe2e131275676232be",
