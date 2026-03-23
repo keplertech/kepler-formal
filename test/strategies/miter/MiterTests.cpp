@@ -10,6 +10,7 @@
 #include "ConstantPropagation.h"
 #include "MiterStrategy.h"
 #include "NLLibraryTruthTables.h"
+#include "NLDB0.h"
 #include "NLUniverse.h"
 #include "NetlistGraph.h"
 #include "SNLDesign.h"
@@ -52,6 +53,73 @@ void executeCommand(const std::string& command) {
   if (result != 0) {
     std::cerr << "Command execution failed." << std::endl;
   }
+}
+
+void expectGenericGateMiterEquivalent(const char* gateName,
+                                      SNLTruthTable::GenericType genericType) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+
+  NLDB0::GateType gateType = NLDB0::GateType::And;
+  switch (genericType) {
+    case SNLTruthTable::GenericType::NAND:
+      gateType = NLDB0::GateType::Nand;
+      break;
+    case SNLTruthTable::GenericType::NOR:
+      gateType = NLDB0::GateType::Nor;
+      break;
+    case SNLTruthTable::GenericType::XNOR:
+      gateType = NLDB0::GateType::Xnor;
+      break;
+    default:
+      throw std::runtime_error("Unsupported generic type for test");
+  }
+
+  auto gateModel = NLDB0::getOrCreateNInputGate(gateType, 2);
+  ASSERT_NE(gateModel, nullptr);
+  SNLBitTerm* gateOut = nullptr;
+  std::vector<SNLBitTerm*> gateInputs;
+  for (auto term : gateModel->getBitTerms()) {
+    if (term->getDirection() == SNLTerm::Direction::Input) {
+      gateInputs.push_back(term);
+    } else {
+      gateOut = term;
+    }
+  }
+  ASSERT_NE(gateOut, nullptr);
+  ASSERT_EQ(gateInputs.size(), 2u);
+
+  auto buildTop = [&](const char* topName) {
+    auto top =
+        SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(topName));
+    auto topIn0 =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+    auto topIn1 =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+    auto topOut =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+    auto inst = SNLInstance::create(top, gateModel, NLName("gate0"));
+
+    auto netIn0 = SNLScalarNet::create(top, NLName("net_a"));
+    auto netIn1 = SNLScalarNet::create(top, NLName("net_b"));
+    auto netOut = SNLScalarNet::create(top, NLName("net_y"));
+
+    topIn0->setNet(netIn0);
+    topIn1->setNet(netIn1);
+    topOut->setNet(netOut);
+    inst->getInstTerm(gateInputs[0])->setNet(netIn0);
+    inst->getInstTerm(gateInputs[1])->setNet(netIn1);
+    inst->getInstTerm(gateOut)->setNet(netOut);
+    return top;
+  };
+
+  auto top0 = buildTop("top0");
+  auto top1 = buildTop("top1");
+  KEPLER_FORMAL::MiterStrategy miterS(top0, top1);
+  miterS.init();
+  EXPECT_TRUE(miterS.run());
 }
 
 }  // namespace
@@ -305,6 +373,18 @@ TEST_F(MiterTests, TestMiterANDNonConstant) {
   // Basic sanity checks: strings are non-empty
   EXPECT_FALSE(pos[0]->toString().empty());
   EXPECT_FALSE(pos[1]->toString().empty());
+}
+
+TEST_F(MiterTests, TestGenericNandTruthTable) {
+  expectGenericGateMiterEquivalent("NAND_GENERIC", SNLTruthTable::GenericType::NAND);
+}
+
+TEST_F(MiterTests, TestGenericNorTruthTable) {
+  expectGenericGateMiterEquivalent("NOR_GENERIC", SNLTruthTable::GenericType::NOR);
+}
+
+TEST_F(MiterTests, TestGenericXnorTruthTable) {
+  expectGenericGateMiterEquivalent("XNOR_GENERIC", SNLTruthTable::GenericType::XNOR);
 }
 
 

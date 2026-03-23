@@ -725,6 +725,29 @@ TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistAndTopAccepted) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistMustBeScalar) {
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "sv_design1_flist:\n"
+      "  - bad\n"
+      "sv_design2_flist: design1.f\n");
+  EXPECT_NE(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST(KeplerFormalCliTests, ConfigSystemVerilogTopMustNotBeEmpty) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
+      "sv_design2_flist: " + fixture.design1FlistPath.string() + "\n"
+      "sv_design1_top: \"\"\n"
+      "sv_design2_top: cva6\n");
+  EXPECT_NE(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST(KeplerFormalCliTests, CliSystemVerilogFlistAndTopAccepted) {
   const auto fixture = createSystemVerilogFlistFixture();
   std::string argv0 = "kepler-formal";
@@ -743,6 +766,43 @@ TEST(KeplerFormalCliTests, CliSystemVerilogFlistAndTopAccepted) {
   int rc = KeplerFormalMain(argc, argv);
   EXPECT_EQ(rc, EXIT_SUCCESS);
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, CliSystemVerilogFlagMissingValueFails) {
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-systemverilog";
+  std::string argv2 = "--sv_design1_flist";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data()};
+  int argc = 3;
+  EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+}
+
+TEST(KeplerFormalCliTests, CliSystemVerilogRequiresSourcesForBothDesigns) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-systemverilog";
+  std::string argv2 = "--sv_design1_flist";
+  std::string argv3 = fixture.design0FlistPath.string();
+  std::string argv4 = "--sv_design1_top";
+  std::string argv5 = "cva6";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(), argv4.data(),
+                  argv5.data()};
+  int argc = 6;
+  EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, CliSystemVerilogOptionsRejectedForVerilogFormat) {
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = "--sv_design1_top";
+  std::string argv3 = "cva6";
+  std::string argv4 = "design0.v";
+  std::string argv5 = "design1.v";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(), argv4.data(),
+                  argv5.data()};
+  int argc = 6;
+  EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
 }
 
 TEST(KeplerFormalCliTests, FirstVerilogDesignWithoutTopFails) {
