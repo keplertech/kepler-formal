@@ -29,13 +29,13 @@ class MiterStrategy {
 
   size_t normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
-                        const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& inputs0Map,
-                        const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& inputs1Map);
+                        const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& inputs0Map,
+                        const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& inputs1Map);
 
   void normalizeOutputs(std::vector<naja::DNL::DNLID>& outputs0,
                         std::vector<naja::DNL::DNLID>& outputs1,
-                        const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& outputs0Map,
-                        const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& outputs1Map);
+                        const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& outputs0Map,
+                        const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& outputs1Map);
   
   static std::string logFileName_;
   const std::vector<naja::DNL::DNLID>& getPIs0() const { return PIs0_; }

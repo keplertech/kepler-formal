@@ -16,12 +16,15 @@ namespace KEPLER_FORMAL {
 
 class BuildPrimaryOutputClauses {
  public:
+  using PathNameIDs = std::vector<NLName::ID>;
+  using PathObjectIDs = std::vector<NLID::DesignObjectID>;
+  using PathKey = std::pair<PathNameIDs, PathObjectIDs>;
 
    struct KeyHash {
-    size_t operator()(const std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>& k) const {
+    size_t operator()(const PathKey& k) const {
       size_t res = 0;
-      for (const auto& name : k.first) {
-        res ^= std::hash<std::string>()(name.getString()) + 0x9e3779b9 + (res << 6) + (res >> 2);
+      for (const auto& nameID : k.first) {
+        res ^= std::hash<NLName::ID>()(nameID) + 0x9e3779b9 + (res << 6) + (res >> 2);
       }
       for (const auto& id : k.second) {
         res ^= std::hash<NLID::DesignObjectID>()(id) + 0x9e3779b9 + (res << 6) + (res >> 2);
@@ -40,12 +43,12 @@ class BuildPrimaryOutputClauses {
   const std::vector<naja::DNL::DNLID>& getInputs() const { return inputs_; }
   const std::vector<naja::DNL::DNLID>& getOutputs() const { return outputs_; }
   const std::unordered_map<naja::DNL::DNLID,
-                 std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>&
+                 PathKey>&
   getInputs2InputsIDs() const {
     return inputs2inputsIDs_;
   }
   const std::unordered_map<naja::DNL::DNLID,
-                 std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>&
+                 PathKey>&
   getOutputs2OutputsIDs() const {
     return outputs2outputsIDs_;
   }
@@ -57,11 +60,11 @@ class BuildPrimaryOutputClauses {
     outputs_ = std::move(outputs); /*sortOutputs();*/
     setOutputs2OutputsIDs();
   }
-  const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KeyHash>&
+  const std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash>&
   getInputsMap() const {
     return inputsMap_;
   }
-  const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KeyHash>&
+  const std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash>&
   getOutputsMap() const {
     return outputsMap_;
   }
@@ -95,14 +98,10 @@ class BuildPrimaryOutputClauses {
   std::vector<naja::DNL::DNLID> outputs_;
   std::vector<bool> IsPOs_;
 
-  std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KeyHash> inputsMap_;
-  std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KeyHash> outputsMap_;
-  std::unordered_map<naja::DNL::DNLID,
-           std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>
-      inputs2inputsIDs_;
-  std::unordered_map<naja::DNL::DNLID,
-           std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>>
-      outputs2outputsIDs_;
+  std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash> inputsMap_;
+  std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash> outputsMap_;
+  std::unordered_map<naja::DNL::DNLID, PathKey> inputs2inputsIDs_;
+  std::unordered_map<naja::DNL::DNLID, PathKey> outputs2outputsIDs_;
   std::vector<size_t> termDNLID2varID_;  // Only for PIs
   size_t lastCommonID = 1;
 

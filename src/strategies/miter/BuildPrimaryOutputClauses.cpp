@@ -23,6 +23,28 @@ using namespace KEPLER_FORMAL;
 using namespace naja::DNL;
 using namespace naja::NL;
 
+namespace {
+
+BuildPrimaryOutputClauses::PathNameIDs getPathNameIDs(const SNLPath& path) {
+  BuildPrimaryOutputClauses::PathNameIDs ids;
+  const auto pathNames = path.getPathNames();
+  ids.reserve(pathNames.size());
+  for (const auto& name : pathNames) {
+    ids.push_back(name.getID());
+  }
+  return ids;
+}
+
+BuildPrimaryOutputClauses::PathKey getTerminalPathKey(const DNLTerminalFull& terminal) {
+  auto pathIDs = getPathNameIDs(terminal.getDNLInstance().getPath());
+  pathIDs.push_back(terminal.getSnlBitTerm()->getName().getID());
+  BuildPrimaryOutputClauses::PathObjectIDs objectIDs = {
+      static_cast<NLID::DesignObjectID>(terminal.getSnlBitTerm()->getBit())};
+  return {std::move(pathIDs), std::move(objectIDs)};
+}
+
+}  // namespace
+
 std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   std::vector<DNLID> inputs;
   auto dnl = get();
@@ -425,35 +447,14 @@ void BuildPrimaryOutputClauses::collect() {
   inputs_ = collectInputs();
   //sortInputs(); <- cannot sort inputs as it has to respect the inputs vector order
   for (const auto& input : inputs_) {
-    std::vector<NLName> path = naja::DNL::get()->getDNLTerminalFromID(input).getDNLInstance().getPath().getPathNames();
-    path.emplace_back(naja::DNL::get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName());
-    using KeyT = std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>;
-
-    std::vector<NLID::DesignObjectID> ids = {
-          (NLID::DesignObjectID) naja::DNL::get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit()
-        //  (NLID::DesignObjectID)pathIDs[pathIDs.size()-2],
-        //   (NLID::DesignObjectID)pathIDs[pathIDs.size()-1] 
-    };
-
-    KeyT key{ path, std::move(ids) };
+    PathKey key = getTerminalPathKey(naja::DNL::get()->getDNLTerminalFromID(input));
     inputsMap_[std::move(key)]  =
             input;
   }
   outputs_ = collectOutputs();
   //sortOutputs(); <- cannot sort as it needs to keep the order for POs_
   for (const auto& output : outputs_) {
-    std::vector<NLName> path = naja::DNL::get()->getDNLTerminalFromID(output).getDNLInstance().getPath().getPathNames();
-    path.emplace_back(naja::DNL::get()->getDNLTerminalFromID(output).getSnlBitTerm()->getName());
-    //auto pathIDs = naja::DNL::get()->getDNLTerminalFromID(output).getFullPathIDs();
-    using KeyT = std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>;
-
-    std::vector<NLID::DesignObjectID> ids = {
-         (NLID::DesignObjectID) naja::DNL::get()->getDNLTerminalFromID(output).getSnlBitTerm()->getBit()
-         //(NLID::DesignObjectID)pathIDs[pathIDs.size()-2],
-         // (NLID::DesignObjectID)pathIDs[pathIDs.size()-1] 
-    };
-
-    KeyT key{ path, std::move(ids) };
+    PathKey key = getTerminalPathKey(naja::DNL::get()->getDNLTerminalFromID(output));
     outputsMap_[std::move(key)]  =
             output;
     DEBUG_LOG("Output collected: %s\n", naja::DNL::get()
@@ -726,11 +727,10 @@ void BuildPrimaryOutputClauses::setInputs2InputsIDs() {
     //     get()->getDNLTerminalFromID(input).getSnlBitTerm()->getID());
     //termIDs.emplace_back(
     //    get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit());
-    std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>&
-      pair = inputs2inputsIDs_[input];
-    pair.first = currentInstance.getPath().getPathNames();
+    PathKey& pair = inputs2inputsIDs_[input];
+    pair.first = getPathNameIDs(currentInstance.getPath());
     pair.first.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName());
+        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName().getID());
     pair.second.emplace_back(
         get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit());
   }
@@ -746,11 +746,10 @@ void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
     //termIDs.emplace_back(
     //     get()->getDNLTerminalFromID(output).getSnlBitTerm()->getID());
     //termIDs
-    std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>&
-      pair = outputs2outputsIDs_[output];
-    pair.first = currentInstance.getPath().getPathNames();
+    PathKey& pair = outputs2outputsIDs_[output];
+    pair.first = getPathNameIDs(currentInstance.getPath());
     pair.first.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getName());
+        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getName().getID());
     pair.second.emplace_back(
         get()->getDNLTerminalFromID(output).getSnlBitTerm()->getBit());
   }

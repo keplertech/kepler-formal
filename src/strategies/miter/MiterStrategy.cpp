@@ -43,6 +43,17 @@ namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
 
+std::string pathKeyToString(const KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey& path) {
+  std::string pathString;
+  for (const auto& nameID : path.first) {
+    pathString += std::to_string(nameID) + ".";
+  }
+  for (const auto& id : path.second) {
+    pathString += std::to_string(id) + ".";
+  }
+  return pathString;
+}
+
 void ensureLoggerInitialized() {
   if (logger) return;
 
@@ -314,9 +325,9 @@ void MiterStrategy::setCnfDump(bool enabled, const std::string& path) {
 size_t MiterStrategy::normalizeInputs(
     std::vector<naja::DNL::DNLID>& inputs0,
     std::vector<naja::DNL::DNLID>& inputs1,
-    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
+    const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         inputs0Map,
-    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
+    const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         inputs1Map) {
   ensureLoggerInitialized();
   logger->info("normalizeInputs: starting");
@@ -324,9 +335,9 @@ size_t MiterStrategy::normalizeInputs(
   // find the intersection of inputs0 and inputs1 based on the getFullPathIDs of
   // DNLTerminal and the diffs
   
-  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths0;
-  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths1;
-  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> pathsCommon;
+  std::set<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> paths0;
+  std::set<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> paths1;
+  std::set<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> pathsCommon;
 
   for (const auto& [path0, input0] : inputs0Map) {
     paths0.insert(path0);
@@ -344,24 +355,14 @@ size_t MiterStrategy::normalizeInputs(
   for (const auto& [path0, input0] : inputs0Map) {
     if (pathsCommon.find(path0) == pathsCommon.end()) {
       diff0.emplace_back(input0);
-      const auto&pathInstance = path0;
-      std::string pathString = "";
-      for (const auto& name : pathInstance.first) {
-        pathString += name.getString() + ".";
-      }
-      logger->info("diff0 input: {}", pathString);
+      logger->info("diff0 input: {}", pathKeyToString(path0));
     }
   }
   std::vector<naja::DNL::DNLID> diff1;
   for (const auto& [path1, input1] : inputs1Map) {
     if (pathsCommon.find(path1) == pathsCommon.end()) {
       diff1.emplace_back(input1);
-      const auto&pathInstance = path1;
-      std::string pathString = "";
-      for (const auto& name : pathInstance.first) {
-        pathString += name.getString() + ".";
-      }
-      logger->info("diff1 input: {}", pathString);
+      logger->info("diff1 input: {}", pathKeyToString(path1));
     }
   }
   inputs0.clear();
@@ -397,9 +398,9 @@ size_t MiterStrategy::normalizeInputs(
 void MiterStrategy::normalizeOutputs(
     std::vector<naja::DNL::DNLID>& outputs0,
     std::vector<naja::DNL::DNLID>& outputs1,
-    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
+    const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         outputs0Map,
-    const std::unordered_map<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
+    const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>&
         outputs1Map) {
   ensureLoggerInitialized();
   logger->info("normalizeOutputs: starting");
@@ -407,9 +408,9 @@ void MiterStrategy::normalizeOutputs(
   // find the intersection of outputs0 and outputs1 based on the getFullPathIDs
   // of DNLTerminal and the diffs
   
-  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths0;
-  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths1;
-  std::set<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> pathsCommon;
+  std::set<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> paths0;
+  std::set<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> paths1;
+  std::set<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> pathsCommon;
   for (const auto& [path1, output1] : outputs1Map) {
     paths1.insert(path1);
   }
@@ -423,25 +424,15 @@ void MiterStrategy::normalizeOutputs(
   for (const auto& [path0, output0] : outputs0Map) {
     if (pathsCommon.find(path0) == pathsCommon.end()) {
       diff0.emplace_back(output0);
-      std::string fullName;
-      for (const auto& name : path0.first) {
-        fullName += name.getString() + ".";
-      }
-      fullName += std::to_string(path0.second[0]) + ".";
-      fullName += std::to_string(path0.second[1]);
-      logger->info("Will ignore the analysis for: {} from netlist 0 as it does not exist in netlist 1", fullName);
+      logger->info("Will ignore the analysis for: {} from netlist 0 as it does not exist in netlist 1",
+                   pathKeyToString(path0));
     }
   }
   std::vector<naja::DNL::DNLID> diff1;
   for (const auto& [path1, output1] : outputs1Map) {
     if (pathsCommon.find(path1) == pathsCommon.end()) {
-      std::string fullName;
-      for (const auto& name : path1.first) {
-        fullName += name.getString() + ".";
-      }
-      fullName += std::to_string(path1.second[0]) + ".";
-      fullName += std::to_string(path1.second[1]);
-      logger->info("Will ignore the analysis for: {} from netlist 1 as it does not exist in netlist 0", fullName);
+      logger->info("Will ignore the analysis for: {} from netlist 1 as it does not exist in netlist 0",
+                   pathKeyToString(path1));
       diff1.emplace_back(output1);
     }
   }
@@ -462,10 +453,10 @@ void MiterStrategy::normalizeOutputs(
   if (outputs0.size() == outputs1.size()) {
     if (outputs0 != outputs1) {
       // build the paths vector for outputs0 and outputs1
-      std::vector<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths0;
-      std::vector<std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>>> paths1;
+      std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> paths0;
+      std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> paths1;
       for (const auto& output0 : outputs0) {
-        std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>> path;
+        KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey path;
         for (const auto& [path0, output0m] : outputs0Map) {
           if (output0m == output0) {
             path = path0;
@@ -475,7 +466,7 @@ void MiterStrategy::normalizeOutputs(
         paths0.emplace_back(path);
       }
       for (const auto& output1 : outputs1) {
-        std::pair<std::vector<NLName>, std::vector<NLID::DesignObjectID>> path;
+        KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey path;
         for (const auto& [path1, output1m] : outputs1Map) {
           if (output1m == output1) {
             path = path1;
@@ -574,8 +565,8 @@ bool MiterStrategy::run() {
   for (size_t i = 0; i < inputs2DnlIds.size(); ++i) {
     const auto&path = builder0_.getInputs2InputsIDs().at(builder0_.getDNLIDforInput(i));
     logger->debug("VARID {} DNLID {}", varNames[inputs2DnlIds[i]], inputs2DnlIds[i]);
-    for (const auto& name : path.first) {
-      logger->debug("{}.", name.getString().c_str());
+    for (const auto& nameID : path.first) {
+      logger->debug("{}.", nameID);
     }
     for (const auto& id : path.second) {
       logger->debug("bit: {}.", id);
@@ -588,8 +579,8 @@ bool MiterStrategy::run() {
   for (size_t i = 0; i < inputs2DnlIds1.size(); ++i) {
     const auto& path = builder1_.getInputs2InputsIDs().at(builder1_.getDNLIDforInput(i));
     logger->debug("VARID {} DNLID {}", varNames1[inputs2DnlIds1[i]], inputs2DnlIds1[i]);
-    for (const auto& name : path.first) {
-      logger->debug("{}.", name.getString().c_str());
+    for (const auto& nameID : path.first) {
+      logger->debug("{}.", nameID);
     }
     for (const auto& id : path.second) {
       logger->debug("bit: {}.", id);
@@ -661,16 +652,16 @@ bool MiterStrategy::run() {
         const auto&path0 = builder0_.getOutputs2OutputsIDs().at(builder0_.getDNLIDforOutput(i));
         const auto&path1 = builder1_.getOutputs2OutputsIDs().at(builder1_.getDNLIDforOutput(i));
         // print path0
-        for (const auto& name : path0.first) {
-          logger->info("{}.", name.getString().c_str());
+        for (const auto& nameID : path0.first) {
+          logger->info("{}.", nameID);
         }
         for (const auto& id : path0.second) {
           logger->info("bit: {}.", id);
         }
         logger->info("\n");
         // print path1
-        for (const auto& name : path1.first) {
-          logger->info("{}.", name.getString().c_str());
+        for (const auto& nameID : path1.first) {
+          logger->info("{}.", nameID);
         }
         for (const auto& id : path1.second) {
           logger->info("bit: {}.", id);
@@ -721,23 +712,11 @@ bool MiterStrategy::run() {
         //logger->info("Clause 1 {}", POs1[i]->toString());
         // print path of index i
         const auto&path0 = builder0_.getOutputs2OutputsIDs().at(builder0_.getDNLIDforOutput(i));
-        std::string pathString = "";
-        for (const auto& name : path0.first) {
-          pathString += name.getString() + ".";
-        }
-        for (const auto& id : path0.second) {
-          pathString += std::to_string(id) + ".";
-        }
+        std::string pathString = pathKeyToString(path0);
         const auto&terminal0 = naja::DNL::get()->getDNLTerminalFromID(outputs0[i]);
         logger->info("Path of differing PO {}: {}", i, pathString);
         const auto&path1 = builder1_.getOutputs2OutputsIDs().at(builder1_.getDNLIDforOutput(i));
-        std::string pathString1 = "";
-        for (const auto& name : path1.first) {
-          pathString1 += name.getString() + ".";
-        }
-        for (const auto& id : path1.second) {
-          pathString1 += std::to_string(id) + ".";
-        }
+        std::string pathString1 = pathKeyToString(path1);
         logger->info("Path of differing PO {}: {}", i, pathString1);
         std::vector<naja::NL::SNLDesign*> topModels;
         topModels.emplace_back(top0_);

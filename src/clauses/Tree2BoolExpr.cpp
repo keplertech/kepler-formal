@@ -208,6 +208,45 @@ void setChildFETS(size_t i, BoolExpr* expr) {
   childLocal.first[i] = expr;
 }
 
+BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+  assert(tbl.isGeneric());
+  assert(k > 0);
+
+  BoolExpr* expr = getChildFETS(0);
+  switch (tbl.getGenericType()) {
+    case SNLTruthTable::GenericType::AND:
+    case SNLTruthTable::GenericType::NAND:
+      for (uint32_t j = 1; j < k; ++j) {
+        expr = BoolExpr::And(expr, getChildFETS(j));
+      }
+      if (tbl.getGenericType() == SNLTruthTable::GenericType::NAND) {
+        expr = BoolExpr::Not(expr);
+      }
+      return expr;
+    case SNLTruthTable::GenericType::OR:
+    case SNLTruthTable::GenericType::NOR:
+      for (uint32_t j = 1; j < k; ++j) {
+        expr = BoolExpr::Or(expr, getChildFETS(j));
+      }
+      if (tbl.getGenericType() == SNLTruthTable::GenericType::NOR) {
+        expr = BoolExpr::Not(expr);
+      }
+      return expr;
+    case SNLTruthTable::GenericType::XOR:
+    case SNLTruthTable::GenericType::XNOR:
+      for (uint32_t j = 1; j < k; ++j) {
+        expr = BoolExpr::Xor(expr, getChildFETS(j));
+      }
+      if (tbl.getGenericType() == SNLTruthTable::GenericType::XNOR) {
+        expr = BoolExpr::Not(expr);
+      }
+      return expr;
+    case SNLTruthTable::GenericType::NONE:
+      break;
+  }
+  throw std::runtime_error("Unsupported generic truth table type");
+}
+
 // Frame type used for explicit stack-based post-order traversal.
 // Each frame holds a pointer to a node and a boolean indicating whether
 // the node has been visited (post-visit) or not (pre-visit).
@@ -365,6 +404,18 @@ BoolExpr* Tree2BoolExpr::convert(
         for (uint32_t i = 0; i < k; ++i) {
           size_t cid = node->tree->nodeFromId(node->childrenIds[i])->nodeID;
           setChildFETS(i, getMemoETS(cid));
+        }
+
+        if (tbl.isGeneric()) {
+          BoolExpr* expr = buildGenericTruthTableExpr(tbl, k);
+          if (isoID != naja::DNL::DNLID_MAX) {
+            auto result = iso2boolExpr_.insert({isoID, expr});
+            if (!result.second) {
+              expr = result.first->second;
+            }
+          }
+          setMemoETS(id, expr);
+          continue;
         }
 
         // Determine which inputs actually matter for this truth table.
