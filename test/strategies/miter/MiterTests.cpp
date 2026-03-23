@@ -74,6 +74,31 @@ void executeCommand(const std::string& command) {
   }
 }
 
+std::vector<std::filesystem::path> listMiterLogFiles() {
+  std::vector<std::filesystem::path> logs;
+  for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::current_path())) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto name = entry.path().filename().string();
+    if (name.rfind("miter_log_", 0) == 0 && entry.path().extension() == ".txt") {
+      logs.push_back(entry.path().filename());
+    }
+  }
+  return logs;
+}
+
+std::filesystem::path findNewMiterLogFile(
+    const std::vector<std::filesystem::path>& beforeLogs) {
+  const auto afterLogs = listMiterLogFiles();
+  for (const auto& after : afterLogs) {
+    if (std::find(beforeLogs.begin(), beforeLogs.end(), after) == beforeLogs.end()) {
+      return after;
+    }
+  }
+  return {};
+}
+
 void expectGenericGateMiterEquivalent(const char* gateName,
                                       SNLTruthTable::GenericType genericType) {
   NLUniverse* univ = NLUniverse::create();
@@ -710,12 +735,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     SNLCapnP::dump(db, outputPath);
   }
   //Check output of binary kepler-formal on the 2 capnp files
+  const auto beforeDifferentLogs = listMiterLogFiles();
   executeCommand(
       (get_kepler_bin() + " -naja_if ./top.capnp ./topEdited1.capnp")
           .c_str());
-  // look for "DIFFERENT" in the file ./miter_log_1.txt
-  // open the file  
-  std::ifstream miterLogFile("./miter_log_0.txt");
+  const auto differentLog = findNewMiterLogFile(beforeDifferentLogs);
+  ASSERT_FALSE(differentLog.empty());
+  std::ifstream miterLogFile(differentLog);
   std::string line;
   bool foundDifferent = false;
   if (miterLogFile.is_open()) {
@@ -760,12 +786,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   }
 
   //Check output of binary kepler-formal on the 2 capnp files
+  const auto beforeIdenticalLogs = listMiterLogFiles();
   executeCommand(
       (get_kepler_bin() + " -naja_if ./top.capnp ./topEdited2.capnp")
           .c_str());
-  // look for "IDENTICAL" in the file ./miter_log_2.txt
-  // open the file
-  std::ifstream miterLogFile2("./miter_log_1.txt");
+  const auto identicalLog = findNewMiterLogFile(beforeIdenticalLogs);
+  ASSERT_FALSE(identicalLog.empty());
+  std::ifstream miterLogFile2(identicalLog);
   bool foundIdentical = false;
   if (miterLogFile2.is_open()) {
     while (getline(miterLogFile2, line)) {
