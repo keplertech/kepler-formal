@@ -47,10 +47,16 @@ static void print_usage(const char* prog) {
 
 static std::vector<std::string> yamlToVector(const YAML::Node& node) {
   std::vector<std::string> out;
-  if (!node) return out;
-  if (!node.IsSequence()) return out;
+  if (!node) {
+    return out;
+  }
+  if (!node.IsSequence()) {
+    return out;
+  }
   for (const auto& n : node) {
-    if (n.IsScalar()) out.emplace_back(n.as<std::string>());
+    if (n.IsScalar()) {
+      out.emplace_back(n.as<std::string>());
+    }
   }
   return out;
 }
@@ -161,8 +167,11 @@ static bool parseConfigInputPaths(const YAML::Node& node,
           error = "input_paths entries must be scalar file paths";
           return false;
         }
-        if (i == 0) out.design0.emplace_back(n.as<std::string>());
-        else out.design1.emplace_back(n.as<std::string>());
+        if (i == 0) {
+          out.design0.emplace_back(n.as<std::string>());
+        } else {
+          out.design1.emplace_back(n.as<std::string>());
+        }
       }
     }
   } else {
@@ -195,7 +204,9 @@ static void logDesignPaths(const char* label,
   std::ostringstream oss;
   oss << label << ": ";
   for (size_t i = 0; i < paths.size(); ++i) {
-    if (i) oss << ", ";
+    if (i) {
+      oss << ", ";
+    }
     oss << paths[i];
   }
   SPDLOG_INFO("{}", oss.str());
@@ -373,13 +384,13 @@ int KeplerFormalMain(int argc, char** argv) {
         // format
         if (cfg["format"] && cfg["format"].IsScalar()) {
           std::string fmt = cfg["format"].as<std::string>();
-          if (fmt == "naja_if")
+          if (fmt == "naja_if") {
             inputFormatType = FormatType::NAJA_IF;
-          else if (fmt == "verilog" || fmt == "v")
+          } else if (fmt == "verilog" || fmt == "v") {
             inputFormatType = FormatType::VERILOG;
-          else if (fmt == "systemverilog" || fmt == "sv")
+          } else if (fmt == "systemverilog" || fmt == "sv") {
             inputFormatType = FormatType::SYSTEMVERILOG;
-          else {
+          } else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
           }
@@ -562,11 +573,16 @@ int KeplerFormalMain(int argc, char** argv) {
 
     if (!explicitDesignFlags) {
       if (inputPaths.size() > 2) {
-        for (size_t i = 2; i < inputPaths.size(); ++i)
+        for (size_t i = 2; i < inputPaths.size(); ++i) {
           libertyFiles.push_back(inputPaths[i]);
+        }
       }
-      if (inputPaths.size() >= 1) designInputs.design0.emplace_back(inputPaths[0]);
-      if (inputPaths.size() >= 2) designInputs.design1.emplace_back(inputPaths[1]);
+      if (inputPaths.size() >= 1) {
+        designInputs.design0.emplace_back(inputPaths[0]);
+      }
+      if (inputPaths.size() >= 2) {
+        designInputs.design1.emplace_back(inputPaths[1]);
+      }
     }
   }
 
@@ -575,10 +591,11 @@ int KeplerFormalMain(int argc, char** argv) {
   if (!console) {
     console = spdlog::stdout_color_mt("console");
   }
-  if (logLevel == "debug")
+  if (logLevel == "debug") {
     spdlog::set_level(spdlog::level::debug);
-  else if (logLevel == "info")
+  } else if (logLevel == "info") {
     spdlog::set_level(spdlog::level::info);
+  }
   // else if (logLevel == "warn")
   //   spdlog::set_level(spdlog::level::warn);
   // else if (logLevel == "error")
@@ -590,8 +607,12 @@ int KeplerFormalMain(int argc, char** argv) {
 
   SPDLOG_INFO("KEPLER FORMAL: Run.");
   std::string inputFormatName = "VERILOG";
-  if (inputFormatType == FormatType::NAJA_IF) inputFormatName = "SNL";
-  if (inputFormatType == FormatType::SYSTEMVERILOG) inputFormatName = "SYSTEMVERILOG";
+  if (inputFormatType == FormatType::NAJA_IF) {
+    inputFormatName = "SNL";
+  }
+  if (inputFormatType == FormatType::SYSTEMVERILOG) {
+    inputFormatName = "SYSTEMVERILOG";
+  }
   SPDLOG_INFO("Input format: {}", inputFormatName);
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);

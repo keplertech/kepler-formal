@@ -934,8 +934,11 @@ static int run_kepler_cli_with_args(const std::vector<std::string>& args) {
     // naive quoting: wrap in single quotes and escape any single quotes inside
     std::string quoted = "'";
     for (char c : a) {
-      if (c == '\'') quoted += "'\\''";
-      else quoted.push_back(c);
+      if (c == '\'') {
+        quoted += "'\\''";
+      } else {
+        quoted.push_back(c);
+      }
     }
     quoted += "'";
     cmd += quoted;
@@ -972,14 +975,18 @@ TEST(KeplerCliSubprocessTests, BinaryExists) {
 
 TEST(KeplerCliSubprocessTests, PrintUsageOnNoArgs) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   int rc = run_kepler_cli_with_args({});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, HelpFlagReturnsSuccess) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   int rc = run_kepler_cli_with_args({"--help"});
   EXPECT_EQ(rc, EXIT_SUCCESS);
   rc = run_kepler_cli_with_args({"-h"});
@@ -988,7 +995,9 @@ TEST(KeplerCliSubprocessTests, HelpFlagReturnsSuccess) {
 
 TEST(KeplerCliSubprocessTests, MissingConfigFileArgument) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   int rc = run_kepler_cli_with_args({"--config"});
   EXPECT_NE(rc, EXIT_SUCCESS);
   rc = run_kepler_cli_with_args({"-c"});
@@ -997,7 +1006,9 @@ TEST(KeplerCliSubprocessTests, MissingConfigFileArgument) {
 
 TEST(KeplerCliSubprocessTests, ConfigFileNotFoundReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   std::string tmpPath = "./nonexistent_config_12345.yaml";
   int rc = run_kepler_cli_with_args({"--config", tmpPath});
   EXPECT_NE(rc, EXIT_SUCCESS);
@@ -1005,7 +1016,9 @@ TEST(KeplerCliSubprocessTests, ConfigFileNotFoundReturnsFailure) {
 
 TEST(KeplerCliSubprocessTests, ConfigUnrecognizedFormatReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   std::filesystem::path tmp = std::filesystem::temp_directory_path() / "kepler_test_bad_format.yaml";
   {
     std::ofstream ofs(tmp);
@@ -1020,7 +1033,9 @@ TEST(KeplerCliSubprocessTests, ConfigUnrecognizedFormatReturnsFailure) {
 
 TEST(KeplerCliSubprocessTests, ConfigUnknownKeyReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   std::filesystem::path tmp = std::filesystem::temp_directory_path() / "kepler_test_unknown_key.yaml";
   {
     std::ofstream ofs(tmp);
@@ -1036,7 +1051,9 @@ TEST(KeplerCliSubprocessTests, ConfigUnknownKeyReturnsFailure) {
 
 TEST(KeplerCliSubprocessTests, ConfigSnlFormatLoadFailureReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   std::filesystem::path tmp = std::filesystem::temp_directory_path() / "kepler_test_snl.yaml";
   {
     std::ofstream ofs(tmp);
@@ -1052,28 +1069,36 @@ TEST(KeplerCliSubprocessTests, ConfigSnlFormatLoadFailureReturnsFailure) {
 
 TEST(KeplerCliSubprocessTests, CliUnrecognizedFormatReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   int rc = run_kepler_cli_with_args({"-badformat", "a", "b"});
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, CliNotEnoughPathsReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   int rc = run_kepler_cli_with_args({"-verilog", "only_one_path.v"});
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, CliNajaIfFormatButMissingFilesReturnsFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
   int rc = run_kepler_cli_with_args({"-naja_if", "/no/such/file1.capnp", "/no/such/file2.capnp"});
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, ConfigParsingViaFilesCoversYamlToVectorBehavior) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
 
   // 1) Sequence of scalars -> valid config with two input_paths should proceed to further checks.
   std::filesystem::path tmpSeq = std::filesystem::temp_directory_path() / "kepler_test_seq.yaml";
@@ -1509,18 +1534,23 @@ TEST_F(MiterTests, UnconnectedTerms) {
 
 TEST(KeplerCliSubprocessTests, ExampleTestRun) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
 
   std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog.yaml";
-  if (std::getenv("TEST_DATA_PREFIX"))
+  if (std::getenv("TEST_DATA_PREFIX")) {
     config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog_bazel.yaml";
+  }
   int rc = run_kepler_cli_with_args({"--config", config});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
 
   std::string pfx = get_test_data_prefix();
   int rc = run_kepler_cli_with_args({"-verilog",
@@ -1535,11 +1565,14 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
 
   std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se.yaml";
-  if (std::getenv("TEST_DATA_PREFIX"))
+  if (std::getenv("TEST_DATA_PREFIX")) {
     config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se_bazel.yaml";
+  }
   int rc = run_kepler_cli_with_args({"--config", config});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
@@ -1547,18 +1580,23 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
 // test failure with test_config_failure.yaml
 TEST(KeplerCliSubprocessTests, ExampleTestRunFailure) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
 
   std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_failure.yaml";
-  if (std::getenv("TEST_DATA_PREFIX"))
+  if (std::getenv("TEST_DATA_PREFIX")) {
     config = get_test_data_prefix() + "test/strategies/miter/test_config_failure_bazel.yaml";
+  }
   int rc = run_kepler_cli_with_args({"--config", config});
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
 TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
   std::filesystem::path p(KEPLER_BIN);
-  if (!std::filesystem::exists(p)) GTEST_SKIP() << "kepler-formal binary missing";
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
 
   const auto tmpDir =
       std::filesystem::temp_directory_path() / "kepler_formal_subprocess_log";

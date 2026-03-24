@@ -50,12 +50,15 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   BoolExpr* getLeft() const { return left_; }
   BoolExpr* getRight() const { return right_; }
   std::string getName() const {
-    if (op_ != Op::VAR)
+    if (op_ != Op::VAR) {
       throw std::logic_error("getName: not a variable");
-    if (varID_ == 0)
+    }
+    if (varID_ == 0) {
       return "FALSE";
-    if (varID_ == 1)
+    }
+    if (varID_ == 1) {
       return "TRUE";
+    }
     return "x" + std::to_string(varID_);
   }
   // default constructor

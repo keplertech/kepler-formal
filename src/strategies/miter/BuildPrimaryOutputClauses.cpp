@@ -82,10 +82,12 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
       const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
-      if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output)
+      if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
         numberOfInputs++;
-      if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input)
+      }
+      if (term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
         numberOfOutputs++;
+      }
     }
 
     if (numberOfInputs == 0 && numberOfOutputs > 0) {
@@ -266,15 +268,12 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
 
     if (!isSequential) {
-      uint64_t inputNum = 0;
       for (DNLID termId = instance.getTermIndexes().first;
            termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
            termId++) {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
-          uint64_t orderID = inputNum;
-          inputNum++;
           auto deps =
               SNLDesignModeling::getCombinatorialOutputs(term.getSnlBitTerm());
           // Collect all tt on the model
@@ -288,8 +287,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                 SNLBitTerm::Direction::Input) {
               continue;
             }
-            const auto tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
-              tTerm.getSnlBitTerm()->getOrderID());
+            const auto tt = SNLDesignModeling::getTruthTable(
+                tTerm.getSnlBitTerm()->getDesign(),
+                tTerm.getSnlBitTerm()->getOrderID());
             if (tt.isInitialized()) {
               tts.emplace_back(tt);
               // print deps
@@ -301,15 +301,18 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
             }
           }
           bool inTermInTTDeps = false;
+          uint64_t orderID = 0;
+          for (DNLID tId = instance.getTermIndexes().first;
+               tId < termId; ++tId) {
+            const DNLTerminalFull& prevTerm = dnl->getDNLTerminalFromID(tId);
+            if (prevTerm.getSnlBitTerm()->getDirection() !=
+                SNLBitTerm::Direction::Output) {
+              ++orderID;
+            }
+          }
           for (const auto tt : tts) {
             const auto ttDeps =
                 tt.getDependencies();  // expect std::vector<uint64_t>
-            // WRONG!!! We need the input's "orderID" not general terminal orderID
-            //uint64_t orderID =
-            //    term.getSnlBitTerm()->getOrderID();  // assume 0-based
-
-            // If orderID is 1-based, uncomment:
-            // if (orderID > 0) --orderID;
 
             for (size_t index = 0; index < ttDeps.size(); ++index) {
               uint64_t d = ttDeps[index];
@@ -329,28 +332,14 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 
               uint64_t localBit = orderID - blockMin;  // 0..63
 
-              // std::printf("TT deps: %llu\n", static_cast<unsigned long
-              // long>(d)); std::printf("d = %llu, orderID = %llu, index = %zu,
-              // localBit = %llu\n",
-              //  static_cast<unsigned long long>(d),
-              //  static_cast<unsigned long long>(orderID),
-              //  index,
-              //  static_cast<unsigned long long>(localBit));
-
-              // Defensive: check localBit < 64
               if (localBit >= 64) {
-                // std::fprintf(stderr, "localBit out of range: %llu\n",
-                //             static_cast<unsigned long long>(localBit));
                 // LCOV_EXCL_START
                 continue;
                 // LCOV_EXCL_STOP
               }
 
-              // Correct shift using 1ULL and parentheses
               assert(localBit < 64);
               uint64_t mask = (1ULL << localBit);
-              // std::printf("mask = 0x%llx\n", static_cast<unsigned long
-              // long>(mask));
 
               if ((d & mask) != 0ULL) {
                 inTermInTTDeps = true;
@@ -362,15 +351,13 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
             }
 
             if (inTermInTTDeps) {
-              // Found — act and break outer loop if that's desired
-              // std::puts("Found matching bit in this TT deps");
               break;
             }
           }
           if (/*deps.empty() &&*/ !inTermInTTDeps) {
             outputsSet.insert(termId);
             modelCache_[instance.getSNLModel()].POs.insert(
-              term.getSnlBitTerm());
+                term.getSnlBitTerm());
             DEBUG_LOG("Collecting output %s of model %s\n",
                       term.getSnlBitTerm()->getName().getString().c_str(),
                       term.getSnlBitTerm()
@@ -390,10 +377,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
       if (term.getSnlBitTerm()->getDirection() !=
           SNLBitTerm::Direction::Output) {
         if (std::find(seqBitTerms.begin(), seqBitTerms.end(),
-                      term.getSnlBitTerm()) != seqBitTerms.end())
+                      term.getSnlBitTerm()) != seqBitTerms.end()) {
           outputsSet.insert(termId);
           modelCache_[instance.getSNLModel()].POs.insert(
               term.getSnlBitTerm());
+        }
         DEBUG_LOG(
             "Collecting seq output %s of model %s\n",
             term.getSnlBitTerm()->getName().getString().c_str(),

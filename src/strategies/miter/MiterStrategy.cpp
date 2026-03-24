@@ -55,7 +55,9 @@ std::string pathKeyToString(const KEPLER_FORMAL::BuildPrimaryOutputClauses::Path
 }
 
 void ensureLoggerInitialized() {
-  if (logger) return;
+  if (logger) {
+    return;
+  }
 
   try {
     // 1) Choose a default file name in the current working directory
@@ -186,8 +188,9 @@ int tseitinEncode(
   // Returns internal 0-based var index
   auto getOrCreateVar = [&](const std::string& key) -> int {
     auto it = varName2idx.find(key);
-    if (it != varName2idx.end())
+    if (it != varName2idx.end()) {
       return it->second;
+    }
     int v = solver.newVar(); // 0-based
     varName2idx[key] = v;
     logger->trace("Created new var {} for key '{}'", v, key);
@@ -247,14 +250,22 @@ int tseitinEncode(
     // First visit -> push children
     if (!fr.visited) {
       fr.visited = true;
-      if (e->getRight()) stk.push({e->getRight(), false, 0, 0});
-      if (e->getLeft())  stk.push({e->getLeft(),  false, 0, 0});
+      if (e->getRight()) {
+        stk.push({e->getRight(), false, 0, 0});
+      }
+      if (e->getLeft()) {
+        stk.push({e->getLeft(),  false, 0, 0});
+      }
       continue;
     }
 
     // Children processed
-    if (e->getLeft())  fr.leftLit  = result[e->getLeft()];
-    if (e->getRight()) fr.rightLit = result[e->getRight()];
+    if (e->getLeft()) {
+      fr.leftLit = result[e->getLeft()];
+    }
+    if (e->getRight()) {
+      fr.rightLit = result[e->getRight()];
+    }
 
     // Fresh var for this node
     int v = solver.newVar();   // 0-based var index

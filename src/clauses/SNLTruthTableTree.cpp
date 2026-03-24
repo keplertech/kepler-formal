@@ -160,8 +160,9 @@ SNLTruthTableTree::Node::Node(uint32_t idx, SNLTruthTableTree* t)
     throw std::overflow_error("Node ID overflow");
     // LCOV_EXCL_STOP
   }
-  if (tree)
+  if (tree) {
     nodeID = (uint32_t)tree->lastID_++;
+  }
 }
 
 SNLTruthTableTree::Node::Node(SNLTruthTableTree* t,
@@ -177,8 +178,9 @@ SNLTruthTableTree::Node::Node(SNLTruthTableTree* t,
     throw std::overflow_error("Node ID overflow");
     // LCOV_EXCL_STOP
   }
-  if (tree)
+  if (tree) {
     nodeID = (uint32_t)tree->lastID_++;
+  }
   if (type == Type::Table) {
     truthTable = SNLDesignModeling::getTruthTable(naja::DNL::get()
                                              ->getDNLTerminalFromID(data.termid)
@@ -275,8 +277,9 @@ bool SNLTruthTableTree::Node::eval(const std::vector<bool>& extInputs) const {
     } else {
       bit = childSp->eval(extInputs);
     }
-    if (bit)
+    if (bit) {
       idx |= (1u << i);
+    }
   }
   return tbl.bits().bit(idx);
 }
@@ -294,11 +297,13 @@ void SNLTruthTableTree::Node::addChildId(uint32_t childId) {
 #ifdef DEBUG_CHECKS
   uint32_t cur = this->parentId;
   while (cur != SNLTruthTableTree::kInvalidId) {
-    if (cur == childId)
+    if (cur == childId) {
       throw std::invalid_argument("addChildId: cycle detected");
+    }
     auto p = tree->nodeFromId(cur);
-    if (!p)
+    if (!p) {
       break;
+    }
     cur = p->parentId;
   }
 #endif
@@ -306,8 +311,9 @@ void SNLTruthTableTree::Node::addChildId(uint32_t childId) {
   childrenIds.emplace_back(childId);
 
   auto childSp = tree->nodeFromId(childId);
-  if (childSp)
+  if (childSp) {
     childSp->parentIds.emplace_back(this->nodeID);
+  }
 }
 
 //----------------------------------------------------------------------
@@ -340,8 +346,9 @@ uint32_t SNLTruthTableTree::allocateNode(std::shared_ptr<Node>& np) {
 void SNLTruthTableTree::updateBorderLeaves() {
   borderLeaves_.clear();
   size_t externalIndex = 0;
-  if (rootId_ == kInvalidId)
+  if (rootId_ == kInvalidId) {
     return;
+  }
   std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> stk;
   stk.reserve(64);
   stk.emplace_back(rootId_);
@@ -363,17 +370,20 @@ void SNLTruthTableTree::updateBorderLeaves() {
     //if (!inserted)
     //  continue;
     const auto& nsp = nodeFromId(nid).get();
-    if (nsp->visited)
+    if (nsp->visited) {
       continue;
+    }
     nsp->visited = true;
-    if (!nsp)
+    if (!nsp) {
       assert(false && "updateBorderLeaves: null node in tree");
+    }
     assert(nsp->childrenIds.size() > 0);
     for (size_t i = 0; i < nsp->childrenIds.size(); ++i) {
       uint32_t cid = nsp->childrenIds[i];
       const auto& ch = nodeFromId(cid).get();
-      if (!ch)
+      if (!ch) {
         assert(false && "updateBorderLeaves: null child node in tree");
+      }
       if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
         BorderLeaf bl;
         if (ch->type == Node::Type::P) {
@@ -614,8 +624,9 @@ void SNLTruthTableTree::concatFull(
   DEBUG_LOG("Border leaves in concatFull:\n");
   for (const auto& bl : borderLeaves_) {
     auto parentPtr = nodeFromId(bl.parentId);
-    if (!parentPtr)
+    if (!parentPtr) {
       continue;
+    }
     naja::DNL::DNLTerminalFull term =
         naja::DNL::get()->getDNLTerminalFromID(parentPtr->data.termid);
     naja::DNL::DNLInstanceFull inst =
@@ -634,8 +645,9 @@ void SNLTruthTableTree::concatFull(
     if (parentPtr->type == Node::Type::P) {
       BorderPIs.insert(parentPtr->data.termid);
     }
-    if (!parentPtr)
+    if (!parentPtr) {
       assert(false);
+    }
     if (parentPtr->type == Node::Type::P) {
       // PI table, skip check
       continue;
@@ -676,8 +688,9 @@ void SNLTruthTableTree::concatFull(
       // print border leaves
       for (const auto& bl : borderLeaves_) {
         auto parentPtr = nodeFromId(bl.parentId);
-        if (!parentPtr)
+        if (!parentPtr) {
           continue;
+        }
         naja::DNL::DNLTerminalFull term =
             naja::DNL::get()->getDNLTerminalFromID(parentPtr->data.termid);
         naja::DNL::DNLInstanceFull inst =
@@ -900,14 +913,16 @@ void SNLTruthTableTree::concatFull(
     uint32_t nid = stk.top();
     stk.pop();
     auto nsp = nodeFromId(nid);
-    if (!nsp)
+    if (!nsp) {
       assert(false && "concatFull: null node in tree during input count");
+    }
     for (size_t i = 0; i < nsp->childrenIds.size(); ++i) {
       uint32_t cid = nsp->childrenIds[i];
       auto ch = nodeFromId(cid);
-      if (!ch)
+      if (!ch) {
         assert(false &&
                "concatFull: null child node in tree during input count");
+      }
       assert(std::find(ch->parentIds.begin(), ch->parentIds.end(), nid) !=
                  ch->parentIds.end() &&
              "concatFull: child missing parent link during input count");
@@ -1051,27 +1066,32 @@ void SNLTruthTableTree::concatFull(
 // isInitialized / print
 //----------------------------------------------------------------------
 bool SNLTruthTableTree::isInitialized() const {
-  if (rootId_ == kInvalidId)
+  if (rootId_ == kInvalidId) {
     return false;
+  }
   std::vector<uint32_t> stk;
   stk.emplace_back(rootId_);
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
     Node* const n = nodeFromId(nid).get();
-    if (!n)
+    if (!n) {
       continue;
+    }
     if (n->type == Node::Type::Table) {
-      if (!n->getTruthTable().isInitialized())
+      if (!n->getTruthTable().isInitialized()) {
         return false;
+      }
     }
     for (size_t i = 0; i < n->childrenIds.size(); ++i) {
       uint32_t cid = n->childrenIds[i];
       Node* const ch = nodeFromId(cid).get();
-      if (!ch)
+      if (!ch) {
         continue;
-      if (ch->type != Node::Type::Input)
+      }
+      if (ch->type != Node::Type::Input) {
         stk.emplace_back(cid);
+      }
     }
   }
   return true;
@@ -1079,16 +1099,18 @@ bool SNLTruthTableTree::isInitialized() const {
 
 // LCOV_EXCL_START
 void SNLTruthTableTree::print() const {
-  if (rootId_ == kInvalidId)
+  if (rootId_ == kInvalidId) {
     return;
+  }
   std::vector<uint32_t> stk;
   stk.emplace_back(rootId_);
   while (!stk.empty()) {
     uint32_t nid = stk.back();
     stk.pop_back();
     auto n = nodeFromId(nid);
-    if (!n)
+    if (!n) {
       continue;
+    }
     if (n->type == Node::Type::Table) {
       printf("term: %zu nodeID=%u id=%u\n", (size_t)n->data.termid,
                 n->nodeID, n->nodeID);
@@ -1166,8 +1188,9 @@ void SNLTruthTableTree::finalize() {
   // code.
 
   // Step 0: quick sanity for root
-  if (rootId_ == kInvalidId && nodes_.empty())
+  if (rootId_ == kInvalidId && nodes_.empty()) {
     return;
+  }
   size_t nodeSize = nodes_.size();
   // Build lookup maps
   
@@ -1178,18 +1201,22 @@ void SNLTruthTableTree::finalize() {
 
   for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
-    if (!sp)
+    if (!sp) {
       continue;
-    if (sp->nodeID != kInvalidId)
+    }
+    if (sp->nodeID != kInvalidId) {
       mapById[sp->nodeID] = sp;
-    if (sp->nodeID != 0)
+    }
+    if (sp->nodeID != 0) {
       mapByNodeID[sp->nodeID] = sp;
+    }
   }
   reserveResolvedChildrenETS(nodeSize);
   for (size_t i = 0; i < nodeSize; ++i) {
     Node* sp = nodes_[i].get();
-    if (!sp)
+    if (!sp) {
       continue;
+    }
     getResolvedChildrenETS().first[i].reserve(sp->childrenIds.size());
     for (size_t j = 0; j < sp->childrenIds.size(); ++j) {
       uint32_t cid = sp->childrenIds[j];
@@ -1197,13 +1224,15 @@ void SNLTruthTableTree::finalize() {
 
       // try match by exact nodeID
       auto it = mapById.find(cid);
-      if (it != mapById.end())
+      if (it != mapById.end()) {
         target = it->second;
+      }
       // fallback: match by debug nodeID
       if (!target) {
         auto it2 = mapByNodeID.find(cid);
-        if (it2 != mapByNodeID.end())
+        if (it2 != mapByNodeID.end()) {
           target = it2->second;
+        }
       }
       // fallback: interpret as index (cid - kIdOffset)
       if (!target) {
@@ -1241,8 +1270,9 @@ void SNLTruthTableTree::finalize() {
   ptrToId.clear();
   for (size_t i = 0; i < nodeSize; ++i) {
     Node*  sp = nodes_[i].get();
-    if (!sp)
+    if (!sp) {
       continue;
+    }
     ptrToId[sp] = static_cast<uint32_t>(i) + kIdOffset;
   }
 
@@ -1292,13 +1322,15 @@ void SNLTruthTableTree::finalize() {
     if (itRoot != mapById.end()) {
       Node* const sp = itRoot->second;
       auto pit = ptrToId.find(sp);
-      if (pit != ptrToId.end())
+      if (pit != ptrToId.end()) {
         newRoot = pit->second;
+      }
     }
     if (newRoot == kInvalidId) {
       // fallback: if nodes_[0] exists, use that
-      if (!nodes_.empty() && nodes_[0])
+      if (!nodes_.empty() && nodes_[0]) {
         newRoot = nodes_[0]->nodeID;
+      }
     }
     rootId_ = newRoot;
   }
@@ -1318,16 +1350,19 @@ void SNLTruthTableTree::finalize() {
     //auto [itr, inserted] = visited.insert(nid);
    
     Node* const n = nodeFromId(nid).get();
-     if (n->visited)
+    if (n->visited) {
       continue;
+    }
     n->visited = true;
-    if (!n)
+    if (!n) {
       continue;
+    }
     for (size_t k = 0; k < n->childrenIds.size(); ++k) {
       uint32_t cid = n->childrenIds[k];
       Node* const ch = nodeFromId(cid).get();
-      if (!ch)
+      if (!ch) {
         continue;
+      }
       if (ch->type == Node::Type::Input || ch->type == Node::Type::P) {
         anyInput = true;
         // if (ch->data.inputIndex > maxInput) maxInput = ch->data.inputIndex;

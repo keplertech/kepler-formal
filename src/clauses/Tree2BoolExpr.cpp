@@ -268,7 +268,9 @@ BoolExpr* Tree2BoolExpr::convert(
   const SNLTruthTableTree& tree, const std::vector<size_t>& varNames) {
 
   const auto root = tree.getRoot();
-  if (!root) return nullptr;
+  if (!root) {
+    return nullptr;
+  }
 
   // Determine maximum node ID to size memoization structures.
   size_t maxID = tree.getMaxID();
@@ -308,7 +310,9 @@ BoolExpr* Tree2BoolExpr::convert(
         }
       }
       // If memo already contains an expression for this node, skip processing.
-      if (getMemoETS(id) != nullptr) continue;
+      if (getMemoETS(id) != nullptr) {
+        continue;
+      }
 
       // If node is a Table or P node, push it back as visited and push children.
       if (node->type == SNLTruthTableTree::Node::Type::Table || node->type == SNLTruthTableTree::Node::Type::P) {
@@ -440,7 +444,11 @@ BoolExpr* Tree2BoolExpr::convert(
 
         // Count how many inputs are relevant.
         size_t numRelIdx = 0;
-        for (uint32_t j = 0; j < k; ++j) { if (getRelevantETS(j)) numRelIdx++; }
+        for (uint32_t j = 0; j < k; ++j) {
+          if (getRelevantETS(j)) {
+            numRelIdx++;
+          }
+        }
 
         // The algorithm expects at least one relevant input for a PI node.
         assert(numRelIdx > 0 && "No relevant inputs for node");
@@ -449,7 +457,9 @@ BoolExpr* Tree2BoolExpr::convert(
           // For each such row, create a conjunction of literals for relevant inputs.
           clearTermsETS();
           for (uint64_t m = 0; m < rows; ++m) {
-            if (!tbl.bits().bit(m)) continue;
+            if (!tbl.bits().bit(m)) {
+              continue;
+            }
             BoolExpr* term = nullptr;
             bool firstLit = true;
             BoolExpr* lit = nullptr;

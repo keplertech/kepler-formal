@@ -102,7 +102,9 @@ public:
 
   // get the maximum node ID assigned in the tree after normalization(finalize)
   uint32_t getMaxID() const {
-    if (nodes_.empty()) return kIdOffset - 1;
+    if (nodes_.empty()) {
+      return kIdOffset - 1;
+    }
     return static_cast<uint32_t>(nodes_.size() + kIdOffset - 1);
   }
 
@@ -116,7 +118,9 @@ private:
 
   void markAllUnvisited() {
     for (auto& n : nodes_) {
-      if (n) n->visited = false;
+      if (n) {
+        n->visited = false;
+      }
     }
   }
 

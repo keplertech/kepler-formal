@@ -89,8 +89,9 @@ public:
           throw std::runtime_error("Invalid literal (<2) passed to Kissat clause");
           // LCOV_EXCL_STOP
         }
-        if (var >= kissatNumVars_)
+        if (var >= kissatNumVars_) {
           kissatNumVars_ = var + 1;
+        }
         int kissatLit = (lit > 0 ? var + 1 : -(var + 1)); // ±(var+1)
         kissat_add(static_cast<kissat*>(kissatSolver_), kissatLit);
       }

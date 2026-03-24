@@ -68,11 +68,13 @@ BoolExpr* BoolExpr::Var(size_t id) {
 
 BoolExpr* BoolExpr::Not(BoolExpr* a) {
     // constant-fold
-    if (a->op_ == Op::VAR && a->varID_ < 2)
+    if (a->op_ == Op::VAR && a->varID_ < 2) {
         return Var(1 - a->varID_);
+    }
     // double negation
-    if (a->op_ == Op::NOT)
+    if (a->op_ == Op::NOT) {
         return a->left_;
+    }
     BoolExprCache::Key k{Op::NOT, 0, a, nullptr};
     return createNode(k);
 }
@@ -83,13 +85,24 @@ BoolExpr* BoolExpr::And(
 {
     // constant-fold
     if ((a->op_ == Op::VAR && a->varID_ == 0) ||
-        (b->op_ == Op::VAR && b->varID_ == 0))
+        (b->op_ == Op::VAR && b->varID_ == 0)) {
         return Var(0);
-    if (a->op_ == Op::VAR && a->varID_ == 1) return b;
-    if (b->op_ == Op::VAR && b->varID_ == 1) return a;
-    if (a == b)              return a;
-    if (a->op_==Op::NOT && a->left_==b) return Var(0);
-    if (b->op_==Op::NOT && b->left_==a) return Var(0);
+    }
+    if (a->op_ == Op::VAR && a->varID_ == 1) {
+        return b;
+    }
+    if (b->op_ == Op::VAR && b->varID_ == 1) {
+        return a;
+    }
+    if (a == b) {
+        return a;
+    }
+    if (a->op_==Op::NOT && a->left_==b) {
+        return Var(0);
+    }
+    if (b->op_==Op::NOT && b->left_==a) {
+        return Var(0);
+    }
 
     // canonical order
     // if (b < a) std::swap(a, b);
@@ -103,13 +116,24 @@ BoolExpr* BoolExpr::Or(
     BoolExpr* b)
 {
     if ((a->op_ == Op::VAR && a->varID_ == 1) ||
-        (b->op_ == Op::VAR && b->varID_ == 1))
+        (b->op_ == Op::VAR && b->varID_ == 1)) {
         return Var(1);
-    if (a->op_ == Op::VAR && a->varID_ == 0) return b;
-    if (b->op_ == Op::VAR && b->varID_ == 0) return a;
-    if (a == b)             return a;
-    if (a->op_==Op::NOT && a->left_==b) return Var(1);
-    if (b->op_==Op::NOT && b->left_==a) return Var(1);
+    }
+    if (a->op_ == Op::VAR && a->varID_ == 0) {
+        return b;
+    }
+    if (b->op_ == Op::VAR && b->varID_ == 0) {
+        return a;
+    }
+    if (a == b) {
+        return a;
+    }
+    if (a->op_==Op::NOT && a->left_==b) {
+        return Var(1);
+    }
+    if (b->op_==Op::NOT && b->left_==a) {
+        return Var(1);
+    }
 
     // if (b < a) std::swap(a, b);
     // BoolExprCache::Key k{Op::OR, 0, a, b};
@@ -121,11 +145,21 @@ BoolExpr* BoolExpr::Xor(
     BoolExpr* a,
     BoolExpr* b)
 {
-    if (a->op_ == Op::VAR && a->varID_ == 0)     return b;
-    if (b->op_ == Op::VAR && b->varID_ == 0)     return a;
-    if (a->op_ == Op::VAR && a->varID_ == 1)     return Not(b);
-    if (b->op_ == Op::VAR && b->varID_ == 1)     return Not(a);
-    if (a == b)                  return Var(0);
+    if (a->op_ == Op::VAR && a->varID_ == 0) {
+        return b;
+    }
+    if (b->op_ == Op::VAR && b->varID_ == 0) {
+        return a;
+    }
+    if (a->op_ == Op::VAR && a->varID_ == 1) {
+        return Not(b);
+    }
+    if (b->op_ == Op::VAR && b->varID_ == 1) {
+        return Not(a);
+    }
+    if (a == b) {
+        return Var(0);
+    }
 
     // if (b < a) std::swap(a, b);
     // BoolExprCache::Key k{Op::XOR, 0, a, b};
@@ -142,26 +176,32 @@ void BoolExpr::Print(std::ostream& out) const {
             break;
         case Op::NOT:
             out << "¬";
-            if (left_->op_ != Op::VAR)
+            if (left_->op_ != Op::VAR) {
                 out << "(";
+            }
             left_->Print(out);
-            if (left_->op_ != Op::VAR)
+            if (left_->op_ != Op::VAR) {
                 out << ")";
+            }
             break;
         case Op::AND:
         case Op::OR:
         case Op::XOR:
-            if (left_->op_ != Op::VAR)
+            if (left_->op_ != Op::VAR) {
                 out << "(";
+            }
             left_->Print(out);
-            if (left_->op_ != Op::VAR)
+            if (left_->op_ != Op::VAR) {
                 out << ")";
+            }
             out << " " << OpToString(op_) << " ";
-            if (right_->op_ != Op::VAR)
+            if (right_->op_ != Op::VAR) {
                 out << "(";
+            }
             right_->Print(out);
-            if (right_->op_ != Op::VAR)
+            if (right_->op_ != Op::VAR) {
                 out << ")";
+            }
             break;
         default:
             assert(false && "unknown BoolExpr op");
@@ -195,8 +235,12 @@ static inline bool isConstTrue(BoolExpr* e) {
 }
 
 BoolExpr* BoolExpr::simplify(BoolExpr* e) {
-    if (!e) return nullptr;
-    if (e->getOp() == Op::VAR) return e;
+    if (!e) {
+        return nullptr;
+    }
+    if (e->getOp() == Op::VAR) {
+        return e;
+    }
 
     std::unordered_map<BoolExpr*, BoolExpr*> memo;
     std::vector<BoolExpr*> stack;
@@ -211,8 +255,12 @@ BoolExpr* BoolExpr::simplify(BoolExpr* e) {
         if (itst == state.end()) {
             state[n] = 1;
             stack.push_back(n);
-            if (n->getRight()) stack.push_back(n->getRight());
-            if (n->getLeft())  stack.push_back(n->getLeft());
+            if (n->getRight()) {
+                stack.push_back(n->getRight());
+            }
+            if (n->getLeft()) {
+                stack.push_back(n->getLeft());
+            }
         } else {
             order.push_back(n);
         }
@@ -290,14 +338,20 @@ std::set<size_t> BoolExpr::getSupportVars() const {
         const BoolExpr* node = stack.back();
         stack.pop_back();
 
-        if (visited[node]) continue;
+        if (visited[node]) {
+            continue;
+        }
         visited[node] = true;
 
         if (node->getOp() == Op::VAR) {
             support.insert(node->getId());
         } else {
-            if (node->getLeft())  stack.push_back(node->getLeft());
-            if (node->getRight()) stack.push_back(node->getRight());
+            if (node->getLeft()) {
+                stack.push_back(node->getLeft());
+            }
+            if (node->getRight()) {
+                stack.push_back(node->getRight());
+            }
         }
     }
 
