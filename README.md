@@ -4,7 +4,7 @@
 
 ## Introduction
 
-Kepler-Formal is a logic equivalence checking (LEC) tool that operates on Verilog, SystemVerilog, and the [Naja interchange format](https://github.com/najaeda/naja-if). It focuses today on combinational equivalence checking only; sequential boundary changes are not supported yet and remain planned work.
+Kepler-Formal is a logic equivalence checking (LEC) tool that operates on Verilog and the [Naja interchange format](https://github.com/najaeda/naja-if). It focuses today on combinational equivalence checking only; sequential boundary changes are not supported yet and remain planned work.
 
 ### Acknowledgement
 
@@ -15,7 +15,7 @@ This project is supported and funded by NLNet through the [NGI0 Entrust](https:/
 
 ## Requirements 
 
-### For Verilog and SystemVerilog:
+### For Verilog:
 
 - No change of sequential boundaries. 
 - No change in names of hierarchical instances, sequential instances and top terminals.
@@ -103,37 +103,24 @@ Once kepler-formal is fully buildable with Bazel, it can be consumed directly by
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-systemverilog/-sv/-naja_if> [--verilog_preprocessing] <netlist1> <netlist2> [<library-file>...]
+build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] <netlist1> <netlist2> [<library-file>...]
 
-# Multi-file Verilog / SystemVerilog designs
-build/src/bin/kepler-formal <-verilog/-systemverilog/-sv> [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
+# Multi-file Verilog designs
+build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
   [--liberty <library-file>...]
-
-# SystemVerilog slang flists with explicit tops
-build/src/bin/kepler-formal -systemverilog \
-  --sv_design1_flist <file> --sv_design1_top <name> \
-  --sv_design2_flist <file> --sv_design2_top <name>
 
 # Through yaml config file
 build/src/bin/kepler-formal --config <yaml file>
 ```
 
 `--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
-
-For SystemVerilog designs that are already driven by a slang command file / flist, use
-`sv_design1_flist`, `sv_design2_flist`, `sv_design1_top`, and `sv_design2_top`.
-This mode is flist-based; do not combine it with `input_paths` / `--design1` / `--design2`.
 ### Supported formats
 
 - CLI:
   - `-verilog`
-  - `-systemverilog`
-  - `-sv`
   - `-naja_if`
 - YAML `format`:
   - `verilog`
-  - `systemverilog`
-  - `sv`
   - `naja_if`
 
 ### Library files
@@ -169,30 +156,6 @@ liberty_files:
   - library_file0.lib
   - library_file1.lib
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
-```
-
-SystemVerilog example:
-
-```yaml
-format: systemverilog
-input_paths:
-  - [design0_pkg.sv, design0_top.sv]
-  - [design1_pkg.sv, design1_top.sv]
-liberty_files:
-  - stdcells.lib.gz
-  - primitives.py
-```
-
-SystemVerilog flist example:
-
-```yaml
-format: systemverilog
-sv_design1_flist: /path/to/design1.f
-sv_design1_top: top1
-sv_design2_flist: /path/to/design2.f
-sv_design2_top: top2
-liberty_files:
-  - stdcells.lib.gz
 ```
 
 ## Example 
