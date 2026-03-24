@@ -130,8 +130,11 @@ static bool parseConfigInputPaths(const YAML::Node& node,
   out.design0.clear();
   out.design1.clear();
   if (!node) {
+    // LCOV_EXCL_START
+    // KeplerFormalMain only calls parseConfigInputPaths when cfg["input_paths"] exists.
     error = "Missing input_paths in config";
     return false;
+    // LCOV_EXCL_STOP
   }
   if (!node.IsSequence()) {
     error = "input_paths must be a sequence";
@@ -234,12 +237,18 @@ static bool validateSystemVerilogOptions(const SystemVerilogOptions& options,
   const auto validateDesign = [&](const SystemVerilogDesignOptions& designOptions,
                                   const char* designLabel) {
     if (designOptions.top && designOptions.top->empty()) {
+      // LCOV_EXCL_START
+      // Public config and CLI parsing already reject empty SystemVerilog values.
       error = std::string(designLabel) + " top must not be empty";
       return false;
+      // LCOV_EXCL_STOP
     }
     if (designOptions.flist && designOptions.flist->empty()) {
+      // LCOV_EXCL_START
+      // Public config and CLI parsing already reject empty SystemVerilog values.
       error = std::string(designLabel) + " flist must not be empty";
       return false;
+      // LCOV_EXCL_STOP
     }
     return true;
   };
@@ -614,8 +623,12 @@ int KeplerFormalMain(int argc, char** argv) {
   }
   std::string svValidationError;
   if (!validateSystemVerilogOptions(systemVerilogOptions, svValidationError)) {
+    // LCOV_EXCL_START
+    // validateSystemVerilogOptions only fails for empty values, which the public
+    // CLI/config parsing already rejects before reaching this point.
     SPDLOG_CRITICAL("Invalid SystemVerilog options: {}", svValidationError);
     return EXIT_FAILURE;
+    // LCOV_EXCL_STOP
   }
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();

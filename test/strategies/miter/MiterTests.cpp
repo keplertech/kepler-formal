@@ -431,6 +431,112 @@ TEST_F(MiterTests, TestGenericXnorTruthTable) {
   expectGenericGateMiterEquivalent("XNOR_GENERIC", SNLTruthTable::GenericType::XNOR);
 }
 
+TEST_F(MiterTests, BuildPrimaryOutputClausesConstantTrueOutput) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesign* logic1 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC1"));
+  auto logic1Out =
+      SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(logic1, SNLTruthTable(0, 1));
+  NLLibraryTruthTables::construct(library);
+
+  SNLInstance* inst = SNLInstance::create(top, logic1, NLName("const1"));
+  SNLNet* net = SNLScalarNet::create(top, NLName("const1_net"));
+  inst->getInstTerm(logic1Out)->setNet(net);
+  topOut->setNet(net);
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 1u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  EXPECT_EQ(builder.getPOs()[0]->toString(), "1");
+}
+
+TEST(MiterStrategyStandaloneTests, NormalizeOutputsIgnoresOutputsOnlyPresentInSecondNetlist) {
+  MiterStrategy strategy(nullptr, nullptr, "normalizeOutputs");
+  using PathKey = BuildPrimaryOutputClauses::PathKey;
+  using OutputMap = std::unordered_map<PathKey, naja::DNL::DNLID,
+                                       BuildPrimaryOutputClauses::KeyHash>;
+
+  const PathKey common{{1}, {10}};
+  const PathKey onlySecond{{2}, {20}};
+
+  OutputMap outputs0Map;
+  OutputMap outputs1Map;
+  outputs0Map.emplace(common, 100);
+  outputs1Map.emplace(common, 200);
+  outputs1Map.emplace(onlySecond, 300);
+
+  std::vector<naja::DNL::DNLID> outputs0{100};
+  std::vector<naja::DNL::DNLID> outputs1{200, 300};
+
+  strategy.normalizeOutputs(outputs0, outputs1, outputs0Map, outputs1Map);
+
+  EXPECT_EQ(outputs0, std::vector<naja::DNL::DNLID>({100}));
+  EXPECT_EQ(outputs1, std::vector<naja::DNL::DNLID>({200}));
+}
+
+TEST_F(MiterTests, InvertedOutputsProduceConstantTrueMiter) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  SNLDesign* top0 =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top0"));
+  SNLDesign* top1 =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top1"));
+  univ->setTopDesign(top0);
+
+  auto top0In =
+      SNLScalarTerm::create(top0, SNLTerm::Direction::Input, NLName("a"));
+  auto top0Out =
+      SNLScalarTerm::create(top0, SNLTerm::Direction::Output, NLName("y"));
+  auto top1In =
+      SNLScalarTerm::create(top1, SNLTerm::Direction::Input, NLName("a"));
+  auto top1Out =
+      SNLScalarTerm::create(top1, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* invModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("INV"));
+  auto invIn =
+      SNLScalarTerm::create(invModel, SNLTerm::Direction::Input, NLName("A"));
+  auto invOut =
+      SNLScalarTerm::create(invModel, SNLTerm::Direction::Output, NLName("ZN"));
+  SNLDesignModeling::setTruthTable(invModel, SNLTruthTable(1, 1));
+  NLLibraryTruthTables::construct(library);
+
+  auto top0InputNet = SNLScalarNet::create(top0, NLName("a_net"));
+  top0In->setNet(top0InputNet);
+  top0Out->setNet(top0InputNet);
+
+  auto top1InputNet = SNLScalarNet::create(top1, NLName("a_net"));
+  auto top1OutputNet = SNLScalarNet::create(top1, NLName("y_net"));
+  top1In->setNet(top1InputNet);
+  top1Out->setNet(top1OutputNet);
+  SNLInstance* inv = SNLInstance::create(top1, invModel, NLName("inv0"));
+  inv->getInstTerm(invIn)->setNet(top1InputNet);
+  inv->getInstTerm(invOut)->setNet(top1OutputNet);
+
+  MiterStrategy strategy(top0, top1, "constant_true_miter");
+  strategy.init();
+  EXPECT_FALSE(strategy.run());
+}
+
 
 TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   printf("[TEST] MiterTests.TestMiterANDNonConstantWithSequentialElements\n");

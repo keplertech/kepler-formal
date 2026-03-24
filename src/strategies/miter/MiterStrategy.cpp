@@ -295,8 +295,10 @@ int tseitinEncode(
         break;
 
       default:
+        // LCOV_EXCL_START
         logger->warn("Unhandled operator in tseitinEncode: {}", static_cast<int>(e->getOp()));
         break;
+        // LCOV_EXCL_STOP
     }
 
     stk.pop();

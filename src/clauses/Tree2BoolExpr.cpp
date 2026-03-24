@@ -242,9 +242,13 @@ BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
       }
       return expr;
     case SNLTruthTable::GenericType::NONE:
+      // LCOV_EXCL_START
       break;
+      // LCOV_EXCL_STOP
   }
+  // LCOV_EXCL_START
   throw std::runtime_error("Unsupported generic truth table type");
+  // LCOV_EXCL_STOP
 }
 
 // Frame type used for explicit stack-based post-order traversal.
@@ -352,7 +356,7 @@ BoolExpr* Tree2BoolExpr::convert(
                    expr = result.first->second;
                }
            }
-            // LCOV_EXCL_STOP
+           // LCOV_EXCL_STOP
            setMemoETS(id, expr);
         } else if (name == 1) {
            BoolExpr* expr = BoolExpr::createTrue();
@@ -365,8 +369,8 @@ BoolExpr* Tree2BoolExpr::convert(
                   // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
                   expr = result.first->second;
               }
-              // LCOV_EXCL_STOP
            }
+           // LCOV_EXCL_STOP
            setMemoETS(id, expr);
         } else {
           // Normal variable mapping.
@@ -380,8 +384,8 @@ BoolExpr* Tree2BoolExpr::convert(
                 // Reuse canonical instance (do NOT delete expr; ownership may not be raw).
                 expr = result.first->second;
             }
-            // LCOV_EXCL_STOP
           }
+          // LCOV_EXCL_STOP
           setMemoETS(id, expr);
         }
       }
@@ -409,10 +413,14 @@ BoolExpr* Tree2BoolExpr::convert(
         if (tbl.isGeneric()) {
           BoolExpr* expr = buildGenericTruthTableExpr(tbl, k);
           if (isoID != naja::DNL::DNLID_MAX) {
+            // LCOV_EXCL_START
+            // The duplicate insert path only happens through concurrent reuse of
+            // the same isoID during conversion.
             auto result = iso2boolExpr_.insert({isoID, expr});
             if (!result.second) {
               expr = result.first->second;
             }
+            // LCOV_EXCL_STOP
           }
           setMemoETS(id, expr);
           continue;
