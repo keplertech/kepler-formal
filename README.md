@@ -114,6 +114,9 @@ build/src/bin/kepler-formal --config <yaml file>
 ```
 
 `--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
+
+Experimental SystemVerilog notes are tracked in [docs/systemverilog/README.md](docs/systemverilog/README.md). That flow is still ongoing work and is not part of the stable top-level interface yet.
+
 ### Supported formats
 
 - CLI:
