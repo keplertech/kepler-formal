@@ -13,6 +13,10 @@
 #include "core/Solver.h"
 #include "simp/SimpSolver.h"
 
+#include <algorithm>
+#include <iomanip>
+#include <map>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include "NetlistGraph.h"
@@ -43,6 +47,12 @@ namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
 
+struct TerminalSummaryRow {
+  std::string modelName;
+  std::string termName;
+  size_t count = 0;
+};
+
 std::string pathKeyToString(const KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey& path) {
   std::string pathString;
   for (const auto& nameID : path.first) {
@@ -52,6 +62,78 @@ std::string pathKeyToString(const KEPLER_FORMAL::BuildPrimaryOutputClauses::Path
     pathString += std::to_string(id) + ".";
   }
   return pathString;
+}
+
+void logTerminalSummaryTable(const std::string& designLabel,
+                            const std::string& kind,
+                            const std::vector<naja::DNL::DNLID>& ids) {
+  std::map<std::pair<std::string, std::string>, size_t> counts;
+  size_t modelWidth = std::string("Model").size();
+  size_t termWidth = std::string("Term").size();
+  size_t countWidth = std::string("Count").size();
+
+  for (const auto id : ids) {
+    const auto& terminal = naja::DNL::get()->getDNLTerminalFromID(id);
+    std::string modelName =
+        terminal.getSnlBitTerm()->getDesign()->getName().getString();
+    std::string termName = terminal.getSnlBitTerm()->getName().getString();
+    if (modelName.empty()) {
+      modelName = "<unnamed>";
+    }
+    if (termName.empty()) {
+      termName = "<unnamed>";
+    }
+    auto key = std::make_pair(std::move(modelName), std::move(termName));
+    size_t& count = counts[key];
+    ++count;
+    modelWidth = std::max(modelWidth, key.first.size());
+    termWidth = std::max(termWidth, key.second.size());
+  }
+
+  std::vector<TerminalSummaryRow> rows;
+  rows.reserve(counts.size());
+  for (const auto& [key, count] : counts) {
+    rows.push_back({key.first, key.second, count});
+    countWidth = std::max(countWidth, std::to_string(count).size());
+  }
+
+  std::sort(rows.begin(), rows.end(),
+            [](const TerminalSummaryRow& lhs, const TerminalSummaryRow& rhs) {
+              if (lhs.count != rhs.count) {
+                return lhs.count > rhs.count;
+              }
+              if (lhs.modelName != rhs.modelName) {
+                return lhs.modelName < rhs.modelName;
+              }
+              return lhs.termName < rhs.termName;
+            });
+
+  std::ostringstream table;
+  table << "| " << std::left << std::setw(modelWidth) << "Model"
+        << " | " << std::setw(termWidth) << "Term"
+        << " | " << std::right << std::setw(countWidth) << "Count"
+        << " |\n";
+  table << "|-" << std::string(modelWidth, '-')
+        << "-|-" << std::string(termWidth, '-')
+        << "-|-" << std::string(countWidth, '-')
+        << "-|\n";
+
+  if (rows.empty()) {
+    table << "| " << std::left << std::setw(modelWidth) << "<none>"
+          << " | " << std::setw(termWidth) << "<none>"
+          << " | " << std::right << std::setw(countWidth) << 0
+          << " |\n";
+  } else {
+    for (const auto& row : rows) {
+      table << "| " << std::left << std::setw(modelWidth) << row.modelName
+            << " | " << std::setw(termWidth) << row.termName
+            << " | " << std::right << std::setw(countWidth) << row.count
+            << " |\n";
+    }
+  }
+
+  logger->info("{} {} summary by model/term ({} total terminals, {} unique rows):\n{}",
+               designLabel, kind, ids.size(), rows.size(), table.str());
 }
 
 void ensureLoggerInitialized() {
@@ -516,13 +598,19 @@ void MiterStrategy::init() {
   univ->setTopDesign(top0_);
   logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
   builder0_.collect();
+  logger->info("Collected {} PIs for design 0\n", builder0_.getInputs().size());
   logger->info("Collected {} POs for design 0\n", builder0_.getOutputs().size());
+  logTerminalSummaryTable("design 0", "PI", builder0_.getInputs());
+  logTerminalSummaryTable("design 0", "PO", builder0_.getOutputs());
   PIs0_ = builder0_.getInputs();
   naja::DNL::destroy();
   univ->setTopDesign(top1_);
   logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
   builder1_.collect();
+  logger->info("Collected {} PIs for design 1\n", builder1_.getInputs().size());
   logger->info("Collected {} POs for design 1\n", builder1_.getOutputs().size());
+  logTerminalSummaryTable("design 1", "PI", builder1_.getInputs());
+  logTerminalSummaryTable("design 1", "PO", builder1_.getOutputs());
   PIs1_ = builder1_.getInputs();
 }
 
