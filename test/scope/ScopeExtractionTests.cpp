@@ -149,10 +149,10 @@ TEST_F(ScopeExtractionUnitTests, IdenticalDesigns_NoVerificationNeeded) {
 
   // Make the child models have deterministic truth tables so library tables
   // exist
-  SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0));
-  SNLDesignModeling::setTruthTable(a.childB_model, SNLTruthTable(0, 1));
-  SNLDesignModeling::setTruthTable(b.childA_model, SNLTruthTable(0, 0));
-  SNLDesignModeling::setTruthTable(b.childB_model, SNLTruthTable(0, 1));
+  SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(a.childB_model, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(b.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(b.childB_model, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
   NLLibraryTruthTables::construct(lib_);
 
   // Wire nets identically for both tops
@@ -207,9 +207,9 @@ TEST_F(ScopeExtractionUnitTests, DifferentInstanceCount_TopAddedToVerify) {
   b.childA_inst = SNLInstance::create(b.top, b.childA_model, NLName(instAName));
 
   // Set truth tables and construct library tables
-  SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0));
-  SNLDesignModeling::setTruthTable(a.childB_model, SNLTruthTable(0, 1));
-  SNLDesignModeling::setTruthTable(b.childA_model, SNLTruthTable(0, 0));
+  SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(a.childB_model, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(b.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
   NLLibraryTruthTables::construct(lib_);
 
   // Wire nets for A
@@ -248,10 +248,10 @@ TEST_F(ScopeExtractionUnitTests, SameCountDifferentChildIDs_AddedToVerify) {
   TopDesignBundle b = buildSimpleTop(lib_, "topB_ids", "LOGIC_X", "LOGIC_Y");
 
   // Set truth tables so nets/terms exist
-  SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0));
-  SNLDesignModeling::setTruthTable(a.childB_model, SNLTruthTable(0, 1));
-  SNLDesignModeling::setTruthTable(b.childA_model, SNLTruthTable(0, 0));
-  SNLDesignModeling::setTruthTable(b.childB_model, SNLTruthTable(0, 1));
+  SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(a.childB_model, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(b.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+  SNLDesignModeling::setTruthTable(b.childB_model, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
   NLLibraryTruthTables::construct(lib_);
 
   // Wire nets for A

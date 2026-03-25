@@ -22,7 +22,7 @@ using Node = SNLTruthTableTree::Node;
 
 // Build a small truth‐table via the "mask" constructor (valid for size ≤ 6).
 static SNLTruthTable makeMaskTable(uint32_t size, uint64_t mask) {
-  return SNLTruthTable(size, mask);
+  return SNLTruthTable(size, mask, SNLTruthTable::fullDependencies(size));
 }
 
 // helper to evaluate a mask at index

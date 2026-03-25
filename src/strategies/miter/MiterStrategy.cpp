@@ -47,6 +47,15 @@ namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
 
+void resetLogger() {
+  if (logger) {
+    logger->flush();
+    logger.reset();
+  }
+  spdlog::drop("miter_logger");
+  spdlog::drop("miter_logger_fallback");
+}
+
 struct TerminalSummaryRow {
   std::string modelName;
   std::string termName;
@@ -137,9 +146,7 @@ void logTerminalSummaryTable(const std::string& designLabel,
 }
 
 void ensureLoggerInitialized() {
-  if (logger) {
-    return;
-  }
+  resetLogger();
 
   try {
     // 1) Choose a default file name in the current working directory

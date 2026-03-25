@@ -112,7 +112,10 @@ TEST_F(UnitDesignCompare, testDifferentDesigns) {
   EXPECT_TRUE(ttSum1.isGeneric());
   EXPECT_EQ(ttSum1.getGenericType(), SNLTruthTable::GenericType::OR);
 
-  KEPLER_FORMAL::MiterStrategy miterS(top0, top1, "./logB");
+  const auto logPath = std::filesystem::current_path() / "logB";
+  std::error_code ec;
+  std::filesystem::remove(logPath, ec);
+  KEPLER_FORMAL::MiterStrategy miterS(top0, top1, logPath.string());
   miterS.init();
   EXPECT_FALSE(miterS.run());
   //should be different
@@ -204,7 +207,7 @@ TEST_F(UnitDesignCompare, testManualAndDesigns) {
     EXPECT_TRUE(miterS.run());
   }
 
-  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8));
+  SNLDesignModeling::setTruthTable(andModel, SNLTruthTable(2, 8, SNLTruthTable::fullDependencies(2)));
   EXPECT_TRUE(SNLDesignModeling::hasModeling(andModel));
 
   {

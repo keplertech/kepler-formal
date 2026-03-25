@@ -136,7 +136,7 @@ void reserveResolvedChildrenETS(size_t n) {
 }
 
 // Init Ptable holder
-const SNLTruthTable SNLTruthTableTree::PtableHolder_ = SNLTruthTable(1, 2);
+const SNLTruthTable SNLTruthTableTree::PtableHolder_ = SNLTruthTable(1, 2, SNLTruthTable::fullDependencies(1));
 
 // diagnostic global
 static std::atomic<size_t> g_live_nodes{0};
