@@ -67,6 +67,18 @@ static std::string get_test_data_prefix() {
 
 namespace {
 
+std::vector<uint64_t> getInputFlatDependencies(const SNLDesign* design) {
+  std::vector<size_t> deps;
+  size_t flatPos = 0;
+  for (auto term : design->getBitTerms()) {
+    if (term->getDirection() != SNLTerm::Direction::Output) {
+      deps.push_back(flatPos);
+    }
+    ++flatPos;
+  }
+  return NLBitDependencies::encodeBits(deps);
+}
+
 void executeCommand(const std::string& command) {
   int result = system(command.c_str());
   if (result != 0) {
@@ -1421,7 +1433,8 @@ TEST_F(MiterTests, tt65In) {
   // set truth tables for all 65 outputs with and function for the 2 inputs
   std::vector<SNLTruthTable> tt65InTables;
   for (int i = 0; i < 65; ++i) {
-    tt65InTables.push_back(SNLTruthTable(2, 8, SNLTruthTable::fullDependencies(2)));
+    tt65InTables.push_back(
+        SNLTruthTable(2, 8, getInputFlatDependencies(tt65InModel)));
   }
   SNLDesignModeling::setTruthTables(tt65InModel,tt65InTables);
   //NLLibraryTruthTables::construct(library);
