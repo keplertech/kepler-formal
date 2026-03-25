@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <gtest/gtest.h>
+#include <chrono>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "gtest/gtest.h"
@@ -67,6 +72,47 @@ static std::string get_test_data_prefix() {
 
 namespace {
 
+std::string sanitizePathComponent(std::string value) {
+  for (char& ch : value) {
+    if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ||
+          ch == '-' || ch == '.')) {
+      ch = '_';
+    }
+  }
+  if (value.empty()) {
+    value = "test";
+  }
+  return value;
+}
+
+std::filesystem::path makeUniqueTestTempDir() {
+  static size_t counter = 0;
+  const auto* testInfo = ::testing::UnitTest::GetInstance()->current_test_info();
+  std::ostringstream name;
+  name << "kepler_formal_";
+  if (testInfo) {
+    name << sanitizePathComponent(testInfo->test_suite_name()) << "_"
+         << sanitizePathComponent(testInfo->name()) << "_";
+  }
+  name << std::chrono::steady_clock::now().time_since_epoch().count() << "_"
+       << counter++;
+  auto dir = std::filesystem::temp_directory_path() / name.str();
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+class ScopedCurrentPath {
+ public:
+  explicit ScopedCurrentPath(const std::filesystem::path& path)
+      : original_(std::filesystem::current_path()) {
+    std::filesystem::current_path(path);
+  }
+  ~ScopedCurrentPath() { std::filesystem::current_path(original_); }
+
+ private:
+  std::filesystem::path original_;
+};
+
 std::vector<uint64_t> getInputFlatDependencies(const SNLDesign* design) {
   std::vector<size_t> deps;
   size_t flatPos = 0;
@@ -84,31 +130,6 @@ void executeCommand(const std::string& command) {
   if (result != 0) {
     std::cerr << "Command execution failed." << std::endl;
   }
-}
-
-std::vector<std::filesystem::path> listMiterLogFiles() {
-  std::vector<std::filesystem::path> logs;
-  for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::current_path())) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    const auto name = entry.path().filename().string();
-    if (name.rfind("miter_log_", 0) == 0 && entry.path().extension() == ".txt") {
-      logs.push_back(entry.path().filename());
-    }
-  }
-  return logs;
-}
-
-std::filesystem::path findNewMiterLogFile(
-    const std::vector<std::filesystem::path>& beforeLogs) {
-  const auto afterLogs = listMiterLogFiles();
-  for (const auto& after : afterLogs) {
-    if (std::find(beforeLogs.begin(), beforeLogs.end(), after) == beforeLogs.end()) {
-      return after;
-    }
-  }
-  return {};
 }
 
 void expectGenericGateMiterEquivalent(const char* gateName,
@@ -191,6 +212,7 @@ class MiterTests : public ::testing::Test {
   void SetUp() override {
     // Code here will be called immediately after the constructor (right
     // before each test).
+    tempDir_ = makeUniqueTestTempDir();
   }
   void TearDown() override {
     // Code here will be called immediately after each test (right
@@ -199,7 +221,17 @@ class MiterTests : public ::testing::Test {
     naja::DNL::destroy();
     NLUniverse::get()->destroy();
     KEPLER_FORMAL::BoolExprCache::destroy();
+    if (!tempDir_.empty()) {
+      std::error_code ec;
+      std::filesystem::remove_all(tempDir_, ec);
+    }
   }
+
+  std::filesystem::path testTempPath(const std::string& leaf) const {
+    return tempDir_ / leaf;
+  }
+
+  std::filesystem::path tempDir_;
 };
 
 TEST(HelloTest, ReturnsHelloWorld) {
@@ -708,6 +740,39 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
 // 2. clone the the top and chain an inverter to the AND output
 // 3. verify that the miter strategy detects the difference
 TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  auto runKeplerCliWithArgs = [](const std::vector<std::string>& args) {
+    std::string cmd;
+    cmd += KEPLER_BIN;
+    for (const auto& a : args) {
+      cmd += " ";
+      std::string quoted = "'";
+      for (char c : a) {
+        if (c == '\'') {
+          quoted += "'\\''";
+        } else {
+          quoted.push_back(c);
+        }
+      }
+      quoted += "'";
+      cmd += quoted;
+    }
+
+    int rc = std::system(cmd.c_str());
+    if (rc == -1) {
+      return EXIT_FAILURE;
+    }
+
+#if defined(_WIN32)
+    return rc;
+#else
+    if (WIFEXITED(rc)) {
+      return WEXITSTATUS(rc);
+    }
+    return EXIT_FAILURE;
+#endif
+  };
+
   // 1. Create SNL
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
@@ -798,15 +863,13 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
 
   {
     // dump top to naja_if(CapProto)
-    std::filesystem::path outputPath("./top.capnp");
+    std::filesystem::path outputPath("top.capnp");
     SNLCapnP::dump(db, outputPath);
   }
   // Dump visual
   {
-    std::string dotFileName(
-        std::string(std::string("./beforeEdit") + std::string(".dot")));
-    std::string svgFileName(
-        std::string(std::string("./beforeEdit") + std::string(".svg")));
+    std::string dotFileName("beforeEdit.dot");
+    std::string svgFileName("beforeEdit.svg");
     SnlVisualiser snl(top);
     snl.process();
     snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
@@ -829,10 +892,8 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
 
   // dump visual
   {
-    std::string dotFileName(
-        std::string(std::string("./afterEdit") + std::string(".dot")));
-    std::string svgFileName(
-        std::string(std::string("./afterEdit") + std::string(".svg")));
+    std::string dotFileName("afterEdit.dot");
+    std::string svgFileName("afterEdit.svg");
     SnlVisualiser snl(top);
     snl.process();
     snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
@@ -843,22 +904,28 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
 
   // test the miter strategy
   {
-    MiterStrategy MiterS(top, topClone, "CaseC");
+    MiterStrategy MiterS(top, topClone, testTempPath("CaseC.log").string());
     MiterS.init();
     EXPECT_FALSE(MiterS.run());
   }
   {
     // dump top to naja_if(CapProto)
-    std::filesystem::path outputPath("./topEdited1.capnp");
+    std::filesystem::path outputPath("topEdited1.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-  //Check output of binary kepler-formal on the 2 capnp files
-  const auto beforeDifferentLogs = listMiterLogFiles();
-  executeCommand(
-      (get_kepler_bin() + " -naja_if ./top.capnp ./topEdited1.capnp")
-          .c_str());
-  const auto differentLog = findNewMiterLogFile(beforeDifferentLogs);
-  ASSERT_FALSE(differentLog.empty());
+  const auto differentLog = testTempPath("different_miter.log");
+  const auto differentCfg = testTempPath("different.yaml");
+  {
+    std::ofstream cfg(differentCfg);
+    cfg << "format: naja_if\n";
+    cfg << "input_paths:\n";
+    cfg << "  - \"" << testTempPath("top.capnp").string() << "\"\n";
+    cfg << "  - \"" << testTempPath("topEdited1.capnp").string() << "\"\n";
+    cfg << "log_file: \"" << differentLog.string() << "\"\n";
+  }
+  int rc = runKeplerCliWithArgs({"--config", differentCfg.string()});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  ASSERT_TRUE(std::filesystem::exists(differentLog));
   std::ifstream miterLogFile(differentLog);
   std::string line;
   bool foundDifferent = false;
@@ -884,14 +951,15 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   topOut->setNet(net7);
   // test the miter strategy again
   {
-    MiterStrategy MiterS(top, topClone, "CaseD");
+    MiterStrategy MiterS(top, topClone, testTempPath("CaseD.log").string());
     MiterS.init();
     EXPECT_TRUE(MiterS.run());
   }
   {
     KEPLER_FORMAL::Config::setSolverType(KEPLER_FORMAL::Config::SolverType::GLUCOSE);
     // print current solver type
-    MiterStrategy MiterGlucose(top, topClone, "MultiDriver");
+    MiterStrategy MiterGlucose(top, topClone,
+                               testTempPath("MultiDriver.log").string());
     MiterGlucose.init();
     // Expect throw in run
     EXPECT_TRUE(MiterGlucose.run());
@@ -899,17 +967,23 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   }
   {
     // dump top to naja_if(CapProto)
-    std::filesystem::path outputPath("./topEdited2.capnp");
+    std::filesystem::path outputPath("topEdited2.capnp");
     SNLCapnP::dump(db, outputPath);
   }
 
-  //Check output of binary kepler-formal on the 2 capnp files
-  const auto beforeIdenticalLogs = listMiterLogFiles();
-  executeCommand(
-      (get_kepler_bin() + " -naja_if ./top.capnp ./topEdited2.capnp")
-          .c_str());
-  const auto identicalLog = findNewMiterLogFile(beforeIdenticalLogs);
-  ASSERT_FALSE(identicalLog.empty());
+  const auto identicalLog = testTempPath("identical_miter.log");
+  const auto identicalCfg = testTempPath("identical.yaml");
+  {
+    std::ofstream cfg(identicalCfg);
+    cfg << "format: naja_if\n";
+    cfg << "input_paths:\n";
+    cfg << "  - \"" << testTempPath("top.capnp").string() << "\"\n";
+    cfg << "  - \"" << testTempPath("topEdited2.capnp").string() << "\"\n";
+    cfg << "log_file: \"" << identicalLog.string() << "\"\n";
+  }
+  rc = runKeplerCliWithArgs({"--config", identicalCfg.string()});
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  ASSERT_TRUE(std::filesystem::exists(identicalLog));
   std::ifstream miterLogFile2(identicalLog);
   bool foundIdentical = false;
   if (miterLogFile2.is_open()) {
@@ -922,7 +996,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     miterLogFile2.close();
   }
   EXPECT_TRUE(foundIdentical);
-  
 }
 
 // ---------------------- Tests appended for coverage (subprocess approach, tolerant) ----------------------
