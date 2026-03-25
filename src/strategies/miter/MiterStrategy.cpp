@@ -222,7 +222,9 @@ void ensureLoggerInitialized() {
     if (logger) {
       logger->set_level(spdlog::level::info);
       logger->flush_on(spdlog::level::info);
-      spdlog::register_logger(logger);
+      if (!spdlog::get(logger->name())) {
+        spdlog::register_logger(logger);
+      }
     }
   } catch (const std::exception& ex) {
     // LCOV_EXCL_START
@@ -230,7 +232,9 @@ void ensureLoggerInitialized() {
     auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
     logger = std::make_shared<spdlog::logger>("miter_logger_fallback", console_sink);
     logger->set_level(spdlog::level::debug);
-    spdlog::register_logger(logger);
+    if (!spdlog::get(logger->name())) {
+      spdlog::register_logger(logger);
+    }
     logger->error("Unexpected exception initializing logger: {}", ex.what());
     // LCOV_EXCL_STOP
   }

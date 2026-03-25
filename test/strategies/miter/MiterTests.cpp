@@ -44,7 +44,11 @@ static std::filesystem::path repoRoot() {
 static std::string get_kepler_bin() {
   const char* env = std::getenv("KEPLER_BIN");
   if (env && *env) {
-    return env;
+    std::filesystem::path envPath(env);
+    if (envPath.is_absolute()) {
+      return envPath.string();
+    }
+    return std::filesystem::absolute(envPath).string();
   }
   const auto root = repoRoot();
   const std::vector<std::filesystem::path> candidates = {
@@ -506,6 +510,56 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesConstantTrueOutput) {
   ASSERT_EQ(builder.getPOs().size(), 1u);
   ASSERT_NE(builder.getPOs()[0], nullptr);
   EXPECT_EQ(builder.getPOs()[0]->toString(), "1");
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topIn0 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+  auto topIn1 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* flatDepsModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("FLAT_DEPS_AND"));
+  auto flatDepsOut = SNLScalarTerm::create(
+      flatDepsModel, SNLTerm::Direction::Output, NLName("y"));
+  auto flatDepsIn0 = SNLScalarTerm::create(
+      flatDepsModel, SNLTerm::Direction::Input, NLName("a"));
+  auto flatDepsIn1 = SNLScalarTerm::create(
+      flatDepsModel, SNLTerm::Direction::Input, NLName("b"));
+  SNLDesignModeling::setTruthTable(
+      flatDepsModel, SNLTruthTable(2, 0b1000, getInputFlatDependencies(flatDepsModel)));
+
+  auto inst = SNLInstance::create(top, flatDepsModel, NLName("u0"));
+  auto netA = SNLScalarNet::create(top, NLName("net_a"));
+  auto netB = SNLScalarNet::create(top, NLName("net_b"));
+  auto netY = SNLScalarNet::create(top, NLName("net_y"));
+
+  topIn0->setNet(netA);
+  topIn1->setNet(netB);
+  topOut->setNet(netY);
+  inst->getInstTerm(flatDepsIn0)->setNet(netA);
+  inst->getInstTerm(flatDepsIn1)->setNet(netB);
+  inst->getInstTerm(flatDepsOut)->setNet(netY);
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+
+  ASSERT_EQ(builder.getOutputs().size(), 1u);
+  const auto outputTerm =
+      naja::DNL::get()->getDNLTerminalFromID(builder.getOutputs()[0]);
+  EXPECT_TRUE(outputTerm.isTopPort());
+  EXPECT_EQ(outputTerm.getSnlBitTerm()->getName().getString(), "y");
 }
 
 TEST(MiterStrategyStandaloneTests, NormalizeOutputsIgnoresOutputsOnlyPresentInSecondNetlist) {

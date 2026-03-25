@@ -301,15 +301,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
             }
           }
           bool inTermInTTDeps = false;
-          uint64_t orderID = 0;
-          for (DNLID tId = instance.getTermIndexes().first;
-               tId < termId; ++tId) {
-            const DNLTerminalFull& prevTerm = dnl->getDNLTerminalFromID(tId);
-            if (prevTerm.getSnlBitTerm()->getDirection() !=
-                SNLBitTerm::Direction::Output) {
-              ++orderID;
-            }
-          }
+          // Truth-table dependencies are encoded in flat bit-term coordinates.
+          uint64_t orderID = term.getSnlBitTerm()->getOrderID();
           for (const auto tt : tts) {
             const auto ttDeps =
                 tt.getDependencies();  // expect std::vector<uint64_t>
