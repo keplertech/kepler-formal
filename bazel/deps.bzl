@@ -107,7 +107,7 @@ naja_repo = repository_rule(
 # to verify, then update the sha256 hashes.
 _GLUCOSE_COMMIT = "7f887abba7cf13636a5ac2d28653668a20a91b25"
 _KISSAT_COMMIT = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
-_NAJA_COMMIT = "62e28342f2cf2eb22772689d5cd43a933cc0cebf"
+_NAJA_COMMIT = "ad0c6b986ff998346ad9cff8033c80d2c4b30f29"
 _NAJA_VERILOG_COMMIT = "a377d7f2644bbbf98ff1ae9e8511d52eba8dd6ca"
 _NAJA_IF_COMMIT = "27ea776a0c3022fea0c29ccd14a4fb7daea941f0"
 _CPPTRACE_COMMIT = "3db8da80111171c219ab5839905771386bee06b3"
@@ -134,7 +134,7 @@ def _deps_impl(_module_ctx):
     naja_repo(
         name = "naja",
         naja_url = "https://github.com/nanocoh/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
-        naja_sha256 = "f50d7c67291dfc08bcfb4fea08de642880de3837df013d8461d378457ab54777",
+        naja_sha256 = "2f4df5172c01100c1a4171ab06df744d72aaea92cee5c9c853b86bf16a1f07cd",
         naja_strip_prefix = "naja-{}".format(_NAJA_COMMIT),
         naja_verilog_url = "https://github.com/najaeda/naja-verilog/archive/{}.tar.gz".format(_NAJA_VERILOG_COMMIT),
         naja_verilog_sha256 = "beffd84e14da4b146d9a0dc4699ebf44596cd437cf8157e3b39430a4080c606d",
