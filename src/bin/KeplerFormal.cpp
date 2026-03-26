@@ -38,10 +38,10 @@ static void print_usage(const char* prog) {
       "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv> "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...] | "
+      "<file...> [--liberty <library-file>...] [--compact] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] "
-      "[--design1 <file...>] [--design2 <file...>]",
+      "[--design1 <file...>] [--design2 <file...>] [--compact]",
       prog);
 }
 
@@ -78,6 +78,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "cnf_export_path",
       "dump_cnf",
       "dump_cnf_path",
+      "compact_mode",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -364,6 +365,7 @@ int KeplerFormalMain(int argc, char** argv) {
   bool useScopes = false;
   bool cleanScopes = false;
   bool dumpCnf = false;
+  bool compactMode = false;
   bool verilogPreprocessing = false;
   std::string dumpCnfPath;
 
@@ -436,6 +438,11 @@ int KeplerFormalMain(int argc, char** argv) {
         // cnf_export_path (optional)
         if (cfg["cnf_export_path"] && cfg["cnf_export_path"].IsScalar()) {
           dumpCnfPath = cfg["cnf_export_path"].as<std::string>();
+        }
+
+        // compact_mode
+        if (cfg["compact_mode"] && cfg["compact_mode"].IsScalar()) {
+          compactMode = cfg["compact_mode"].as<bool>();
         }
 
         // verilog_preprocessing (optional)
@@ -525,6 +532,10 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       if (arg == "--verilog_preprocessing") {
         verilogPreprocessing = true;
+        continue;
+      }
+      if (arg == "--compact") {
+        compactMode = true;
         continue;
       }
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
@@ -655,6 +666,7 @@ int KeplerFormalMain(int argc, char** argv) {
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   SPDLOG_INFO("Solver: {}",
               solverType == KEPLER_FORMAL::Config::SolverType::KISSAT ? "KISSAT" : "GLUCOSE");
+  SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -858,7 +870,7 @@ int KeplerFormalMain(int argc, char** argv) {
   // --------------------------------------------------------------------------
   if (inputFormatType == FormatType::NAJA_IF && useScopes) {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
-    MiterS.init();
+    MiterS.init(false);
     ScopeExtraction extractor(top0, top1);
     extractor.collectVerificationScopes();
     if (cleanScopes) {
@@ -879,7 +891,7 @@ int KeplerFormalMain(int argc, char** argv) {
           MiterScope.setCnfDump(true, outPath);
         }
         MiterScope.init();
-        if (MiterScope.run()) {
+        if (MiterScope.run(compactMode)) {
           SPDLOG_INFO("No difference was found for scope: {} , {}",
                       scopes.first->getName().getString(),
                       scopes.second->getName().getString());
@@ -906,7 +918,7 @@ int KeplerFormalMain(int argc, char** argv) {
         MiterS.setCnfDump(true, outPath);
       }
       MiterS.init();
-      if (MiterS.run()) {
+      if (MiterS.run(compactMode)) {
         SPDLOG_INFO("No difference was found.");
       } else {
         SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");

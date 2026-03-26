@@ -146,7 +146,9 @@ void logTerminalSummaryTable(const std::string& designLabel,
 }
 
 void ensureLoggerInitialized() {
-  resetLogger();
+  if (logger && spdlog::get(logger->name())) {
+    return;
+  }
 
   try {
     // 1) Choose a default file name in the current working directory
@@ -599,33 +601,44 @@ void MiterStrategy::normalizeOutputs(
   #endif
 }
 
-void MiterStrategy::init() {
-  ensureLoggerInitialized();
-  logger->info("MiterStrategy::run starting");
+void MiterStrategy::init(bool enableLogging) {
+  if (enableLogging) {
+    resetLogger();
+    ensureLoggerInitialized();
+    logger->info("MiterStrategy::run starting");
+  }
   // build both sets of POs
   topInit_ = NLUniverse::get()->getTopDesign();
   NLUniverse* univ = NLUniverse::get();
   naja::DNL::destroy();
   univ->setTopDesign(top0_);
-  logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
+  if (enableLogging) {
+    logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
+  }
   builder0_.collect();
-  logger->info("Collected {} PIs for design 0\n", builder0_.getInputs().size());
-  logger->info("Collected {} POs for design 0\n", builder0_.getOutputs().size());
-  logTerminalSummaryTable("design 0", "PI", builder0_.getInputs());
-  logTerminalSummaryTable("design 0", "PO", builder0_.getOutputs());
+  if (enableLogging) {
+    logger->info("Collected {} PIs for design 0\n", builder0_.getInputs().size());
+    logger->info("Collected {} POs for design 0\n", builder0_.getOutputs().size());
+    logTerminalSummaryTable("design 0", "PI", builder0_.getInputs());
+    logTerminalSummaryTable("design 0", "PO", builder0_.getOutputs());
+  }
   PIs0_ = builder0_.getInputs();
   naja::DNL::destroy();
   univ->setTopDesign(top1_);
-  logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
+  if (enableLogging) {
+    logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
+  }
   builder1_.collect();
-  logger->info("Collected {} PIs for design 1\n", builder1_.getInputs().size());
-  logger->info("Collected {} POs for design 1\n", builder1_.getOutputs().size());
-  logTerminalSummaryTable("design 1", "PI", builder1_.getInputs());
-  logTerminalSummaryTable("design 1", "PO", builder1_.getOutputs());
+  if (enableLogging) {
+    logger->info("Collected {} PIs for design 1\n", builder1_.getInputs().size());
+    logger->info("Collected {} POs for design 1\n", builder1_.getOutputs().size());
+    logTerminalSummaryTable("design 1", "PI", builder1_.getInputs());
+    logTerminalSummaryTable("design 1", "PO", builder1_.getOutputs());
+  }
   PIs1_ = builder1_.getInputs();
 }
 
-bool MiterStrategy::run() {
+bool MiterStrategy::run(bool compact) {
   NLUniverse* univ = NLUniverse::get();
   // normalize inputs and outputs
   std::vector<naja::DNL::DNLID> inputs0sort;
@@ -649,12 +662,6 @@ bool MiterStrategy::run() {
   univ->setTopDesign(top0_);
   builder0_.setInputs(inputs0sort);
   builder0_.setOutputs(outputs0sort);
-  naja::DNL::destroy();
-  univ->setTopDesign(top1_);
-  builder1_.setInputs(inputs1sort);
-  builder1_.setOutputs(outputs1sort);
-  naja::DNL::destroy();
-  univ->setTopDesign(top0_);
   builder0_.build();
   const auto& PIs0 = builder0_.getInputs();
   const auto& POs0 = builder0_.getPOs();
@@ -662,14 +669,24 @@ bool MiterStrategy::run() {
   const auto& inputs2inputsIDs0 = builder0_.getInputs2InputsIDs();
   const auto&outputs2outputsIDs0 = builder0_.getOutputs2OutputsIDs();
   naja::DNL::destroy();
+  if (compact) {
+    top0_->getDB()->destroy();
+    top0_ = nullptr;
+  } 
   univ->setTopDesign(top1_);
-  builder1_.build();
+  builder1_.setInputs(inputs1sort);
+  builder1_.setOutputs(outputs1sort);
+  builder1_.build();  
   const auto& PIs1 = builder1_.getInputs();
   const auto& POs1 = builder1_.getPOs();
   const auto& outputs1 = builder1_.getOutputs();
   const auto& inputs2inputsIDs1 = builder1_.getInputs2InputsIDs();
   const auto& outputs2outputsIDs1 = builder1_.getOutputs2OutputsIDs();
-
+  naja::DNL::destroy();
+  if (compact) {
+    top1_->getLibrary()->destroy();
+    top1_ = nullptr;
+  }
   // print path to var names
   const auto & inputs2DnlIds = builder0_.getInputs();
   // var names for inputs
@@ -700,7 +717,7 @@ bool MiterStrategy::run() {
     logger->debug("\n");
   }
 
-  if (topInit_ != nullptr) {
+  if (!compact && topInit_ != nullptr) {
     univ->setTopDesign(topInit_);
   }
 
@@ -750,6 +767,14 @@ bool MiterStrategy::run() {
   logger->info("SAT solver starting");
   bool sat = solver.solve();
   logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
+
+  if (compact) {
+    logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
+    if (sat) {
+      logger->warn("Due to compact mode, per PO analysis is skipped.");
+    }
+    return !sat;
+  }
 
   if (sat) {
     logger->info("Miter found a difference -> moving to analyze individual POs");

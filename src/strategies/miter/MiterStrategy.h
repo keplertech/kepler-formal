@@ -21,9 +21,9 @@ class MiterStrategy {
  public:
   MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& logFileName = "", const std::string& prefix = "");
 
-  void init();
+  void init(bool enableLogging = true);
 
-  bool run();
+  bool run(bool compact = false);
 
   void setCnfDump(bool enabled, const std::string& path = "");
 

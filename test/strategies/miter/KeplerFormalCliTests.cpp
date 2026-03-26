@@ -230,6 +230,17 @@ struct SolverGuard {
   KEPLER_FORMAL::Config::SolverType oldValue_;
 };
 
+struct CurrentPathGuard {
+  CurrentPathGuard(): oldPath_(std::filesystem::current_path()) {}
+
+  ~CurrentPathGuard() {
+    std::error_code ec;
+    std::filesystem::current_path(oldPath_, ec);
+  }
+
+  std::filesystem::path oldPath_;
+};
+
 std::vector<std::filesystem::path> listTemporarySystemVerilogCommandFiles() {
   std::vector<std::filesystem::path> files;
   std::error_code ec;
@@ -247,6 +258,25 @@ std::vector<std::filesystem::path> listTemporarySystemVerilogCommandFiles() {
     const auto name = entry.path().filename().string();
     if (name.rfind("kepler_formal_sv_top_", 0) == 0 &&
         entry.path().extension() == ".f") {
+      files.push_back(entry.path().filename());
+    }
+  }
+  std::sort(files.begin(), files.end());
+  return files;
+}
+
+std::vector<std::filesystem::path> listMiterLogsInCurrentDirectory() {
+  std::vector<std::filesystem::path> files;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::current_path(), ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto name = entry.path().filename().string();
+    if (name.rfind("miter_log_", 0) == 0 && entry.path().extension() == ".txt") {
       files.push_back(entry.path().filename());
     }
   }
@@ -637,6 +667,25 @@ TEST(KeplerFormalCliTests, CliWithoutVerilogPreprocessingFlagFailsOnDirectiveInp
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST(KeplerFormalCliTests, CliCompactFlagAccepted) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = fixture.design0Path.string();
+  std::string argv3 = fixture.design1Path.string();
+  std::string argv4 = "--compact";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(), argv4.data()};
+  int argc = 5;
+
+  EXPECT_EQ(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST(KeplerFormalCliTests, ConfigMissingInputPathsFails) {
   const auto cfgPath = writeTempConfig("format: verilog\nlog_level: info\n");
   int rc = runWithConfigFile(cfgPath);
@@ -982,6 +1031,23 @@ TEST(KeplerFormalCliTests, ConfigKissatSolverAccepted) {
       "solver: kissat\n");
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   EXPECT_EQ(KEPLER_FORMAL::Config::getSolverType(), KEPLER_FORMAL::Config::KISSAT);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, ConfigCompactModeAccepted) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "compact_mode: true\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
@@ -1508,6 +1574,33 @@ TEST(KeplerFormalCliTests, SnlScopesEquivalentEditedScopeNoDifference) {
 
   int rc = runWithConfigFile(cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, SnlScopesCreatesOnlyOneDefaultMiterLogPerScopeRun) {
+  const auto fixture = createEquivalentScopedNajaIfFixture();
+  const auto runDir = fixture.tmpDir / "run_dir";
+  std::filesystem::create_directories(runDir);
+
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "input_paths:\n"
+      "  - " + fixture.design0IfPath.string() + "\n"
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "liberty_files:\n"
+      "  - " + fixture.libertyPath.string() + "\n"
+      "use_scopes: true\n");
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    EXPECT_EQ(logs.size(), 1u);
+  }
+
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
