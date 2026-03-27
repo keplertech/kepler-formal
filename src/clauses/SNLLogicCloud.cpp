@@ -319,7 +319,9 @@ void SNLLogicCloud::compute() {
       const auto& input = getCurrentIterationInputsETS().first[i];
       const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
           dnl_.getDNLTerminalFromID(input).getIsoID());
-      if (isInput(input) || iso.isConstant()) {
+      // Treat primary inputs, constants, and zero-driver isos (SHADOW or
+      // dangling nets) as boundary inputs in the logic cloud
+      if (isInput(input) || iso.isConstant() || iso.getDrivers().empty()) {
         pushBackNewIterationInputsETS(input);
         DEBUG_LOG("Adding input id: %zu %s\n", input,
                   dnl_.getDNLTerminalFromID(input)
@@ -377,9 +379,10 @@ void SNLLogicCloud::compute() {
           }
           throw std::runtime_error(error);
         }
-      } else if (iso.getDrivers().empty()) {
-        assert(iso.getDrivers().size() == 1 &&
-               "Iso have no drivers and more than one reader, not supported");
+      } else {
+        // Should not reach here: empty drivers caught at boundary input check
+        assert(!iso.getDrivers().empty() &&
+               "Iso has no drivers, should have been handled as boundary input");
       }
       const auto& driver = iso.getDrivers().front();
       
