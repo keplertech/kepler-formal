@@ -15,6 +15,7 @@ cc_library(
     includes = ["."],
     visibility = ["//visibility:public"],
     deps = [
+        "//src/config:kepler_config",
         "//src/formal:formal_structures",
         "@naja",
         "@naja//:naja_extra_headers",
