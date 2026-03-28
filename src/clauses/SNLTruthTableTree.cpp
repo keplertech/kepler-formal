@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <stack>
 #include <stdexcept>
@@ -480,6 +481,60 @@ bool SNLTruthTableTree::eval(const std::vector<bool>& extInputs) const {
     // LCOV_EXCL_STOP
   }
   return rootSp->eval(extInputs);
+}
+
+bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
+    size_t borderIndex,
+    naja::DNL::DNLID termid,
+    std::vector<naja::DNL::DNLID>& loopTerms) const {
+  loopTerms.clear();
+  if (borderIndex >= borderLeaves_.size()) {
+    return false;
+  }
+  const auto termIt = termid2nodeid_.find(termid);
+  if (termIt == termid2nodeid_.end()) {
+    return false;
+  }
+
+  const uint32_t targetId = termIt->second;
+  const uint32_t startId = borderLeaves_[borderIndex].parentId;
+  std::vector<uint32_t> nodePath;
+  std::unordered_set<uint32_t> visited;
+
+  std::function<bool(uint32_t)> dfs = [&](uint32_t nodeId) {
+    if (nodeId == kInvalidId || !visited.insert(nodeId).second) {
+      return false;
+    }
+    const auto nodeSp = nodeFromId(nodeId);
+    if (!nodeSp) {
+      return false;
+    }
+    nodePath.push_back(nodeId);
+    if (nodeId == targetId) {
+      return true;
+    }
+    for (uint32_t parentId : nodeSp->parentIds) {
+      if (dfs(parentId)) {
+        return true;
+      }
+    }
+    nodePath.pop_back();
+    return false;
+  };
+
+  if (!dfs(startId)) {
+    return false;
+  }
+
+  for (auto it = nodePath.rbegin(); it != nodePath.rend(); ++it) {
+    const auto nodeSp = nodeFromId(*it);
+    if (!nodeSp || nodeSp->type == Node::Type::Input) {
+      continue;
+    }
+    loopTerms.push_back(nodeSp->data.termid);
+  }
+  loopTerms.push_back(termid);
+  return true;
 }
 
 //----------------------------------------------------------------------

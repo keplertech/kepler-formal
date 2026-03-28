@@ -92,6 +92,11 @@ public:
   void destroy();
 
   size_t getNumNodes() const { return nodes_.size(); }
+  size_t getBorderLeavesSize() const { return borderLeaves_.size(); }
+  bool findAncestorLoopForBorderLeaf(
+      size_t borderIndex,
+      naja::DNL::DNLID termid,
+      std::vector<naja::DNL::DNLID>& loopTerms) const;
 
   // allocateNode guarantees id assignment before publishing node in nodes_
   uint32_t allocateNode(std::shared_ptr<Node>& np);
@@ -106,6 +111,10 @@ public:
       return kIdOffset - 1;
     }
     return static_cast<uint32_t>(nodes_.size() + kIdOffset - 1);
+  }
+
+  bool isValid() const {
+    return !nodes_.empty() && rootId_ != kInvalidId;
   }
 
 private:

@@ -28,6 +28,14 @@ public:
     return getInstance().solverType_;
   }
 
+  static void setReportSkippedPOs(bool enabled) {
+    getInstance().reportSkippedPOs_ = enabled;
+  }
+
+  static bool getReportSkippedPOs() {
+    return getInstance().reportSkippedPOs_;
+  }
+
 private:
   Config() = default;
   ~Config() = default;
@@ -38,6 +46,7 @@ private:
   }
 
   SolverType solverType_ = KISSAT;
+  bool reportSkippedPOs_ = false;
 };
 
 } // namespace kepler

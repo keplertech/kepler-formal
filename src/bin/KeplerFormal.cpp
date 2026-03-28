@@ -38,10 +38,12 @@ static void print_usage(const char* prog) {
       "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv> "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...] [--compact] | "
+      "<file...> [--liberty <library-file>...] [--compact] "
+      "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] "
-      "[--design1 <file...>] [--design2 <file...>] [--compact]",
+      "[--design1 <file...>] [--design2 <file...>] [--compact] "
+      "[--report-skipped-pos]",
       prog);
 }
 
@@ -79,6 +81,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf",
       "dump_cnf_path",
       "compact_mode",
+      "report_skipped_pos",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -366,8 +369,11 @@ int KeplerFormalMain(int argc, char** argv) {
   bool cleanScopes = false;
   bool dumpCnf = false;
   bool compactMode = false;
+  bool reportSkippedPOs = false;
   bool verilogPreprocessing = false;
   std::string dumpCnfPath;
+
+  KEPLER_FORMAL::Config::setReportSkippedPOs(false);
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -443,6 +449,11 @@ int KeplerFormalMain(int argc, char** argv) {
         // compact_mode
         if (cfg["compact_mode"] && cfg["compact_mode"].IsScalar()) {
           compactMode = cfg["compact_mode"].as<bool>();
+        }
+
+        // report_skipped_pos
+        if (cfg["report_skipped_pos"] && cfg["report_skipped_pos"].IsScalar()) {
+          reportSkippedPOs = cfg["report_skipped_pos"].as<bool>();
         }
 
         // verilog_preprocessing (optional)
@@ -536,6 +547,10 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       if (arg == "--compact") {
         compactMode = true;
+        continue;
+      }
+      if (arg == "--report-skipped-pos") {
+        reportSkippedPOs = true;
         continue;
       }
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
@@ -664,9 +679,11 @@ int KeplerFormalMain(int argc, char** argv) {
   }
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
+  KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
   SPDLOG_INFO("Solver: {}",
               solverType == KEPLER_FORMAL::Config::SolverType::KISSAT ? "KISSAT" : "GLUCOSE");
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
+  SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }

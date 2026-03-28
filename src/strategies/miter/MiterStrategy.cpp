@@ -1077,6 +1077,9 @@ BoolExpr* MiterStrategy::buildMiter(
                    B.size());
       break;
     }
+    if (!A[i]->isValid() || !B[i]->isValid()) {
+            continue;
+    }
     // bool unSupportedVar = false;
     // const auto&varSupportA = A[i]->getSupportVars();
     // for (const auto&var : varSupportA) {

@@ -7,8 +7,14 @@
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
 #include "SNLPath.h"
+#include "NajaProperty.h"
+#include "../../config/Config.h"
+#include <fstream>
+#include <mutex>
+#include <string_view>
 #include <thread>
 #include <tbb/global_control.h>
+#include <unordered_set>
 
 //#define DEBUG_PRINTS
 //#define DEBUG_CHECKS
@@ -41,6 +47,194 @@ BuildPrimaryOutputClauses::PathKey getTerminalPathKey(const DNLTerminalFull& ter
   BuildPrimaryOutputClauses::PathObjectIDs objectIDs = {
       static_cast<NLID::DesignObjectID>(terminal.getSnlBitTerm()->getBit())};
   return {std::move(pathIDs), std::move(objectIDs)};
+}
+
+std::string formatTerminalName(const DNLTerminalFull& term) {
+  std::string fullName;
+  const auto path = term.getDNLInstance().getPath().getPathNames();
+  for (size_t i = 0; i < path.size(); ++i) {
+    fullName += path[i].getString();
+    fullName += ".";
+  }
+  fullName += term.getSnlBitTerm()->getName().getString();
+  fullName += std::to_string(term.getSnlBitTerm()->getBit());
+  return fullName;
+}
+
+bool shouldReportSkippedPOs() {
+  return KEPLER_FORMAL::Config::getReportSkippedPOs();
+}
+
+const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
+const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
+
+struct SkippedPOReportKey {
+  const DNLFull* dnl = nullptr;
+  DNLID isoID        = DNLID_MAX;
+
+  bool operator==(const SkippedPOReportKey& other) const {
+    return dnl == other.dnl && isoID == other.isoID;
+  }
+};
+
+struct SkippedPOReportKeyHash {
+  size_t operator()(const SkippedPOReportKey& key) const {
+    return std::hash<const void*>{}(static_cast<const void*>(key.dnl)) ^
+           (std::hash<DNLID>{}(key.isoID) << 1);
+  }
+};
+
+void initializeSkippedPOReportFiles() {
+  static bool initialized = false;
+  if (initialized || !shouldReportSkippedPOs()) {
+    return;
+  }
+  std::ofstream(kSkippedMultiDriverPOReport, std::ios::trunc);
+  std::ofstream(kSkippedNoDriverPOReport, std::ios::trunc);
+  initialized = true;
+}
+
+bool shouldEmitSkippedPOReport(const DNLFull* dnl,
+                               DNLID isoID,
+                               const char* reportFile) {
+  static std::mutex mutex;
+  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
+      multiDriverReports;
+  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
+      noDriverReports;
+
+  if (isoID == DNLID_MAX) {
+    return true;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex);
+  const SkippedPOReportKey key{dnl, isoID};
+  auto& reported = std::string_view(reportFile) == kSkippedMultiDriverPOReport
+                       ? multiDriverReports
+                       : noDriverReports;
+  return reported.insert(key).second;
+}
+
+std::string formatIsoTermName(const DNLFull* dnl, DNLID termID) {
+  const auto& term = dnl->getDNLTerminalFromID(termID);
+  std::string fullName = term.getDNLInstance().getSNLModel()->getName().getString();
+  fullName += ":";
+  const auto path = term.getDNLInstance().getPath().getPathNames();
+  for (size_t i = 0; i < path.size(); ++i) {
+    fullName += path[i].getString();
+    fullName += ".";
+  }
+  fullName += term.getSnlBitTerm()->getName().getString();
+  fullName += std::to_string(term.getSnlBitTerm()->getBit());
+  return fullName;
+}
+
+std::string formatNetReport(const SNLBitNet* net) {
+  std::string description = "design=";
+  description += net->getDesign()->getName().getString();
+  description += " name=";
+  description += net->getName().getString();
+  description += " type=";
+  description += net->getType().getString();
+  description += " is_assign=";
+  description += net->getType().isAssign() ? "true" : "false";
+  description += " is_supply=";
+  description += net->getType().isSupply() ? "true" : "false";
+  description += " is_constant0=";
+  description += net->isConstant0() ? "true" : "false";
+  description += " is_constant1=";
+  description += net->isConstant1() ? "true" : "false";
+  description += " model_is_assign=";
+  description += net->getDesign()->isAssign() ? "true" : "false";
+  description += " properties=[";
+  bool first = true;
+  for (auto* property : net->getProperties()) {
+    if (!first) {
+      description += ", ";
+    }
+    first = false;
+    description += property->getName();
+    description += "=";
+    description += property->getString();
+  }
+  description += "]";
+  return description;
+}
+
+template <typename TermIDs>
+void appendTermsToReport(std::string& report,
+                         const DNLFull* dnl,
+                         const char* label,
+                         const TermIDs& termIDs) {
+  report += label;
+  report += ": [";
+  for (size_t i = 0; i < termIDs.size(); ++i) {
+    report += formatIsoTermName(dnl, termIDs[i]);
+    if (i + 1 != termIDs.size()) {
+      report += ", ";
+    }
+  }
+  report += "]";
+}
+
+void appendNetsToReport(std::string& report,
+                        const char* label,
+                        const std::set<SNLBitNet*>& nets) {
+  report += label;
+  report += ": [";
+  size_t i = 0;
+  for (const auto* net : nets) {
+    report += formatNetReport(net);
+    if (++i != nets.size()) {
+      report += ", ";
+    }
+  }
+  report += "]";
+}
+
+void reportSkippedPO(const DNLFull* dnl,
+                     const DNLTerminalFull& term,
+                     const char* reason,
+                     const char* reportFile) {
+  if (!shouldReportSkippedPOs()) {
+    return;
+  }
+  if (!shouldEmitSkippedPOReport(dnl, term.getIsoID(), reportFile)) {
+    return;
+  }
+  initializeSkippedPOReportFiles();
+
+  std::string report = "Skipping PO ";
+  report += formatTerminalName(term);
+  report += " of model ";
+  report += term.getSnlBitTerm()->getDesign()->getName().getString();
+  report += " because ";
+  report += reason;
+
+  if (term.getIsoID() != DNLID_MAX) {
+    report += ". iso=";
+    report += std::to_string(term.getIsoID());
+    report += " ";
+    const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+    appendTermsToReport(report, dnl, "readers", iso.getReaders());
+    report += " ";
+    appendTermsToReport(report, dnl, "drivers", iso.getDrivers());
+    naja::DNL::DNLComplexIso complexIso(term.getIsoID());
+    dnl->getCustomIso(term.getIsoID(), complexIso);
+    report += " ";
+    appendTermsToReport(report, dnl, "complex_readers", complexIso.getReaders());
+    report += " ";
+    appendTermsToReport(report, dnl, "complex_drivers", complexIso.getDrivers());
+    report += " ";
+    appendTermsToReport(report, dnl, "complex_hier_terms", complexIso.getHierTerms());
+    report += " ";
+    appendNetsToReport(report, "complex_nets", complexIso.getNets());
+  }
+
+  std::ofstream out(reportFile, std::ios::app);
+  if (out) {
+    out << report << "\n\n";
+  }
 }
 
 }  // namespace
@@ -398,6 +592,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
     if (term.getIsoID() != DNLID_MAX && 
       dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().empty()) {
+      reportSkippedPO(
+          dnl, term, "its iso has no drivers", kSkippedNoDriverPOReport);
       DEBUG_LOG("Skipping output %s of model %s as it is not connected to any net\n",
                 term.getSnlBitTerm()->getName().getString().c_str(),
                 term.getSnlBitTerm()
@@ -409,6 +605,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
     if (term.getIsoID() != DNLID_MAX && 
       dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().size() > 1) {
+      reportSkippedPO(
+          dnl,
+          term,
+          "its iso has multiple drivers",
+          kSkippedMultiDriverPOReport);
       DEBUG_LOG("Skipping output %s of model %s as it is driven by multiple drivers\n",
                 term.getSnlBitTerm()->getName().getString().c_str(),
                 term.getSnlBitTerm()
@@ -657,7 +858,11 @@ void BuildPrimaryOutputClauses::build() {
     #ifdef DEBUG_CHECKS
     auto startConv = std::chrono::steady_clock::now();
     #endif
-    POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+    if (cloud.getTruthTable().isValid()) {
+      POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+    } else {
+      POs_[i] = BoolExpr::createInvalid(); 
+    }
     #ifdef DEBUG_CHECKS
     auto endConv = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds_conv = endConv - startConv;

@@ -21,6 +21,7 @@
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLDesignModeling.h"
+#include "SNLBusTerm.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "SNLPath.h"
@@ -790,6 +791,247 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   }
 }
 
+TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+
+  SNLDesign* buf2Model =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("BUF2"));
+  auto bufIn1 =
+      SNLScalarTerm::create(buf2Model, SNLTerm::Direction::Input, NLName("in1"));
+  auto bufIn2 =
+      SNLScalarTerm::create(buf2Model, SNLTerm::Direction::Input, NLName("in2"));
+  auto bufOut = SNLScalarTerm::create(buf2Model, SNLTerm::Direction::Output,
+                                      NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      buf2Model,
+      SNLTruthTable(1, 2, NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+
+  auto buildTop = [&](const char* topName) {
+    auto top = SNLDesign::create(
+        libraryDesigns, SNLDesign::Type::Standard, NLName(topName));
+    univ->setTopDesign(top);
+
+    auto topA =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+    auto topB =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+    auto topOut =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+
+    auto inst = SNLInstance::create(top, buf2Model, NLName("buf2"));
+
+    auto netA = SNLScalarNet::create(top, NLName("net_a"));
+    auto netB = SNLScalarNet::create(top, NLName("net_b"));
+    auto netOut = SNLScalarNet::create(top, NLName("net_out"));
+
+    topA->setNet(netA);
+    topB->setNet(netB);
+    topOut->setNet(netOut);
+
+    inst->getInstTerm(bufIn1)->setNet(netA);
+    inst->getInstTerm(bufIn2)->setNet(netB);
+    inst->getInstTerm(bufOut)->setNet(netOut);
+
+    return top;
+  };
+
+  auto top = buildTop("top");
+  auto topClone = top->clone(NLName("topClone"));
+  MiterStrategy MiterS(top, topClone, "ReducedTruthTableArity");
+  MiterS.init();
+  try {
+    (void)MiterS.run();
+    FAIL() << "Expected arity mismatch runtime_error";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_NE(message.find("SNLLogicCloud arity mismatch"), std::string::npos);
+    EXPECT_NE(message.find("TT arity=1"), std::string::npos);
+    EXPECT_NE(message.find("model non-output term count=2"), std::string::npos);
+  }
+}
+
+TEST_F(MiterTests, Db0FAArityCheckFailureReproducer) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  SNLDesign* faModel = NLDB0::getFA();
+  ASSERT_NE(nullptr, faModel);
+
+  auto buildTop = [&](const char* topName) {
+    auto top = SNLDesign::create(
+        libraryDesigns, SNLDesign::Type::Standard, NLName(topName));
+    univ->setTopDesign(top);
+
+    auto topA =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+    auto topB =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+    auto topCI =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("ci"));
+    auto topS =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("s"));
+    auto topCO =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("co"));
+
+    auto inst = SNLInstance::create(top, faModel, NLName("fa0"));
+
+    auto netA = SNLScalarNet::create(top, NLName("net_a"));
+    auto netB = SNLScalarNet::create(top, NLName("net_b"));
+    auto netCI = SNLScalarNet::create(top, NLName("net_ci"));
+    auto netS = SNLScalarNet::create(top, NLName("net_s"));
+    auto netCO = SNLScalarNet::create(top, NLName("net_co"));
+
+    topA->setNet(netA);
+    topB->setNet(netB);
+    topCI->setNet(netCI);
+    topS->setNet(netS);
+    topCO->setNet(netCO);
+
+    inst->getInstTerm(NLDB0::getFAInputA())->setNet(netA);
+    inst->getInstTerm(NLDB0::getFAInputB())->setNet(netB);
+    inst->getInstTerm(NLDB0::getFAInputCI())->setNet(netCI);
+    inst->getInstTerm(NLDB0::getFAOutputS())->setNet(netS);
+    inst->getInstTerm(NLDB0::getFAOutputCO())->setNet(netCO);
+
+    return top;
+  };
+
+  auto top = buildTop("top");
+  auto topClone = top->clone(NLName("topClone"));
+  MiterStrategy MiterS(top, topClone, "Db0FAArityCheck");
+  MiterS.init();
+  EXPECT_EQ(2, SNLDesignModeling::getTruthTableCount(faModel));
+
+  // Regression for the former workflow failure path: DB0 FA must be
+  // handled through per-output truth-table counting, not the single-output
+  // primitive truth-table API.
+  EXPECT_TRUE(MiterS.run());
+}
+
+TEST_F(MiterTests, InternalPOAssignCycleIsSkippedAndReported) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  auto assignModel = NLDB0::getAssign();
+  ASSERT_NE(nullptr, assignModel);
+  auto dffrnModel = NLDB0::getDFFRN();
+  ASSERT_NE(nullptr, dffrnModel);
+  auto faModel = NLDB0::getFA();
+  ASSERT_NE(nullptr, faModel);
+  auto muxModel = NLDB0::getMux2();
+  ASSERT_NE(nullptr, muxModel);
+
+  auto buildTop = [&](const char* topName) {
+    auto top = SNLDesign::create(
+        libraryDesigns, SNLDesign::Type::Standard, NLName(topName));
+    univ->setTopDesign(top);
+
+    auto topB =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+    auto topCI =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("ci"));
+    auto topRN =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("rn"));
+    auto topC =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("c"));
+    auto topMuxA =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("ma"));
+    auto topMuxB =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("mb"));
+    auto topMuxS =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("ms"));
+
+    auto dffrnInst = SNLInstance::create(top, dffrnModel, NLName("ff0"));
+    auto assignSeedInst =
+        SNLInstance::create(top, assignModel, NLName("assign_seed"));
+    auto faInst = SNLInstance::create(top, faModel, NLName("fa0"));
+    auto assignSelInst =
+        SNLInstance::create(top, assignModel, NLName("assign_sel"));
+    auto mux0Inst = SNLInstance::create(top, muxModel, NLName("mux0"));
+    auto mux1Inst = SNLInstance::create(top, muxModel, NLName("mux1"));
+
+    auto netRN = SNLScalarNet::create(top, NLName("net_rn"));
+    auto netC = SNLScalarNet::create(top, NLName("net_c"));
+    auto netB = SNLScalarNet::create(top, NLName("net_b"));
+    auto netCI = SNLScalarNet::create(top, NLName("net_ci"));
+    auto netMuxA = SNLScalarNet::create(top, NLName("net_ma"));
+    auto netMuxB = SNLScalarNet::create(top, NLName("net_mb"));
+    auto netMuxS = SNLScalarNet::create(top, NLName("net_ms"));
+    auto netQ = SNLScalarNet::create(top, NLName("net_q"));
+    auto netSeedOut = SNLScalarNet::create(top, NLName("net_seed_out"));
+    auto netSeedIn = SNLScalarNet::create(top, NLName("net_seed_in"));
+    auto netFaS = SNLScalarNet::create(top, NLName("net_fa_s"));
+    auto netSelOut = SNLScalarNet::create(top, NLName("net_sel_out"));
+    auto netSelIn = SNLScalarNet::create(top, NLName("net_sel_in"));
+
+    topB->setNet(netB);
+    topCI->setNet(netCI);
+    topRN->setNet(netRN);
+    topC->setNet(netC);
+    topMuxA->setNet(netMuxA);
+    topMuxB->setNet(netMuxB);
+    topMuxS->setNet(netMuxS);
+
+    dffrnInst->getInstTerm(NLDB0::getDFFRNData())->setNet(netSeedOut);
+    dffrnInst->getInstTerm(NLDB0::getDFFRNResetN())->setNet(netRN);
+    dffrnInst->getInstTerm(NLDB0::getDFFRNClock())->setNet(netC);
+    dffrnInst->getInstTerm(NLDB0::getDFFRNOutput())->setNet(netQ);
+
+    assignSeedInst->getInstTerm(NLDB0::getAssignInput())->setNet(netSeedIn);
+    assignSeedInst->getInstTerm(NLDB0::getAssignOutput())->setNet(netSeedOut);
+
+    faInst->getInstTerm(NLDB0::getFAInputA())->setNet(netSeedOut);
+    faInst->getInstTerm(NLDB0::getFAInputB())->setNet(netB);
+    faInst->getInstTerm(NLDB0::getFAInputCI())->setNet(netCI);
+    faInst->getInstTerm(NLDB0::getFAOutputS())->setNet(netFaS);
+
+    assignSelInst->getInstTerm(NLDB0::getAssignInput())->setNet(netSelIn);
+    assignSelInst->getInstTerm(NLDB0::getAssignOutput())->setNet(netSelOut);
+
+    mux0Inst->getInstTerm(NLDB0::getMux2InputA())->setNet(netQ);
+    mux0Inst->getInstTerm(NLDB0::getMux2InputB())->setNet(netFaS);
+    mux0Inst->getInstTerm(NLDB0::getMux2Select())->setNet(netSelOut);
+    mux0Inst->getInstTerm(NLDB0::getMux2Output())->setNet(netSeedIn);
+
+    mux1Inst->getInstTerm(NLDB0::getMux2InputA())->setNet(netMuxA);
+    mux1Inst->getInstTerm(NLDB0::getMux2InputB())->setNet(netMuxB);
+    mux1Inst->getInstTerm(NLDB0::getMux2Select())->setNet(netMuxS);
+    mux1Inst->getInstTerm(NLDB0::getMux2Output())->setNet(netSelIn);
+
+    return top;
+  };
+
+  auto top = buildTop("top");
+  auto topClone = top->clone(NLName("topClone"));
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  const bool previousReportSkippedPOs = Config::getReportSkippedPOs();
+  Config::setReportSkippedPOs(true);
+  MiterStrategy MiterS(top, topClone, "InternalPOAssignCycle");
+  MiterS.init();
+  EXPECT_TRUE(MiterS.run());
+  Config::setReportSkippedPOs(previousReportSkippedPOs);
+
+  const auto reportPath = tempDir_ / "skipped_logical_loop_pos.txt";
+  ASSERT_TRUE(std::filesystem::exists(reportPath));
+  std::ifstream report(reportPath);
+  ASSERT_TRUE(report.good());
+  std::stringstream buffer;
+  buffer << report.rdbuf();
+  const std::string content = buffer.str();
+  EXPECT_NE(content.find("logical loop"), std::string::npos);
+  EXPECT_NE(content.find("loop_terms"), std::string::npos);
+  EXPECT_NE(content.find("D0"), std::string::npos);
+}
+
 // 1. create a circuit of 2 inputs that drives and AND gate that drives top output
 // 2. clone the the top and chain an inverter to the AND output
 // 3. verify that the miter strategy detects the difference
@@ -1496,8 +1738,7 @@ TEST_F(MiterTests, multiDriver) {
   // 11. create DNL
   MiterStrategy MiterS(top, topClone, "MultiDriver");
   MiterS.init();
-  // Expect throw in run
-  EXPECT_THROW(MiterS.run(), std::runtime_error);
+  EXPECT_TRUE(MiterS.run());
   naja::DNL::destroy();
 }
 
@@ -1626,8 +1867,7 @@ TEST_F(MiterTests, tt65In) {
   // 11. create DNL
   MiterStrategy MiterS(top, topClone, "MultiDriver");
   MiterS.init();
-  // Expect throw in run
-  EXPECT_THROW(MiterS.run(), std::runtime_error);
+  EXPECT_TRUE(MiterS.run());
 }
 
 TEST_F(MiterTests, ConnectedInouts) {

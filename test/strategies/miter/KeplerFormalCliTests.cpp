@@ -230,6 +230,16 @@ struct SolverGuard {
   KEPLER_FORMAL::Config::SolverType oldValue_;
 };
 
+struct ReportSkippedPOsGuard {
+  ReportSkippedPOsGuard(): oldValue_(KEPLER_FORMAL::Config::getReportSkippedPOs()) {}
+
+  ~ReportSkippedPOsGuard() {
+    KEPLER_FORMAL::Config::setReportSkippedPOs(oldValue_);
+  }
+
+  bool oldValue_;
+};
+
 struct CurrentPathGuard {
   CurrentPathGuard(): oldPath_(std::filesystem::current_path()) {}
 
@@ -686,6 +696,27 @@ TEST(KeplerFormalCliTests, CliCompactFlagAccepted) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST(KeplerFormalCliTests, CliReportSkippedPOsFlagAccepted) {
+  ReportSkippedPOsGuard reportGuard;
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-verilog";
+  std::string argv2 = fixture.design0Path.string();
+  std::string argv3 = fixture.design1Path.string();
+  std::string argv4 = "--report-skipped-pos";
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(), argv4.data()};
+  int argc = 5;
+
+  EXPECT_EQ(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+  EXPECT_TRUE(KEPLER_FORMAL::Config::getReportSkippedPOs());
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST(KeplerFormalCliTests, ConfigMissingInputPathsFails) {
   const auto cfgPath = writeTempConfig("format: verilog\nlog_level: info\n");
   int rc = runWithConfigFile(cfgPath);
@@ -1048,6 +1079,25 @@ TEST(KeplerFormalCliTests, ConfigCompactModeAccepted) {
       "  - " + fixture.design1Path.string() + "\n"
       "compact_mode: true\n");
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, ConfigReportSkippedPOsAccepted) {
+  ReportSkippedPOsGuard reportGuard;
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "report_skipped_pos: true\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_TRUE(KEPLER_FORMAL::Config::getReportSkippedPOs());
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }

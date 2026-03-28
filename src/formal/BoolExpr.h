@@ -26,6 +26,7 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   // Convenient constants
   static BoolExpr* createFalse() { return Var(0); }
   static BoolExpr* createTrue() { return Var(1); }
+  static BoolExpr* createInvalid() { return Var((size_t)-1); }
 
   // Factory methods (canonical, fold constants, share structure)
   static BoolExpr* Var(size_t id);
@@ -90,6 +91,12 @@ class BoolExpr : public std::enable_shared_from_this<BoolExpr> {
   static BoolExpr* simplify(BoolExpr* e);
 
   std::set<size_t> getSupportVars() const;
+
+  bool isValid() const {
+    return op_ != Op::NONE &&
+           ((op_ == Op::VAR && varID_ != (size_t)-1) ||
+            (op_ != Op::VAR && left_ != nullptr));
+  }
 
  private:
   // Private ctor: use factory methods

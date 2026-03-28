@@ -103,11 +103,11 @@ Once kepler-formal is fully buildable with Bazel, it can be consumed directly by
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] <netlist1> <netlist2> [<library-file>...]
+build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] [--report-skipped-pos] <netlist1> <netlist2> [<library-file>...]
 
 # Multi-file Verilog designs
 build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
-  [--liberty <library-file>...]
+  [--liberty <library-file>...] [--report-skipped-pos]
 
 # Through yaml config file
 build/src/bin/kepler-formal --config <yaml file>
@@ -141,6 +141,23 @@ Behavior:
 - `.lib` and `.lib.gz` are loaded through `SNLLibertyConstructor`
 - `.py` is loaded through `SNLPyLoader`
 
+### Optional skipped-PO reports
+
+Skipped-PO reporting is disabled by default.
+
+Enable it with either:
+
+- CLI: `--report-skipped-pos`
+- YAML: `report_skipped_pos: true`
+
+When enabled, Kepler-Formal may emit the following files in the current working directory:
+
+- `skipped_multi_driver_pos.txt`
+- `skipped_no_driver_pos.txt`
+- `skipped_logical_loop_pos.txt`
+
+These reports are generated only for skipped POs, for example when a PO is ignored because it is driven by multiple drivers, has no driver, or closes a logical loop during cloud expansion.
+
 ### YAML Input Paths
 
 The YAML `input_paths` field accepts either:
@@ -159,6 +176,7 @@ liberty_files:
   - library_file0.lib
   - library_file1.lib
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
+report_skipped_pos: true      # Optional: writes skipped PO reports, default is false
 ```
 
 ## Example 
