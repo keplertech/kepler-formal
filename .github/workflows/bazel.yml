@@ -15,6 +15,21 @@ jobs:
     - uses: actions/checkout@v4
       # No submodules needed — Bazel fetches deps via http_archive
 
+    - name: Verify Bazel Naja pin matches checked-in submodule
+      run: |
+        bazel_naja_commit="$(sed -n 's/^_NAJA_COMMIT = \"\\(.*\\)\"/\\1/p' bazel/deps.bzl)"
+        gitlink_naja_commit="$(git rev-parse HEAD:thirdparty/naja)"
+        if [ -z "${bazel_naja_commit}" ]; then
+          echo "Failed to read _NAJA_COMMIT from bazel/deps.bzl"
+          exit 1
+        fi
+        if [ "${bazel_naja_commit}" != "${gitlink_naja_commit}" ]; then
+          echo "Bazel Naja pin mismatch"
+          echo "bazel/deps.bzl _NAJA_COMMIT: ${bazel_naja_commit}"
+          echo "thirdparty/naja gitlink: ${gitlink_naja_commit}"
+          exit 1
+        fi
+
     - name: Cache Bazel outputs
       uses: actions/cache@v4
       with:
