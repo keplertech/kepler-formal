@@ -14,6 +14,7 @@
 #include "BuildPrimaryOutputClauses.h"
 #include "ConstantPropagation.h"
 #include "MiterStrategy.h"
+#include "NajaDumpableProperty.h"
 #include "NLLibraryTruthTables.h"
 #include "NLDB0.h"
 #include "NLUniverse.h"
@@ -628,6 +629,12 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
   auto netA = SNLScalarNet::create(top, NLName("net_a"));
   auto netY = SNLScalarNet::create(top, NLName("net_y"));
   auto floatingNet = SNLScalarNet::create(top, NLName("floating_net"));
+  auto* floatingPropA =
+      naja::NajaDumpableProperty::create(floatingNet, "report_prop_a");
+  floatingPropA->addStringValue("alpha");
+  auto* floatingPropB =
+      naja::NajaDumpableProperty::create(floatingNet, "report_prop_b");
+  floatingPropB->addUInt64Value(7);
 
   topIn->setNet(netA);
   topOut->setNet(netY);
@@ -648,6 +655,8 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
   EXPECT_NE(content.find("drivers: []"), std::string::npos);
   EXPECT_NE(content.find("complex_nets"), std::string::npos);
   EXPECT_NE(content.find("floating_net"), std::string::npos);
+  EXPECT_NE(content.find("report_prop_a="), std::string::npos);
+  EXPECT_NE(content.find("report_prop_b="), std::string::npos);
   EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
 }
 
@@ -698,6 +707,12 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   auto netA = SNLScalarNet::create(top, NLName("net_a"));
   auto netY = SNLScalarNet::create(top, NLName("net_y"));
   auto sharedNet = SNLScalarNet::create(top, NLName("shared_net"));
+  auto* sharedPropA =
+      naja::NajaDumpableProperty::create(sharedNet, "report_prop_a");
+  sharedPropA->addStringValue("beta");
+  auto* sharedPropB =
+      naja::NajaDumpableProperty::create(sharedNet, "report_prop_b");
+  sharedPropB->addUInt64Value(11);
 
   topIn->setNet(netA);
   topOut->setNet(netY);
@@ -721,6 +736,8 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   EXPECT_NE(content.find("LOGIC1"), std::string::npos);
   EXPECT_NE(content.find("complex_nets"), std::string::npos);
   EXPECT_NE(content.find("shared_net"), std::string::npos);
+  EXPECT_NE(content.find("report_prop_a="), std::string::npos);
+  EXPECT_NE(content.find("report_prop_b="), std::string::npos);
   EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
 }
 
