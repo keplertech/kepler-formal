@@ -19,6 +19,7 @@
 #include "NLDB0.h"
 #include "NLUniverse.h"
 #include "NetlistGraph.h"
+#include "../../../src/sat/SATSolverWrapper.h"
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLDesignModeling.h"
@@ -739,6 +740,124 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   EXPECT_NE(content.find("report_prop_a="), std::string::npos);
   EXPECT_NE(content.find("report_prop_b="), std::string::npos);
   EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesInitializesSkippedPOReportFilesOnlyOnce) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topInA =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+  auto topInB =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+  auto topOut0 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y0"));
+  auto topOut1 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y1"));
+
+  SNLDesign* logic0 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC0"));
+  auto logic0Out =
+      SNLScalarTerm::create(logic0, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      logic0, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+
+  SNLDesign* logic1 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC1"));
+  auto logic1Out =
+      SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      logic1, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
+
+  SNLDesign* passModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("PASS1"));
+  auto passIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("data"));
+  auto unusedIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("unused"));
+  auto passOut = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      passModel,
+      SNLTruthTable(2, 0b1100,
+                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+
+  auto const0 = SNLInstance::create(top, logic0, NLName("const0"));
+  auto const1 = SNLInstance::create(top, logic1, NLName("const1"));
+  auto noDriverInst = SNLInstance::create(top, passModel, NLName("u_no_driver"));
+  auto multiDriverInst =
+      SNLInstance::create(top, passModel, NLName("u_multi_driver"));
+
+  auto netA = SNLScalarNet::create(top, NLName("net_a"));
+  auto netB = SNLScalarNet::create(top, NLName("net_b"));
+  auto netY0 = SNLScalarNet::create(top, NLName("net_y0"));
+  auto netY1 = SNLScalarNet::create(top, NLName("net_y1"));
+  auto floatingNet = SNLScalarNet::create(top, NLName("floating_net"));
+  auto sharedNet = SNLScalarNet::create(top, NLName("shared_net"));
+
+  topInA->setNet(netA);
+  topInB->setNet(netB);
+  topOut0->setNet(netY0);
+  topOut1->setNet(netY1);
+
+  const0->getInstTerm(logic0Out)->setNet(sharedNet);
+  const1->getInstTerm(logic1Out)->setNet(sharedNet);
+
+  noDriverInst->getInstTerm(passIn)->setNet(netA);
+  noDriverInst->getInstTerm(unusedIn)->setNet(floatingNet);
+  noDriverInst->getInstTerm(passOut)->setNet(netY0);
+
+  multiDriverInst->getInstTerm(passIn)->setNet(netB);
+  multiDriverInst->getInstTerm(unusedIn)->setNet(sharedNet);
+  multiDriverInst->getInstTerm(passOut)->setNet(netY1);
+
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  ScopedReportSkippedPOs reportGuard(true);
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+
+  EXPECT_TRUE(std::filesystem::exists(tempDir_ / "skipped_no_driver_pos.txt"));
+  EXPECT_TRUE(std::filesystem::exists(tempDir_ / "skipped_multi_driver_pos.txt"));
+}
+
+TEST_F(MiterTests, MiterStrategySummaryUsesUnnamedFallbackLabels) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryS =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("standard"));
+
+  SNLDesign* top =
+      SNLDesign::create(libraryS, SNLDesign::Type::Standard, NLName(""));
+  univ->setTopDesign(top);
+  auto topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName(""));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName(""));
+  auto net = SNLScalarNet::create(top, NLName("n0"));
+  topIn->setNet(net);
+  topOut->setNet(net);
+
+  SNLDesign* topClone = top->clone(NLName(""));
+
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  const auto logPath = tempDir_ / "unnamed_summary.txt";
+  MiterStrategy strategy(top, topClone, logPath.string());
+  strategy.init();
+
+  ASSERT_TRUE(std::filesystem::exists(logPath));
+  const auto content = readTextFile(logPath);
+  EXPECT_NE(content.find("<unnamed>"), std::string::npos);
+}
+
+TEST(MiterStandaloneTests, KissatClauseAutoExpandsTrackedVariableCount) {
+  SATSolverWrapper solver(KEPLER_FORMAL::Config::SolverType::KISSAT);
+  solver.addClause({5});
+  EXPECT_EQ(solver.newVar(), 4);
 }
 
 TEST(MiterStrategyStandaloneTests, NormalizeOutputsIgnoresOutputsOnlyPresentInSecondNetlist) {
