@@ -103,11 +103,11 @@ Once kepler-formal is fully buildable with Bazel, it can be consumed directly by
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] [--report-skipped-pos] <netlist1> <netlist2> [<library-file>...]
+build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] [--compact] [--report-skipped-pos] <netlist1> <netlist2> [<library-file>...]
 
 # Multi-file Verilog designs
 build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
-  [--liberty <library-file>...] [--report-skipped-pos]
+  [--liberty <library-file>...] [--compact] [--report-skipped-pos]
 
 # Through yaml config file
 build/src/bin/kepler-formal --config <yaml file>
@@ -140,6 +140,21 @@ Behavior:
 
 - `.lib` and `.lib.gz` are loaded through `SNLLibertyConstructor`
 - `.py` is loaded through `SNLPyLoader`
+
+### Optional compact mode
+
+Compact mode is disabled by default.
+
+Enable it with either:
+
+- CLI: `--compact`
+- YAML: `compact_mode: true`
+
+Behavior:
+
+- the full miter is still checked normally
+- if the miter is SAT, Kepler-Formal stops after the whole-design `DIFFERENT` result
+- per-PO analysis is skipped in that SAT case
 
 ### Optional skipped-PO reports
 
@@ -176,6 +191,7 @@ liberty_files:
   - library_file0.lib
   - library_file1.lib
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
+compact_mode: true            # Optional: skips per-PO analysis after a SAT whole-miter result
 report_skipped_pos: true      # Optional: writes skipped PO reports, default is false
 ```
 

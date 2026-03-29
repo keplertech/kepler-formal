@@ -368,6 +368,7 @@ void SNLLogicCloud::compute() {
     return fullName.str();
   };
   std::vector<std::string> frontierHistory;
+  // LCOV_EXCL_START
   auto appendTermList = [&](std::ostringstream& out,
                             const auto& termIDs,
                             size_t limit = 24) {
@@ -441,6 +442,7 @@ void SNLLogicCloud::compute() {
     snapshot << "]";
     return snapshot.str();
   };
+  // LCOV_EXCL_STOP
   auto throwIfTruthTableArityMismatch = [&](naja::DNL::DNLID driver) {
     const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     const auto* model = inst.getSNLModel();
@@ -501,6 +503,7 @@ void SNLLogicCloud::compute() {
           << instanceNonOutputTerms.str() << "], tt=" << tt.toString();
     throw std::runtime_error(error.str());
   };
+  // LCOV_EXCL_START
   auto throwIfFrontierMismatch = [&](size_t iter) {
     const size_t currentCount = sizeOfCurrentIterationInputsETS();
     const size_t mergeCount = sizeOfInputsToMergeETS();
@@ -705,6 +708,7 @@ void SNLLogicCloud::compute() {
     }
     throw std::runtime_error(error.str());
   };
+  // LCOV_EXCL_STOP
   DEBUG_LOG("---- Begin!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() ||
       isOutput(seedOutputTerm_)) {

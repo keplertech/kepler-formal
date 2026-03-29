@@ -137,6 +137,40 @@ void executeCommand(const std::string& command) {
   }
 }
 
+std::string readTextFile(const std::filesystem::path& path) {
+  std::ifstream file(path);
+  std::stringstream buffer;
+  buffer << file.rdbuf();
+  return buffer.str();
+}
+
+size_t countSubstringOccurrences(const std::string& text,
+                                 const std::string& needle) {
+  if (needle.empty()) {
+    return 0;
+  }
+  size_t count = 0;
+  size_t pos = 0;
+  while ((pos = text.find(needle, pos)) != std::string::npos) {
+    ++count;
+    pos += needle.size();
+  }
+  return count;
+}
+
+class ScopedReportSkippedPOs {
+ public:
+  explicit ScopedReportSkippedPOs(bool enabled)
+      : original_(Config::getReportSkippedPOs()) {
+    Config::setReportSkippedPOs(enabled);
+  }
+
+  ~ScopedReportSkippedPOs() { Config::setReportSkippedPOs(original_); }
+
+ private:
+  bool original_;
+};
+
 void expectGenericGateMiterEquivalent(const char* gateName,
                                       SNLTruthTable::GenericType genericType) {
   NLUniverse* univ = NLUniverse::create();
@@ -561,6 +595,133 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs)
       naja::DNL::get()->getDNLTerminalFromID(builder.getOutputs()[0]);
   EXPECT_TRUE(outputTerm.isTopPort());
   EXPECT_EQ(outputTerm.getSnlBitTerm()->getName().getString(), "y");
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* passModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("PASS0"));
+  auto passIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("data"));
+  auto unusedIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("unused"));
+  auto passOut = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      passModel,
+      SNLTruthTable(2, 0b1100,
+                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+
+  auto inst = SNLInstance::create(top, passModel, NLName("u0"));
+  auto netA = SNLScalarNet::create(top, NLName("net_a"));
+  auto netY = SNLScalarNet::create(top, NLName("net_y"));
+  auto floatingNet = SNLScalarNet::create(top, NLName("floating_net"));
+
+  topIn->setNet(netA);
+  topOut->setNet(netY);
+  inst->getInstTerm(passIn)->setNet(netA);
+  inst->getInstTerm(unusedIn)->setNet(floatingNet);
+  inst->getInstTerm(passOut)->setNet(netY);
+
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  ScopedReportSkippedPOs reportGuard(true);
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.collect();
+
+  const auto reportPath = tempDir_ / "skipped_no_driver_pos.txt";
+  ASSERT_TRUE(std::filesystem::exists(reportPath));
+  const auto content = readTextFile(reportPath);
+  EXPECT_NE(content.find("its iso has no drivers"), std::string::npos);
+  EXPECT_NE(content.find("drivers: []"), std::string::npos);
+  EXPECT_NE(content.find("complex_nets"), std::string::npos);
+  EXPECT_NE(content.find("floating_net"), std::string::npos);
+  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* logic0 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC0"));
+  auto logic0Out =
+      SNLScalarTerm::create(logic0, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      logic0, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+
+  SNLDesign* logic1 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC1"));
+  auto logic1Out =
+      SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      logic1, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
+
+  SNLDesign* passModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("PASS1"));
+  auto passIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("data"));
+  auto unusedIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("unused"));
+  auto passOut = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      passModel,
+      SNLTruthTable(2, 0b1100,
+                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+
+  auto const0 = SNLInstance::create(top, logic0, NLName("const0"));
+  auto const1 = SNLInstance::create(top, logic1, NLName("const1"));
+  auto inst = SNLInstance::create(top, passModel, NLName("u0"));
+  auto netA = SNLScalarNet::create(top, NLName("net_a"));
+  auto netY = SNLScalarNet::create(top, NLName("net_y"));
+  auto sharedNet = SNLScalarNet::create(top, NLName("shared_net"));
+
+  topIn->setNet(netA);
+  topOut->setNet(netY);
+  const0->getInstTerm(logic0Out)->setNet(sharedNet);
+  const1->getInstTerm(logic1Out)->setNet(sharedNet);
+  inst->getInstTerm(passIn)->setNet(netA);
+  inst->getInstTerm(unusedIn)->setNet(sharedNet);
+  inst->getInstTerm(passOut)->setNet(netY);
+
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  ScopedReportSkippedPOs reportGuard(true);
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.collect();
+
+  const auto reportPath = tempDir_ / "skipped_multi_driver_pos.txt";
+  ASSERT_TRUE(std::filesystem::exists(reportPath));
+  const auto content = readTextFile(reportPath);
+  EXPECT_NE(content.find("its iso has multiple drivers"), std::string::npos);
+  EXPECT_NE(content.find("LOGIC0"), std::string::npos);
+  EXPECT_NE(content.find("LOGIC1"), std::string::npos);
+  EXPECT_NE(content.find("complex_nets"), std::string::npos);
+  EXPECT_NE(content.find("shared_net"), std::string::npos);
+  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
 }
 
 TEST(MiterStrategyStandaloneTests, NormalizeOutputsIgnoresOutputsOnlyPresentInSecondNetlist) {
