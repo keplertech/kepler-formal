@@ -13,11 +13,12 @@
 #include "SNLPath.h"
 #include "Tree2BoolExpr.h"
 #include "../config/Config.h"
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <ostream>
 #include <string_view>
-#include <unordered_set>
 
 
 
@@ -43,20 +44,43 @@ const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
 const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
 const char* kSkippedLogicalLoopPOReport = "skipped_logical_loop_pos.txt";
 
-struct SkippedPOReportKey {
-  const DNLFull* dnl = nullptr;
-  DNLID rootTerm     = DNLID_MAX;
-
-  bool operator==(const SkippedPOReportKey& other) const {
-    return dnl == other.dnl && rootTerm == other.rootTerm;
+struct SparseReportedIDs {
+  bool mark(const DNLFull* dnl, size_t nBits, DNLID id) {
+    if (id == DNLID_MAX) {
+      return true;
+    }
+    if (owner != dnl) {
+      for (uint32_t wordIndex : touchedWords) {
+        words[wordIndex] = 0;
+      }
+      touchedWords.clear();
+      owner = dnl;
+    }
+    ensureCapacity(std::max(nBits, static_cast<size_t>(id + 1)));
+    const size_t wordIndex = id >> 6;
+    const uint64_t mask = uint64_t{1} << (id & 63);
+    uint64_t& word = words[wordIndex];
+    if (word & mask) {
+      return false;
+    }
+    if (word == 0) {
+      touchedWords.push_back(static_cast<uint32_t>(wordIndex));
+    }
+    word |= mask;
+    return true;
   }
-};
 
-struct SkippedPOReportKeyHash {
-  size_t operator()(const SkippedPOReportKey& key) const {
-    return std::hash<const void*>{}(static_cast<const void*>(key.dnl)) ^
-           (std::hash<DNLID>{}(key.rootTerm) << 1);
+ private:
+  void ensureCapacity(size_t nBits) {
+    const size_t wordCount = (nBits + 63) / 64;
+    if (words.size() < wordCount) {
+      words.resize(wordCount, 0);
+    }
   }
+
+  const DNLFull* owner = nullptr;
+  std::vector<uint64_t> words;
+  std::vector<uint32_t> touchedWords;
 };
 
 void initializeSkippedPOReportFiles() {
@@ -74,15 +98,11 @@ bool shouldEmitSkippedPOReport(const DNLFull* dnl,
                                DNLID rootTerm,
                                const char* reportFile) {
   static std::mutex mutex;
-  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
-      multiDriverReports;
-  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
-      noDriverReports;
-  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
-      logicalLoopReports;
+  static SparseReportedIDs multiDriverReports;
+  static SparseReportedIDs noDriverReports;
+  static SparseReportedIDs logicalLoopReports;
 
   std::lock_guard<std::mutex> lock(mutex);
-  const SkippedPOReportKey key{dnl, rootTerm};
   const std::string_view reportFileView(reportFile);
   auto& reported =
       reportFileView == std::string_view(kSkippedMultiDriverPOReport)
@@ -90,51 +110,102 @@ bool shouldEmitSkippedPOReport(const DNLFull* dnl,
           : reportFileView == std::string_view(kSkippedNoDriverPOReport)
                 ? noDriverReports
                 : logicalLoopReports;
-  return reported.insert(key).second;
+  return reported.mark(dnl, dnl->getDNLTerms().size(), rootTerm);
 }
 
-std::string formatCloudTermName(const DNLFull* dnl, DNLID termID) {
+std::mutex& getReportWriteMutex(const char* reportFile) {
+  static std::mutex multiDriverMutex;
+  static std::mutex noDriverMutex;
+  static std::mutex logicalLoopMutex;
+  const std::string_view reportFileView(reportFile);
+  if (reportFileView == std::string_view(kSkippedMultiDriverPOReport)) {
+    return multiDriverMutex;
+  }
+  if (reportFileView == std::string_view(kSkippedNoDriverPOReport)) {
+    return noDriverMutex;
+  }
+  return logicalLoopMutex;
+}
+
+struct ThreadLocalSkippedPOReportBuffers {
+  std::string multiDriver;
+  std::string noDriver;
+  std::string logicalLoop;
+};
+
+thread_local ThreadLocalSkippedPOReportBuffers skippedPOReportBuffers;
+
+constexpr size_t kSkippedPOReportFlushThreshold = 16 * 1024;
+
+std::string& getReportBuffer(const char* reportFile) {
+  const std::string_view reportFileView(reportFile);
+  if (reportFileView == std::string_view(kSkippedMultiDriverPOReport)) {
+    return skippedPOReportBuffers.multiDriver;
+  }
+  if (reportFileView == std::string_view(kSkippedNoDriverPOReport)) {
+    return skippedPOReportBuffers.noDriver;
+  }
+  return skippedPOReportBuffers.logicalLoop;
+}
+
+void flushBufferedReport(const char* reportFile) {
+  auto& buffer = getReportBuffer(reportFile);
+  if (buffer.empty()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(getReportWriteMutex(reportFile));
+  std::ofstream out(reportFile, std::ios::app);
+  if (out) {
+    out << buffer;
+  }
+  buffer.clear();
+}
+
+void flushAllBufferedReports() {
+  flushBufferedReport(kSkippedMultiDriverPOReport);
+  flushBufferedReport(kSkippedNoDriverPOReport);
+  flushBufferedReport(kSkippedLogicalLoopPOReport);
+}
+
+struct BufferedReportFlushGuard {
+  ~BufferedReportFlushGuard() { flushAllBufferedReports(); }
+};
+
+void appendCloudTermName(std::ostream& out, const DNLFull* dnl, DNLID termID) {
   if (termID == DNLID_MAX) {
-    return "<invalid>";
+    out << "<invalid>";
+    return;
   }
   const auto& term = dnl->getDNLTerminalFromID(termID);
-  std::string fullName;
   if (term.getDNLInstance().getSNLModel()) {
-    fullName += term.getDNLInstance().getSNLModel()->getName().getString();
-    fullName += ":";
+    out << term.getDNLInstance().getSNLModel()->getName().getString() << ":";
   }
   const auto path = term.getDNLInstance().getPath().getPathNames();
   for (size_t i = 0; i < path.size(); ++i) {
-    fullName += path[i].getString();
-    fullName += ".";
+    out << path[i].getString() << ".";
   }
-  fullName += term.getSnlBitTerm()->getName().getString();
-  fullName += std::to_string(term.getSnlBitTerm()->getBit());
-  fullName += " (term_id=";
-  fullName += std::to_string(termID);
-  fullName += ", iso=";
-  fullName += std::to_string(term.getIsoID());
-  fullName += ")";
-  return fullName;
+  out << term.getSnlBitTerm()->getName().getString()
+      << term.getSnlBitTerm()->getBit()
+      << " (term_id=" << termID
+      << ", iso=" << term.getIsoID() << ")";
 }
 
 template <typename TermIDs>
-void appendTermsToReport(std::string& report,
+void appendTermsToReport(std::ostream& out,
                          const DNLFull* dnl,
                          const char* label,
                          const TermIDs& termIDs) {
-  report += label;
-  report += ": [";
+  out << label << ": [";
   for (size_t i = 0; i < termIDs.size(); ++i) {
-    report += formatCloudTermName(dnl, termIDs[i]);
+    appendCloudTermName(out, dnl, termIDs[i]);
     if (i + 1 != termIDs.size()) {
-      report += ", ";
+      out << ", ";
     }
   }
-  report += "]";
+  out << "]";
 }
 
-void appendIsoDetailsToReport(std::string& report,
+void appendIsoDetailsToReport(std::ostream& out,
                               const DNLFull* dnl,
                               DNLID termID,
                               const char* label) {
@@ -146,14 +217,10 @@ void appendIsoDetailsToReport(std::string& report,
     return;
   }
   const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
-  report += " ";
-  report += label;
-  report += "_iso=";
-  report += std::to_string(term.getIsoID());
-  report += " ";
-  appendTermsToReport(report, dnl, "readers", iso.getReaders());
-  report += " ";
-  appendTermsToReport(report, dnl, "drivers", iso.getDrivers());
+  out << " " << label << "_iso=" << term.getIsoID() << " ";
+  appendTermsToReport(out, dnl, "readers", iso.getReaders());
+  out << " ";
+  appendTermsToReport(out, dnl, "drivers", iso.getDrivers());
 }
 
 void reportCloudSkippedRoot(const DNLFull* dnl,
@@ -170,29 +237,32 @@ void reportCloudSkippedRoot(const DNLFull* dnl,
     return;
   }
   initializeSkippedPOReportFiles();
-
-  std::string report = "Skipping cloud root ";
-  report += formatCloudTermName(dnl, rootTerm);
-  report += " because ";
-  report += reason;
-  report += ". current_input=";
-  report += formatCloudTermName(dnl, currentInput);
+  std::ostringstream entry;
+  entry << "Skipping cloud root ";
+  appendCloudTermName(entry, dnl, rootTerm);
+  entry << " because " << reason << ". current_input=";
+  appendCloudTermName(entry, dnl, currentInput);
   if (mergeTerm != DNLID_MAX) {
-    report += " merge_term=";
-    report += formatCloudTermName(dnl, mergeTerm);
+    entry << " merge_term=";
+    appendCloudTermName(entry, dnl, mergeTerm);
   }
-  appendIsoDetailsToReport(report, dnl, currentInput, "current_input");
+  appendIsoDetailsToReport(entry, dnl, currentInput, "current_input");
   if (mergeTerm != DNLID_MAX) {
-    appendIsoDetailsToReport(report, dnl, mergeTerm, "merge_term");
+    appendIsoDetailsToReport(entry, dnl, mergeTerm, "merge_term");
   }
   if (loopTerms && !loopTerms->empty()) {
-    report += " ";
-    appendTermsToReport(report, dnl, "loop_terms", *loopTerms);
+    entry << " ";
+    appendTermsToReport(entry, dnl, "loop_terms", *loopTerms);
   }
+  entry << "\n\n";
 
-  std::ofstream out(reportFile, std::ios::app);
-  if (out) {
-    out << report << "\n\n";
+  auto& buffer = getReportBuffer(reportFile);
+  if (buffer.capacity() < kSkippedPOReportFlushThreshold) {
+    buffer.reserve(kSkippedPOReportFlushThreshold);
+  }
+  buffer += entry.str();
+  if (buffer.size() >= kSkippedPOReportFlushThreshold) {
+    flushBufferedReport(reportFile);
   }
 }
 
@@ -350,6 +420,7 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 }
 
 void SNLLogicCloud::compute() {
+  BufferedReportFlushGuard reportFlushGuard;
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
   auto formatTermName = [&](naja::DNL::DNLID termID) {

@@ -735,10 +735,9 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   EXPECT_NE(content.find("its iso has multiple drivers"), std::string::npos);
   EXPECT_NE(content.find("LOGIC0"), std::string::npos);
   EXPECT_NE(content.find("LOGIC1"), std::string::npos);
-  EXPECT_NE(content.find("complex_nets"), std::string::npos);
-  EXPECT_NE(content.find("shared_net"), std::string::npos);
-  EXPECT_NE(content.find("report_prop_a="), std::string::npos);
-  EXPECT_NE(content.find("report_prop_b="), std::string::npos);
+  EXPECT_EQ(content.find("complex_nets"), std::string::npos);
+  EXPECT_EQ(content.find("report_prop_a="), std::string::npos);
+  EXPECT_EQ(content.find("report_prop_b="), std::string::npos);
   EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
 }
 

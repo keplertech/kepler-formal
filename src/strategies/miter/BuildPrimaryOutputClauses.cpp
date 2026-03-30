@@ -9,12 +9,13 @@
 #include "SNLPath.h"
 #include "NajaProperty.h"
 #include "../../config/Config.h"
+#include <algorithm>
 #include <fstream>
+#include <ostream>
 #include <mutex>
 #include <string_view>
 #include <thread>
 #include <tbb/global_control.h>
-#include <unordered_set>
 
 //#define DEBUG_PRINTS
 //#define DEBUG_CHECKS
@@ -49,16 +50,13 @@ BuildPrimaryOutputClauses::PathKey getTerminalPathKey(const DNLTerminalFull& ter
   return {std::move(pathIDs), std::move(objectIDs)};
 }
 
-std::string formatTerminalName(const DNLTerminalFull& term) {
-  std::string fullName;
+void appendTerminalName(std::ostream& out, const DNLTerminalFull& term) {
   const auto path = term.getDNLInstance().getPath().getPathNames();
   for (size_t i = 0; i < path.size(); ++i) {
-    fullName += path[i].getString();
-    fullName += ".";
+    out << path[i].getString() << ".";
   }
-  fullName += term.getSnlBitTerm()->getName().getString();
-  fullName += std::to_string(term.getSnlBitTerm()->getBit());
-  return fullName;
+  out << term.getSnlBitTerm()->getName().getString()
+      << term.getSnlBitTerm()->getBit();
 }
 
 bool shouldReportSkippedPOs() {
@@ -68,20 +66,43 @@ bool shouldReportSkippedPOs() {
 const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
 const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
 
-struct SkippedPOReportKey {
-  const DNLFull* dnl = nullptr;
-  DNLID isoID        = DNLID_MAX;
-
-  bool operator==(const SkippedPOReportKey& other) const {
-    return dnl == other.dnl && isoID == other.isoID;
+struct SparseReportedIDs {
+  bool mark(const DNLFull* dnl, size_t nBits, DNLID id) {
+    if (id == DNLID_MAX) {
+      return true;
+    }
+    if (owner != dnl) {
+      for (uint32_t wordIndex : touchedWords) {
+        words[wordIndex] = 0;
+      }
+      touchedWords.clear();
+      owner = dnl;
+    }
+    ensureCapacity(std::max(nBits, static_cast<size_t>(id + 1)));
+    const size_t wordIndex = id >> 6;
+    const uint64_t mask = uint64_t{1} << (id & 63);
+    uint64_t& word = words[wordIndex];
+    if (word & mask) {
+      return false;
+    }
+    if (word == 0) {
+      touchedWords.push_back(static_cast<uint32_t>(wordIndex));
+    }
+    word |= mask;
+    return true;
   }
-};
 
-struct SkippedPOReportKeyHash {
-  size_t operator()(const SkippedPOReportKey& key) const {
-    return std::hash<const void*>{}(static_cast<const void*>(key.dnl)) ^
-           (std::hash<DNLID>{}(key.isoID) << 1);
+ private:
+  void ensureCapacity(size_t nBits) {
+    const size_t wordCount = (nBits + 63) / 64;
+    if (words.size() < wordCount) {
+      words.resize(wordCount, 0);
+    }
   }
+
+  const DNLFull* owner = nullptr;
+  std::vector<uint64_t> words;
+  std::vector<uint32_t> touchedWords;
 };
 
 void initializeSkippedPOReportFiles() {
@@ -98,98 +119,87 @@ bool shouldEmitSkippedPOReport(const DNLFull* dnl,
                                DNLID isoID,
                                const char* reportFile) {
   static std::mutex mutex;
-  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
-      multiDriverReports;
-  static std::unordered_set<SkippedPOReportKey, SkippedPOReportKeyHash>
-      noDriverReports;
+  static SparseReportedIDs multiDriverReports;
+  static SparseReportedIDs noDriverReports;
 
   if (isoID == DNLID_MAX) {
     return true;
   }
 
   std::lock_guard<std::mutex> lock(mutex);
-  const SkippedPOReportKey key{dnl, isoID};
   auto& reported = std::string_view(reportFile) == kSkippedMultiDriverPOReport
                        ? multiDriverReports
                        : noDriverReports;
-  return reported.insert(key).second;
+  return reported.mark(dnl, dnl->getDNLIsoDB().getNumIsos() + 1, isoID);
 }
 
-std::string formatIsoTermName(const DNLFull* dnl, DNLID termID) {
+std::mutex& getReportWriteMutex(const char* reportFile) {
+  static std::mutex multiDriverMutex;
+  static std::mutex noDriverMutex;
+  return std::string_view(reportFile) == kSkippedMultiDriverPOReport
+             ? multiDriverMutex
+             : noDriverMutex;
+}
+
+void appendIsoTermName(std::ostream& out, const DNLFull* dnl, DNLID termID) {
   const auto& term = dnl->getDNLTerminalFromID(termID);
-  std::string fullName = term.getDNLInstance().getSNLModel()->getName().getString();
-  fullName += ":";
+  out << term.getDNLInstance().getSNLModel()->getName().getString() << ":";
   const auto path = term.getDNLInstance().getPath().getPathNames();
   for (size_t i = 0; i < path.size(); ++i) {
-    fullName += path[i].getString();
-    fullName += ".";
+    out << path[i].getString() << ".";
   }
-  fullName += term.getSnlBitTerm()->getName().getString();
-  fullName += std::to_string(term.getSnlBitTerm()->getBit());
-  return fullName;
+  out << term.getSnlBitTerm()->getName().getString()
+      << term.getSnlBitTerm()->getBit();
 }
 
-std::string formatNetReport(const SNLBitNet* net) {
-  std::string description = "design=";
-  description += net->getDesign()->getName().getString();
-  description += " name=";
-  description += net->getName().getString();
-  description += " type=";
-  description += net->getType().getString();
-  description += " is_assign=";
-  description += net->getType().isAssign() ? "true" : "false";
-  description += " is_supply=";
-  description += net->getType().isSupply() ? "true" : "false";
-  description += " is_constant0=";
-  description += net->isConstant0() ? "true" : "false";
-  description += " is_constant1=";
-  description += net->isConstant1() ? "true" : "false";
-  description += " model_is_assign=";
-  description += net->getDesign()->isAssign() ? "true" : "false";
-  description += " properties=[";
+void appendNetReport(std::ostream& out, const SNLBitNet* net) {
+  out << "design=" << net->getDesign()->getName().getString()
+      << " name=" << net->getName().getString()
+      << " type=" << net->getType().getString()
+      << " is_assign=" << (net->getType().isAssign() ? "true" : "false")
+      << " is_supply=" << (net->getType().isSupply() ? "true" : "false")
+      << " is_constant0=" << (net->isConstant0() ? "true" : "false")
+      << " is_constant1=" << (net->isConstant1() ? "true" : "false")
+      << " model_is_assign=" << (net->getDesign()->isAssign() ? "true" : "false")
+      << " properties=[";
   bool first = true;
   for (auto* property : net->getProperties()) {
     if (!first) {
-      description += ", ";
+      out << ", ";
     }
     first = false;
-    description += property->getName();
-    description += "=";
-    description += property->getString();
+    out << property->getName() << "=" << property->getString();
   }
-  description += "]";
-  return description;
+  out << "]";
 }
 
 template <typename TermIDs>
-void appendTermsToReport(std::string& report,
+void appendTermsToReport(std::ostream& out,
                          const DNLFull* dnl,
                          const char* label,
                          const TermIDs& termIDs) {
-  report += label;
-  report += ": [";
+  out << label << ": [";
   for (size_t i = 0; i < termIDs.size(); ++i) {
-    report += formatIsoTermName(dnl, termIDs[i]);
+    appendIsoTermName(out, dnl, termIDs[i]);
     if (i + 1 != termIDs.size()) {
-      report += ", ";
+      out << ", ";
     }
   }
-  report += "]";
+  out << "]";
 }
 
-void appendNetsToReport(std::string& report,
+void appendNetsToReport(std::ostream& out,
                         const char* label,
                         const std::set<SNLBitNet*>& nets) {
-  report += label;
-  report += ": [";
+  out << label << ": [";
   size_t i = 0;
   for (const auto* net : nets) {
-    report += formatNetReport(net);
+    appendNetReport(out, net);
     if (++i != nets.size()) {
-      report += ", ";
+      out << ", ";
     }
   }
-  report += "]";
+  out << "]";
 }
 
 void reportSkippedPO(const DNLFull* dnl,
@@ -203,37 +213,35 @@ void reportSkippedPO(const DNLFull* dnl,
     return;
   }
   initializeSkippedPOReportFiles();
-
-  std::string report = "Skipping PO ";
-  report += formatTerminalName(term);
-  report += " of model ";
-  report += term.getSnlBitTerm()->getDesign()->getName().getString();
-  report += " because ";
-  report += reason;
-
-  if (term.getIsoID() != DNLID_MAX) {
-    report += ". iso=";
-    report += std::to_string(term.getIsoID());
-    report += " ";
-    const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
-    appendTermsToReport(report, dnl, "readers", iso.getReaders());
-    report += " ";
-    appendTermsToReport(report, dnl, "drivers", iso.getDrivers());
-    naja::DNL::DNLComplexIso complexIso(term.getIsoID());
-    dnl->getCustomIso(term.getIsoID(), complexIso);
-    report += " ";
-    appendTermsToReport(report, dnl, "complex_readers", complexIso.getReaders());
-    report += " ";
-    appendTermsToReport(report, dnl, "complex_drivers", complexIso.getDrivers());
-    report += " ";
-    appendTermsToReport(report, dnl, "complex_hier_terms", complexIso.getHierTerms());
-    report += " ";
-    appendNetsToReport(report, "complex_nets", complexIso.getNets());
-  }
-
+  std::lock_guard<std::mutex> lock(getReportWriteMutex(reportFile));
   std::ofstream out(reportFile, std::ios::app);
   if (out) {
-    out << report << "\n\n";
+    out << "Skipping PO ";
+    appendTerminalName(out, term);
+    out << " of model "
+        << term.getSnlBitTerm()->getDesign()->getName().getString()
+        << " because " << reason;
+
+    if (term.getIsoID() != DNLID_MAX) {
+      out << ". iso=" << term.getIsoID() << " ";
+      const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+      appendTermsToReport(out, dnl, "readers", iso.getReaders());
+      out << " ";
+      appendTermsToReport(out, dnl, "drivers", iso.getDrivers());
+      if (std::string_view(reportFile) == kSkippedNoDriverPOReport) {
+        naja::DNL::DNLComplexIso complexIso(term.getIsoID());
+        dnl->getCustomIso(term.getIsoID(), complexIso);
+        out << " ";
+        appendTermsToReport(out, dnl, "complex_readers", complexIso.getReaders());
+        out << " ";
+        appendTermsToReport(out, dnl, "complex_drivers", complexIso.getDrivers());
+        out << " ";
+        appendTermsToReport(out, dnl, "complex_hier_terms", complexIso.getHierTerms());
+        out << " ";
+        appendNetsToReport(out, "complex_nets", complexIso.getNets());
+      }
+    }
+    out << "\n\n";
   }
 }
 
