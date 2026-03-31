@@ -1,0 +1,60 @@
+name: regress-big
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
+          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
+          libboost-iostreams-dev zlib1g-dev
+
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+
+    - name: Configure CMake
+      run: |
+        cmake -B ${{github.workspace}}/build \
+          -GNinja \
+          -DPYTHON_INTERFACE=OFF \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=20 \
+          -DCMAKE_CXX_FLAGS="-O3 -march=native -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -march=native -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_EXE_LINKER_FLAGS="-flto"
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config Release
+
+    - name: Clone kepler-formal-regress
+      working-directory: ${{github.workspace}}
+      run: git clone https://github.com/keplertech/kepler-formal-regress
+
+    - name: Run cva6 reporting
+      working-directory: ${{github.workspace}}
+      run: |
+        cd kepler-formal-regress/cva6
+        export CVA6_REPO_DIR="$PWD"
+        export HPDCACHE_DIR="$PWD/core/cache_subsystem/hpdcache"
+        export TARGET_CFG="cv64a6_imafdc_sv39"
+        ../../build/src/bin/kepler-formal -systemverilog \
+          --sv_design1_flist "$PWD/core/Flist.cva6" \
+          --sv_design1_top cva6 \
+          --sv_design2_flist "$PWD/core/Flist.cva6" \
+          --sv_design2_top cva6 \
+          --report-skipped-pos

@@ -269,7 +269,7 @@ BoolExpr* Tree2BoolExpr::convert(
 
   const auto root = tree.getRoot();
   if (!root) {
-    return nullptr;
+    return nullptr; // LCOV_EXCL_LINE
   }
 
   // Determine maximum node ID to size memoization structures.

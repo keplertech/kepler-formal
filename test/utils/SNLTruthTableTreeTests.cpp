@@ -261,6 +261,27 @@ TEST(SNLTruthTableTreeApiTest, DefaultConstructionAndMaxIdBehavior) {
   EXPECT_NO_THROW(tree.destroy());
 }
 
+TEST(SNLTruthTableTreeApiTest, FindAncestorLoopRejectsOutOfRangeBorderIndex) {
+  SNLTruthTableTree tree;
+  std::vector<naja::DNL::DNLID> loopTerms;
+
+  EXPECT_FALSE(tree.findAncestorLoopForBorderLeaf(0, 0, loopTerms));
+  EXPECT_TRUE(loopTerms.empty());
+}
+
+TEST(SNLTruthTableTreeApiTest, IsInitializedTraversesNestedTableChildren) {
+  SNLTruthTableTree tree(0, 0, Node::Type::P);
+
+  auto child = std::make_shared<Node>(0u, &tree);
+  child->type = Node::Type::Table;
+  child->truthTable = makeMaskTable(0, 0);
+  uint32_t childId = tree.allocateNode(child);
+
+  tree.getRoot()->addChildId(childId);
+
+  EXPECT_TRUE(tree.isInitialized());
+}
+
 // Expect allocateNode to reject null shared_ptr
 TEST(SNLTruthTableTreeNodeFromIdTest, AllocateNullSharedPtrThrows) {
   SNLTruthTableTree tree;

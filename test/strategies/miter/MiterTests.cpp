@@ -1017,6 +1017,76 @@ TEST_F(MiterTests, MiterStrategySummaryUsesUnnamedFallbackLabels) {
   EXPECT_NE(content.find("<unnamed>"), std::string::npos);
 }
 
+TEST_F(MiterTests, SNLLogicCloudReportsSkippedNoDriverRoot) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* passModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("PASSCLOUD"));
+  auto passIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("data"));
+  auto unusedIn = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("unused"));
+  auto passOut = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      passModel,
+      SNLTruthTable(2, 0b1100,
+                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+
+  auto inst = SNLInstance::create(top, passModel, NLName("u0"));
+  auto netA = SNLScalarNet::create(top, NLName("net_a"));
+  auto netY = SNLScalarNet::create(top, NLName("net_y"));
+  auto floatingNet = SNLScalarNet::create(top, NLName("floating_net"));
+
+  topIn->setNet(netA);
+  topOut->setNet(netY);
+  inst->getInstTerm(passIn)->setNet(netA);
+  inst->getInstTerm(unusedIn)->setNet(floatingNet);
+  inst->getInstTerm(passOut)->setNet(netY);
+
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  ScopedReportSkippedPOs reportGuard(true);
+  naja::DNL::destroy();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  auto* dnl = naja::DNL::get();
+  ASSERT_EQ(builder.getOutputs().size(), 1u);
+
+  std::vector<bool> isPIs(dnl->getNBterms() + 1, false);
+  for (auto input : builder.getInputs()) {
+    isPIs[input] = true;
+  }
+
+  std::vector<bool> isPOs(dnl->getNBterms() + 1, false);
+  for (auto output : builder.getOutputs()) {
+    isPOs[output] = true;
+  }
+
+  SNLLogicCloud cloud(builder.getOutputs()[0], isPIs, isPOs);
+  cloud.compute();
+  EXPECT_FALSE(cloud.getTruthTable().isValid());
+  SNLLogicCloud::flushSkippedPOReports();
+
+  const auto reportPath = tempDir_ / "skipped_no_driver_pos.txt";
+  ASSERT_TRUE(std::filesystem::exists(reportPath));
+  const auto content = readTextFile(reportPath);
+  EXPECT_NE(content.find("no drivers during cloud expansion"),
+            std::string::npos);
+  EXPECT_NE(content.find("current_input="), std::string::npos);
+  EXPECT_NE(content.find("drivers: []"), std::string::npos);
+}
+
 TEST(MiterStandaloneTests, KissatClauseAutoExpandsTrackedVariableCount) {
   SATSolverWrapper solver(KEPLER_FORMAL::Config::SolverType::KISSAT);
   solver.addClause({5});
