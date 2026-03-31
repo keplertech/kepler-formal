@@ -82,8 +82,8 @@ jobs:
     - name: Run cva6 reporting
       working-directory: ${{github.workspace}}
       run: |
-        cd kepler-formal-regress/kepler-formal-examples/cva6
-        KEPLER_FORMAL_BIN=../../../build/src/bin/kepler-formal ./kepler-formal-report.csh
+        cd kepler-formal-examples/cva6
+        KEPLER_FORMAL_BIN=../../build/src/bin/kepler-formal ./kepler-formal-report.csh
   
     - name: Run on naja if
       working-directory: ${{github.workspace}}
