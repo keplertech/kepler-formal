@@ -51,6 +51,12 @@ jobs:
       run: |
         git clone https://github.com/keplertech/kepler-formal-regress
     
+    - name: Run cva6 reporting
+      working-directory: ${{github.workspace}}
+      run: |
+        cd kepler-formal-regress/cva6
+        KEPLER_FORMAL_BIN=../../build/src/bin/kepler-formal ./kepler-formal-report.csh
+    
     - name: Run cts_aes_asap7_base
       working-directory: ${{github.workspace}}
       run: |
@@ -78,12 +84,6 @@ jobs:
         cd kepler-formal-regress/ihp-sg13g2_i2c-gpio-expander
         ../../build/src/bin/kepler-formal --config objects/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_test.yml
         grep "Circuits are IDENTICAL" logs/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_check.log 
-
-    - name: Run cva6 reporting
-      working-directory: ${{github.workspace}}
-      run: |
-        cd kepler-formal-examples/cva6
-        KEPLER_FORMAL_BIN=../../build/src/bin/kepler-formal ./kepler-formal-report.csh
   
     - name: Run on naja if
       working-directory: ${{github.workspace}}
