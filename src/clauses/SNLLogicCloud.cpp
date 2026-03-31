@@ -15,10 +15,11 @@
 #include "../config/Config.h"
 #include <algorithm>
 #include <fstream>
-#include <map>
+#include <memory>
 #include <mutex>
 #include <ostream>
 #include <string_view>
+#include <unordered_set>
 
 
 
@@ -40,136 +41,78 @@ bool shouldReportSkippedPOs() {
   return KEPLER_FORMAL::Config::getReportSkippedPOs();
 }
 
+bool canUseCachedIsoShortcut(const naja::DNL::DNLIso& iso,
+                             naja::DNL::DNLID input) {
+  if (iso.getIsoID() == naja::DNL::DNLID_MAX || iso.getDrivers().empty() ||
+      iso.getDrivers().front() != input) {
+    return false;
+  }
+  return Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
+         Tree2BoolExpr::iso2boolExpr_.end();
+}
+
 const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
 const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
 const char* kSkippedLogicalLoopPOReport = "skipped_logical_loop_pos.txt";
 
-struct SparseReportedIDs {
-  bool mark(const DNLFull* dnl, size_t nBits, DNLID id) {
-    if (id == DNLID_MAX) {
-      return true;
-    }
-    if (owner != dnl) {
-      for (uint32_t wordIndex : touchedWords) {
-        words[wordIndex] = 0;
-      }
-      touchedWords.clear();
-      owner = dnl;
-    }
-    ensureCapacity(std::max(nBits, static_cast<size_t>(id + 1)));
-    const size_t wordIndex = id >> 6;
-    const uint64_t mask = uint64_t{1} << (id & 63);
-    uint64_t& word = words[wordIndex];
-    if (word & mask) {
-      return false;
-    }
-    if (word == 0) {
-      touchedWords.push_back(static_cast<uint32_t>(wordIndex));
-    }
-    word |= mask;
-    return true;
-  }
-
- private:
-  void ensureCapacity(size_t nBits) {
-    const size_t wordCount = (nBits + 63) / 64;
-    if (words.size() < wordCount) {
-      words.resize(wordCount, 0);
-    }
-  }
-
-  const DNLFull* owner = nullptr;
-  std::vector<uint64_t> words;
-  std::vector<uint32_t> touchedWords;
-};
-
 void initializeSkippedPOReportFiles() {
-  static bool initialized = false;
-  if (initialized || !shouldReportSkippedPOs()) {
+  static std::once_flag once;
+  if (!shouldReportSkippedPOs()) {
     return;
   }
-  std::ofstream(kSkippedMultiDriverPOReport, std::ios::trunc);
-  std::ofstream(kSkippedNoDriverPOReport, std::ios::trunc);
-  std::ofstream(kSkippedLogicalLoopPOReport, std::ios::trunc);
-  initialized = true;
+  std::call_once(once, []() {
+    std::ofstream(kSkippedMultiDriverPOReport, std::ios::trunc);
+    std::ofstream(kSkippedNoDriverPOReport, std::ios::trunc);
+    std::ofstream(kSkippedLogicalLoopPOReport, std::ios::trunc);
+  });
 }
 
-bool shouldEmitSkippedPOReport(const DNLFull* dnl,
-                               DNLID rootTerm,
-                               const char* reportFile) {
-  static std::mutex mutex;
-  static SparseReportedIDs multiDriverReports;
-  static SparseReportedIDs noDriverReports;
-  static SparseReportedIDs logicalLoopReports;
+DNLID getReportIsoID(const DNLFull* dnl, DNLID currentInput, DNLID mergeTerm) {
+  auto getIsoID = [&](DNLID termID) -> DNLID {
+    if (termID == DNLID_MAX) {
+      return DNLID_MAX;
+    }
+    return dnl->getDNLTerminalFromID(termID).getIsoID();
+  };
 
-  std::lock_guard<std::mutex> lock(mutex);
-  const std::string_view reportFileView(reportFile);
-  auto& reported =
-      reportFileView == std::string_view(kSkippedMultiDriverPOReport)
-          ? multiDriverReports
-          : reportFileView == std::string_view(kSkippedNoDriverPOReport)
-                ? noDriverReports
-                : logicalLoopReports;
-  return reported.mark(dnl, dnl->getDNLTerms().size(), rootTerm);
-}
-
-std::mutex& getReportWriteMutex(const char* reportFile) {
-  static std::mutex multiDriverMutex;
-  static std::mutex noDriverMutex;
-  static std::mutex logicalLoopMutex;
-  const std::string_view reportFileView(reportFile);
-  if (reportFileView == std::string_view(kSkippedMultiDriverPOReport)) {
-    return multiDriverMutex;
+  const DNLID currentIsoID = getIsoID(currentInput);
+  if (currentIsoID != DNLID_MAX) {
+    return currentIsoID;
   }
-  if (reportFileView == std::string_view(kSkippedNoDriverPOReport)) {
-    return noDriverMutex;
-  }
-  return logicalLoopMutex;
+  return getIsoID(mergeTerm);
 }
 
-struct ThreadLocalSkippedPOReportBuffers {
-  std::string multiDriver;
-  std::string noDriver;
-  std::string logicalLoop;
+struct SkippedPOReportEvent {
+  const DNLFull* dnl = nullptr;
+  DNLID rootTerm = DNLID_MAX;
+  DNLID currentInput = DNLID_MAX;
+  DNLID mergeTerm = DNLID_MAX;
+  DNLID reportIsoID = DNLID_MAX;
+  const char* reason = nullptr;
+  const char* reportFile = nullptr;
+  std::vector<DNLID, tbb::tbb_allocator<DNLID>> loopTerms;
 };
 
-thread_local ThreadLocalSkippedPOReportBuffers skippedPOReportBuffers;
+using SkippedPOReportEventVector =
+    std::vector<SkippedPOReportEvent, tbb::tbb_allocator<SkippedPOReportEvent>>;
 
-constexpr size_t kSkippedPOReportFlushThreshold = 16 * 1024;
+thread_local SkippedPOReportEventVector skippedPOReportEvents;
 
-std::string& getReportBuffer(const char* reportFile) {
-  const std::string_view reportFileView(reportFile);
-  if (reportFileView == std::string_view(kSkippedMultiDriverPOReport)) {
-    return skippedPOReportBuffers.multiDriver;
-  }
-  if (reportFileView == std::string_view(kSkippedNoDriverPOReport)) {
-    return skippedPOReportBuffers.noDriver;
-  }
-  return skippedPOReportBuffers.logicalLoop;
+SkippedPOReportEventVector& getSkippedPOReportEvents() {
+  return skippedPOReportEvents;
 }
 
-void flushBufferedReport(const char* reportFile) {
-  auto& buffer = getReportBuffer(reportFile);
-  if (buffer.empty()) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(getReportWriteMutex(reportFile));
-  std::ofstream out(reportFile, std::ios::app);
-  if (out) {
-    out << buffer;
-  }
-  buffer.clear();
-}
+using SkippedPOReportEventsETS =
+    tbb::enumerable_thread_specific<SkippedPOReportEventVector*>;
+SkippedPOReportEventsETS skippedPOReportEventsETS;
 
-void flushAllBufferedReports() {
-  flushBufferedReport(kSkippedMultiDriverPOReport);
-  flushBufferedReport(kSkippedNoDriverPOReport);
-  flushBufferedReport(kSkippedLogicalLoopPOReport);
+void recordSkippedPOReportEvent(const SkippedPOReportEvent& event) {
+  auto& events = getSkippedPOReportEvents();
+  if (events.empty()) {
+    skippedPOReportEventsETS.local() = &events;
+  }
+  events.emplace_back(event);
 }
-
-struct BufferedReportFlushGuard {
-  ~BufferedReportFlushGuard() { flushAllBufferedReports(); }
-};
 
 void appendCloudTermName(std::ostream& out, const DNLFull* dnl, DNLID termID) {
   if (termID == DNLID_MAX) {
@@ -233,37 +176,18 @@ void reportCloudSkippedRoot(const DNLFull* dnl,
   if (!shouldReportSkippedPOs()) {
     return;
   }
-  if (!shouldEmitSkippedPOReport(dnl, rootTerm, reportFile)) {
-    return;
+  SkippedPOReportEvent event;
+  event.dnl = dnl;
+  event.rootTerm = rootTerm;
+  event.currentInput = currentInput;
+  event.mergeTerm = mergeTerm;
+  event.reportIsoID = getReportIsoID(dnl, currentInput, mergeTerm);
+  event.reason = reason;
+  event.reportFile = reportFile;
+  if (loopTerms) {
+    event.loopTerms.assign(loopTerms->begin(), loopTerms->end());
   }
-  initializeSkippedPOReportFiles();
-  std::ostringstream entry;
-  entry << "Skipping cloud root ";
-  appendCloudTermName(entry, dnl, rootTerm);
-  entry << " because " << reason << ". current_input=";
-  appendCloudTermName(entry, dnl, currentInput);
-  if (mergeTerm != DNLID_MAX) {
-    entry << " merge_term=";
-    appendCloudTermName(entry, dnl, mergeTerm);
-  }
-  appendIsoDetailsToReport(entry, dnl, currentInput, "current_input");
-  if (mergeTerm != DNLID_MAX) {
-    appendIsoDetailsToReport(entry, dnl, mergeTerm, "merge_term");
-  }
-  if (loopTerms && !loopTerms->empty()) {
-    entry << " ";
-    appendTermsToReport(entry, dnl, "loop_terms", *loopTerms);
-  }
-  entry << "\n\n";
-
-  auto& buffer = getReportBuffer(reportFile);
-  if (buffer.capacity() < kSkippedPOReportFlushThreshold) {
-    buffer.reserve(kSkippedPOReportFlushThreshold);
-  }
-  buffer += entry.str();
-  if (buffer.size() >= kSkippedPOReportFlushThreshold) {
-    flushBufferedReport(reportFile);
-  }
+  recordSkippedPOReportEvent(event);
 }
 
 }  // namespace
@@ -420,7 +344,6 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 }
 
 void SNLLogicCloud::compute() {
-  BufferedReportFlushGuard reportFlushGuard;
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
   auto formatTermName = [&](naja::DNL::DNLID termID) {
@@ -901,10 +824,7 @@ void SNLLogicCloud::compute() {
       const auto input = getNewIterationInputsETS().first[i];
       auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
           dnl_.getDNLTerminalFromID(input).getIsoID());
-      const bool cachedAsInput =
-          Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
-              Tree2BoolExpr::iso2boolExpr_.end() &&
-          !iso.getDrivers().empty() && iso.getDrivers().front() == input;
+      const bool cachedAsInput = canUseCachedIsoShortcut(iso, input);
       if (!isInput(input) && !cachedAsInput && !iso.isConstant()) {
         reachedPIs = false;
         break;
@@ -1074,9 +994,7 @@ void SNLLogicCloud::compute() {
       }
       const auto& driver = iso.getDrivers().front();
       
-      if (isInput(driver)
-        || (Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
-            Tree2BoolExpr::iso2boolExpr_.end() && iter > 0)) {
+      if (isInput(driver) || (canUseCachedIsoShortcut(iso, driver) && iter > 0)) {
         pushBackNewIterationInputsETS(driver);
         DEBUG_LOG(
             "- %lu After analyzing input %s(%lu), addings driver %s(%lu) is a "
@@ -1195,11 +1113,83 @@ void SNLLogicCloud::compute() {
   for (const auto& input : currentIterationInputs_) {
     auto iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
         dnl_.getDNLTerminalFromID(input).getIsoID());
-    const bool cachedAsInput =
-        Tree2BoolExpr::iso2boolExpr_.find(iso.getIsoID()) !=
-            Tree2BoolExpr::iso2boolExpr_.end() &&
-        !iso.getDrivers().empty() && iso.getDrivers().front() == input;
+    const bool cachedAsInput = canUseCachedIsoShortcut(iso, input);
     assert(isInput(input) || cachedAsInput || iso.isConstant());
   }
   #endif
+}
+
+void SNLLogicCloud::flushSkippedPOReports() {
+  if (!shouldReportSkippedPOs()) {
+    return;
+  }
+
+  initializeSkippedPOReportFiles();
+  std::ofstream multiDriverOut(kSkippedMultiDriverPOReport, std::ios::app);
+  std::ofstream noDriverOut(kSkippedNoDriverPOReport, std::ios::app);
+  std::ofstream logicalLoopOut(kSkippedLogicalLoopPOReport, std::ios::app);
+  std::unordered_set<uint64_t> seenIsoKeys;
+
+  auto makeIsoKey = [](const DNLFull* dnl, DNLID isoID) -> uint64_t {
+    return (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dnl)) << 32) ^
+           static_cast<uint64_t>(isoID);
+  };
+
+  for (auto* eventsPtr : skippedPOReportEventsETS) {
+    if (eventsPtr == nullptr) {
+      continue;
+    }
+    auto& events = *eventsPtr;
+    for (const auto& event : events) {
+      std::ostream* out = &logicalLoopOut;
+      const std::string_view reportFile(event.reportFile);
+      if (reportFile == std::string_view(kSkippedMultiDriverPOReport)) {
+        out = &multiDriverOut;
+      } else if (reportFile == std::string_view(kSkippedNoDriverPOReport)) {
+        out = &noDriverOut;
+      }
+
+      if (!(*out)) {
+        continue;
+      }
+
+      const bool isFirstForIso =
+          event.reportIsoID == DNLID_MAX ||
+          seenIsoKeys.insert(makeIsoKey(event.dnl, event.reportIsoID)).second;
+
+      *out << "Skipping cloud root ";
+      appendCloudTermName(*out, event.dnl, event.rootTerm);
+      *out << " because " << event.reason;
+      if (event.reportIsoID != DNLID_MAX) {
+        *out << ". iso=" << event.reportIsoID;
+      }
+      if (!isFirstForIso) {
+        if (event.reportIsoID != DNLID_MAX) {
+          *out << ". See first encounter of iso=" << event.reportIsoID
+               << " for details";
+        }
+        *out << "\n\n";
+        continue;
+      }
+
+      *out << ". current_input=";
+      appendCloudTermName(*out, event.dnl, event.currentInput);
+      if (event.mergeTerm != DNLID_MAX) {
+        *out << " merge_term=";
+        appendCloudTermName(*out, event.dnl, event.mergeTerm);
+      }
+      appendIsoDetailsToReport(*out, event.dnl, event.currentInput,
+                               "current_input");
+      if (event.mergeTerm != DNLID_MAX) {
+        appendIsoDetailsToReport(*out, event.dnl, event.mergeTerm,
+                                 "merge_term");
+      }
+      if (!event.loopTerms.empty()) {
+        *out << " ";
+        appendTermsToReport(*out, event.dnl, "loop_terms", event.loopTerms);
+      }
+      *out << "\n\n";
+    }
+    events.clear();
+  }
 }

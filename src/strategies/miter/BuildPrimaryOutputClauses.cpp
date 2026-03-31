@@ -11,8 +11,8 @@
 #include "../../config/Config.h"
 #include <algorithm>
 #include <fstream>
-#include <ostream>
 #include <mutex>
+#include <ostream>
 #include <string_view>
 #include <thread>
 #include <tbb/global_control.h>
@@ -106,31 +106,27 @@ struct SparseReportedIDs {
 };
 
 void initializeSkippedPOReportFiles() {
-  static bool initialized = false;
-  if (initialized || !shouldReportSkippedPOs()) {
+  static std::once_flag once;
+  if (!shouldReportSkippedPOs()) {
     return;
   }
-  std::ofstream(kSkippedMultiDriverPOReport, std::ios::trunc);
-  std::ofstream(kSkippedNoDriverPOReport, std::ios::trunc);
-  initialized = true;
+  std::call_once(once, []() {
+    std::ofstream(kSkippedMultiDriverPOReport, std::ios::trunc);
+    std::ofstream(kSkippedNoDriverPOReport, std::ios::trunc);
+  });
 }
 
 bool shouldEmitSkippedPOReport(const DNLFull* dnl,
-                               DNLID isoID,
-                               const char* reportFile) {
+                               DNLID isoID) {
   static std::mutex mutex;
-  static SparseReportedIDs multiDriverReports;
-  static SparseReportedIDs noDriverReports;
+  static SparseReportedIDs reportedIsos;
 
   if (isoID == DNLID_MAX) {
     return true;
   }
 
   std::lock_guard<std::mutex> lock(mutex);
-  auto& reported = std::string_view(reportFile) == kSkippedMultiDriverPOReport
-                       ? multiDriverReports
-                       : noDriverReports;
-  return reported.mark(dnl, dnl->getDNLIsoDB().getNumIsos() + 1, isoID);
+  return reportedIsos.mark(dnl, dnl->getDNLIsoDB().getNumIsos() + 1, isoID);
 }
 
 std::mutex& getReportWriteMutex(const char* reportFile) {
@@ -209,10 +205,8 @@ void reportSkippedPO(const DNLFull* dnl,
   if (!shouldReportSkippedPOs()) {
     return;
   }
-  if (!shouldEmitSkippedPOReport(dnl, term.getIsoID(), reportFile)) {
-    return;
-  }
   initializeSkippedPOReportFiles();
+  const bool isFirstForIso = shouldEmitSkippedPOReport(dnl, term.getIsoID());
   std::lock_guard<std::mutex> lock(getReportWriteMutex(reportFile));
   std::ofstream out(reportFile, std::ios::app);
   if (out) {
@@ -223,7 +217,16 @@ void reportSkippedPO(const DNLFull* dnl,
         << " because " << reason;
 
     if (term.getIsoID() != DNLID_MAX) {
-      out << ". iso=" << term.getIsoID() << " ";
+      out << ". iso=" << term.getIsoID();
+    }
+
+    if (!isFirstForIso) {
+      if (term.getIsoID() != DNLID_MAX) {
+        out << ". See first encounter of iso=" << term.getIsoID()
+            << " for details";
+      }
+    } else if (term.getIsoID() != DNLID_MAX) {
+      out << " ";
       const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
       appendTermsToReport(out, dnl, "readers", iso.getReaders());
       out << " ";
@@ -752,8 +755,10 @@ void BuildPrimaryOutputClauses::build() {
 
     DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
     DEBUG_LOG("isoID: %zu\n", isoID);
-    if (Tree2BoolExpr::iso2boolExpr_.find(isoID) != Tree2BoolExpr::iso2boolExpr_.end()) {
-      POs_[i] = Tree2BoolExpr::iso2boolExpr_[isoID];
+    auto cachedIt = Tree2BoolExpr::iso2boolExpr_.find(isoID);
+    if (cachedIt != Tree2BoolExpr::iso2boolExpr_.end() &&
+        cachedIt->second != nullptr) {
+      POs_[i] = cachedIt->second;
       #ifdef DEBUG_CHECKS
       assert(POs_[i] != nullptr);
       #endif
@@ -857,7 +862,9 @@ void BuildPrimaryOutputClauses::build() {
     #ifdef DEBUG_CHECKS
     auto startFin = std::chrono::steady_clock::now();    
     #endif
-    cloud.getTruthTable().finalize();
+    if (cloud.getTruthTable().isValid()) {
+      cloud.getTruthTable().finalize();
+    }
     #ifdef DEBUG_CHECKS
     auto endFin = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed_seconds_fin = endFin - startFin;
@@ -879,7 +886,13 @@ void BuildPrimaryOutputClauses::build() {
     cloud.destroy();
     // BoolExpr::getMutex().unlock();
     // printf("size of expr: %lu\n", POs_.back()->size());
-    Tree2BoolExpr::iso2boolExpr_[isoID] = POs_[i];
+    if (isoID != DNLID_MAX) {
+      // Publish only fully-built expressions; do not expose a placeholder entry.
+      auto insertResult = Tree2BoolExpr::iso2boolExpr_.insert({isoID, POs_[i]});
+      if (!insertResult.second) {
+        POs_[i] = insertResult.first->second;
+      }
+    }
   };
   Tree2BoolExpr::iso2boolExpr_.clear();
   if (getenv("KEPLER_NO_MT")) {
@@ -903,6 +916,7 @@ void BuildPrimaryOutputClauses::build() {
       tbb::static_partitioner()
     );
   }
+  SNLLogicCloud::flushSkippedPOReports();
   destroy();  // Clean up DNL instance
 }
 

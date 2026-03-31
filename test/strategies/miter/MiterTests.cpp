@@ -14,6 +14,7 @@
 #include "BuildPrimaryOutputClauses.h"
 #include "ConstantPropagation.h"
 #include "MiterStrategy.h"
+#include "SNLLogicCloud.h"
 #include "NajaDumpableProperty.h"
 #include "NLLibraryTruthTables.h"
 #include "NLDB0.h"
@@ -29,6 +30,7 @@
 #include "SNLPath.h"
 #include "SNLCapnP.h"
 #include "DNL.h"
+#include "Tree2BoolExpr.h"
 
 #include "Config.h"
 
@@ -144,6 +146,43 @@ std::string readTextFile(const std::filesystem::path& path) {
   std::stringstream buffer;
   buffer << file.rdbuf();
   return buffer.str();
+}
+
+naja::DNL::DNLID findDNLTermIDByInstanceAndTerm(const char* instanceName,
+                                                const char* termName) {
+  auto* dnl = naja::DNL::get();
+  for (naja::DNL::DNLID id = 0; id <= dnl->getNBterms(); ++id) {
+    const auto& term = dnl->getDNLTerminalFromID(id);
+    if (term.isNull()) {
+      continue;
+    }
+    auto* instance = term.getDNLInstance().getSNLInstance();
+    if (instance == nullptr) {
+      continue;
+    }
+    if (instance->getName().getString() == instanceName &&
+        term.getSnlBitTerm()->getName().getString() == termName) {
+      return id;
+    }
+  }
+  return naja::DNL::DNLID_MAX;
+}
+
+std::vector<std::string> getTermLabels(const std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& ids) {
+  std::vector<std::string> labels;
+  labels.reserve(ids.size());
+  for (auto id : ids) {
+    const auto& term = naja::DNL::get()->getDNLTerminalFromID(id);
+    std::string label;
+    if (auto* instance = term.getDNLInstance().getSNLInstance()) {
+      label += instance->getName().getString();
+      label += ".";
+    }
+    label += term.getSnlBitTerm()->getName().getString();
+    labels.push_back(label);
+  }
+  std::sort(labels.begin(), labels.end());
+  return labels;
 }
 
 size_t countSubstringOccurrences(const std::string& text,
@@ -658,7 +697,8 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
   EXPECT_NE(content.find("floating_net"), std::string::npos);
   EXPECT_NE(content.find("report_prop_a="), std::string::npos);
   EXPECT_NE(content.find("report_prop_b="), std::string::npos);
-  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
+  EXPECT_NE(content.find("See first encounter of iso="), std::string::npos);
+  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 2u);
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
@@ -738,7 +778,8 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   EXPECT_EQ(content.find("complex_nets"), std::string::npos);
   EXPECT_EQ(content.find("report_prop_a="), std::string::npos);
   EXPECT_EQ(content.find("report_prop_b="), std::string::npos);
-  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 1u);
+  EXPECT_NE(content.find("See first encounter of iso="), std::string::npos);
+  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 2u);
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesInitializesSkippedPOReportFilesOnlyOnce) {
@@ -822,6 +863,129 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesInitializesSkippedPOReportFilesOnlyO
 
   EXPECT_TRUE(std::filesystem::exists(tempDir_ / "skipped_no_driver_pos.txt"));
   EXPECT_TRUE(std::filesystem::exists(tempDir_ / "skipped_multi_driver_pos.txt"));
+}
+
+TEST_F(MiterTests, ReportingModePreservesCachedIsoShortcutInLogicCloud) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topInA =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
+  auto topInB =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("b"));
+  auto topInC =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("c"));
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* andModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND2"));
+  auto andIn0 =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("a"));
+  auto andIn1 =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Input, NLName("b"));
+  auto andOut =
+      SNLScalarTerm::create(andModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      andModel, SNLTruthTable(2, 0b1000, SNLTruthTable::fullDependencies(2)));
+
+  SNLDesign* bufModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("BUF1"));
+  auto bufIn =
+      SNLScalarTerm::create(bufModel, SNLTerm::Direction::Input, NLName("a"));
+  auto bufOut =
+      SNLScalarTerm::create(bufModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      bufModel, SNLTruthTable(1, 0b10, SNLTruthTable::fullDependencies(1)));
+
+  SNLDesign* orModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("OR2"));
+  auto orIn0 =
+      SNLScalarTerm::create(orModel, SNLTerm::Direction::Input, NLName("a"));
+  auto orIn1 =
+      SNLScalarTerm::create(orModel, SNLTerm::Direction::Input, NLName("b"));
+  auto orOut =
+      SNLScalarTerm::create(orModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      orModel, SNLTruthTable(2, 0b1110, SNLTruthTable::fullDependencies(2)));
+
+  auto andInst = SNLInstance::create(top, andModel, NLName("and0"));
+  auto bufInst = SNLInstance::create(top, bufModel, NLName("buf0"));
+  auto orInst = SNLInstance::create(top, orModel, NLName("or0"));
+
+  auto netA = SNLScalarNet::create(top, NLName("net_a"));
+  auto netB = SNLScalarNet::create(top, NLName("net_b"));
+  auto netC = SNLScalarNet::create(top, NLName("net_c"));
+  auto netAnd = SNLScalarNet::create(top, NLName("net_and"));
+  auto netBuf = SNLScalarNet::create(top, NLName("net_buf"));
+  auto netY = SNLScalarNet::create(top, NLName("net_y"));
+
+  topInA->setNet(netA);
+  topInB->setNet(netB);
+  topInC->setNet(netC);
+  topOut->setNet(netY);
+
+  andInst->getInstTerm(andIn0)->setNet(netA);
+  andInst->getInstTerm(andIn1)->setNet(netB);
+  andInst->getInstTerm(andOut)->setNet(netAnd);
+
+  bufInst->getInstTerm(bufIn)->setNet(netAnd);
+  bufInst->getInstTerm(bufOut)->setNet(netBuf);
+
+  orInst->getInstTerm(orIn0)->setNet(netBuf);
+  orInst->getInstTerm(orIn1)->setNet(netC);
+  orInst->getInstTerm(orOut)->setNet(netY);
+
+  naja::DNL::destroy();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+
+  auto* dnl = naja::DNL::get();
+  ASSERT_EQ(builder.getOutputs().size(), 1u);
+
+  std::vector<bool> isPIs(dnl->getNBterms() + 1, false);
+  for (auto input : builder.getInputs()) {
+    isPIs[input] = true;
+  }
+
+  std::vector<bool> isPOs(dnl->getNBterms() + 1, false);
+  for (auto output : builder.getOutputs()) {
+    isPOs[output] = true;
+  }
+
+  const auto andOutID = findDNLTermIDByInstanceAndTerm("and0", "y");
+  ASSERT_NE(andOutID, naja::DNL::DNLID_MAX);
+  const auto andIsoID = dnl->getDNLTerminalFromID(andOutID).getIsoID();
+  ASSERT_NE(andIsoID, naja::DNL::DNLID_MAX);
+
+  Tree2BoolExpr::iso2boolExpr_.clear();
+  Tree2BoolExpr::iso2boolExpr_.insert({andIsoID, BoolExpr::Var(999)});
+
+  {
+    ScopedReportSkippedPOs reportGuard(false);
+    SNLLogicCloud cloud(builder.getOutputs()[0], isPIs, isPOs);
+    cloud.compute();
+    EXPECT_EQ(getTermLabels(cloud.getInputs()),
+              (std::vector<std::string>{"and0.y", "c"}));
+    cloud.destroy();
+  }
+
+  {
+    ScopedReportSkippedPOs reportGuard(true);
+    SNLLogicCloud cloud(builder.getOutputs()[0], isPIs, isPOs);
+    cloud.compute();
+    EXPECT_EQ(getTermLabels(cloud.getInputs()),
+              (std::vector<std::string>{"and0.y", "c"}));
+    cloud.destroy();
+  }
+
+  Tree2BoolExpr::iso2boolExpr_.clear();
+  naja::DNL::destroy();
 }
 
 TEST_F(MiterTests, MiterStrategySummaryUsesUnnamedFallbackLabels) {
