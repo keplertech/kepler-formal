@@ -55,7 +55,15 @@ jobs:
       working-directory: ${{github.workspace}}
       run: |
         cd kepler-formal-regress/cva6
-        KEPLER_FORMAL_BIN=../../build/src/bin/kepler-formal ./kepler-formal-report.csh
+        export CVA6_REPO_DIR="$PWD"
+        export HPDCACHE_DIR="$PWD/core/cache_subsystem/hpdcache"
+        export TARGET_CFG="cv64a6_imafdc_sv39"
+        ../../build/src/bin/kepler-formal -systemverilog \
+          --sv_design1_flist "$PWD/core/Flist.cva6" \
+          --sv_design1_top cva6 \
+          --sv_design2_flist "$PWD/core/Flist.cva6" \
+          --sv_design2_top cva6 \
+          --report-skipped-pos
     
     - name: Run cts_aes_asap7_base
       working-directory: ${{github.workspace}}
