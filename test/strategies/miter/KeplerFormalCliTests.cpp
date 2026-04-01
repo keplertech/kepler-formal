@@ -745,6 +745,44 @@ TEST(KeplerFormalCliTests, CliCompactFlagWritesIdenticalSummaryToDefaultLog) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST(KeplerFormalCliTests, CliCompactFlagAlignsReorderedInputsAndOutputs) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input a, input b, output y0, output y1);\n"
+      "  assign y0 = a;\n"
+      "  assign y1 = b;\n"
+      "endmodule\n",
+      "module top(input b, input a, output y1, output y0);\n"
+      "  assign y1 = b;\n"
+      "  assign y0 = a;\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "compact_reordered_cli_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+
+    std::string argv0 = "kepler-formal";
+    std::string argv1 = "-verilog";
+    std::string argv2 = fixture.design0Path.string();
+    std::string argv3 = fixture.design1Path.string();
+    std::string argv4 = "--compact";
+    char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(),
+                    argv4.data()};
+    int argc = 5;
+
+    EXPECT_EQ(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(contents.find("Circuits are IDENTICAL"), std::string::npos);
+  }
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST(KeplerFormalCliTests, CliReportSkippedPOsFlagAccepted) {
   ReportSkippedPOsGuard reportGuard;
   const auto fixture = createEquivalentDesignFixture(

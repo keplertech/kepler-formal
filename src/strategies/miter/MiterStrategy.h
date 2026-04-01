@@ -19,11 +19,19 @@ namespace KEPLER_FORMAL {
 
 class MiterStrategy {
  public:
+  struct CompactSnapshot {
+    std::vector<BuildPrimaryOutputClauses::PathKey> inputs;
+    std::vector<BuildPrimaryOutputClauses::PathKey> outputs;
+    tbb::concurrent_vector<BoolExpr*> POs;
+  };
+
   MiterStrategy(naja::NL::SNLDesign* top0, naja::NL::SNLDesign* top1, const std::string& logFileName = "", const std::string& prefix = "");
 
   void init(bool enableLogging = true);
 
   bool run(bool compact = false);
+  bool runCompactSnapshots(const CompactSnapshot& snapshot0,
+                           const CompactSnapshot& snapshot1);
 
   void setCnfDump(bool enabled, const std::string& path = "");
 
@@ -41,6 +49,8 @@ class MiterStrategy {
   const std::vector<naja::DNL::DNLID>& getPIs0() const { return PIs0_; }
   const std::vector<naja::DNL::DNLID>& getPIs1() const { return PIs1_; }
  private:
+  bool runCompactPOs(const tbb::concurrent_vector<BoolExpr*>& POs0,
+                     const tbb::concurrent_vector<BoolExpr*>& POs1);
   BoolExpr* buildMiter(
       const tbb::concurrent_vector<BoolExpr*>& A,
       const tbb::concurrent_vector<BoolExpr*>& B) const;

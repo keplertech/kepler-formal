@@ -332,6 +332,23 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
   return svInputPaths;
 }
 
+static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
+    const KEPLER_FORMAL::BuildPrimaryOutputClauses& builder) {
+  KEPLER_FORMAL::MiterStrategy::CompactSnapshot snapshot;
+  snapshot.inputs.reserve(builder.getInputs().size());
+  for (const auto input : builder.getInputs()) {
+    snapshot.inputs.emplace_back(builder.getInputs2InputsIDs().at(input));
+  }
+  snapshot.outputs.reserve(builder.getOutputs().size());
+  for (const auto output : builder.getOutputs()) {
+    snapshot.outputs.emplace_back(builder.getOutputs2OutputsIDs().at(output));
+  }
+  for (auto* expr : builder.getPOs()) {
+    snapshot.POs.push_back(expr);
+  }
+  return snapshot;
+}
+
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
   enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF };
@@ -725,6 +742,132 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       return true;
     };
+
+    auto loadOneDesign = [&](const std::vector<std::string>& designPaths,
+                             const SystemVerilogDesignOptions& designOptions,
+                             int designIndex,
+                             int dbID) -> NLDB* {
+      NLDB* db = nullptr;
+      bool primitivesLoadedForDesign = false;
+
+      if (!libertyFiles.empty()) {
+        db = NLDB::create(NLUniverse::get());
+        primitivesLoadedForDesign = loadLibraries(db);
+        if (!primitivesLoadedForDesign) {
+          throw std::runtime_error("Failed to load library files");
+        }
+      }
+
+      if (inputFormatType == FormatType::VERILOG ||
+          inputFormatType == FormatType::SYSTEMVERILOG) {
+        if (!db) {
+          db = NLDB::create(NLUniverse::get());
+        }
+        db->setID(dbID);
+        SPDLOG_INFO("Parsing {} file(s) for design {}",
+                    inputFormatType == FormatType::SYSTEMVERILOG ? "systemverilog" : "verilog",
+                    designIndex + 1);
+        auto designLibrary = NLLibrary::create(db, NLName("DESIGN"));
+        if (inputFormatType == FormatType::SYSTEMVERILOG) {
+          SNLSVConstructor constructor(designLibrary);
+          std::vector<std::filesystem::path> temporaryFiles;
+          const auto svInputPaths =
+              buildSystemVerilogInputPaths(designPaths, designOptions, temporaryFiles);
+          try {
+            constructor.construct(svInputPaths);
+          } catch (...) {
+            for (const auto& temporaryFile : temporaryFiles) {
+              std::error_code ec;
+              std::filesystem::remove(temporaryFile, ec);
+            }
+            throw;
+          }
+          for (const auto& temporaryFile : temporaryFiles) {
+            std::error_code ec;
+            std::filesystem::remove(temporaryFile, ec);
+          }
+        } else {
+          SNLVRLConstructor constructor(designLibrary);
+          constructor.config_.preprocessEnabled_ = verilogPreprocessing;
+          constructor.construct(toPathVector(designPaths));
+        }
+        auto top = SNLUtils::findTop(designLibrary);
+        if (!top) {
+          throw std::runtime_error("No top design was found after parsing input");
+        }
+        db->setTopDesign(top);
+        SPDLOG_INFO("Found top design: {}", top->getString());
+      } else {
+        SPDLOG_INFO("Loading Naja IF: {}", designPaths[0]);
+        naja::NL::SNLCapnP::LoadingConfiguration config;
+        config.primitiveConflictPolicy_ =
+            primitivesLoadedForDesign
+                ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting
+                : naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
+        db = SNLCapnP::load(designPaths[0].c_str(), config);
+        if (!db) {
+          throw std::runtime_error("Failed to load Naja IF: " + designPaths[0]);
+        }
+        db->setID(dbID);
+      }
+
+      if (!db->getTopDesign()) {
+        throw std::runtime_error("Top design not set for loaded netlist");
+      }
+      return db;
+    };
+
+    auto buildCompactSnapshotForTop =
+        [&](naja::NL::SNLDesign* top,
+            const char* designLabel) {
+          KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
+          NLUniverse::get()->setTopDesign(top);
+          naja::DNL::destroy();
+          builder.collect();
+          SPDLOG_INFO("Collected {} PIs for {}", builder.getInputs().size(), designLabel);
+          SPDLOG_INFO("Collected {} POs for {}", builder.getOutputs().size(), designLabel);
+          auto inputs = builder.getInputs();
+          auto outputs = builder.getOutputs();
+          builder.setInputs(inputs);
+          builder.setOutputs(outputs);
+          builder.build();
+          return captureCompactSnapshot(builder);
+        };
+
+    if (compactMode && !useScopes) {
+      NLDB* compactDb0 =
+          loadOneDesign(designInputs.design0, systemVerilogOptions.design0, 0, 2);
+      top0 = compactDb0->getTopDesign();
+      auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0");
+      naja::DNL::destroy();
+      compactDb0->destroy();
+      top0 = nullptr;
+
+      NLDB* compactDb1 =
+          loadOneDesign(designInputs.design1, systemVerilogOptions.design1, 1, 1);
+      top1 = compactDb1->getTopDesign();
+      auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1");
+      naja::DNL::destroy();
+      compactDb1->destroy();
+      top1 = nullptr;
+
+      try {
+        KEPLER_FORMAL::MiterStrategy MiterS(nullptr, nullptr, logFileName);
+        if (dumpCnf) {
+          const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
+          MiterS.setCnfDump(true, outPath);
+        }
+        if (MiterS.runCompactSnapshots(snapshot0, snapshot1)) {
+          SPDLOG_INFO("No difference was found.");
+        } else {
+          SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+        }
+      } catch (const std::exception& e) {
+        SPDLOG_ERROR("Workflow failed: {}", e.what());
+        return EXIT_FAILURE;
+      }
+      return EXIT_SUCCESS;
+    }
 
     if (!libertyFiles.empty()) {
       db0 = NLDB::create(NLUniverse::get());

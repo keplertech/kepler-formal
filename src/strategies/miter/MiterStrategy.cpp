@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -71,6 +72,176 @@ std::string pathKeyToString(const KEPLER_FORMAL::BuildPrimaryOutputClauses::Path
     pathString += std::to_string(id) + ".";
   }
   return pathString;
+}
+
+using PathKey = KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey;
+using PathKeyHash = KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash;
+
+size_t normalizeCompactInputs(std::vector<PathKey>& inputs0,
+                              std::vector<PathKey>& inputs1) {
+  std::set<PathKey> paths1(inputs1.begin(), inputs1.end());
+  std::set<PathKey> commonPaths;
+  for (const auto& path : inputs0) {
+    if (paths1.find(path) != paths1.end()) {
+      commonPaths.insert(path);
+    }
+  }
+
+  std::vector<PathKey> diff0;
+  for (const auto& path : inputs0) {
+    if (commonPaths.find(path) == commonPaths.end()) {
+      diff0.emplace_back(path);
+      logger->info("diff0 input: {}", pathKeyToString(path));
+    }
+  }
+
+  std::vector<PathKey> diff1;
+  for (const auto& path : inputs1) {
+    if (commonPaths.find(path) == commonPaths.end()) {
+      diff1.emplace_back(path);
+      logger->info("diff1 input: {}", pathKeyToString(path));
+    }
+  }
+
+  inputs0.clear();
+  for (const auto& path : commonPaths) {
+    inputs0.emplace_back(path);
+  }
+  inputs0.insert(inputs0.end(), diff0.begin(), diff0.end());
+
+  inputs1.clear();
+  for (const auto& path : commonPaths) {
+    inputs1.emplace_back(path);
+  }
+  inputs1.insert(inputs1.end(), diff1.begin(), diff1.end());
+
+  logger->info("size of common inputs: {}", commonPaths.size());
+  logger->info("size of diff0 inputs: {}", diff0.size());
+  logger->info("size of diff1 inputs: {}", diff1.size());
+  return commonPaths.size();
+}
+
+void normalizeCompactOutputs(std::vector<PathKey>& outputs0,
+                             std::vector<PathKey>& outputs1) {
+  std::set<PathKey> paths1(outputs1.begin(), outputs1.end());
+  std::set<PathKey> commonPaths;
+  for (const auto& path : outputs0) {
+    if (paths1.find(path) != paths1.end()) {
+      commonPaths.insert(path);
+    }
+  }
+
+  for (const auto& path : outputs0) {
+    if (commonPaths.find(path) == commonPaths.end()) {
+      logger->info("Will ignore the analysis for: {} from netlist 0 as it does not exist in netlist 1",
+                   pathKeyToString(path));
+    }
+  }
+  for (const auto& path : outputs1) {
+    if (commonPaths.find(path) == commonPaths.end()) {
+      logger->info("Will ignore the analysis for: {} from netlist 1 as it does not exist in netlist 0",
+                   pathKeyToString(path));
+    }
+  }
+
+  outputs0.clear();
+  outputs1.clear();
+  for (const auto& path : commonPaths) {
+    outputs0.emplace_back(path);
+    outputs1.emplace_back(path);
+  }
+
+  logger->info("size of common outputs: {}", commonPaths.size());
+}
+
+std::unordered_map<size_t, size_t> buildCompactVarRemap(
+    const std::vector<PathKey>& originalInputs,
+    const std::vector<PathKey>& normalizedInputs) {
+  std::unordered_map<PathKey, size_t, PathKeyHash> normalizedIndex;
+  for (size_t i = 0; i < normalizedInputs.size(); ++i) {
+    normalizedIndex[normalizedInputs[i]] = i + 2;
+  }
+
+  std::unordered_map<size_t, size_t> remap;
+  for (size_t i = 0; i < originalInputs.size(); ++i) {
+    auto it = normalizedIndex.find(originalInputs[i]);
+    if (it != normalizedIndex.end()) {
+      remap[i + 2] = it->second;
+    }
+  }
+  return remap;
+}
+
+BoolExpr* remapCompactExpr(BoolExpr* expr,
+                           const std::unordered_map<size_t, size_t>& varRemap,
+                           std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
+  if (expr == nullptr) {
+    return nullptr;
+  }
+
+  auto memoIt = memo.find(expr);
+  if (memoIt != memo.end()) {
+    return memoIt->second;
+  }
+
+  BoolExpr* remapped = nullptr;
+  switch (expr->getOp()) {
+    case Op::VAR: {
+      const auto id = expr->getId();
+      if (id == static_cast<size_t>(-1)) {
+        remapped = BoolExpr::createInvalid();
+      } else if (id <= 1) {
+        remapped = BoolExpr::Var(id);
+      } else {
+        auto it = varRemap.find(id);
+        remapped = BoolExpr::Var(it != varRemap.end() ? it->second : id);
+      }
+      break;
+    }
+    case Op::NOT:
+      remapped = BoolExpr::Not(remapCompactExpr(expr->getLeft(), varRemap, memo));
+      break;
+    case Op::AND:
+      remapped = BoolExpr::And(remapCompactExpr(expr->getLeft(), varRemap, memo),
+                               remapCompactExpr(expr->getRight(), varRemap, memo));
+      break;
+    case Op::OR:
+      remapped = BoolExpr::Or(remapCompactExpr(expr->getLeft(), varRemap, memo),
+                              remapCompactExpr(expr->getRight(), varRemap, memo));
+      break;
+    case Op::XOR:
+      remapped = BoolExpr::Xor(remapCompactExpr(expr->getLeft(), varRemap, memo),
+                               remapCompactExpr(expr->getRight(), varRemap, memo));
+      break;
+    default:
+      remapped = BoolExpr::createInvalid();
+      break;
+  }
+
+  memo[expr] = remapped;
+  return remapped;
+}
+
+tbb::concurrent_vector<BoolExpr*> reorderCompactPOs(
+    const KEPLER_FORMAL::MiterStrategy::CompactSnapshot& snapshot,
+    const std::vector<PathKey>& normalizedInputs,
+    const std::vector<PathKey>& normalizedOutputs) {
+  std::unordered_map<PathKey, size_t, PathKeyHash> outputIndex;
+  for (size_t i = 0; i < snapshot.outputs.size(); ++i) {
+    outputIndex[snapshot.outputs[i]] = i;
+  }
+
+  const auto varRemap = buildCompactVarRemap(snapshot.inputs, normalizedInputs);
+  std::unordered_map<BoolExpr*, BoolExpr*> memo;
+  tbb::concurrent_vector<BoolExpr*> reordered;
+  for (const auto& path : normalizedOutputs) {
+    auto it = outputIndex.find(path);
+    if (it == outputIndex.end()) {
+      continue;
+    }
+    reordered.push_back(remapCompactExpr(snapshot.POs[it->second], varRemap, memo));
+  }
+  return reordered;
 }
 
 void logTerminalSummaryTable(const std::string& designLabel,
@@ -721,6 +892,10 @@ bool MiterStrategy::run(bool compact) {
     univ->setTopDesign(topInit_);
   }
 
+  if (compact) {
+    return runCompactPOs(POs0, POs1);
+  }
+
   if (POs0.empty() || POs1.empty()) {
     logger->warn(
         "No valid outputs to compare. Miter vacuously equivalent.");
@@ -767,14 +942,6 @@ bool MiterStrategy::run(bool compact) {
   logger->info("SAT solver starting");
   bool sat = solver.solve();
   logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
-
-  if (compact) {
-    logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
-    if (sat) {
-      logger->warn("Due to compact mode, per PO analysis is skipped.");
-    }
-    return !sat;
-  }
 
   if (sat) {
     logger->info("Miter found a difference -> moving to analyze individual POs");
@@ -1051,6 +1218,71 @@ bool MiterStrategy::run(bool compact) {
   }
   // if UNSAT → miter can never be true → outputs identical
   logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
+  return !sat;
+}
+
+bool MiterStrategy::runCompactSnapshots(const CompactSnapshot& snapshot0,
+                                        const CompactSnapshot& snapshot1) {
+  resetLogger();
+  ensureLoggerInitialized();
+  logger->info("MiterStrategy::runCompactSnapshots starting");
+
+  auto inputs0 = snapshot0.inputs;
+  auto inputs1 = snapshot1.inputs;
+  const size_t commonSize = normalizeCompactInputs(inputs0, inputs1);
+  lastCommonVarID_ = commonSize > 0 ? (commonSize - 1) + 2 : 1;
+
+  auto outputs0 = snapshot0.outputs;
+  auto outputs1 = snapshot1.outputs;
+  normalizeCompactOutputs(outputs0, outputs1);
+
+  logger->info("size of PIs in circuit 0: {}", inputs0.size());
+  logger->info("size of PIs in circuit 1: {}", inputs1.size());
+  logger->info("size of POs in circuit 0: {}", outputs0.size());
+  logger->info("size of POs in circuit 1: {}", outputs1.size());
+
+  auto POs0 = reorderCompactPOs(snapshot0, inputs0, outputs0);
+  auto POs1 = reorderCompactPOs(snapshot1, inputs1, outputs1);
+  return runCompactPOs(POs0, POs1);
+}
+
+bool MiterStrategy::runCompactPOs(const tbb::concurrent_vector<BoolExpr*>& POs0,
+                                  const tbb::concurrent_vector<BoolExpr*>& POs1) {
+  if (POs0.empty() || POs1.empty()) {
+    logger->warn("No valid outputs to compare. Miter vacuously equivalent.");
+    return true;
+  }
+
+  logger->info("Building miter expression");
+  auto miter = buildMiter(POs0, POs1);
+  logger->info("Finished building miter expression");
+
+  if (dumpCnf_) {
+    const std::string outPath = dumpCnfPath_.empty() ? "miter.cnf" : dumpCnfPath_;
+    if (dumpBoolExprToDimacs(miter, outPath)) {
+      logger->info("Dumped miter CNF to {}", outPath);
+    } else {
+      // LCOV_EXCL_START
+      logger->warn("Failed to dump miter CNF to {}", outPath);
+      // LCOV_EXCL_STOP
+    }
+  }
+
+  auto backend = KEPLER_FORMAL::Config::getSolverType();
+  SATSolverWrapper solver(backend);
+  std::unordered_map<BoolExpr*, int> node2var;
+  std::unordered_map<std::string, int> varName2idx;
+
+  int rootVar = tseitinEncode(solver, miter, node2var, varName2idx);
+  solver.addClause({rootVar});
+
+  logger->info("SAT solver starting");
+  const bool sat = solver.solve();
+  logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
+  logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
+  if (sat) {
+    logger->warn("Due to compact mode, per PO analysis is skipped.");
+  }
   return !sat;
 }
 
