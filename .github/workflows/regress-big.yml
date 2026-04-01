@@ -41,9 +41,49 @@ jobs:
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config Release
 
+    - name: Install kepler-formal
+      run: cmake --install ${{github.workspace}}/build --prefix ${{github.workspace}}/stage
+
+    - name: Upload kepler-formal artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kepler-formal-release
+        path: ${{github.workspace}}/stage
+        if-no-files-found: error
+
+  cva6-compact:
+    needs: build
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
+          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
+          libboost-iostreams-dev zlib1g-dev
+
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Download kepler-formal artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: kepler-formal-release
+        path: ${{github.workspace}}/stage
+
     - name: Clone kepler-formal-regress
       working-directory: ${{github.workspace}}
       run: git clone https://github.com/keplertech/kepler-formal-regress
+
+    - name: Show runner memory
+      run: |
+        free -h
+        grep MemTotal /proc/meminfo
+        nproc
+        ps -eo pid,%mem,rss,cmd --sort=-rss | head
 
     - name: Run cva6 compact
       working-directory: ${{github.workspace}}
@@ -52,7 +92,8 @@ jobs:
         export CVA6_REPO_DIR="$PWD"
         export HPDCACHE_DIR="$PWD/core/cache_subsystem/hpdcache"
         export TARGET_CFG="cv64a6_imafdc_sv39"
-        ../../build/src/bin/kepler-formal -systemverilog \
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH}"
+        "${{github.workspace}}/stage/bin/kepler-formal" -systemverilog \
           --compact \
           --sv_design1_flist "$PWD/core/Flist.cva6" \
           --sv_design1_top cva6 \
