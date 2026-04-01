@@ -74,6 +74,9 @@ jobs:
         name: kepler-formal-release
         path: ${{github.workspace}}/stage
 
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
     - name: Clone kepler-formal-regress
       working-directory: ${{github.workspace}}
       run: git clone https://github.com/keplertech/kepler-formal-regress
