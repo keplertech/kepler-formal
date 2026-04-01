@@ -45,7 +45,7 @@ jobs:
       working-directory: ${{github.workspace}}
       run: git clone https://github.com/keplertech/kepler-formal-regress
 
-    - name: Run cva6 compact reporting
+    - name: Run cva6 compact
       working-directory: ${{github.workspace}}
       run: |
         cd kepler-formal-regress/cva6
@@ -57,5 +57,4 @@ jobs:
           --sv_design1_flist "$PWD/core/Flist.cva6" \
           --sv_design1_top cva6 \
           --sv_design2_flist "$PWD/core/Flist.cva6" \
-          --sv_design2_top cva6 \
-          --report-skipped-pos
+          --sv_design2_top cva6
