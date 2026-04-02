@@ -661,30 +661,34 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("PASS0"));
   auto passIn = SNLScalarTerm::create(
       passModel, SNLTerm::Direction::Input, NLName("data"));
-  auto unusedIn = SNLScalarTerm::create(
-      passModel, SNLTerm::Direction::Input, NLName("unused"));
+  auto unusedIn0 = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("unused0"));
+  auto unusedIn1 = SNLScalarTerm::create(
+      passModel, SNLTerm::Direction::Input, NLName("unused1"));
   auto passOut = SNLScalarTerm::create(
       passModel, SNLTerm::Direction::Output, NLName("y"));
   SNLDesignModeling::setTruthTable(
       passModel,
-      SNLTruthTable(2, 0b1100,
+      SNLTruthTable(3, 0xF0,
                     NLBitDependencies::encodeBits(std::vector<size_t>{0})));
 
   auto inst = SNLInstance::create(top, passModel, NLName("u0"));
   auto netA = SNLScalarNet::create(top, NLName("net_a"));
   auto netY = SNLScalarNet::create(top, NLName("net_y"));
-  auto floatingNet = SNLScalarNet::create(top, NLName("floating_net"));
+  auto floatingNet0 = SNLScalarNet::create(top, NLName("floating_net_0"));
+  auto floatingNet1 = SNLScalarNet::create(top, NLName("floating_net_1"));
   auto* floatingPropA =
-      naja::NajaDumpableProperty::create(floatingNet, "report_prop_a");
+      naja::NajaDumpableProperty::create(floatingNet0, "report_prop_a");
   floatingPropA->addStringValue("alpha");
   auto* floatingPropB =
-      naja::NajaDumpableProperty::create(floatingNet, "report_prop_b");
+      naja::NajaDumpableProperty::create(floatingNet0, "report_prop_b");
   floatingPropB->addUInt64Value(7);
 
   topIn->setNet(netA);
   topOut->setNet(netY);
   inst->getInstTerm(passIn)->setNet(netA);
-  inst->getInstTerm(unusedIn)->setNet(floatingNet);
+  inst->getInstTerm(unusedIn0)->setNet(floatingNet0);
+  inst->getInstTerm(unusedIn1)->setNet(floatingNet1);
   inst->getInstTerm(passOut)->setNet(netY);
 
   ScopedCurrentPath scopedCurrentPath(tempDir_);
@@ -699,11 +703,12 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
   EXPECT_NE(content.find("its iso has no drivers"), std::string::npos);
   EXPECT_NE(content.find("drivers: []"), std::string::npos);
   EXPECT_NE(content.find("complex_nets"), std::string::npos);
-  EXPECT_NE(content.find("floating_net"), std::string::npos);
+  EXPECT_NE(content.find("floating_net_0"), std::string::npos);
+  EXPECT_NE(content.find("floating_net_1"), std::string::npos);
   EXPECT_NE(content.find("report_prop_a="), std::string::npos);
   EXPECT_NE(content.find("report_prop_b="), std::string::npos);
   EXPECT_NE(content.find("See first encounter of iso="), std::string::npos);
-  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 2u);
+  EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 4u);
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
@@ -1192,6 +1197,48 @@ TEST(MiterStrategyStandaloneTests, RunCompactSnapshotsWithNoCommonOutputsIsVacuo
 
   MiterStrategy strategy(nullptr, nullptr, "compactSnapshotsNoCommonOutputs");
   EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
+}
+
+TEST_F(MiterTests, CompactRunEquivalentDesignsInSeparateDBsWritesCnf) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db0 = NLDB::create(univ);
+  NLDB* db1 = NLDB::create(univ);
+
+  NLLibrary* library0 =
+      NLLibrary::create(db0, NLLibrary::Type::Standard, NLName("designs0"));
+  NLLibrary* library1 =
+      NLLibrary::create(db1, NLLibrary::Type::Standard, NLName("designs1"));
+
+  SNLDesign* top0 =
+      SNLDesign::create(library0, SNLDesign::Type::Standard, NLName("top0"));
+  SNLDesign* top1 =
+      SNLDesign::create(library1, SNLDesign::Type::Standard, NLName("top1"));
+  univ->setTopDesign(top0);
+
+  auto top0In =
+      SNLScalarTerm::create(top0, SNLTerm::Direction::Input, NLName("a"));
+  auto top0Out =
+      SNLScalarTerm::create(top0, SNLTerm::Direction::Output, NLName("y"));
+  auto top1In =
+      SNLScalarTerm::create(top1, SNLTerm::Direction::Input, NLName("a"));
+  auto top1Out =
+      SNLScalarTerm::create(top1, SNLTerm::Direction::Output, NLName("y"));
+
+  auto net0 = SNLScalarNet::create(top0, NLName("net_a"));
+  top0In->setNet(net0);
+  top0Out->setNet(net0);
+
+  auto net1 = SNLScalarNet::create(top1, NLName("net_a"));
+  top1In->setNet(net1);
+  top1Out->setNet(net1);
+
+  const auto cnfPath = testTempPath("compact_run_separate_dbs.cnf");
+  MiterStrategy strategy(top0, top1, testTempPath("compact_run_separate_dbs.log").string());
+  strategy.init();
+  strategy.setCnfDump(true, cnfPath.string());
+
+  EXPECT_TRUE(strategy.run(true));
+  EXPECT_TRUE(std::filesystem::exists(cnfPath));
 }
 
 TEST_F(MiterTests, InvertedOutputsProduceConstantTrueMiter) {

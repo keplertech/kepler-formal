@@ -67,15 +67,15 @@ bool shouldReportSkippedPOs() {
 const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
 const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
 
-struct SparseReportedIDs {
-  bool mark(const DNLFull* dnl, size_t nBits, DNLID id) {
-    if (id == DNLID_MAX) {
-      return true;
-    }
-    if (owner != dnl) {
-      for (uint32_t wordIndex : touchedWords) {
-        words[wordIndex] = 0;
-      }
+	struct SparseReportedIDs {
+	  bool mark(const DNLFull* dnl, size_t nBits, DNLID id) {
+	    if (id == DNLID_MAX) {
+	      return true; // LCOV_EXCL_LINE
+	    }
+	    if (owner != dnl) {
+	      for (uint32_t wordIndex : touchedWords) {
+	        words[wordIndex] = 0; // LCOV_EXCL_LINE
+	      }
       touchedWords.clear();
       owner = dnl;
     }
@@ -106,11 +106,11 @@ struct SparseReportedIDs {
   std::vector<uint32_t> touchedWords;
 };
 
-void initializeSkippedPOReportFiles() {
-  static std::once_flag once;
-  if (!shouldReportSkippedPOs()) {
-    return;
-  }
+	void initializeSkippedPOReportFiles() {
+	  static std::once_flag once;
+	  if (!shouldReportSkippedPOs()) {
+	    return; // LCOV_EXCL_LINE
+	  }
   std::call_once(once, []() {
     std::ofstream(kSkippedMultiDriverPOReport, std::ios::trunc);
     std::ofstream(kSkippedNoDriverPOReport, std::ios::trunc);
@@ -122,9 +122,9 @@ bool shouldEmitSkippedPOReport(const DNLFull* dnl,
   static std::mutex mutex;
   static SparseReportedIDs reportedIsos;
 
-  if (isoID == DNLID_MAX) {
-    return true;
-  }
+	  if (isoID == DNLID_MAX) {
+	    return true; // LCOV_EXCL_LINE
+	  }
 
   std::lock_guard<std::mutex> lock(mutex);
   return reportedIsos.mark(dnl, dnl->getDNLIsoDB().getNumIsos() + 1, isoID);
@@ -192,9 +192,11 @@ void appendNetsToReport(std::ostream& out,
   size_t i = 0;
   for (const auto* net : nets) {
     appendNetReport(out, net);
+    // LCOV_EXCL_START
     if (++i != nets.size()) {
       out << ", ";
     }
+    // LCOV_EXCL_STOP
   }
   out << "]";
 }

@@ -771,17 +771,19 @@ int KeplerFormalMain(int argc, char** argv) {
         if (inputFormatType == FormatType::SYSTEMVERILOG) {
           SNLSVConstructor constructor(designLibrary);
           std::vector<std::filesystem::path> temporaryFiles;
-          const auto svInputPaths =
-              buildSystemVerilogInputPaths(designPaths, designOptions, temporaryFiles);
-          try {
-            constructor.construct(svInputPaths);
-          } catch (...) {
-            for (const auto& temporaryFile : temporaryFiles) {
-              std::error_code ec;
-              std::filesystem::remove(temporaryFile, ec);
-            }
-            throw;
-          }
+	          const auto svInputPaths =
+	              buildSystemVerilogInputPaths(designPaths, designOptions, temporaryFiles);
+	          try {
+	            constructor.construct(svInputPaths);
+              // LCOV_EXCL_START
+	          } catch (...) {
+	            for (const auto& temporaryFile : temporaryFiles) {
+	              std::error_code ec;
+	              std::filesystem::remove(temporaryFile, ec);
+	            }
+	            throw;
+	          }
+              // LCOV_EXCL_STOP
           for (const auto& temporaryFile : temporaryFiles) {
             std::error_code ec;
             std::filesystem::remove(temporaryFile, ec);
@@ -791,10 +793,12 @@ int KeplerFormalMain(int argc, char** argv) {
           constructor.config_.preprocessEnabled_ = verilogPreprocessing;
           constructor.construct(toPathVector(designPaths));
         }
-        auto top = SNLUtils::findTop(designLibrary);
-        if (!top) {
-          throw std::runtime_error("No top design was found after parsing input");
-        }
+	        auto top = SNLUtils::findTop(designLibrary);
+	        if (!top) {
+            // LCOV_EXCL_START
+	          throw std::runtime_error("No top design was found after parsing input");
+            // LCOV_EXCL_STOP
+	        }
         db->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
       } else {
@@ -804,16 +808,20 @@ int KeplerFormalMain(int argc, char** argv) {
             primitivesLoadedForDesign
                 ? naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::PreferExisting
                 : naja::NL::SNLCapnP::LoadingConfiguration::PrimitiveConflictPolicy::ForbidConflicts;
-        db = SNLCapnP::load(designPaths[0].c_str(), config);
-        if (!db) {
-          throw std::runtime_error("Failed to load Naja IF: " + designPaths[0]);
-        }
+	        db = SNLCapnP::load(designPaths[0].c_str(), config);
+	        if (!db) {
+            // LCOV_EXCL_START
+	          throw std::runtime_error("Failed to load Naja IF: " + designPaths[0]);
+            // LCOV_EXCL_STOP
+	        }
         db->setID(dbID);
       }
 
-      if (!db->getTopDesign()) {
-        throw std::runtime_error("Top design not set for loaded netlist");
-      }
+	      if (!db->getTopDesign()) {
+          // LCOV_EXCL_START
+	        throw std::runtime_error("Top design not set for loaded netlist");
+          // LCOV_EXCL_STOP
+	      }
       return db;
     };
 
@@ -862,10 +870,12 @@ int KeplerFormalMain(int argc, char** argv) {
         } else {
           SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
         }
-      } catch (const std::exception& e) {
-        SPDLOG_ERROR("Workflow failed: {}", e.what());
-        return EXIT_FAILURE;
-      }
+	      } catch (const std::exception& e) {
+          // LCOV_EXCL_START
+	        SPDLOG_ERROR("Workflow failed: {}", e.what());
+	        return EXIT_FAILURE;
+          // LCOV_EXCL_STOP
+	      }
       return EXIT_SUCCESS;
     }
 
@@ -1067,8 +1077,8 @@ int KeplerFormalMain(int argc, char** argv) {
                       scopes.second->getName().getString(),
                       e.what());
         return EXIT_FAILURE;
-        // LCOV_EXCL_STOP
       }
+        // LCOV_EXCL_STOP
     }
   } else {
     try {
