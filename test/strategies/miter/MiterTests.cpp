@@ -3,9 +3,11 @@
 
 #include <gtest/gtest.h>
 #include <chrono>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -1385,6 +1387,133 @@ TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
   }
 }
 
+TEST_F(MiterTests, BuildPrimaryOutputClausesDoesNotTreatWideMuxInputsAsPOs) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  SNLDesign* muxModel = NLDB0::getOrCreateMux2(4);
+  ASSERT_NE(nullptr, muxModel);
+  EXPECT_EQ(4u, SNLDesignModeling::getTruthTableCount(muxModel));
+
+  auto top = SNLDesign::create(
+      libraryDesigns, SNLDesign::Type::Standard, NLName("top"));
+  univ->setTopDesign(top);
+
+  std::array<SNLScalarTerm*, 4> topA{};
+  std::array<SNLScalarTerm*, 4> topB{};
+  std::array<SNLScalarTerm*, 4> topY{};
+  for (size_t bit = 0; bit < 4; ++bit) {
+    topA[bit] = SNLScalarTerm::create(
+        top, SNLTerm::Direction::Input, NLName("a" + std::to_string(bit)));
+    topB[bit] = SNLScalarTerm::create(
+        top, SNLTerm::Direction::Input, NLName("b" + std::to_string(bit)));
+    topY[bit] = SNLScalarTerm::create(
+        top, SNLTerm::Direction::Output, NLName("y" + std::to_string(bit)));
+  }
+  auto topS =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("s"));
+
+  auto muxInst = SNLInstance::create(top, muxModel, NLName("mux0"));
+  auto netS = SNLScalarNet::create(top, NLName("net_s"));
+  topS->setNet(netS);
+  muxInst->getInstTerm(NLDB0::getMux2Select(muxModel))->setNet(netS);
+
+  for (size_t bit = 0; bit < 4; ++bit) {
+    auto* netA =
+        SNLScalarNet::create(top, NLName("net_a" + std::to_string(bit)));
+    auto* netB =
+        SNLScalarNet::create(top, NLName("net_b" + std::to_string(bit)));
+    auto* netY =
+        SNLScalarNet::create(top, NLName("net_y" + std::to_string(bit)));
+    topA[bit]->setNet(netA);
+    topB[bit]->setNet(netB);
+    topY[bit]->setNet(netY);
+    muxInst->getInstTerm(NLDB0::getMux2InputA(muxModel)->getBit(bit))
+        ->setNet(netA);
+    muxInst->getInstTerm(NLDB0::getMux2InputB(muxModel)->getBit(bit))
+        ->setNet(netB);
+    muxInst->getInstTerm(NLDB0::getMux2Output(muxModel)->getBit(bit))
+        ->setNet(netY);
+  }
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+
+  ASSERT_EQ(builder.getOutputs().size(), 4u);
+  std::set<std::string> outputNames;
+  for (const auto outputID : builder.getOutputs()) {
+    const auto& outputTerm = naja::DNL::get()->getDNLTerminalFromID(outputID);
+    EXPECT_TRUE(outputTerm.isTopPort());
+    outputNames.insert(outputTerm.getSnlBitTerm()->getName().getString());
+  }
+  EXPECT_EQ(outputNames, (std::set<std::string>{"y0", "y1", "y2", "y3"}));
+}
+
+TEST_F(MiterTests, WideMuxMiterEquivalent) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  SNLDesign* muxModel = NLDB0::getOrCreateMux2(4);
+  ASSERT_NE(nullptr, muxModel);
+  EXPECT_EQ(4u, SNLDesignModeling::getTruthTableCount(muxModel));
+
+  auto buildTop = [&](const char* topName) {
+    auto top = SNLDesign::create(
+        libraryDesigns, SNLDesign::Type::Standard, NLName(topName));
+    univ->setTopDesign(top);
+
+    std::array<SNLScalarTerm*, 4> topA{};
+    std::array<SNLScalarTerm*, 4> topB{};
+    std::array<SNLScalarTerm*, 4> topY{};
+    for (size_t bit = 0; bit < 4; ++bit) {
+      topA[bit] = SNLScalarTerm::create(
+          top, SNLTerm::Direction::Input, NLName("a" + std::to_string(bit)));
+      topB[bit] = SNLScalarTerm::create(
+          top, SNLTerm::Direction::Input, NLName("b" + std::to_string(bit)));
+      topY[bit] = SNLScalarTerm::create(
+          top, SNLTerm::Direction::Output, NLName("y" + std::to_string(bit)));
+    }
+    auto topS =
+        SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("s"));
+
+    auto muxInst = SNLInstance::create(top, muxModel, NLName("mux0"));
+    auto netS = SNLScalarNet::create(top, NLName("net_s"));
+    topS->setNet(netS);
+    muxInst->getInstTerm(NLDB0::getMux2Select(muxModel))->setNet(netS);
+
+    for (size_t bit = 0; bit < 4; ++bit) {
+      auto* netA =
+          SNLScalarNet::create(top, NLName("net_a" + std::to_string(bit)));
+      auto* netB =
+          SNLScalarNet::create(top, NLName("net_b" + std::to_string(bit)));
+      auto* netY =
+          SNLScalarNet::create(top, NLName("net_y" + std::to_string(bit)));
+      topA[bit]->setNet(netA);
+      topB[bit]->setNet(netB);
+      topY[bit]->setNet(netY);
+      muxInst->getInstTerm(NLDB0::getMux2InputA(muxModel)->getBit(bit))
+          ->setNet(netA);
+      muxInst->getInstTerm(NLDB0::getMux2InputB(muxModel)->getBit(bit))
+          ->setNet(netB);
+      muxInst->getInstTerm(NLDB0::getMux2Output(muxModel)->getBit(bit))
+          ->setNet(netY);
+    }
+
+    return top;
+  };
+
+  auto top = buildTop("top");
+  auto topClone = top->clone(NLName("topClone"));
+  MiterStrategy MiterS(top, topClone, "WideMuxMiterEquivalent");
+  MiterS.init();
+  EXPECT_TRUE(MiterS.run());
+}
+
 TEST_F(MiterTests, Db0FAArityCheckFailureReproducer) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
@@ -1527,15 +1656,15 @@ TEST_F(MiterTests, InternalPOAssignCycleIsSkippedAndReported) {
     assignSelInst->getInstTerm(NLDB0::getAssignInput())->setNet(netSelIn);
     assignSelInst->getInstTerm(NLDB0::getAssignOutput())->setNet(netSelOut);
 
-    mux0Inst->getInstTerm(NLDB0::getMux2InputA())->setNet(netQ);
-    mux0Inst->getInstTerm(NLDB0::getMux2InputB())->setNet(netFaS);
+    mux0Inst->getInstTerm(NLDB0::getMux2InputA()->getBit(0))->setNet(netQ);
+    mux0Inst->getInstTerm(NLDB0::getMux2InputB()->getBit(0))->setNet(netFaS);
     mux0Inst->getInstTerm(NLDB0::getMux2Select())->setNet(netSelOut);
-    mux0Inst->getInstTerm(NLDB0::getMux2Output())->setNet(netSeedIn);
+    mux0Inst->getInstTerm(NLDB0::getMux2Output()->getBit(0))->setNet(netSeedIn);
 
-    mux1Inst->getInstTerm(NLDB0::getMux2InputA())->setNet(netMuxA);
-    mux1Inst->getInstTerm(NLDB0::getMux2InputB())->setNet(netMuxB);
+    mux1Inst->getInstTerm(NLDB0::getMux2InputA()->getBit(0))->setNet(netMuxA);
+    mux1Inst->getInstTerm(NLDB0::getMux2InputB()->getBit(0))->setNet(netMuxB);
     mux1Inst->getInstTerm(NLDB0::getMux2Select())->setNet(netMuxS);
-    mux1Inst->getInstTerm(NLDB0::getMux2Output())->setNet(netSelIn);
+    mux1Inst->getInstTerm(NLDB0::getMux2Output()->getBit(0))->setNet(netSelIn);
 
     return top;
   };

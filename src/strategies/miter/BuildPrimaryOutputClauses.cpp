@@ -3,6 +3,7 @@
 
 #include "BuildPrimaryOutputClauses.h"
 #include "DNL.h"
+#include "NLDB0.h"
 #include "SNLDesignModeling.h"
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
@@ -198,6 +199,24 @@ void appendNetsToReport(std::ostream& out,
   out << "]";
 }
 
+void mergeDependencies(std::vector<uint64_t>& merged,
+                       const std::vector<uint64_t>& deps) {
+  if (merged.size() < deps.size()) {
+    merged.resize(deps.size(), 0);
+  }
+  for (size_t i = 0; i < deps.size(); ++i) {
+    merged[i] |= deps[i];
+  }
+}
+
+bool containsDependencyBit(const std::vector<uint64_t>& deps, uint64_t orderID) {
+  const size_t chunkIndex = orderID / 64;
+  if (chunkIndex >= deps.size()) {
+    return false;
+  }
+  return (deps[chunkIndex] & (uint64_t{1} << (orderID % 64))) != 0;
+}
+
 void reportSkippedPO(const DNLFull* dnl,
                      const DNLTerminalFull& term,
                      const char* reason,
@@ -271,6 +290,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     if ((iter != modelCache_.end()) && iter->second.analyzedPIs) {
       const auto& cache = iter->second;
+      if (cache.PIs.empty()) {
+        continue;
+      }
       for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
@@ -349,8 +371,6 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input) {
-          auto deps =
-              SNLDesignModeling::getCombinatorialInputs(term.getSnlBitTerm());
           const auto tt = SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getDesign(), 
               term.getSnlBitTerm()->getOrderID());
           if (!tt.isInitialized()) {
@@ -434,6 +454,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     auto iter = modelCache_.find(instance.getSNLModel());
     if ((iter != modelCache_.end()) && iter->second.analyzedPOs) {
       const auto& cache = iter->second;
+      if (cache.POs.empty()) {
+        continue;
+      }
       for (DNLID termId = instance.getTermIndexes().first;
          termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
          termId++) {
@@ -473,86 +496,39 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
 
     if (!isSequential) {
+      if (NLDB0::isMux2(instance.getSNLModel())) {
+        continue;
+      }
+
+      auto& cache = modelCache_[instance.getSNLModel()];
+      if (!cache.analyzedPODependencies) {
+        for (DNLID tId = instance.getTermIndexes().first;
+             tId != DNLID_MAX && tId <= instance.getTermIndexes().second;
+             tId++) {
+          const DNLTerminalFull& tTerm = dnl->getDNLTerminalFromID(tId);
+          if (tTerm.getSnlBitTerm()->getDirection() ==
+              SNLBitTerm::Direction::Input) {
+            continue;
+          }
+          const auto tt = SNLDesignModeling::getTruthTable(
+              tTerm.getSnlBitTerm()->getDesign(),
+              tTerm.getSnlBitTerm()->getOrderID());
+          if (tt.isInitialized()) {
+            mergeDependencies(cache.poTruthTableDependencies,
+                              tt.getDependencies());
+          }
+        }
+        cache.analyzedPODependencies = true;
+      }
+
       for (DNLID termId = instance.getTermIndexes().first;
            termId != DNLID_MAX && termId <= instance.getTermIndexes().second;
            termId++) {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Output) {
-          auto deps =
-              SNLDesignModeling::getCombinatorialOutputs(term.getSnlBitTerm());
-          // Collect all tt on the model
-          std::vector<SNLTruthTable> tts;
-          for (DNLID tId = instance.getTermIndexes().first;
-               tId != DNLID_MAX && tId <= instance.getTermIndexes().second;
-               tId++) {
-            const DNLTerminalFull& tTerm = dnl->getDNLTerminalFromID(tId);
-            // If direction is input, skip
-            if (tTerm.getSnlBitTerm()->getDirection() ==
-                SNLBitTerm::Direction::Input) {
-              continue;
-            }
-            const auto tt = SNLDesignModeling::getTruthTable(
-                tTerm.getSnlBitTerm()->getDesign(),
-                tTerm.getSnlBitTerm()->getOrderID());
-            if (tt.isInitialized()) {
-              tts.emplace_back(tt);
-              // print deps
-              for (const auto& d : tt.getDependencies()) {
-                DEBUG_LOG("TT deps: %llu\n", d);
-              }
-            } else if (tt.all0() || tt.all1()) {
-              tts.emplace_back(tt);
-            }
-          }
-          bool inTermInTTDeps = false;
-          // Truth-table dependencies are encoded in flat bit-term coordinates.
-          uint64_t orderID = term.getSnlBitTerm()->getOrderID();
-          for (const auto tt : tts) {
-            const auto ttDeps =
-                tt.getDependencies();  // expect std::vector<uint64_t>
-
-            for (size_t index = 0; index < ttDeps.size(); ++index) {
-              uint64_t d = ttDeps[index];
-
-              uint64_t blockMin = index * 64ULL;     // inclusive
-              uint64_t blockMax = blockMin + 64ULL;  // exclusive
-
-              // If orderID is before this block, nothing more to find
-              if (orderID < blockMin) {
-                break;
-              }
-
-              // Skip if orderID beyond this block
-              if (orderID >= blockMax) {
-                continue;
-              }
-
-              uint64_t localBit = orderID - blockMin;  // 0..63
-
-              if (localBit >= 64) {
-                // LCOV_EXCL_START
-                continue;
-                // LCOV_EXCL_STOP
-              }
-
-              assert(localBit < 64);
-              uint64_t mask = (1ULL << localBit);
-
-              if ((d & mask) != 0ULL) {
-                inTermInTTDeps = true;
-              }
-
-              // we handled the block which contains orderID; stop scanning
-              // ttDeps
-              break;
-            }
-
-            if (inTermInTTDeps) {
-              break;
-            }
-          }
-          if (/*deps.empty() &&*/ !inTermInTTDeps) {
+          if (!containsDependencyBit(cache.poTruthTableDependencies,
+                                     term.getSnlBitTerm()->getOrderID())) {
             outputsSet.insert(termId);
             modelCache_[instance.getSNLModel()].POs.insert(
                 term.getSnlBitTerm());

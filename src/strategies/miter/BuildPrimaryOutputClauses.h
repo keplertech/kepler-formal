@@ -126,6 +126,8 @@ class BuildPrimaryOutputClauses {
     bool analyzedPIs = false;
     std::unordered_set<naja::NL::SNLBitTerm*> POs;
     bool analyzedPOs = false;
+    bool analyzedPODependencies = false;
+    std::vector<uint64_t> poTruthTableDependencies;
   };
 
   std::unordered_map<const naja::NL::SNLDesign*, CachedModel> modelCache_;

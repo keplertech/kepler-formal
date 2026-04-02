@@ -8,17 +8,23 @@
 #include "NajaProperty.h"
 #include "SNLDesignModeling.h"
 #include "SNLBitNet.h"
+#include "NLDB0.h"
+#include "SNLBusTerm.h"
+#include "SNLBusTermBit.h"
+#include "SNLScalarTerm.h"
 #include "tbb/concurrent_vector.h"
 #include "tbb/enumerable_thread_specific.h"
 #include "SNLPath.h"
 #include "Tree2BoolExpr.h"
 #include "../config/Config.h"
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <ostream>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 
@@ -346,6 +352,42 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 void SNLLogicCloud::compute() {
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
+  struct TruthTableKey {
+    const SNLDesign* design;
+    size_t flatTermID;
+
+    bool operator==(const TruthTableKey& other) const {
+      return design == other.design && flatTermID == other.flatTermID;
+    }
+  };
+  struct TruthTableKeyHash {
+    size_t operator()(const TruthTableKey& key) const {
+      return std::hash<const SNLDesign*>{}(key.design) ^
+             (std::hash<size_t>{}(key.flatTermID) << 1);
+    }
+  };
+  std::unordered_map<const SNLDesign*, size_t> truthTableCountCache;
+  std::unordered_map<TruthTableKey, SNLTruthTable, TruthTableKeyHash>
+      truthTableCache;
+  auto getTruthTableCountCached = [&](const SNLDesign* model) {
+    auto it = truthTableCountCache.find(model);
+    if (it != truthTableCountCache.end()) {
+      return it->second;
+    }
+    const size_t count = SNLDesignModeling::getTruthTableCount(model);
+    truthTableCountCache.emplace(model, count);
+    return count;
+  };
+  auto getTruthTableCached = [&](const SNLDesign* model, size_t flatTermID) {
+    const TruthTableKey key{model, flatTermID};
+    auto it = truthTableCache.find(key);
+    if (it != truthTableCache.end()) {
+      return it->second;
+    }
+    auto tt = SNLDesignModeling::getTruthTable(model, flatTermID);
+    truthTableCache.emplace(key, tt);
+    return tt;
+  };
   auto formatTermName = [&](naja::DNL::DNLID termID) {
     const auto& term = dnl_.getDNLTerminalFromID(termID);
     std::ostringstream fullName;
@@ -361,6 +403,8 @@ void SNLLogicCloud::compute() {
     }
     return fullName.str();
   };
+  const bool captureFrontierHistory =
+      std::getenv("KEPLER_CAPTURE_FRONTIER_HISTORY") != nullptr;
   std::vector<std::string> frontierHistory;
   // LCOV_EXCL_START
   auto appendTermList = [&](std::ostringstream& out,
@@ -436,17 +480,92 @@ void SNLLogicCloud::compute() {
     snapshot << "]";
     return snapshot.str();
   };
+  auto collectRelevantInstanceInputs = [&](naja::DNL::DNLID driver) {
+    const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+    const auto* model = inst.getSNLModel();
+
+    std::vector<naja::DNL::DNLID> allNonOutputTerms;
+    for (DNLID termID = inst.getTermIndexes().first;
+         termID <= inst.getTermIndexes().second; ++termID) {
+      const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
+      if (term.getSnlBitTerm()->getDirection() ==
+          SNLBitTerm::Direction::Output) {
+        continue;
+      }
+      allNonOutputTerms.push_back(termID);
+    }
+
+    if (!NLDB0::isMux2(model)) {
+      return allNonOutputTerms;
+    }
+
+    std::unordered_map<size_t, naja::DNL::DNLID> orderIDToTermID;
+    orderIDToTermID.reserve(allNonOutputTerms.size());
+    for (const auto termID : allNonOutputTerms) {
+      orderIDToTermID.emplace(
+          dnl_.getDNLTerminalFromID(termID).getSnlBitTerm()->getOrderID(),
+          termID);
+    }
+
+    const auto* driverTerm = dnl_.getDNLTerminalFromID(driver).getSnlBitTerm();
+    const auto driverBit = static_cast<NLID::Bit>(driverTerm->getBit());
+    const auto* inputA = NLDB0::getMux2InputA(model);
+    const auto* inputB = NLDB0::getMux2InputB(model);
+    const auto* select = NLDB0::getMux2Select(model);
+    if (!inputA || !inputB || !select) {
+      throw std::runtime_error("SNLLogicCloud failed to resolve wide mux inputs");
+    }
+    std::vector<naja::DNL::DNLID> relevantTerms;
+    relevantTerms.reserve(3);
+    for (const auto* bitTerm :
+         {inputA->getBit(driverBit), inputB->getBit(driverBit)}) {
+      if (!bitTerm) {
+        std::ostringstream error;
+        error << "SNLLogicCloud failed to resolve wide mux bit "
+              << static_cast<size_t>(driverBit) << " for driver "
+              << formatTermName(driver) << " in model "
+              << model->getName().getString();
+        throw std::runtime_error(error.str());
+      }
+      const auto it = orderIDToTermID.find(bitTerm->getOrderID());
+      if (it == orderIDToTermID.end()) {
+        std::ostringstream error;
+        error << "SNLLogicCloud failed to map wide mux dependency "
+              << bitTerm->getOrderID() << " for driver "
+              << formatTermName(driver)
+              << " in model " << model->getName().getString();
+        throw std::runtime_error(error.str());
+      }
+      relevantTerms.push_back(it->second);
+    }
+    const auto selectIt = orderIDToTermID.find(select->getOrderID());
+    if (selectIt == orderIDToTermID.end()) {
+      std::ostringstream error;
+      error << "SNLLogicCloud failed to map wide mux select dependency "
+            << select->getOrderID() << " for driver "
+            << formatTermName(driver) << " in model "
+            << model->getName().getString();
+      throw std::runtime_error(error.str());
+    }
+    relevantTerms.push_back(selectIt->second);
+    return relevantTerms;
+  };
   // LCOV_EXCL_STOP
   auto throwIfTruthTableArityMismatch = [&](naja::DNL::DNLID driver) {
     const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     const auto* model = inst.getSNLModel();
-    if (SNLDesignModeling::getTruthTableCount(model) == 0) {
+    if (getTruthTableCountCached(model) == 0) {
       return;
     }
-    const auto tt = SNLDesignModeling::getTruthTable(
-        model,
-        dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
+    const auto tt = getTruthTableCached(
+        model, dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
     if (!tt.isInitialized()) {
+      return;
+    }
+    const auto relevantInputs = collectRelevantInstanceInputs(driver);
+    const size_t expectedInputCount =
+        NLDB0::isMux2(model) ? size_t{3} : tt.size();
+    if (expectedInputCount == relevantInputs.size()) {
       return;
     }
 
@@ -465,32 +584,21 @@ void SNLLogicCloud::compute() {
       }
     }
 
-    size_t instanceNonOutputCount = 0;
     std::ostringstream instanceNonOutputTerms;
     bool firstInstanceTerm = true;
-    for (DNLID termID = inst.getTermIndexes().first;
-         termID <= inst.getTermIndexes().second; ++termID) {
-      const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
-      if (term.getSnlBitTerm()->getDirection() !=
-          SNLBitTerm::Direction::Output) {
-        ++instanceNonOutputCount;
-        if (!firstInstanceTerm) {
-          instanceNonOutputTerms << ", ";
-        }
-        firstInstanceTerm = false;
-        instanceNonOutputTerms << formatTermName(termID);
+    for (const auto termID : relevantInputs) {
+      if (!firstInstanceTerm) {
+        instanceNonOutputTerms << ", ";
       }
-    }
-
-    if (tt.size() == modelNonOutputCount) {
-      return;
+      firstInstanceTerm = false;
+      instanceNonOutputTerms << formatTermName(termID);
     }
 
     std::ostringstream error;
     error << "SNLLogicCloud arity mismatch for model "
           << model->getName().getString() << ": TT arity=" << tt.size()
           << ", model non-output term count=" << modelNonOutputCount
-          << ", instance non-output term count=" << instanceNonOutputCount
+          << ", instance non-output term count=" << relevantInputs.size()
           << ", driver=" << formatTermName(driver)
           << ", model non-output terms=[" << modelNonOutputTerms.str()
           << "], instance non-output terms=["
@@ -741,14 +849,9 @@ void SNLLogicCloud::compute() {
     throwIfTruthTableArityMismatch(driver);
     DEBUG_LOG("Instance name: %s\n",
               inst.getSNLInstance()->getName().getString().c_str());
-    for (DNLID termID = inst.getTermIndexes().first;
-         termID <= inst.getTermIndexes().second; termID++) {
-      const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
-      if (term.getSnlBitTerm()->getDirection() !=
-          SNLBitTerm::Direction::Output) {
-        pushBackNewIterationInputsETS(termID);
-        DEBUG_LOG("Add input with id: %zu\n", termID);
-      }
+    for (const auto termID : collectRelevantInstanceInputs(driver)) {
+      pushBackNewIterationInputsETS(termID);
+      DEBUG_LOG("Add input with id: %zu\n", termID);
     }
     DEBUG_LOG("model name: %s\n",
               inst.getSNLModel()->getName().getString().c_str());
@@ -783,7 +886,7 @@ void SNLLogicCloud::compute() {
     DEBUG_LOG("No inputs found for seed output term %zu\n", seedOutputTerm_);
     return;
   }
-  {
+  if (captureFrontierHistory) {
     std::ostringstream seedInfo;
     seedInfo << "seed_output={" << formatTermName(seedOutputTerm_) << "}"
              << " initial_inputs=[";
@@ -1035,35 +1138,28 @@ void SNLLogicCloud::compute() {
                     .c_str());
       pushBackInputsToMergeETS({inst.getID(), driver});
 
-      for (DNLID termID = inst.getTermIndexes().first;
-           termID <= inst.getTermIndexes().second; termID++) {
-        const DNLTerminalFull& term = dnl_.getDNLTerminalFromID(termID);
-        if (term.getSnlBitTerm()->getDirection() !=
-            SNLBitTerm::Direction::Output) {
-          if (isPairVisitedETS(driver, termID)) {
-            DEBUG_LOG(
-                "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
-                "skipping\n",
-                iter, input,
-                naja::DNL::get()
-                    ->getDNLTerminalFromID(input)
-                    .getSnlBitTerm()
-                    ->getName()
-                    .getString()
-                    .c_str(),
-                naja::DNL::get()
-                    ->getDNLTerminalFromID(input)
-                    .getDNLInstance()
-                    .getSNLModel()
-                    ->getName()
-                    .getString()
-                    .c_str());
-            continue;
-          }
-          auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
-              dnl_.getDNLTerminalFromID(termID).getIsoID());
-          pushBackNewIterationInputsETS(termID);
+      for (const auto termID : collectRelevantInstanceInputs(driver)) {
+        if (isPairVisitedETS(driver, termID)) {
+          DEBUG_LOG(
+              "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
+              "skipping\n",
+              iter, input,
+              naja::DNL::get()
+                  ->getDNLTerminalFromID(input)
+                  .getSnlBitTerm()
+                  ->getName()
+                  .getString()
+                  .c_str(),
+              naja::DNL::get()
+                  ->getDNLTerminalFromID(input)
+                  .getDNLInstance()
+                  .getSNLModel()
+                  ->getName()
+                  .getString()
+                  .c_str());
+          continue;
         }
+        pushBackNewIterationInputsETS(termID);
       }
     }
 
@@ -1096,7 +1192,9 @@ void SNLLogicCloud::compute() {
     table_.concatFull(getInputsToMergeETS().first,
                       sizeOfInputsToMergeETS());
     throwIfNextFrontierMismatch(iter);
-    frontierHistory.emplace_back(buildIterationSnapshot(iter));
+    if (captureFrontierHistory) {
+      frontierHistory.emplace_back(buildIterationSnapshot(iter));
+    }
     DEBUG_LOG("--- End of iteration %zu\n", iter);
     iter++;
   }
