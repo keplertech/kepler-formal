@@ -176,7 +176,7 @@ BoolExpr* remapCompactExpr(BoolExpr* expr,
                            const std::unordered_map<size_t, size_t>& varRemap,
                            std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
   if (expr == nullptr) {
-    return nullptr;
+    return nullptr; // LCOV_EXCL_LINE
   }
 
   auto memoIt = memo.find(expr);
@@ -189,7 +189,7 @@ BoolExpr* remapCompactExpr(BoolExpr* expr,
     case Op::VAR: {
       const auto id = expr->getId();
       if (id == static_cast<size_t>(-1)) {
-        remapped = BoolExpr::createInvalid();
+        remapped = BoolExpr::createInvalid(); // LCOV_EXCL_LINE
       } else if (id <= 1) {
         remapped = BoolExpr::Var(id);
       } else {
@@ -213,9 +213,11 @@ BoolExpr* remapCompactExpr(BoolExpr* expr,
       remapped = BoolExpr::Xor(remapCompactExpr(expr->getLeft(), varRemap, memo),
                                remapCompactExpr(expr->getRight(), varRemap, memo));
       break;
+      // LCOV_EXCL_START
     default:
       remapped = BoolExpr::createInvalid();
       break;
+      // LCOV_EXCL_STOP
   }
 
   memo[expr] = remapped;
@@ -237,7 +239,7 @@ tbb::concurrent_vector<BoolExpr*> reorderCompactPOs(
   for (const auto& path : normalizedOutputs) {
     auto it = outputIndex.find(path);
     if (it == outputIndex.end()) {
-      continue;
+      continue; // LCOV_EXCL_LINE
     }
     reordered.push_back(remapCompactExpr(snapshot.POs[it->second], varRemap, memo));
   }

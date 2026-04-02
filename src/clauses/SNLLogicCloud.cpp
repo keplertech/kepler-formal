@@ -376,17 +376,18 @@ void SNLLogicCloud::compute() {
     }
     const size_t count = SNLDesignModeling::getTruthTableCount(model);
     truthTableCountCache.emplace(model, count);
+    const auto& entry = truthTableCountCache.find(model);
     return count;
   };
   auto getTruthTableCached = [&](const SNLDesign* model, size_t flatTermID) {
     const TruthTableKey key{model, flatTermID};
-    auto it = truthTableCache.find(key);
+    const auto& it = truthTableCache.find(key);
     if (it != truthTableCache.end()) {
       return it->second;
     }
     auto tt = SNLDesignModeling::getTruthTable(model, flatTermID);
-    truthTableCache.emplace(key, tt);
-    return tt;
+    const auto& entry = truthTableCache.emplace(key, tt);
+    return entry.first->second;
   };
   auto formatTermName = [&](naja::DNL::DNLID termID) {
     const auto& term = dnl_.getDNLTerminalFromID(termID);
@@ -557,7 +558,7 @@ void SNLLogicCloud::compute() {
     if (getTruthTableCountCached(model) == 0) {
       return;
     }
-    const auto tt = getTruthTableCached(
+    const auto& tt = getTruthTableCached(
         model, dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
     if (!tt.isInitialized()) {
       return;

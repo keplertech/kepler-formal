@@ -953,6 +953,29 @@ TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistAndTopAccepted) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST(KeplerFormalCliTests, ConfigCompactSystemVerilogFlistWithLibertyAndCnfAccepted) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  const auto cnfPath = fixture.tmpDir / "compact_sv.cnf";
+  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
+      "sv_design2_flist: " + fixture.design1FlistPath.string() + "\n"
+      "sv_design1_top: cva6\n"
+      "sv_design2_top: cva6\n"
+      "compact_mode: true\n"
+      "cnf_export: true\n"
+      "cnf_export_path: " + cnfPath.string() + "\n"
+      "liberty_files:\n"
+      "  - " + libertyPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_TRUE(std::filesystem::exists(cnfPath));
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistMustBeScalar) {
   const auto cfgPath = writeTempConfig(
       "format: systemverilog\n"
@@ -1332,6 +1355,34 @@ TEST(KeplerFormalCliTests, MissingSecondNajaIfFails) {
   std::filesystem::remove(cfgPath);
 }
 
+TEST(KeplerFormalCliTests, ConfigCompactNajaIfAccepted) {
+  const auto root = repoRoot();
+  const auto exampleDir = root / "example";
+  const auto design = exampleDir / "tinyrocket_naja.if";
+  const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
+  const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
+  const auto lib2 = exampleDir / "fakeram45_64x32.lib";
+
+  ASSERT_TRUE(std::filesystem::exists(design));
+  ASSERT_TRUE(std::filesystem::exists(lib0));
+  ASSERT_TRUE(std::filesystem::exists(lib1));
+  ASSERT_TRUE(std::filesystem::exists(lib2));
+
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "input_paths:\n"
+      "  - " + design.string() + "\n"
+      "  - " + design.string() + "\n"
+      "liberty_files:\n"
+      "  - " + lib0.string() + "\n"
+      "  - " + lib1.string() + "\n"
+      "  - " + lib2.string() + "\n"
+      "compact_mode: true\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+}
+
 TEST(KeplerFormalCliTests, CliUnknownOptionFails) {
   std::string argv0 = "kepler-formal";
   std::string argv1 = "-verilog";
@@ -1569,6 +1620,46 @@ TEST(KeplerFormalCliTests, CliSystemVerilogTopCommandFileCreationFailureFails) {
   char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(),
                   argv4.data(), argv5.data(), argv6.data(), argv7.data()};
   int argc = 8;
+
+  EXPECT_EQ(KeplerFormalMain(argc, argv), EXIT_FAILURE);
+
+  std::filesystem::permissions(noWriteDir, perms);
+  std::filesystem::remove_all(noWriteDir);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST(KeplerFormalCliTests, CliCompactSystemVerilogTopCommandFileCreationFailureFails) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic a, output logic y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto noWriteDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_sv_compact_no_write";
+  std::filesystem::create_directories(noWriteDir);
+  auto perms = std::filesystem::status(noWriteDir).permissions();
+  std::filesystem::permissions(
+      noWriteDir,
+      std::filesystem::perms::owner_write | std::filesystem::perms::group_write |
+          std::filesystem::perms::others_write,
+      std::filesystem::perm_options::remove);
+
+  EnvVarGuard tmpDirGuard("TMPDIR");
+  tmpDirGuard.set(noWriteDir.string());
+
+  std::string argv0 = "kepler-formal";
+  std::string argv1 = "-systemverilog";
+  std::string argv2 = "--sv_design1_top";
+  std::string argv3 = "top";
+  std::string argv4 = "--sv_design2_top";
+  std::string argv5 = "top";
+  std::string argv6 = "--compact";
+  std::string argv7 = fixture.design0Path.string();
+  std::string argv8 = fixture.design1Path.string();
+  char* argv[] = {argv0.data(), argv1.data(), argv2.data(), argv3.data(),
+                  argv4.data(), argv5.data(), argv6.data(), argv7.data(),
+                  argv8.data()};
+  int argc = 9;
 
   EXPECT_EQ(KeplerFormalMain(argc, argv), EXIT_FAILURE);
 

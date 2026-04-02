@@ -78,7 +78,10 @@ static const char* KEPLER_BIN = KEPLER_BIN_STR.c_str();
 // in runfiles at workspace-relative paths); CMake uses "../../../../".
 static std::string get_test_data_prefix() {
   const char* env = std::getenv("TEST_DATA_PREFIX");
-  return env ? env : "../../../../";
+  if (env) {
+    return env;
+  }
+  return (repoRoot().string() + "/");
 }
 
 namespace {
@@ -1119,6 +1122,78 @@ TEST(MiterStrategyStandaloneTests, NormalizeOutputsIgnoresOutputsOnlyPresentInSe
   EXPECT_EQ(outputs1, std::vector<naja::DNL::DNLID>({200}));
 }
 
+TEST(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWritesCnf) {
+  using PathKey = BuildPrimaryOutputClauses::PathKey;
+  auto makePathKey = [](int nameID, int objectID) -> PathKey {
+    return {{static_cast<NLName::ID>(nameID)},
+            {static_cast<NLID::DesignObjectID>(objectID)}};
+  };
+
+  const PathKey a = makePathKey(1, 10);
+  const PathKey b = makePathKey(2, 20);
+  const PathKey only0 = makePathKey(3, 30);
+  const PathKey only1 = makePathKey(4, 40);
+  const PathKey logicOut = makePathKey(5, 50);
+  const PathKey constOut = makePathKey(6, 60);
+  const PathKey drop0 = makePathKey(7, 70);
+  const PathKey drop1 = makePathKey(8, 80);
+
+  MiterStrategy::CompactSnapshot snapshot0;
+  snapshot0.inputs = {a, b, only0};
+  snapshot0.outputs = {logicOut, constOut, drop0};
+  auto shared0 = BoolExpr::And(BoolExpr::Var(2), BoolExpr::Var(3));
+  snapshot0.POs.emplace_back(
+      BoolExpr::Or(BoolExpr::Not(shared0),
+                   BoolExpr::Xor(shared0, BoolExpr::Var(4))));
+  snapshot0.POs.emplace_back(BoolExpr::createTrue());
+  snapshot0.POs.emplace_back(BoolExpr::Var(2));
+
+  MiterStrategy::CompactSnapshot snapshot1;
+  snapshot1.inputs = {b, a, only1};
+  snapshot1.outputs = {constOut, logicOut, drop1};
+  auto shared1 = BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(2));
+  snapshot1.POs.emplace_back(BoolExpr::createTrue());
+  snapshot1.POs.emplace_back(
+      BoolExpr::Or(BoolExpr::Not(shared1),
+                   BoolExpr::Xor(shared1, BoolExpr::Var(4))));
+  snapshot1.POs.emplace_back(BoolExpr::Var(3));
+
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_compact_snapshot_cnf";
+  std::filesystem::create_directories(tmpDir);
+  const auto cnfPath = tmpDir / "compact_snapshot.cnf";
+
+  MiterStrategy strategy(nullptr, nullptr,
+                         (tmpDir / "compact_snapshot.log").string());
+  strategy.setCnfDump(true, cnfPath.string());
+
+  EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
+  EXPECT_TRUE(std::filesystem::exists(cnfPath));
+
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST(MiterStrategyStandaloneTests, RunCompactSnapshotsWithNoCommonOutputsIsVacuouslyEquivalent) {
+  using PathKey = BuildPrimaryOutputClauses::PathKey;
+  auto makePathKey = [](int nameID, int objectID) -> PathKey {
+    return {{static_cast<NLName::ID>(nameID)},
+            {static_cast<NLID::DesignObjectID>(objectID)}};
+  };
+
+  MiterStrategy::CompactSnapshot snapshot0;
+  snapshot0.inputs = {makePathKey(1, 10)};
+  snapshot0.outputs = {makePathKey(2, 20)};
+  snapshot0.POs.emplace_back(BoolExpr::Var(2));
+
+  MiterStrategy::CompactSnapshot snapshot1;
+  snapshot1.inputs = {makePathKey(1, 10)};
+  snapshot1.outputs = {makePathKey(3, 30)};
+  snapshot1.POs.emplace_back(BoolExpr::Var(2));
+
+  MiterStrategy strategy(nullptr, nullptr, "compactSnapshotsNoCommonOutputs");
+  EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
+}
+
 TEST_F(MiterTests, InvertedOutputsProduceConstantTrueMiter) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
@@ -1167,7 +1242,6 @@ TEST_F(MiterTests, InvertedOutputsProduceConstantTrueMiter) {
   strategy.init();
   EXPECT_FALSE(strategy.run());
 }
-
 
 TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   printf("[TEST] MiterTests.TestMiterANDNonConstantWithSequentialElements\n");

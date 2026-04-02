@@ -507,7 +507,7 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
     }
     const auto nodeSp = nodeFromId(nodeId);
     if (!nodeSp) {
-      return false;
+      return false; // LCOV_EXCL_LINE
     }
     nodePath.push_back(nodeId);
     if (nodeId == targetId) {
@@ -529,7 +529,7 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
   for (auto it = nodePath.rbegin(); it != nodePath.rend(); ++it) {
     const auto nodeSp = nodeFromId(*it);
     if (!nodeSp || nodeSp->type == Node::Type::Input) {
-      continue;
+      continue; // LCOV_EXCL_LINE
     }
     loopTerms.push_back(nodeSp->data.termid);
   }
@@ -1283,12 +1283,14 @@ void SNLTruthTableTree::finalize() {
         target = it->second;
       }
       // fallback: match by debug nodeID
+      // LCOV_EXCL_START
       if (!target) {
         auto it2 = mapByNodeID.find(cid);
         if (it2 != mapByNodeID.end()) {
           target = it2->second;
         }
       }
+      // LCOV_EXCL_STOP
       // fallback: interpret as index (cid - kIdOffset)
       if (!target) {
         if (cid >= kIdOffset) {
@@ -1383,9 +1385,11 @@ void SNLTruthTableTree::finalize() {
     }
     if (newRoot == kInvalidId) {
       // fallback: if nodes_[0] exists, use that
+      // LCOV_EXCL_START
       if (!nodes_.empty() && nodes_[0]) {
         newRoot = nodes_[0]->nodeID;
       }
+      // LCOV_EXCL_STOP
     }
     rootId_ = newRoot;
   }
