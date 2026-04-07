@@ -1049,21 +1049,6 @@ void SNLLogicCloud::compute() {
         // proper error with names of all the drivers
         // throw an error and separate names by comma
         if (iso.getDrivers().size() > 1) {
-          // std::string error = "Iso has multiple drivers: ";
-          // error += "iso=";
-          // error += std::to_string(iso.getIsoID());
-          // error += " input=";
-          // error += formatTermName(input);
-          // error += " constant0=";
-          // error += iso.isConstant0() ? "true" : "false";
-          // error += " constant1=";
-          // error += iso.isConstant1() ? "true" : "false";
-          // error += " ";
-          // appendTerms(error, "readers", iso.getReaders());
-          // error += " ";
-          // appendTerms(error, "drivers", iso.getDrivers());
-          // appendComplexIsoDetails(error);
-          // throw std::runtime_error(error);
           reportCloudSkippedRoot(&dnl_, seedOutputTerm_, input, DNLID_MAX,
                                  "its iso has multiple drivers during cloud expansion",
                                  kSkippedMultiDriverPOReport);
@@ -1072,21 +1057,6 @@ void SNLLogicCloud::compute() {
         }
       } else if (iso.getDrivers().empty()) {
         if (!iso.isConstant()) {
-          // std::string error = "Iso has no drivers and is not constant. ";
-          // error += "iso=";
-          // error += std::to_string(iso.getIsoID());
-          // error += " input=";
-          // error += formatTermName(input);
-          // error += " constant0=";
-          // error += iso.isConstant0() ? "true" : "false";
-          // error += " constant1=";
-          // error += iso.isConstant1() ? "true" : "false";
-          // error += " ";
-          // appendTerms(error, "readers", iso.getReaders());
-          // error += " ";
-          // appendTerms(error, "drivers", iso.getDrivers());
-          // appendComplexIsoDetails(error);
-          // throw std::runtime_error(error);
           reportCloudSkippedRoot(&dnl_, seedOutputTerm_, input, DNLID_MAX,
                                  "its iso has no drivers during cloud expansion",
                                  kSkippedNoDriverPOReport);
