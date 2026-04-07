@@ -19,9 +19,8 @@ struct BoolExprCacheKey {
   Op op = Op::NONE;
   // init with max size_t for invalid 
   size_t varId = (size_t)-1;  // only used if op == VAR; otherwise ignored
-  BoolExpr*
-      l  = nullptr;  // raw pointer — not owning; use index/ptr identity for the key
-  BoolExpr* r = nullptr;  // raw pointer
+  BoolExpr* l  = nullptr;
+  BoolExpr* r = nullptr;
 };
 
 class BoolExprCache {
