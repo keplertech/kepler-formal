@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  cva6-compact:
     runs-on: ubuntu-22.04
 
     steps:
@@ -43,36 +43,6 @@ jobs:
 
     - name: Install kepler-formal
       run: cmake --install ${{github.workspace}}/build --prefix ${{github.workspace}}/stage
-
-    - name: Upload kepler-formal artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: kepler-formal-release
-        path: ${{github.workspace}}/stage
-        if-no-files-found: error
-
-  cva6-compact:
-    needs: build
-    runs-on: ubuntu-22.04
-
-    steps:
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
-          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
-          libboost-iostreams-dev zlib1g-dev
-
-    - uses: actions/checkout@v4
-      with:
-        submodules: true
-
-    - name: Download kepler-formal artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: kepler-formal-release
-        path: ${{github.workspace}}/stage
 
     - name: Restore executable bit
       run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
