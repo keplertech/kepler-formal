@@ -2412,27 +2412,27 @@ TEST_F(MiterTests, CoverDiff) {
   SNLNet* netC0a = SNLScalarNet::create(topClone0, NLName("netC0a"));
   SNLNet* netC0b = SNLScalarNet::create(topClone0, NLName("netC0b"));
   auto andC0 = topClone0->getInstance(NLName("and"));
-  andC0->getInstTerm(andIn1->getID())->setNet(netC0a);
-  andC0->getInstTerm(andIn2->getID())->setNet(netC0b);
+  andC0->getInstTerm(andIn1)->setNet(netC0a);
+  andC0->getInstTerm(andIn2)->setNet(netC0b);
   topClone0->getBitTerm(topin->getID(), 0)->setNet(netC0a);
   SNLInstance* constC0 = SNLInstance::create(topClone0, logic0, NLName("logic0C0"));
-  constC0->getInstTerm(logic0Out->getID())->setNet(netC0b);
+  constC0->getInstTerm(logic0Out)->setNet(netC0b);
 
   SNLDesign* topClone1 = top->clone(NLName("topClone1"));
   SNLNet* netC1a = SNLScalarNet::create(topClone1, NLName("netC1a"));
   SNLNet* netC1b = SNLScalarNet::create(topClone1, NLName("netC1b"));
   auto andC1 = topClone1->getInstance(NLName("and"));
-  andC1->getInstTerm(andIn1->getID())->setNet(netC1a);
-  andC1->getInstTerm(andIn2->getID())->setNet(netC1b);
+  andC1->getInstTerm(andIn1)->setNet(netC1a);
+  andC1->getInstTerm(andIn2)->setNet(netC1b);
   SNLInstance* constC1 = SNLInstance::create(topClone1, logic0, NLName("logic0C1"));
   
   
   auto inverterC1 = SNLInstance::create(topClone1, inverterModel, NLName("inverterC1"));
-  constC1->getInstTerm(logic0Out->getID())->setNet(netC1a);
+  constC1->getInstTerm(logic0Out)->setNet(netC1a);
   auto netC1invOut = SNLScalarNet::create(topClone1, NLName("netC1invOut"));
-  inverterC1->getInstTerm(invIn->getID())->setNet(netC1b);
-  inverterC1->getInstTerm(invOut->getID())->setNet(netC1invOut);
-  andC1->getInstTerm(andIn1->getID())->setNet(netC1invOut);
+  inverterC1->getInstTerm(invIn)->setNet(netC1b);
+  inverterC1->getInstTerm(invOut)->setNet(netC1invOut);
+  andC1->getInstTerm(andIn1)->setNet(netC1invOut);
   topClone1->getBitTerm(topin2->getID(), 0)->setNet(netC1b);
   
   // 11. create DNL
