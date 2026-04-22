@@ -154,7 +154,6 @@ Current SEC limitations in the binary:
 - `compact_mode` is not supported
 - `use_scopes` and `clean_scopes` are not supported
 - `cnf_export` / `dump_cnf` are not supported
-- `report_skipped_pos` is not supported
 
 ### Library files
 

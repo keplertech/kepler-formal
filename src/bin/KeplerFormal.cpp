@@ -1040,10 +1040,6 @@ int KeplerFormalMain(int argc, char** argv) {
       SPDLOG_CRITICAL("SEC verification does not support CNF export");
       return EXIT_FAILURE;
     }
-    if (reportSkippedPOs) {
-      SPDLOG_CRITICAL("SEC verification does not support skipped PO reporting");
-      return EXIT_FAILURE;
-    }
   }
   for (const auto& libraryFile : libertyFiles) {
     if (isPythonLoaderPath(libraryFile)) {
