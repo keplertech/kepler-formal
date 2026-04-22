@@ -103,10 +103,10 @@ Once kepler-formal is fully buildable with Bazel, it can be consumed directly by
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] [--compact] [--report-skipped-pos] <netlist1> <netlist2> [<library-file>...]
+build/src/bin/kepler-formal [-v <LEC|SEC>] [-k <max-k>] <-verilog/-naja_if> [--verilog_preprocessing] [--compact] [--report-skipped-pos] <netlist1> <netlist2> [<library-file>...]
 
 # Multi-file Verilog designs
-build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
+build/src/bin/kepler-formal [-v <LEC|SEC>] [-k <max-k>] -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
   [--liberty <library-file>...] [--compact] [--report-skipped-pos]
 
 # Through yaml config file
@@ -125,6 +125,36 @@ Experimental SystemVerilog notes are tracked in [docs/systemverilog/README.md](d
 - YAML `format`:
   - `verilog`
   - `naja_if`
+
+### Verification mode
+
+Verification mode defaults to `LEC`.
+
+Select it with either:
+
+- CLI: `-v LEC` or `-v SEC`
+- YAML: `verification: LEC` or `verification: SEC`
+
+`SEC` also accepts a k-induction bound:
+
+- CLI: `-k <max-k>`
+- YAML: `max_k: <integer>`
+
+`max_k` is only valid with `SEC`.
+
+Current SEC semantics:
+
+- compares the observed outputs of the two designs
+- does not require internal register/state names to match across the designs
+- still relies on the current output-only k-induction model in the binary, so
+  it does not yet encode a full reset/init relation
+
+Current SEC limitations in the binary:
+
+- `compact_mode` is not supported
+- `use_scopes` and `clean_scopes` are not supported
+- `cnf_export` / `dump_cnf` are not supported
+- `report_skipped_pos` is not supported
 
 ### Library files
 
@@ -182,6 +212,7 @@ Example:
 
 ```yaml
 format: verilog
+verification: LEC           # Optional: LEC by default, or SEC
 input_paths:
   - [design0_part1.v, design0_part2.v] # design 0
   - [design1_part1.v, design1_part2.v] # design 1
@@ -190,6 +221,7 @@ liberty_files:
   - library_file1.lib
 py_tech_files:
   - primitives.py              # Optional: Python tech loaders are YAML-only
+max_k: 32                     # Optional: SEC only
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 compact_mode: true            # Optional: skips per-PO analysis after a SAT whole-miter result
 report_skipped_pos: true      # Optional: writes skipped PO reports, default is false

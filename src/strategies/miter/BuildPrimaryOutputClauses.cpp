@@ -219,6 +219,12 @@ bool containsDependencyBit(const std::vector<uint64_t>& deps, uint64_t orderID) 
   return (deps[chunkIndex] & (uint64_t{1} << (orderID % 64))) != 0;
 }
 
+BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
+    BuildPrimaryOutputClauses::SkippedOutputReason reason,
+    std::string detail) {
+  return {reason, std::move(detail)};
+}
+
 void reportSkippedPO(const DNLFull* dnl,
                      const DNLTerminalFull& term,
                      const char* reason,
@@ -437,6 +443,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
 std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   std::vector<DNLID> outputs;
   std::set<DNLID> outputsSet;
+  skippedOutputs_.clear();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
 
@@ -581,6 +588,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
     if (term.getIsoID() != DNLID_MAX && 
       dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().empty()) {
+      skippedOutputs_[out] = makeSkippedOutputInfo(
+          SkippedOutputReason::NoDriver, "its iso has no drivers");
       reportSkippedPO(
           dnl, term, "its iso has no drivers", kSkippedNoDriverPOReport);
       DEBUG_LOG("Skipping output %s of model %s as it is not connected to any net\n",
@@ -594,6 +603,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
     if (term.getIsoID() != DNLID_MAX && 
       dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().size() > 1) {
+      skippedOutputs_[out] = makeSkippedOutputInfo(
+          SkippedOutputReason::MultiDriver, "its iso has multiple drivers");
       reportSkippedPO(
           dnl,
           term,
@@ -683,6 +694,10 @@ void BuildPrimaryOutputClauses::initVarNames() {
 void BuildPrimaryOutputClauses::build() {
   //printf("Building primary output clauses\n");
   naja::DNL::get();
+  // The logic-cloud caches are keyed by live DNL/model objects. Clear them
+  // for each build so later extractions never reuse entries from a previous
+  // universe or destroyed DNL instance.
+  SNLLogicCloud::resetAnalysisCaches();
   POs_.clear();
   POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
   initVarNames();
@@ -854,7 +869,27 @@ void BuildPrimaryOutputClauses::build() {
     if (cloud.getTruthTable().isValid()) {
       POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
     } else {
-      POs_[i] = BoolExpr::createInvalid(); 
+      POs_[i] = BoolExpr::createInvalid();
+      SkippedOutputReason skipReason = SkippedOutputReason::None;
+      switch (cloud.getSkipReason()) {
+        case SNLLogicCloud::SkipReason::NoDriver:
+          skipReason = SkippedOutputReason::NoDriver;
+          break;
+        case SNLLogicCloud::SkipReason::MultiDriver:
+          skipReason = SkippedOutputReason::MultiDriver;
+          break;
+        case SNLLogicCloud::SkipReason::LogicalLoop:
+          skipReason = SkippedOutputReason::LogicalLoop;
+          break;
+        case SNLLogicCloud::SkipReason::None:
+        default:
+          break;
+      }
+      if (skipReason != SkippedOutputReason::None) {
+        std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
+        skippedOutputs_[out] = makeSkippedOutputInfo(
+            skipReason, cloud.getSkipReasonText());
+      }
     }
     #ifdef DEBUG_CHECKS
     auto endConv = std::chrono::steady_clock::now();

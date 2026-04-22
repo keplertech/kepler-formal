@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <string>
+#include <cstdlib>
 #include <stdexcept>
 #include <memory>
 
@@ -113,6 +114,42 @@ public:
     // LCOV_EXCL_START
     throw std::runtime_error("Unknown solver type");
     // LCOV_EXCL_STOP
+  }
+
+  bool getLiteralValue(int lit) const {
+    if (lit == 0) {
+      return false;
+    }
+    if (lit == 1) {
+      return true;
+    }
+
+    const int external = std::abs(lit);
+    const int var = external - 2;
+    if (var < 0) {
+      throw std::runtime_error("Invalid literal passed to getLiteralValue");
+    }
+
+    bool positiveValue = false;
+    if (solverType_ == KEPLER_FORMAL::Config::SolverType::GLUCOSE) {
+      const auto value = glucoseSolver_->modelValue(Glucose::mkLit(var));
+      if (Glucose::toInt(value) == 2) {
+        positiveValue = false;
+      } else {
+        positiveValue = Glucose::toInt(value) == 0;
+      }
+    } else if (solverType_ == KEPLER_FORMAL::Config::SolverType::KISSAT) {
+      const int value = kissat_value(static_cast<kissat*>(kissatSolver_), var + 1);
+      if (value == 0) {
+        positiveValue = false;
+      } else {
+        positiveValue = value > 0;
+      }
+    } else {
+      throw std::runtime_error("Unknown solver type");
+    }
+
+    return lit > 0 ? positiveValue : !positiveValue;
   }
 
   void* getSolver() {

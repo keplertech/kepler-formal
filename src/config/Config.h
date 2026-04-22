@@ -21,32 +21,36 @@ public:
 
   // Static configuration API
   static void setSolverType(SolverType type) {
-    getInstance().solverType_ = type;
+    solverType_ = type;
   }
 
   static SolverType getSolverType() {
-    return getInstance().solverType_;
+    return solverType_;
   }
 
   static void setReportSkippedPOs(bool enabled) {
-    getInstance().reportSkippedPOs_ = enabled;
+    reportSkippedPOs_ = enabled;
   }
 
   static bool getReportSkippedPOs() {
-    return getInstance().reportSkippedPOs_;
+    return reportSkippedPOs_;
+  }
+
+  static void setSecTreatUncomputableSeqAsBoundary(bool enabled) {
+    secTreatUncomputableSeqAsBoundary_ = enabled;
+  }
+
+  static bool getSecTreatUncomputableSeqAsBoundary() {
+    return secTreatUncomputableSeqAsBoundary_;
   }
 
 private:
   Config() = default;
   ~Config() = default;
 
-  static Config& getInstance() {
-    static Config instance;
-    return instance;
-  }
-
-  SolverType solverType_ = KISSAT;
-  bool reportSkippedPOs_ = false;
+  inline static SolverType solverType_ = KISSAT;
+  inline static bool reportSkippedPOs_ = false;
+  inline static bool secTreatUncomputableSeqAsBoundary_ = true;
 };
 
 } // namespace kepler

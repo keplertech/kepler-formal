@@ -213,7 +213,75 @@ std::string BoolExpr::toString() const     {
     Print(oss);
     return oss.str();
 }
-//bool BoolExpr::evaluate(const std::unordered_map<size_t,bool>& env) const { /* … */ }
+bool BoolExpr::evaluate(const std::unordered_map<size_t, bool>& env) const {
+    struct StackFrame {
+        const BoolExpr* node = nullptr;
+        bool visited = false;
+    };
+
+    std::unordered_map<const BoolExpr*, bool> values;
+    std::vector<StackFrame> stack;
+    stack.push_back({this, false});
+
+    while (!stack.empty()) {
+        const auto current = stack.back();
+        stack.pop_back();
+        const BoolExpr* node = current.node;
+
+        if (values.find(node) != values.end()) {
+            continue;
+        }
+
+        if (node->op_ == Op::VAR) {
+            if (node->varID_ == 0) {
+                values.emplace(node, false);
+            } else if (node->varID_ == 1) {
+                values.emplace(node, true);
+            } else {
+                auto it = env.find(node->varID_);
+                if (it == env.end()) {
+                    throw std::runtime_error(
+                        "BoolExpr::evaluate missing variable " +
+                        std::to_string(node->varID_));
+                }
+                values.emplace(node, it->second);
+            }
+            continue;
+        }
+
+        if (!current.visited) {
+            stack.push_back({node, true});
+            if (node->right_) {
+                stack.push_back({node->right_, false});
+            }
+            if (node->left_) {
+                stack.push_back({node->left_, false});
+            }
+            continue;
+        }
+
+        switch (node->op_) {
+        case Op::NOT:
+            values.emplace(node, !values.at(node->left_));
+            break;
+        case Op::AND:
+            values.emplace(node, values.at(node->left_) && values.at(node->right_));
+            break;
+        case Op::OR:
+            values.emplace(node, values.at(node->left_) || values.at(node->right_));
+            break;
+        case Op::XOR:
+            values.emplace(node, values.at(node->left_) != values.at(node->right_));
+            break;
+        case Op::VAR:
+        case Op::NONE:
+        default:
+            throw std::runtime_error("BoolExpr::evaluate encountered unsupported operator");
+        }
+    }
+
+    return values.at(this);
+}
 std::string BoolExpr::OpToString(Op op) { 
     switch (op) {
         case Op::VAR: return "VAR";

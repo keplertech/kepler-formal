@@ -8,6 +8,13 @@ namespace KEPLER_FORMAL {
 
 class SNLLogicCloud {
  public:
+  enum class SkipReason {
+    None,
+    MultiDriver,
+    NoDriver,
+    LogicalLoop,
+  };
+
   SNLLogicCloud(naja::DNL::DNLID seedOutputTerm,
                 const std::vector<bool>& PIs,
                 const std::vector<bool>& POs)
@@ -15,9 +22,12 @@ class SNLLogicCloud {
         PIs_(PIs), POs_(POs) {
   }
   void compute();
+  static void resetAnalysisCaches();
   static void flushSkippedPOReports();
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);
+  SkipReason getSkipReason() const { return skipReason_; }
+  const std::string& getSkipReasonText() const { return skipReasonText_; }
   SNLTruthTableTree& getTruthTable() { return table_; }
   const std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& getInputs() const {
     return currentIterationInputs_;
@@ -50,6 +60,8 @@ class SNLLogicCloud {
   const naja::DNL::DNLFull& dnl_;
   const std::vector<bool>& PIs_;
   const std::vector<bool>& POs_;
+  SkipReason skipReason_ = SkipReason::None;
+  std::string skipReasonText_;
 };
 
 }  // namespace KEPLER_FORMAL

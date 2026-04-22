@@ -6,6 +6,7 @@
 #include "BoolExpr.h"
 #include "DNL.h"
 #include <tbb/concurrent_unordered_map.h>
+#include <mutex>
 #include "SNLTruthTable.h"
 #include <unordered_map>
 #include <unordered_set>
@@ -20,7 +21,7 @@ class BuildPrimaryOutputClauses {
   using PathObjectIDs = std::vector<NLID::DesignObjectID>;
   using PathKey = std::pair<PathNameIDs, PathObjectIDs>;
 
-   struct KeyHash {
+  struct KeyHash {
     size_t operator()(const PathKey& k) const {
       size_t res = 0;
       for (const auto& nameID : k.first) {
@@ -31,6 +32,18 @@ class BuildPrimaryOutputClauses {
       }
       return res;
     }
+  };
+
+  enum class SkippedOutputReason {
+    None,
+    NoDriver,
+    MultiDriver,
+    LogicalLoop,
+  };
+
+  struct SkippedOutputInfo {
+    SkippedOutputReason reason = SkippedOutputReason::None;
+    std::string detail;
   };
 
   BuildPrimaryOutputClauses() = default;
@@ -78,6 +91,10 @@ class BuildPrimaryOutputClauses {
   const std::vector<size_t>& getTermDNLID2VarID() const {
     return termDNLID2varID_;
   }
+  const std::unordered_map<naja::DNL::DNLID, SkippedOutputInfo>&
+  getSkippedOutputs() const {
+    return skippedOutputs_;
+  }
   void setLastCommonID(size_t id) { lastCommonID = id; }
 
  private:
@@ -104,6 +121,8 @@ class BuildPrimaryOutputClauses {
   std::unordered_map<naja::DNL::DNLID, PathKey> outputs2outputsIDs_;
   std::vector<size_t> termDNLID2varID_;  // Only for PIs
   size_t lastCommonID = 1;
+  std::unordered_map<naja::DNL::DNLID, SkippedOutputInfo> skippedOutputs_;
+  mutable std::mutex skippedOutputsMutex_;
 
   struct hash {
     size_t operator()(const std::pair<unsigned int, unsigned long>& p) const noexcept {

@@ -25,6 +25,7 @@ target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/
 
 target_link_libraries(keplerFormalCliTests
     kepler_config
+    kepler_sec
     naja_snl_pyloader
     naja_dnl
     naja_opt

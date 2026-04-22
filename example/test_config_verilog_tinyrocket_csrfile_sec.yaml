@@ -1,0 +1,14 @@
+format: verilog
+verification: SEC
+max_k: 4
+input_paths:
+  - [tinyrocket_csrfile.v, tinyrocket_csrfile_wrapper.v]
+  - [tinyrocket_csrfile.v, tinyrocket_csrfile_wrapper_k3.v]
+liberty_files:
+  - NangateOpenCellLibrary_typical.lib
+  - fakeram45_1024x32.lib
+  - fakeram45_64x32.lib
+  - fakeram45_64x15.lib
+log_level: info
+solver: kissat
+log_file: tinyrocket_csrfile_sec.log

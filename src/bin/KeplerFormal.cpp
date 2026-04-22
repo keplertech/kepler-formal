@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <iostream>
@@ -11,9 +12,11 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
 #include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <yaml-cpp/yaml.h>
@@ -32,17 +35,20 @@
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
 #include "Config.h"
+#include "strategy/SequentialEquivalenceStrategy.h"
 
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
       "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv> "
-      "<netlist1> <netlist2> [<library-file>...] | "
+      "[-v <LEC|SEC>] [-k <max-k>] [--sec-engine <LEGACY|KINDUCTION|IMC|PDR>] <netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...] [--compact] "
+      "<file...> [--liberty <library-file>...] [-v <LEC|SEC>] [-k <max-k>] [--sec-engine <LEGACY|KINDUCTION|IMC|PDR>] "
+      "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] "
-      "[--design1 <file...>] [--design2 <file...>] [--compact] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <LEC|SEC>] [-k <max-k>] [--sec-engine <LEGACY|KINDUCTION|IMC|PDR>] "
+      "[--design1 <file...>] [--design2 <file...>] "
+      "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos]",
       prog);
 }
@@ -67,12 +73,181 @@ static bool isPythonLoaderPath(const std::string& path) {
   return std::filesystem::path(path).extension() == ".py";
 }
 
+enum class VerificationMode {
+  LEC,
+  SEC,
+};
+
+static std::string toUpperCopy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::toupper(ch));
+  });
+  return value;
+}
+
+static bool parseVerificationModeToken(const std::string& token,
+                                       VerificationMode& mode,
+                                       std::string& error) {
+  const std::string normalized = toUpperCopy(token);
+  if (normalized == "LEC") {
+    mode = VerificationMode::LEC;
+    return true;
+  }
+  if (normalized == "SEC") {
+    mode = VerificationMode::SEC;
+    return true;
+  }
+  error = "expected LEC or SEC, got `" + token + "`";
+  return false;
+}
+
+static const char* verificationModeName(VerificationMode mode) {
+  switch (mode) {
+    case VerificationMode::SEC:
+      return "SEC";
+    case VerificationMode::LEC:
+    default:
+      return "LEC";
+  }
+}
+
+static bool parseSecEngineToken(const std::string& token,
+                                KEPLER_FORMAL::SEC::SecEngine& engine,
+                                std::string& error) {
+  // Keep the binary-level selector intentionally small for now so the
+  // user-facing SEC modes stay explicit and predictable.
+  const std::string normalized = toUpperCopy(token);
+  if (normalized == "LEGACY") {
+    engine = KEPLER_FORMAL::SEC::SecEngine::Legacy;
+    return true;
+  }
+  if (normalized == "KINDUCTION" || normalized == "K_INDUCTION" ||
+      normalized == "CLASSIC_K_INDUCTION") {
+    engine = KEPLER_FORMAL::SEC::SecEngine::KInduction;
+    return true;
+  }
+  if (normalized == "IMC") {
+    engine = KEPLER_FORMAL::SEC::SecEngine::Imc;
+    return true;
+  }
+  if (normalized == "PDR") {
+    engine = KEPLER_FORMAL::SEC::SecEngine::Pdr;
+    return true;
+  }
+  error = "expected LEGACY, KINDUCTION, IMC, or PDR, got `" + token + "`";
+  return false;
+}
+
+static const char* secEngineName(KEPLER_FORMAL::SEC::SecEngine engine) {
+  switch (engine) {
+    case KEPLER_FORMAL::SEC::SecEngine::KInduction:
+      return "KINDUCTION";
+    case KEPLER_FORMAL::SEC::SecEngine::Imc:
+      return "IMC";
+    case KEPLER_FORMAL::SEC::SecEngine::Pdr:
+      return "PDR";
+    case KEPLER_FORMAL::SEC::SecEngine::Legacy:
+    default:
+      return "LEGACY";
+  }
+}
+
+static spdlog::level::level_enum parseLogLevel(const std::string& logLevel) {
+  if (logLevel == "debug") {
+    return spdlog::level::debug;
+  }
+  return spdlog::level::info;
+}
+
+static std::string chooseRunLogFilePath(const std::string& requestedPath) {
+  if (requestedPath.empty()) {
+    int logIndex = 0;
+    while (true) {
+      const std::string candidate = "miter_log_" + std::to_string(logIndex) + ".txt";
+      std::ifstream infile(candidate);
+      if (infile.good()) {
+        ++logIndex;
+        continue;
+      }
+      return candidate;
+    }
+  }
+
+  std::filesystem::path path(requestedPath);
+  const auto parent = path.parent_path();
+  if (!parent.empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(parent, ec);
+    if (ec) {
+      std::cerr << "Warning: failed to create log directory '" << parent.string()
+                << "': " << ec.message() << " (" << ec.value()
+                << "). Using default SEC log path.\n";
+      return chooseRunLogFilePath("");
+    }
+  }
+  return path.string();
+}
+
+static std::string configureMainLogger(const std::string& logLevel,
+                                       bool enableFileLog,
+                                       const std::string& requestedLogFilePath) {
+  std::vector<spdlog::sink_ptr> sinks;
+  sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+
+  std::string chosenLogFile;
+  if (enableFileLog) {
+    chosenLogFile = chooseRunLogFilePath(requestedLogFilePath);
+    try {
+      sinks.push_back(
+          std::make_shared<spdlog::sinks::basic_file_sink_mt>(chosenLogFile, true));
+    } catch (const spdlog::spdlog_ex& ex) {
+      std::cerr << "Warning: failed to create SEC log file '" << chosenLogFile
+                << "': " << ex.what() << ". Logging will continue on stdout only.\n";
+      chosenLogFile.clear();
+    }
+  }
+
+  spdlog::drop("kepler_formal_main_logger");
+  auto logger = std::make_shared<spdlog::logger>(
+      "kepler_formal_main_logger", sinks.begin(), sinks.end());
+  const auto level = parseLogLevel(logLevel);
+  logger->set_level(level);
+  logger->flush_on(spdlog::level::info);
+  spdlog::set_default_logger(logger);
+  spdlog::set_level(level);
+  return chosenLogFile;
+}
+
+static bool parseMaxKToken(const std::string& token,
+                           size_t& maxK,
+                           std::string& error) {
+  if (token.empty()) {
+    error = "max_k must not be empty";
+    return false;
+  }
+  if (!std::all_of(token.begin(), token.end(), [](unsigned char ch) { return std::isdigit(ch); })) {
+    error = "max_k must be a non-negative integer";
+    return false;
+  }
+  try {
+    maxK = static_cast<size_t>(std::stoull(token));
+  } catch (const std::exception&) {
+    error = "max_k is out of range";
+    return false;
+  }
+  return true;
+}
+
 static bool validateConfigKeys(const YAML::Node& cfg) {
   if (!cfg || !cfg.IsMap()) {
     return true;
   }
   static const std::unordered_set<std::string> kAllowedKeys = {
       "format",
+      "verification",
+      "max_k",
+      "sec_engine",
+      "sec_uncomputable_seq_as_boundary",
       "input_paths",
       "liberty_files",
       "py_tech_files",
@@ -357,6 +532,7 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
   enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF };
+  constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
     naja::DNL::destroy();
     if (NLUniverse::get()) {
@@ -376,6 +552,12 @@ int KeplerFormalMain(int argc, char** argv) {
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
+  VerificationMode verificationMode = VerificationMode::LEC;
+  KEPLER_FORMAL::SEC::SecEngine secEngine = KEPLER_FORMAL::SEC::SecEngine::Legacy;
+  bool secEngineExplicit = false;
+  size_t secMaxK = kDefaultSecMaxK;
+  bool secMaxKExplicit = false;
+  bool secTreatUncomputableSeqAsBoundary = true;
 
   // Basic argument sanity
   if (argc < 2) {
@@ -397,6 +579,7 @@ int KeplerFormalMain(int argc, char** argv) {
   std::string dumpCnfPath;
 
   KEPLER_FORMAL::Config::setReportSkippedPOs(false);
+  KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(true);
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -425,6 +608,56 @@ int KeplerFormalMain(int argc, char** argv) {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
           }
+        }
+
+        if (cfg["verification"]) {
+          if (!cfg["verification"].IsScalar()) {
+            SPDLOG_CRITICAL("verification must be a scalar");
+            return EXIT_FAILURE;
+          }
+          std::string verificationError;
+          if (!parseVerificationModeToken(
+                  cfg["verification"].as<std::string>(), verificationMode, verificationError)) {
+            SPDLOG_CRITICAL("Invalid verification mode in config: {}", verificationError);
+            return EXIT_FAILURE;
+          }
+        }
+
+        if (cfg["max_k"]) {
+          if (!cfg["max_k"].IsScalar()) {
+            SPDLOG_CRITICAL("max_k must be a scalar");
+            return EXIT_FAILURE;
+          }
+          std::string maxKError;
+          if (!parseMaxKToken(cfg["max_k"].as<std::string>(), secMaxK, maxKError)) {
+            SPDLOG_CRITICAL("Invalid max_k in config: {}", maxKError);
+            return EXIT_FAILURE;
+          }
+          secMaxKExplicit = true;
+        }
+
+        if (cfg["sec_engine"]) {
+          if (!cfg["sec_engine"].IsScalar()) {
+            SPDLOG_CRITICAL("sec_engine must be a scalar");
+            return EXIT_FAILURE;
+          }
+          std::string secEngineError;
+          if (!parseSecEngineToken(
+                  cfg["sec_engine"].as<std::string>(), secEngine, secEngineError)) {
+            SPDLOG_CRITICAL("Invalid sec_engine in config: {}", secEngineError);
+            return EXIT_FAILURE;
+          }
+          secEngineExplicit = true;
+        }
+
+        if (cfg["sec_uncomputable_seq_as_boundary"]) {
+          if (!cfg["sec_uncomputable_seq_as_boundary"].IsScalar()) {
+            SPDLOG_CRITICAL(
+                "sec_uncomputable_seq_as_boundary must be a scalar");
+            return EXIT_FAILURE;
+          }
+          secTreatUncomputableSeqAsBoundary =
+              cfg["sec_uncomputable_seq_as_boundary"].as<bool>();
         }
 
         // input_paths
@@ -522,21 +755,88 @@ int KeplerFormalMain(int argc, char** argv) {
 
   // If not using config, fall back to original CLI parsing
   if (!usedConfig) {
-    if ((std::string(argv[1]) == "--help") ||
-        (std::string(argv[1]) == "-h")) {
-      print_usage(argv[0]);
-      return EXIT_SUCCESS;
+    bool formatFound = false;
+    int parseStart = 1;
+    while (parseStart < argc) {
+      std::string arg = argv[parseStart];
+      if (arg == "--help" || arg == "-h") {
+        print_usage(argv[0]);
+        return EXIT_SUCCESS;
+      }
+      if (arg == "-v" || arg == "--verification") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing verification mode after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string verificationError;
+        if (!parseVerificationModeToken(argv[parseStart + 1], verificationMode, verificationError)) {
+          SPDLOG_CRITICAL("Invalid verification mode: {}", verificationError);
+          return EXIT_FAILURE;
+        }
+        parseStart += 2;
+        continue;
+      }
+      if (arg == "-k" || arg == "--max-k") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing max_k after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string maxKError;
+        if (!parseMaxKToken(argv[parseStart + 1], secMaxK, maxKError)) {
+          SPDLOG_CRITICAL("Invalid max_k: {}", maxKError);
+          return EXIT_FAILURE;
+        }
+        secMaxKExplicit = true;
+        parseStart += 2;
+        continue;
+      }
+      if (arg == "--sec-engine") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing SEC engine after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string secEngineError;
+        if (!parseSecEngineToken(argv[parseStart + 1], secEngine, secEngineError)) {
+          SPDLOG_CRITICAL("Invalid SEC engine: {}", secEngineError);
+          return EXIT_FAILURE;
+        }
+        secEngineExplicit = true;
+        parseStart += 2;
+        continue;
+      }
+      if (arg == "--sec-uncomputable-seq-boundary") {
+        secTreatUncomputableSeqAsBoundary = true;
+        ++parseStart;
+        continue;
+      }
+      if (arg == "--no-sec-uncomputable-seq-boundary") {
+        secTreatUncomputableSeqAsBoundary = false;
+        ++parseStart;
+        continue;
+      }
+      if (arg == "-naja_if") {
+        inputFormatType = FormatType::NAJA_IF;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
+      if (arg == "-verilog") {
+        inputFormatType = FormatType::VERILOG;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
+      if (arg == "-systemverilog" || arg == "-sv") {
+        inputFormatType = FormatType::SYSTEMVERILOG;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
+      SPDLOG_CRITICAL("Unrecognized option before input format type: {}", arg);
+      return EXIT_FAILURE;
     }
-
-    std::string formatType = argv[1];
-    if (formatType == "-naja_if") {
-      inputFormatType = FormatType::NAJA_IF;
-    } else if (formatType == "-verilog") {
-      inputFormatType = FormatType::VERILOG;
-    } else if (formatType == "-systemverilog" || formatType == "-sv") {
-      inputFormatType = FormatType::SYSTEMVERILOG;
-    } else {
-      SPDLOG_CRITICAL("Unrecognized input format type: {}", formatType);
+    if (!formatFound) {
+      SPDLOG_CRITICAL("Missing input format type");
       return EXIT_FAILURE;
     }
 
@@ -545,8 +845,54 @@ int KeplerFormalMain(int argc, char** argv) {
     bool currentLiberty = false;
     std::vector<std::string> inputPaths;
 
-    for (int i = 2; i < argc; ++i) {
+    for (int i = parseStart; i < argc; ++i) {
       std::string arg = argv[i];
+      if (arg == "-v" || arg == "--verification") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing verification mode after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string verificationError;
+        if (!parseVerificationModeToken(argv[++i], verificationMode, verificationError)) {
+          SPDLOG_CRITICAL("Invalid verification mode: {}", verificationError);
+          return EXIT_FAILURE;
+        }
+        continue;
+      }
+      if (arg == "-k" || arg == "--max-k") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing max_k after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string maxKError;
+        if (!parseMaxKToken(argv[++i], secMaxK, maxKError)) {
+          SPDLOG_CRITICAL("Invalid max_k: {}", maxKError);
+          return EXIT_FAILURE;
+        }
+        secMaxKExplicit = true;
+        continue;
+      }
+      if (arg == "--sec-engine") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing SEC engine after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string secEngineError;
+        if (!parseSecEngineToken(argv[++i], secEngine, secEngineError)) {
+          SPDLOG_CRITICAL("Invalid SEC engine: {}", secEngineError);
+          return EXIT_FAILURE;
+        }
+        secEngineExplicit = true;
+        continue;
+      }
+      if (arg == "--sec-uncomputable-seq-boundary") {
+        secTreatUncomputableSeqAsBoundary = true;
+        continue;
+      }
+      if (arg == "--no-sec-uncomputable-seq-boundary") {
+        secTreatUncomputableSeqAsBoundary = false;
+        continue;
+      }
       if (arg == "--design1") {
         explicitDesignFlags = true;
         currentDesign = &designInputs.design0;
@@ -636,24 +982,8 @@ int KeplerFormalMain(int argc, char** argv) {
     }
   }
 
-  // Configure logging level
-  auto console = spdlog::get("console");
-  if (!console) {
-    console = spdlog::stdout_color_mt("console");
-  }
-  if (logLevel == "debug") {
-    spdlog::set_level(spdlog::level::debug);
-  } else if (logLevel == "info") {
-    spdlog::set_level(spdlog::level::info);
-  }
-  // else if (logLevel == "warn")
-  //   spdlog::set_level(spdlog::level::warn);
-  // else if (logLevel == "error")
-  //   spdlog::set_level(spdlog::level::err);
-  // else if (logLevel == "critical")
-  //   spdlog::set_level(spdlog::level::critical);
-  else
-    spdlog::set_level(spdlog::level::info);
+  const std::string runLogFilePath = configureMainLogger(
+      logLevel, verificationMode == VerificationMode::SEC, logFileName);
 
   SPDLOG_INFO("KEPLER FORMAL: Run.");
   std::string inputFormatName = "VERILOG";
@@ -664,6 +994,9 @@ int KeplerFormalMain(int argc, char** argv) {
     inputFormatName = "SYSTEMVERILOG";
   }
   SPDLOG_INFO("Input format: {}", inputFormatName);
+  if (!runLogFilePath.empty()) {
+    SPDLOG_INFO("Run log: {}", runLogFilePath);
+  }
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);
 
@@ -685,6 +1018,32 @@ int KeplerFormalMain(int argc, char** argv) {
       (designInputs.design0.size() != 1 || designInputs.design1.size() != 1)) {
     SPDLOG_CRITICAL("SNL input only supports one file per design");
     return EXIT_FAILURE;
+  }
+  if (verificationMode == VerificationMode::LEC && secMaxKExplicit) {
+    SPDLOG_CRITICAL("max_k/-k is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (verificationMode == VerificationMode::LEC && secEngineExplicit) {
+    SPDLOG_CRITICAL("sec_engine/--sec-engine is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (verificationMode == VerificationMode::SEC) {
+    if (compactMode) {
+      SPDLOG_CRITICAL("SEC verification does not support compact mode");
+      return EXIT_FAILURE;
+    }
+    if (useScopes || cleanScopes) {
+      SPDLOG_CRITICAL("SEC verification does not support scope extraction/cleaning");
+      return EXIT_FAILURE;
+    }
+    if (dumpCnf) {
+      SPDLOG_CRITICAL("SEC verification does not support CNF export");
+      return EXIT_FAILURE;
+    }
+    if (reportSkippedPOs) {
+      SPDLOG_CRITICAL("SEC verification does not support skipped PO reporting");
+      return EXIT_FAILURE;
+    }
   }
   for (const auto& libraryFile : libertyFiles) {
     if (isPythonLoaderPath(libraryFile)) {
@@ -713,8 +1072,19 @@ int KeplerFormalMain(int argc, char** argv) {
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
+  KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(
+      secTreatUncomputableSeqAsBoundary);
   SPDLOG_INFO("Solver: {}",
               solverType == KEPLER_FORMAL::Config::SolverType::KISSAT ? "KISSAT" : "GLUCOSE");
+  SPDLOG_INFO("Verification: {}", verificationModeName(verificationMode));
+  if (verificationMode == VerificationMode::SEC) {
+    SPDLOG_INFO("SEC max_k: {}", secMaxK);
+    SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
+    SPDLOG_INFO(
+        "SEC uncomputable sequentials: {}",
+        secTreatUncomputableSeqAsBoundary ? "boundary abstraction"
+                                          : "strict failure");
+  }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
@@ -1051,7 +1421,60 @@ int KeplerFormalMain(int argc, char** argv) {
   // --------------------------------------------------------------------------
   // 4. Hand off to the rest of the editing/analysis workflow
   // --------------------------------------------------------------------------
-  if (inputFormatType == FormatType::NAJA_IF && useScopes) {
+  if (verificationMode == VerificationMode::SEC) {
+    try {
+      KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
+          top0, top1, solverType, secEngine);
+      const auto result = strategy.run(secMaxK);
+      if (result.totalOutputs != 0) {
+        SPDLOG_INFO(
+            "SEC output coverage: {:.2f}% ({}/{} covered/existing outputs).",
+            result.outputCoveragePercent(),
+            result.coveredOutputs,
+            result.totalOutputs);
+      }
+      if (!result.skippedObservedOutputs.empty()) {
+        std::ostringstream skippedOutputs;
+        for (const auto& skippedOutput : result.skippedObservedOutputs) {
+          skippedOutputs << "  - " << skippedOutput << "\n";
+        }
+        SPDLOG_INFO(
+            "SEC skipped observed outputs due to connectivity issues "
+            "(no-driver or multi-driver only):\n{}",
+            skippedOutputs.str());
+      }
+      if (!result.abstractedSequentialBoundaries.empty()) {
+        std::ostringstream abstractedBoundaries;
+        for (const auto& abstractedBoundary : result.abstractedSequentialBoundaries) {
+          abstractedBoundaries << "  - " << abstractedBoundary << "\n";
+        }
+        SPDLOG_INFO(
+            "SEC abstracted uncomputable sequential interfaces as boundaries:\n{}",
+            abstractedBoundaries.str());
+      }
+      switch (result.status) {
+        case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Equivalent:
+          SPDLOG_INFO("No difference was found. SEC proved equivalence at k = {}.", result.bound);
+          return EXIT_SUCCESS;
+        case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Different:
+          SPDLOG_INFO("Difference was found. SEC found a counterexample at k = {}.", result.bound);
+          if (!result.reason.empty()) {
+            SPDLOG_INFO("SEC counterexample details:\n{}", result.reason);
+          }
+          return EXIT_SUCCESS;
+        case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Inconclusive:
+          SPDLOG_CRITICAL("SEC was inconclusive up to max_k = {}: {}", secMaxK, result.reason);
+          return EXIT_FAILURE;
+        case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Unsupported:
+        default:
+          SPDLOG_CRITICAL("SEC cannot run on this design pair: {}", result.reason);
+          return EXIT_FAILURE;
+      }
+    } catch (const std::exception& e) {
+      SPDLOG_ERROR("SEC workflow failed: {}", e.what());
+      return EXIT_FAILURE;
+    }
+  } else if (inputFormatType == FormatType::NAJA_IF && useScopes) {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
     MiterS.init(false);
     ScopeExtraction extractor(top0, top1);

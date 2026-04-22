@@ -1,0 +1,14 @@
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_test(
+    name = "SequentialEquivalenceStrategyTests",
+    srcs = ["SequentialEquivalenceStrategyTests.cpp"],
+    linkopts = ["-ltbb", "-ltbbmalloc", "-lz", "-lcapnp", "-lkj"],
+    deps = [
+        "//src/config:kepler_config",
+        "//src/sec:kepler_sec",
+        "//src/strategies:formal_strategies",
+        "@naja",
+        "@googletest//:gtest_main",
+    ],
+)

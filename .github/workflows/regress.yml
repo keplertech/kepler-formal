@@ -45,6 +45,14 @@ jobs:
       # Execute tests defined by the CMake configuration.  
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest -VV -E ".*[p|P]ython.*" -C ${{env.BUILD_TYPE}}
+
+    - name: Run SEC unit tests
+      working-directory: ${{github.workspace}}/build
+      run: ctest --output-on-failure -R 'SequentialEquivalenceStrategyTests\.'
+
+    - name: Run SEC CLI tests
+      working-directory: ${{github.workspace}}/build
+      run: ctest --output-on-failure -R 'KeplerFormalCliTests\.(ConfigSecIgnoresRenamedInternalState|ConfigSystemVerilogSecVerificationAccepted|ConfigTinyRocketSecVerificationAccepted)'
     
     - name: Clone kepler-formal-regress
       working-directory: ${{github.workspace}}
@@ -109,6 +117,24 @@ jobs:
     - name: Execute edit.py
       working-directory: ${{github.workspace}}/example
       run: python edit.py
+
+    - name: Generate TinyRocket CSRFile SEC example
+      working-directory: ${{github.workspace}}/example
+      run: python extract_tinyrocket_csrfile_sec.py
+
+    - name: Run TinyRocket CSRFile SEC k3 example
+      working-directory: ${{github.workspace}}/example
+      run: |
+        rm -f tinyrocket_csrfile_sec.log
+        ../build/src/bin/kepler-formal --config test_config_verilog_tinyrocket_csrfile_sec.yaml
+        grep "SEC found a counterexample at k = 3" tinyrocket_csrfile_sec.log
+
+    - name: Run TinyRocket SEC self-check
+      working-directory: ${{github.workspace}}/example
+      run: |
+        ../build/src/bin/kepler-formal --config test_config_verilog_tinyrocket_sec.yaml > tinyrocket_self_sec.out 2>&1
+        cat tinyrocket_self_sec.out
+        grep "SEC proved equivalence at k = 1" tinyrocket_self_sec.out
 
     - name: Run on naja if edited
       working-directory: ${{github.workspace}}/example

@@ -1,0 +1,9 @@
+# seq_example_config.yaml
+format: systemverilog
+verification: SEC
+max_k: 20
+input_paths:
+  - seq_design0.sv
+  - seq_design1.sv
+log_level: info
+solver: kissat

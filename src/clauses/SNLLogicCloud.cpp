@@ -61,8 +61,46 @@ const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
 const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
 const char* kSkippedLogicalLoopPOReport = "skipped_logical_loop_pos.txt";
 
-	void initializeSkippedPOReportFiles() {
-	  static std::once_flag once;
+struct TruthTableKey {
+  const SNLDesign* design;
+  size_t flatTermID;
+
+  bool operator==(const TruthTableKey& other) const {
+    return design == other.design && flatTermID == other.flatTermID;
+  }
+};
+
+struct TruthTableKeyHash {
+  size_t operator()(const TruthTableKey& key) const {
+    return std::hash<const SNLDesign*>{}(key.design) ^
+           (std::hash<size_t>{}(key.flatTermID) << 1);
+  }
+};
+
+struct ModelInputInfo {
+  bool isMux2 = false;
+  const SNLBusTerm* muxInputA = nullptr;
+  const SNLBusTerm* muxInputB = nullptr;
+  const SNLBitTerm* muxSelect = nullptr;
+};
+
+struct CloudAnalysisCaches {
+  std::mutex mutex;
+  std::unordered_map<const SNLDesign*, size_t> truthTableCountCache;
+  std::unordered_map<TruthTableKey, SNLTruthTable, TruthTableKeyHash>
+      truthTableCache;
+  std::unordered_map<const SNLDesign*, ModelInputInfo> modelInputInfoCache;
+  std::unordered_map<naja::DNL::DNLID, std::vector<naja::DNL::DNLID>>
+      relevantInputCache;
+};
+
+CloudAnalysisCaches& getCloudAnalysisCaches() {
+  static CloudAnalysisCaches caches;
+  return caches;
+}
+
+		void initializeSkippedPOReportFiles() {
+		  static std::once_flag once;
 	  if (!shouldReportSkippedPOs()) {
 	    return; // LCOV_EXCL_LINE
 	  }
@@ -352,41 +390,51 @@ bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
 void SNLLogicCloud::compute() {
   clearNewIterationInputsETS();
   clearCurrentIterationInputsETS();
-  struct TruthTableKey {
-    const SNLDesign* design;
-    size_t flatTermID;
-
-    bool operator==(const TruthTableKey& other) const {
-      return design == other.design && flatTermID == other.flatTermID;
-    }
-  };
-  struct TruthTableKeyHash {
-    size_t operator()(const TruthTableKey& key) const {
-      return std::hash<const SNLDesign*>{}(key.design) ^
-             (std::hash<size_t>{}(key.flatTermID) << 1);
-    }
-  };
-  std::unordered_map<const SNLDesign*, size_t> truthTableCountCache;
-  std::unordered_map<TruthTableKey, SNLTruthTable, TruthTableKeyHash>
-      truthTableCache;
+  auto& analysisCaches = getCloudAnalysisCaches();
   auto getTruthTableCountCached = [&](const SNLDesign* model) {
-    auto it = truthTableCountCache.find(model);
-    if (it != truthTableCountCache.end()) {
-      return it->second;
+    {
+      std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+      auto it = analysisCaches.truthTableCountCache.find(model);
+      if (it != analysisCaches.truthTableCountCache.end()) {
+        return it->second;
+      }
     }
     const size_t count = SNLDesignModeling::getTruthTableCount(model);
-    truthTableCountCache.emplace(model, count);
-    const auto& entry = truthTableCountCache.find(model);
+    std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+    analysisCaches.truthTableCountCache.emplace(model, count);
     return count;
   };
   auto getTruthTableCached = [&](const SNLDesign* model, size_t flatTermID) {
     const TruthTableKey key{model, flatTermID};
-    const auto& it = truthTableCache.find(key);
-    if (it != truthTableCache.end()) {
-      return it->second;
+    {
+      std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+      const auto& it = analysisCaches.truthTableCache.find(key);
+      if (it != analysisCaches.truthTableCache.end()) {
+        return it->second;
+      }
     }
     auto tt = SNLDesignModeling::getTruthTable(model, flatTermID);
-    const auto& entry = truthTableCache.emplace(key, tt);
+    std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+    const auto& entry = analysisCaches.truthTableCache.emplace(key, tt);
+    return entry.first->second;
+  };
+  auto getModelInputInfo = [&](const SNLDesign* model) -> const ModelInputInfo& {
+    {
+      std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+      const auto it = analysisCaches.modelInputInfoCache.find(model);
+      if (it != analysisCaches.modelInputInfoCache.end()) {
+        return it->second;
+      }
+    }
+    ModelInputInfo info;
+    info.isMux2 = NLDB0::isMux2(model);
+    if (info.isMux2) {
+      info.muxInputA = NLDB0::getMux2InputA(model);
+      info.muxInputB = NLDB0::getMux2InputB(model);
+      info.muxSelect = NLDB0::getMux2Select(model);
+    }
+    std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+    const auto& entry = analysisCaches.modelInputInfoCache.emplace(model, info);
     return entry.first->second;
   };
   auto formatTermName = [&](naja::DNL::DNLID termID) {
@@ -481,9 +529,18 @@ void SNLLogicCloud::compute() {
     snapshot << "]";
     return snapshot.str();
   };
-  auto collectRelevantInstanceInputs = [&](naja::DNL::DNLID driver) {
+  auto collectRelevantInstanceInputs = [&](naja::DNL::DNLID driver)
+      -> const std::vector<naja::DNL::DNLID>& {
+    {
+      std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+      const auto cacheIt = analysisCaches.relevantInputCache.find(driver);
+      if (cacheIt != analysisCaches.relevantInputCache.end()) {
+        return cacheIt->second;
+      }
+    }
     const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     const auto* model = inst.getSNLModel();
+    const auto& modelInputInfo = getModelInputInfo(model);
 
     std::vector<naja::DNL::DNLID> allNonOutputTerms;
     for (DNLID termID = inst.getTermIndexes().first;
@@ -496,8 +553,11 @@ void SNLLogicCloud::compute() {
       allNonOutputTerms.push_back(termID);
     }
 
-    if (!NLDB0::isMux2(model)) {
-      return allNonOutputTerms;
+    if (!modelInputInfo.isMux2) {
+      std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+      const auto& entry =
+          analysisCaches.relevantInputCache.emplace(driver, std::move(allNonOutputTerms));
+      return entry.first->second;
     }
 
     std::unordered_map<size_t, naja::DNL::DNLID> orderIDToTermID;
@@ -510,9 +570,9 @@ void SNLLogicCloud::compute() {
 
     const auto* driverTerm = dnl_.getDNLTerminalFromID(driver).getSnlBitTerm();
     const auto driverBit = static_cast<NLID::Bit>(driverTerm->getBit());
-    const auto* inputA = NLDB0::getMux2InputA(model);
-    const auto* inputB = NLDB0::getMux2InputB(model);
-    const auto* select = NLDB0::getMux2Select(model);
+    const auto* inputA = modelInputInfo.muxInputA;
+    const auto* inputB = modelInputInfo.muxInputB;
+    const auto* select = modelInputInfo.muxSelect;
     if (!inputA || !inputB || !select) {
       throw std::runtime_error("SNLLogicCloud failed to resolve wide mux inputs");
     }
@@ -549,23 +609,26 @@ void SNLLogicCloud::compute() {
       throw std::runtime_error(error.str());
     }
     relevantTerms.push_back(selectIt->second);
-    return relevantTerms;
+    std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+    const auto& entry =
+        analysisCaches.relevantInputCache.emplace(driver, std::move(relevantTerms));
+    return entry.first->second;
   };
   // LCOV_EXCL_STOP
-	  auto throwIfTruthTableArityMismatch = [&](naja::DNL::DNLID driver) {
-	    const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
-	    const auto* model = inst.getSNLModel();
+		  auto throwIfTruthTableArityMismatch = [&](naja::DNL::DNLID driver) {
+		    const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+		    const auto* model = inst.getSNLModel();
 	    if (getTruthTableCountCached(model) == 0) {
 	      return; // LCOV_EXCL_LINE
 	    }
 	    const auto& tt = getTruthTableCached(
 	        model, dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
-	    if (!tt.isInitialized()) {
-	      return; // LCOV_EXCL_LINE
-	    }
-    const auto relevantInputs = collectRelevantInstanceInputs(driver);
+		    if (!tt.isInitialized()) {
+		      return; // LCOV_EXCL_LINE
+		    }
+    const auto& relevantInputs = collectRelevantInstanceInputs(driver);
     const size_t expectedInputCount =
-        NLDB0::isMux2(model) ? size_t{3} : tt.size();
+        getModelInputInfo(model).isMux2 ? size_t{3} : tt.size();
     if (expectedInputCount == relevantInputs.size()) {
       return;
     }
@@ -815,30 +878,34 @@ void SNLLogicCloud::compute() {
   DEBUG_LOG("---- Begin!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() ||
       isOutput(seedOutputTerm_)) {
-    const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
-        dnl_.getDNLTerminalFromID(seedOutputTerm_).getIsoID());
-    // LCOV_EXCL_START
-    if (iso.getDrivers().size() > 1) {
-      #ifdef DEBUG_PRINTS
-      for (const auto& driver : iso.getDrivers()) {
-        DEBUG_LOG("Driver: %s\n", dnl_.getDNLTerminalFromID(driver)
-                                      .getSnlBitTerm()
-                                      ->getName()
-                                      .getString()
-                                      .c_str());
-      }
-      #endif
-      throw std::runtime_error("Seed output term is not a single driver");
-    } else if (iso.getDrivers().empty()) {
-      std::string termName = dnl_.getDNLTerminalFromID(seedOutputTerm_)
-                                 .getSnlBitTerm()
-                                 ->getName()
-                                 .getString();
-      std::string error =
-          "Seed output term '" + termName + "' has no drivers";
-      throw std::runtime_error(error);
+    const auto& seedOutput = dnl_.getDNLTerminalFromID(seedOutputTerm_);
+    if (seedOutput.getIsoID() == DNLID_MAX) {
+      skipReason_ = SkipReason::NoDriver;
+      skipReasonText_ = "its iso has no drivers";
+      reportCloudSkippedRoot(&dnl_, seedOutputTerm_, seedOutputTerm_, DNLID_MAX,
+                             "its iso has no drivers", kSkippedNoDriverPOReport);
+      table_ = SNLTruthTableTree();
+      return;
     }
-    // LCOV_EXCL_STOP
+    const auto& iso =
+        dnl_.getDNLIsoDB().getIsoFromIsoIDconst(seedOutput.getIsoID());
+    if (iso.getDrivers().size() > 1) {
+      skipReason_ = SkipReason::MultiDriver;
+      skipReasonText_ = "its iso has multiple drivers";
+      reportCloudSkippedRoot(&dnl_, seedOutputTerm_, seedOutputTerm_, DNLID_MAX,
+                             "its iso has multiple drivers",
+                             kSkippedMultiDriverPOReport);
+      table_ = SNLTruthTableTree();
+      return;
+    }
+    if (iso.getDrivers().empty()) {
+      skipReason_ = SkipReason::NoDriver;
+      skipReasonText_ = "its iso has no drivers";
+      reportCloudSkippedRoot(&dnl_, seedOutputTerm_, seedOutputTerm_, DNLID_MAX,
+                             "its iso has no drivers", kSkippedNoDriverPOReport);
+      table_ = SNLTruthTableTree();
+      return;
+    }
     const auto& driver = iso.getDrivers().front();
     auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
     if (isInput(driver)) {
@@ -1049,6 +1116,8 @@ void SNLLogicCloud::compute() {
         // proper error with names of all the drivers
         // throw an error and separate names by comma
         if (iso.getDrivers().size() > 1) {
+          skipReason_ = SkipReason::MultiDriver;
+          skipReasonText_ = "its iso has multiple drivers during cloud expansion";
           reportCloudSkippedRoot(&dnl_, seedOutputTerm_, input, DNLID_MAX,
                                  "its iso has multiple drivers during cloud expansion",
                                  kSkippedMultiDriverPOReport);
@@ -1057,6 +1126,8 @@ void SNLLogicCloud::compute() {
         }
       } else if (iso.getDrivers().empty()) {
         if (!iso.isConstant()) {
+          skipReason_ = SkipReason::NoDriver;
+          skipReasonText_ = "its iso has no drivers during cloud expansion";
           reportCloudSkippedRoot(&dnl_, seedOutputTerm_, input, DNLID_MAX,
                                  "its iso has no drivers during cloud expansion",
                                  kSkippedNoDriverPOReport);
@@ -1099,7 +1170,7 @@ void SNLLogicCloud::compute() {
           dnl_.getDNLTerminalFromID(driver).getDNLInstance().getID());
       throwIfTruthTableArityMismatch(driver);
 
-      DEBUG_LOG("Adding driver id: %zu %s(%s)\n", driver,
+	      DEBUG_LOG("Adding driver id: %zu %s(%s)\n", driver,
                 dnl_.getDNLTerminalFromID(driver)
                     .getSnlBitTerm()
                     ->getName()
@@ -1111,10 +1182,11 @@ void SNLLogicCloud::compute() {
                     ->getName()
                     .getString()
                     .c_str());
-      pushBackInputsToMergeETS({inst.getID(), driver});
+	      pushBackInputsToMergeETS({inst.getID(), driver});
 
-      for (const auto termID : collectRelevantInstanceInputs(driver)) {
-        if (isPairVisitedETS(driver, termID)) {
+	      const auto& relevantInputs = collectRelevantInstanceInputs(driver);
+	      for (const auto termID : relevantInputs) {
+	        if (isPairVisitedETS(driver, termID)) {
           DEBUG_LOG(
               "#### iter %lu 1 Term (%zu) %s of inst %s already handled, "
               "skipping\n",
@@ -1134,8 +1206,8 @@ void SNLLogicCloud::compute() {
                   .c_str());
           continue;
         }
-        pushBackNewIterationInputsETS(termID);
-      }
+	        pushBackNewIterationInputsETS(termID);
+	      }
     }
 
     if (sizeOfInputsToMergeETS() == 0) {
@@ -1155,6 +1227,9 @@ void SNLLogicCloud::compute() {
         std::vector<DNLID> loopTerms;
         if (table_.findAncestorLoopForBorderLeaf(i, merges[i].second,
                                                  loopTerms)) {
+          skipReason_ = SkipReason::LogicalLoop;
+          skipReasonText_ =
+              "a logical loop was detected during cloud expansion";
           reportCloudSkippedRoot(
               &dnl_, seedOutputTerm_, currentInputs[i], merges[i].second,
               "a logical loop was detected during cloud expansion",
@@ -1192,6 +1267,15 @@ void SNLLogicCloud::compute() {
     assert(isInput(input) || cachedAsInput || iso.isConstant());
   }
   #endif
+}
+
+void SNLLogicCloud::resetAnalysisCaches() {
+  auto& analysisCaches = getCloudAnalysisCaches();
+  std::lock_guard<std::mutex> lock(analysisCaches.mutex);
+  analysisCaches.truthTableCountCache.clear();
+  analysisCaches.truthTableCache.clear();
+  analysisCaches.modelInputInfoCache.clear();
+  analysisCaches.relevantInputCache.clear();
 }
 
 void SNLLogicCloud::flushSkippedPOReports() {

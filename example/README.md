@@ -27,7 +27,33 @@ python edit.py
 # Through config file
 ../build/src/bin/kepler-formal --config test_config_naja_if.yaml
 ../build/src/bin/kepler-formal --config test_config_verilog.yaml
+../build/src/bin/kepler-formal --config test_config_verilog_sec.yaml
+../build/src/bin/kepler-formal --config test_config_verilog_tinyrocket_sec.yaml
+python edit_tinyrocket_output_buffers.py
+../build/src/bin/kepler-formal --config test_config_verilog_tinyrocket_buffered_sec.yaml
+python extract_tinyrocket_csrfile_sec.py
+../build/src/bin/kepler-formal --config test_config_verilog_tinyrocket_csrfile_sec.yaml
 ```
+
+`test_config_verilog_sec.yaml` is a small SEC example that uses the local
+`seq_design0.sv` / `seq_design1.sv` pair.
+
+`test_config_verilog_tinyrocket_sec.yaml` keeps the original full-TinyRocket
+SEC self-compare setup for experimentation with the same Liberty files as the
+LEC example.
+
+`edit_tinyrocket_output_buffers.py` generates
+`tinyrocket_output_buffered.v`, which adds one combinational buffer on every
+top-level TinyRocket output bit. The matching
+`test_config_verilog_tinyrocket_buffered_sec.yaml` keeps behavior identical
+while making the SEC pair structurally different.
+
+`test_config_verilog_tinyrocket_csrfile_sec.yaml` extracts `CSRFile` from
+`tinyrocket.v` with Najaeda and then runs a TinyRocket-derived SEC example that
+first fails at `k = 3` on the existing `io_decode_0_fp_illegal` output.
+
+The current SEC flow compares observed outputs only. Internal register naming
+does not need to match between the two designs.
 
 ### YAML input_paths notes
 
