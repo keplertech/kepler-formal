@@ -20,6 +20,7 @@ cc_library(
     hdrs = [
         "common/AlignedSignals.h",
         "common/BoolExprUtils.h",
+        "common/SecDiag.h",
         "common/SignalKey.h",
         "imc/ExactInterpolantSynthesizer.h",
         "imc/IMCEngine.h",

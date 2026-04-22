@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <map>
@@ -21,6 +20,7 @@
 #include "SNLPath.h"
 #include "common/BoolExprUtils.h"
 #include "common/AlignedSignals.h"
+#include "common/SecDiag.h"
 #include "imc/ExactInterpolantSynthesizer.h"
 #include "imc/IMCEngine.h"
 #include "kinduction/KInductionEngine.h"
@@ -693,17 +693,15 @@ SequentialEquivalenceStrategy::SequentialEquivalenceStrategy(
     : top0_(top0), top1_(top1), solverType_(solverType), secEngine_(secEngine) {}
 
 SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) const {
-  const bool secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr;
+  const bool secDiagEnabled = isSecDiagEnabled();
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: start run\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: start run");
   }
 
   // Step 1: extract both tops into the same normalized SEC representation.
   SequentialDesignModel model0 = SequentialDesignModel::extract(top0_);
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: extracted design0\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: extracted design0");
   }
   std::vector<std::string> abstractedSequentialBoundaries;
   for (const auto& description : model0.abstractedSequentialBoundaries) {
@@ -719,8 +717,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   }
   SequentialDesignModel model1 = SequentialDesignModel::extract(top1_);
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: extracted design1\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: extracted design1");
   }
   abstractedSequentialBoundaries.reserve(
       model0.abstractedSequentialBoundaries.size() +
@@ -760,8 +757,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   OutputCoverageSelection outputCoverage;
   try {
     if (secDiagEnabled) {
-      fprintf(stderr, "SEC diag: aligning inputs/outputs\n");
-      fflush(stderr);
+      emitSecDiag("SEC diag: aligning inputs/outputs");
     }
     alignedInputs = alignSignalsByName(
         model0.environmentInputs,
@@ -788,13 +784,13 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
           abstractedSequentialBoundaries);
     }
     if (secDiagEnabled) {
-      fprintf(
-          stderr,
-          "SEC diag: checked_outputs=%zu total_outputs=%zu skipped=%zu\n",
+      emitSecDiag(
+          "SEC diag: checked_outputs=",
           alignedOutputs.names.size(),
+          " total_outputs=",
           outputCoverage.totalOutputs,
+          " skipped=",
           outputCoverage.skippedOutputs.size());
-      fflush(stderr);
     }
     alignedOutputs = alignSignalsByName(
         model0.observedOutputs,
@@ -808,8 +804,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
           "outputs disagree after connectivity skipping");
     }
     if (secDiagEnabled) {
-      fprintf(stderr, "SEC diag: inferring inductive state equalities\n");
-      fflush(stderr);
+      emitSecDiag("SEC diag: inferring inductive state equalities");
     }
     // Internal-state correspondence must be inferred from the transition
     // structure itself. Matching register names is not strong enough for SEC:
@@ -817,8 +812,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
     inductiveStateEqualities = inferStructurallyEquivalentStatePairs(
         model0, model1, alignedInputs);
     if (secDiagEnabled) {
-      fprintf(stderr, "SEC diag: inferred inductive state equalities\n");
-      fflush(stderr);
+      emitSecDiag("SEC diag: inferred inductive state equalities");
     }
   } catch (const std::exception& e) {
     return makeSecResult(
@@ -830,13 +824,16 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   }
 
   if (secDiagEnabled) {
-    printf(
-        "SEC diag: aligned_inputs=%zu aligned_outputs=%zu inductive_state_equalities=%zu "
-        "state_bits0=%zu state_bits1=%zu\n",
+    emitSecDiag(
+        "SEC diag: aligned_inputs=",
         alignedInputs.names.size(),
+        " aligned_outputs=",
         alignedOutputs.names.size(),
+        " inductive_state_equalities=",
         inductiveStateEqualities.names.size(),
+        " state_bits0=",
         model0.stateBits.size(),
+        " state_bits1=",
         model1.stateBits.size());
   }
 
@@ -917,8 +914,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
     problem.observedOutputExprs1.push_back(remappedOutputs1.at(key1));
   }
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: remapped observed outputs\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: remapped observed outputs");
   }
 
   for (const auto& key : model0.stateBits) {
@@ -934,8 +930,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
             model1.nextStateExprByStateKey.at(key), localToCombined1, remapMemo1));
   }
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: remapped next-state formulas\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: remapped next-state formulas");
   }
 
   // Step 5: if reset/init data is available, build the explicit frame-0 state
@@ -1002,8 +997,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   const auto [abstractOutputMap0, abstractOutputMap1] = buildAbstractTransitionMaps(
       model0, model1, alignedInputs, anchoredStateEqualities);
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: built abstract transition maps\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: built abstract transition maps");
   }
 
   // Step 6: build the SEC proof obligations. The checked SEC property remains
@@ -1054,31 +1048,33 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
 
   problem.description = "SEC property with aligned observed outputs";
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: built SEC and induction properties\n");
-    fflush(stderr);
+    emitSecDiag("SEC diag: built SEC and induction properties");
   }
 
   if (secDiagEnabled) {
-    printf(
-        "SEC diag: property_is_true=%d induction_property_is_true=%d "
-        "bad_is_false=%d induction_bad_is_false=%d reset_bootstrap_inputs=%zu "
-        "bootstrap_cycles=%zu bootstrap_equalities=%zu inductive_equalities=%zu\n",
+    emitSecDiag(
+        "SEC diag: property_is_true=",
         problem.property == BoolExpr::createTrue(),
+        " induction_property_is_true=",
         problem.inductionProperty == BoolExpr::createTrue(),
+        " bad_is_false=",
         problem.bad == BoolExpr::createFalse(),
+        " induction_bad_is_false=",
         problem.inductionBad == BoolExpr::createFalse(),
+        " reset_bootstrap_inputs=",
         problem.resetBootstrapInputs.size(),
+        " bootstrap_cycles=",
         problem.resetBootstrapCycles,
+        " bootstrap_equalities=",
         problem.bootstrapStateEqualityPairs.size(),
+        " inductive_equalities=",
         problem.inductiveStateEqualityPairs.size());
-    fflush(stdout);
   }
 
   // Step 7: hand the combined transition system to the selected proof engine.
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: entering %s\n",
+    emitSecDiag(
+        "SEC diag: entering ",
         secEngine_ == SecEngine::Pdr
             ? "pdr engine"
             : (secEngine_ == SecEngine::Imc
@@ -1086,7 +1082,6 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
                    : (secEngine_ == SecEngine::KInduction
                           ? "classic k-induction engine"
                           : "legacy engine")));
-    fflush(stderr);
   }
 
   if (secEngine_ == SecEngine::Pdr) {

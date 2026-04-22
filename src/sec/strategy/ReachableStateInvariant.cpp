@@ -5,11 +5,11 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
 #include <optional>
 #include <unordered_map>
 
 #include "common/BoolExprUtils.h"
+#include "common/SecDiag.h"
 #include "strategy/StructuralStateInvariant.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -369,14 +369,15 @@ AlignedSignals deriveResetBootstrapStateEqualities(
     currentKnownValues0 = std::move(nextKnownValues0);
     currentKnownValues1 = std::move(nextKnownValues1);
     if (secDiagEnabled) {
-      fprintf(
-          stderr,
-          "SEC diag: bootstrap step %zu equalities=%zu known0=%zu known1=%zu\n",
+      emitSecDiag(
+          "SEC diag: bootstrap step ",
           step + 1,
+          " equalities=",
           currentEqualities.names.size(),
+          " known0=",
           currentKnownValues0.size(),
+          " known1=",
           currentKnownValues1.size());
-      fflush(stderr);
     }
   }
 

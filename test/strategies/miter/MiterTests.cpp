@@ -173,6 +173,20 @@ naja::DNL::DNLID findDNLTermIDByInstanceAndTerm(const char* instanceName,
   return naja::DNL::DNLID_MAX;
 }
 
+naja::DNL::DNLID findTopDNLTermIDByName(const char* termName) {
+  auto* dnl = naja::DNL::get();
+  for (naja::DNL::DNLID id = 0; id <= dnl->getNBterms(); ++id) {
+    const auto& term = dnl->getDNLTerminalFromID(id);
+    if (term.isNull() || !term.isTopPort()) {
+      continue;
+    }
+    if (term.getSnlBitTerm()->getName().getString() == termName) {
+      return id;
+    }
+  }
+  return naja::DNL::DNLID_MAX;
+}
+
 std::vector<std::string> getTermLabels(const std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& ids) {
   std::vector<std::string> labels;
   labels.reserve(ids.size());
@@ -790,6 +804,92 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   EXPECT_EQ(content.find("report_prop_b="), std::string::npos);
   EXPECT_NE(content.find("See first encounter of iso="), std::string::npos);
   EXPECT_EQ(countSubstringOccurrences(content, "Skipping PO "), 2u);
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesSetOutputsSkipsNoDriverSeedOutput) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+  auto floatingNet = SNLScalarNet::create(top, NLName("floating_net"));
+  topOut->setNet(floatingNet);
+
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  naja::DNL::DNLID topOutID = findTopDNLTermIDByName("y");
+  ASSERT_NE(topOutID, naja::DNL::DNLID_MAX);
+
+  builder.setOutputs({topOutID});
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 1u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  EXPECT_FALSE(builder.getPOs()[0]->isValid());
+  const auto& skippedOutputs = builder.getSkippedOutputs();
+  auto it = skippedOutputs.find(topOutID);
+  ASSERT_NE(it, skippedOutputs.end());
+  EXPECT_EQ(it->second.reason,
+            BuildPrimaryOutputClauses::SkippedOutputReason::NoDriver);
+  EXPECT_NE(it->second.detail.find("its iso has no drivers"), std::string::npos);
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesSetOutputsSkipsMultiDriverSeedOutput) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("y"));
+
+  SNLDesign* logic0 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC0"));
+  auto logic0Out =
+      SNLScalarTerm::create(logic0, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      logic0, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));
+
+  SNLDesign* logic1 =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("LOGIC1"));
+  auto logic1Out =
+      SNLScalarTerm::create(logic1, SNLTerm::Direction::Output, NLName("out"));
+  SNLDesignModeling::setTruthTable(
+      logic1, SNLTruthTable(0, 1, SNLTruthTable::fullDependencies(0)));
+
+  auto const0 = SNLInstance::create(top, logic0, NLName("const0"));
+  auto const1 = SNLInstance::create(top, logic1, NLName("const1"));
+  auto sharedNet = SNLScalarNet::create(top, NLName("shared_net"));
+  topOut->setNet(sharedNet);
+  const0->getInstTerm(logic0Out)->setNet(sharedNet);
+  const1->getInstTerm(logic1Out)->setNet(sharedNet);
+
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  naja::DNL::DNLID topOutID = findTopDNLTermIDByName("y");
+  ASSERT_NE(topOutID, naja::DNL::DNLID_MAX);
+
+  builder.setOutputs({topOutID});
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 1u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  EXPECT_FALSE(builder.getPOs()[0]->isValid());
+  const auto& skippedOutputs = builder.getSkippedOutputs();
+  auto it = skippedOutputs.find(topOutID);
+  ASSERT_NE(it, skippedOutputs.end());
+  EXPECT_EQ(it->second.reason,
+            BuildPrimaryOutputClauses::SkippedOutputReason::MultiDriver);
+  EXPECT_NE(it->second.detail.find("its iso has multiple drivers"),
+            std::string::npos);
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesInitializesSkippedPOReportFilesOnlyOnce) {

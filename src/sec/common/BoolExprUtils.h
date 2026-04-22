@@ -27,6 +27,15 @@ BoolExpr* substituteBoolExprVariables(
     BoolExpr* root,
     const std::unordered_map<size_t, bool>& assignments);
 
+BoolExpr* substituteBoolExprSubexpressions(
+    BoolExpr* root,
+    const std::unordered_map<size_t, BoolExpr*>& replacements,
+    std::unordered_map<BoolExpr*, BoolExpr*>& memo);
+
+BoolExpr* substituteBoolExprSubexpressions(
+    BoolExpr* root,
+    const std::unordered_map<size_t, BoolExpr*>& replacements);
+
 inline BoolExpr* makeEqualityExpr(BoolExpr* lhs, BoolExpr* rhs) {
   return BoolExpr::Not(BoolExpr::Xor(lhs, rhs));
 }

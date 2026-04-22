@@ -22,6 +22,7 @@ class SNLLogicCloud {
         PIs_(PIs), POs_(POs) {
   }
   void compute();
+  static void resetAnalysisCaches();
   static void flushSkippedPOReports();
   bool isInput(naja::DNL::DNLID inputTerm);
   bool isOutput(naja::DNL::DNLID inputTerm);

@@ -132,4 +132,64 @@ BoolExpr* substituteBoolExprVariables(
   return substituteBoolExprVariables(root, assignments, memo);
 }
 
+BoolExpr* substituteBoolExprSubexpressions(
+    BoolExpr* root,
+    const std::unordered_map<size_t, BoolExpr*>& replacements,
+    std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
+  if (root == nullptr) {
+    return nullptr;
+  }
+
+  if (auto it = memo.find(root); it != memo.end()) {
+    return it->second;
+  }
+
+  BoolExpr* substituted = nullptr;
+  switch (root->getOp()) {
+    case Op::VAR: {
+      const size_t id = root->getId();
+      if (id < 2) {
+        substituted = BoolExpr::Var(id);
+        break;
+      }
+      auto it = replacements.find(id);
+      substituted = it == replacements.end() ? BoolExpr::Var(id) : it->second;
+      break;
+    }
+    case Op::NOT:
+      substituted = BoolExpr::Not(
+          substituteBoolExprSubexpressions(root->getLeft(), replacements, memo));
+      break;
+    case Op::AND:
+      substituted = BoolExpr::And(
+          substituteBoolExprSubexpressions(root->getLeft(), replacements, memo),
+          substituteBoolExprSubexpressions(root->getRight(), replacements, memo));
+      break;
+    case Op::OR:
+      substituted = BoolExpr::Or(
+          substituteBoolExprSubexpressions(root->getLeft(), replacements, memo),
+          substituteBoolExprSubexpressions(root->getRight(), replacements, memo));
+      break;
+    case Op::XOR:
+      substituted = BoolExpr::Xor(
+          substituteBoolExprSubexpressions(root->getLeft(), replacements, memo),
+          substituteBoolExprSubexpressions(root->getRight(), replacements, memo));
+      break;
+    case Op::NONE:
+    default:
+      throw std::runtime_error(
+          "Unsupported BoolExpr operator in subexpression substitution");
+  }
+
+  memo.emplace(root, substituted);
+  return substituted;
+}
+
+BoolExpr* substituteBoolExprSubexpressions(
+    BoolExpr* root,
+    const std::unordered_map<size_t, BoolExpr*>& replacements) {
+  std::unordered_map<BoolExpr*, BoolExpr*> memo;
+  return substituteBoolExprSubexpressions(root, replacements, memo);
+}
+
 }  // namespace KEPLER_FORMAL::SEC

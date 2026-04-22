@@ -694,6 +694,10 @@ void BuildPrimaryOutputClauses::initVarNames() {
 void BuildPrimaryOutputClauses::build() {
   //printf("Building primary output clauses\n");
   naja::DNL::get();
+  // The logic-cloud caches are keyed by live DNL/model objects. Clear them
+  // for each build so later extractions never reuse entries from a previous
+  // universe or destroyed DNL instance.
+  SNLLogicCloud::resetAnalysisCaches();
   POs_.clear();
   POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
   initVarNames();

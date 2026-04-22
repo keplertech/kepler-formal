@@ -4,8 +4,8 @@
 #include "model/SequentialDesignModel.h"
 
 #include <algorithm>
+#include <boost/multiprecision/cpp_int.hpp>
 #include <cctype>
-#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <limits>
@@ -17,13 +17,20 @@
 #include <unordered_map>
 
 #include "DNL.h"
+#include "NLDB0.h"
 #include "NLUniverse.h"
+#include "SNLBitTerm.h"
+#include "SNLBusTerm.h"
+#include "SNLBusTermBit.h"
 #include "SNLDesignModeling.h"
+#include "SNLInstance.h"
 #include "SNLPath.h"
+#include "SNLScalarTerm.h"
 #include "../../clauses/SNLLogicCloud.h"
 #include "../../clauses/Tree2BoolExpr.h"
 #include "../../config/Config.h"
 #include "common/BoolExprUtils.h"
+#include "common/SecDiag.h"
 #include "../../strategies/miter/BuildPrimaryOutputClauses.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -66,6 +73,31 @@ struct InstanceBoundaryInfo {
   std::vector<BoundaryObservedTerm> observedTerms;
 };
 
+struct PendingMemoryInstance {
+  std::string instancePath;
+  std::vector<SignalKey> rdataKeys;
+  std::vector<naja::DNL::DNLID> rdataTermIDs;
+  std::vector<naja::DNL::DNLID> raddrTermIDs;
+  std::vector<naja::DNL::DNLID> waddrTermIDs;
+  std::vector<naja::DNL::DNLID> wdataTermIDs;
+  std::vector<naja::DNL::DNLID> weTermIDs;
+  std::optional<naja::DNL::DNLID> rstTermID;
+  std::vector<SignalKey> cellKeys;
+  std::vector<std::optional<bool>> initBits;
+  size_t width = 0;
+  size_t depth = 0;
+  size_t abits = 0;
+  size_t readPorts = 0;
+  size_t writePorts = 0;
+  bool resetEnabled = false;
+  bool resetAsync = false;
+  bool resetActiveLow = false;
+};
+
+std::optional<naja::DNL::DNLID> resolveObservedForwardingSourceTerm(
+    naja::DNL::DNLFull* dnl,
+    naja::DNL::DNLID termID);
+
 struct BuiltObservedExpr {
   BoolExpr* expr = nullptr;
   std::optional<ConnectivitySkipInfo> connectivitySkip;
@@ -75,6 +107,8 @@ struct BuiltObservedExpr {
 using BuilderSkippedOutputInfo = KEPLER_FORMAL::BuildPrimaryOutputClauses::SkippedOutputInfo;
 using BuilderSkippedOutputReason =
     KEPLER_FORMAL::BuildPrimaryOutputClauses::SkippedOutputReason;
+
+using BigInt = boost::multiprecision::cpp_int;
 
 std::string describeConnectivitySkipOrigin(ConnectivitySkipOrigin origin) {
   switch (origin) {
@@ -102,7 +136,7 @@ std::optional<ConnectivitySkipInfo> getConnectivitySkipInfo(
 
 BuiltObservedExpr buildObservedExprForTerm(
     naja::DNL::DNLID termID,
-    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
+    std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
     const std::vector<naja::DNL::DNLID>& inputTerms,
     const std::vector<naja::DNL::DNLID>& outputTerms,
     const std::vector<size_t>& termDNLID2varID) {
@@ -150,6 +184,7 @@ BuiltObservedExpr buildObservedExprForTerm(
       cloud.getTruthTable().finalize();
       localResult.expr =
           KEPLER_FORMAL::Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID);
+      outputExprByTerm.emplace(outputTermID, localResult.expr);
       cloud.destroy();
       return localResult;
     }
@@ -209,6 +244,11 @@ BuiltObservedExpr buildObservedExprForTerm(
     }
 
     const auto& term = dnl->getDNLTerminalFromID(currentTermID);
+    if (const auto forwardedSourceTerm =
+            resolveObservedForwardingSourceTerm(dnl, currentTermID);
+        forwardedSourceTerm.has_value() && *forwardedSourceTerm != currentTermID) {
+      return self(self, *forwardedSourceTerm);
+    }
     if (term.getSnlBitTerm()->getDirection() !=
         naja::NL::SNLBitTerm::Direction::Output) {
       if (term.getIsoID() == naja::DNL::DNLID_MAX) {
@@ -259,6 +299,119 @@ std::unordered_set<naja::DNL::DNLID> collectRequiredSequentialOutputTerms(
     }
   }
   return requiredTerms;
+}
+
+std::unordered_set<naja::DNL::DNLID> collectRequiredMemoryDependencyTerms(
+    const std::vector<PendingMemoryInstance>& pendingMemoryInstances) {
+  std::unordered_set<naja::DNL::DNLID> requiredTerms;
+  for (const auto& pendingMemory : pendingMemoryInstances) {
+    requiredTerms.insert(
+        pendingMemory.raddrTermIDs.begin(), pendingMemory.raddrTermIDs.end());
+    requiredTerms.insert(
+        pendingMemory.waddrTermIDs.begin(), pendingMemory.waddrTermIDs.end());
+    requiredTerms.insert(
+        pendingMemory.wdataTermIDs.begin(), pendingMemory.wdataTermIDs.end());
+    requiredTerms.insert(
+        pendingMemory.weTermIDs.begin(), pendingMemory.weTermIDs.end());
+    if (pendingMemory.rstTermID.has_value()) {
+      requiredTerms.insert(*pendingMemory.rstTermID);
+    }
+  }
+  return requiredTerms;
+}
+
+bool canForwardObservedTerm(const naja::DNL::DNLTerminalFull& term) {
+  if (term.isNull()) {
+    return false;
+  }
+  if (term.isTopPort()) {
+    return true;
+  }
+  if (term.getSnlBitTerm()->getDirection() !=
+      naja::NL::SNLBitTerm::Direction::Output) {
+    return true;
+  }
+  return !term.getDNLInstance().isLeaf();
+}
+
+std::vector<naja::DNL::DNLID> getObservedForwardingDrivers(
+    naja::DNL::DNLFull* dnl,
+    const naja::DNL::DNLTerminalFull& term) {
+  std::vector<naja::DNL::DNLID> drivers;
+  if (dnl == nullptr || term.isNull() ||
+      term.getIsoID() == naja::DNL::DNLID_MAX) {
+    return drivers;
+  }
+
+  const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+  drivers.assign(iso.getDrivers().begin(), iso.getDrivers().end());
+  return drivers;
+}
+
+std::optional<naja::DNL::DNLID> resolveObservedForwardingSourceTerm(
+    naja::DNL::DNLFull* dnl,
+    naja::DNL::DNLID termID) {
+  if (dnl == nullptr) {
+    return std::nullopt;
+  }
+
+  std::unordered_set<naja::DNL::DNLID> visitedTerms;
+  auto resolveRecursively =
+      [&](auto&& self,
+          naja::DNL::DNLID currentTermID) -> std::optional<naja::DNL::DNLID> {
+    if (!visitedTerms.insert(currentTermID).second) {
+      return std::nullopt;
+    }
+
+    const auto& term = dnl->getDNLTerminalFromID(currentTermID);
+    if (term.isNull()) {
+      return std::nullopt;
+    }
+    if (!canForwardObservedTerm(term)) {
+      return currentTermID;
+    }
+
+    const auto drivers = getObservedForwardingDrivers(dnl, term);
+    if (drivers.empty()) {
+      return std::nullopt;
+    }
+    if (drivers.size() == 1) {
+      if (drivers.front() == currentTermID) {
+        return currentTermID;
+      }
+      return self(self, drivers.front());
+    }
+
+    std::optional<naja::DNL::DNLID> uniqueResolvedDriver;
+    for (const auto driverID : drivers) {
+      const auto resolvedDriver = self(self, driverID);
+      if (!resolvedDriver.has_value()) {
+        return std::nullopt;
+      }
+      if (!uniqueResolvedDriver.has_value()) {
+        uniqueResolvedDriver = resolvedDriver;
+        continue;
+      }
+      if (*uniqueResolvedDriver != *resolvedDriver) {
+        return std::nullopt;
+      }
+    }
+    return uniqueResolvedDriver;
+  };
+
+  return resolveRecursively(resolveRecursively, termID);
+}
+
+std::optional<naja::DNL::DNLID> resolveObservedOutputSourceTerm(
+    naja::DNL::DNLFull* dnl,
+    naja::DNL::DNLID observedTermID) {
+  const auto resolvedSourceTerm =
+      resolveObservedForwardingSourceTerm(dnl, observedTermID);
+  if (!resolvedSourceTerm.has_value() ||
+      *resolvedSourceTerm == observedTermID) {
+    return std::nullopt;
+  }
+  return resolvedSourceTerm;
 }
 
 std::vector<naja::DNL::DNLID> selectRequiredBuilderOutputs(
@@ -315,23 +468,23 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
   builder.setOutputs(filteredOutputs);
 
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) %s begin outputs=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         topName,
+        ") ",
         phaseLabel,
+        " begin outputs=",
         filteredOutputs.size());
-    fflush(stderr);
   }
   builder.build();
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) %s end outputs=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         topName,
+        ") ",
         phaseLabel,
+        " end outputs=",
         filteredOutputs.size());
-    fflush(stderr);
   }
 
   result.inputs = builder.getInputs();
@@ -408,13 +561,174 @@ SignalKey getTerminalPathKey(const naja::DNL::DNLTerminalFull& terminal) {
 
 std::string getTerminalDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
   std::ostringstream oss;
-  const auto pathNames = terminal.getDNLInstance().getPath().getPathNames();
-  for (const auto& name : pathNames) {
-    oss << name.getString() << ".";
+  const auto instance = terminal.getDNLInstance();
+  if (!terminal.isTopPort() && !instance.isNull() && !instance.isTop()) {
+    const auto pathNames = instance.getPath().getPathNames();
+    for (const auto& name : pathNames) {
+      oss << name.getString() << ".";
+    }
   }
   oss << terminal.getSnlBitTerm()->getName().getString() << "["
       << terminal.getSnlBitTerm()->getBit() << "]";
   return oss.str();
+}
+
+SignalKey makeSyntheticInstanceBitKey(
+    const naja::DNL::DNLInstanceFull& instance,
+    const std::string& baseName,
+    size_t bit) {
+  SignalKey key;
+  const auto pathNames = instance.getPath().getPathNames();
+  key.first.reserve(pathNames.size() + 1);
+  for (const auto& name : pathNames) {
+    key.first.push_back(stableSignalKeyNameID(name.getString()));
+  }
+  key.first.push_back(stableSignalKeyNameID(baseName));
+  key.second.push_back(
+      static_cast<naja::NL::NLID::DesignObjectID>(bit));
+  return key;
+}
+
+std::string makeSyntheticInstanceBitDisplayName(
+    const naja::DNL::DNLInstanceFull& instance,
+    const std::string& baseName,
+    size_t bit) {
+  std::ostringstream oss;
+  const auto pathNames = instance.getPath().getPathNames();
+  for (const auto& name : pathNames) {
+    oss << name.getString() << ".";
+  }
+  oss << baseName << "[" << bit << "]";
+  return oss.str();
+}
+
+std::string getEffectiveParameterValue(
+    const naja::NL::SNLInstance* instance,
+    const char* name) {
+  if (instance == nullptr) {
+    throw std::runtime_error(
+        std::string("Null instance while reading parameter `") + name + "`");
+  }
+  if (auto* instParameter = instance->getInstParameter(naja::NL::NLName(name))) {
+    return instParameter->getValue();
+  }
+  auto* parameter = instance->getModel()->getParameter(naja::NL::NLName(name));
+  if (parameter == nullptr) {
+    throw std::runtime_error(
+        "Missing memory parameter `" + std::string(name) + "` on instance `" +
+        instance->getName().getString() + "`");
+  }
+  return parameter->getValue();
+}
+
+std::string stripNumericDecorators(std::string value) {
+  value.erase(
+      std::remove_if(
+          value.begin(),
+          value.end(),
+          [](unsigned char ch) { return std::isspace(ch) || ch == '_'; }),
+      value.end());
+  return value;
+}
+
+std::vector<std::optional<bool>> parseVerilogLiteralBits(
+    const std::string& rawValue,
+    size_t requiredBits) {
+  std::vector<std::optional<bool>> bits(requiredBits, false);
+  if (requiredBits == 0) {
+    return bits;
+  }
+
+  std::string value = stripNumericDecorators(rawValue);
+  if (value.empty()) {
+    return bits;
+  }
+
+  auto fillFromBigInt = [&](const BigInt& intValue) {
+    for (size_t bit = 0; bit < requiredBits; ++bit) {
+      bits[bit] = static_cast<bool>((intValue >> bit) & 1);
+    }
+  };
+
+  const auto quote = value.find('\'');
+  if (quote == std::string::npos) {
+    fillFromBigInt(BigInt(value));
+    return bits;
+  }
+
+  if (quote + 1 >= value.size()) {
+    return bits;
+  }
+  const char base = static_cast<char>(std::tolower(static_cast<unsigned char>(value[quote + 1])));
+  std::string digits = value.substr(quote + 2);
+  if (digits.empty()) {
+    return bits;
+  }
+
+  if (base == 'b') {
+    for (size_t index = 0; index < std::min(requiredBits, digits.size()); ++index) {
+      const char digit = static_cast<char>(
+          std::tolower(static_cast<unsigned char>(digits[digits.size() - 1 - index])));
+      if (digit == '0') {
+        bits[index] = false;
+      } else if (digit == '1') {
+        bits[index] = true;
+      } else {
+        bits[index] = std::nullopt;
+      }
+    }
+    return bits;
+  }
+
+  const auto parseDigit = [&](char digit) -> int {
+    if (digit >= '0' && digit <= '9') {
+      return digit - '0';
+    }
+    if (digit >= 'a' && digit <= 'f') {
+      return 10 + digit - 'a';
+    }
+    return -1;
+  };
+
+  int radix = 10;
+  switch (base) {
+    case 'h':
+      radix = 16;
+      break;
+    case 'o':
+      radix = 8;
+      break;
+    case 'd':
+      radix = 10;
+      break;
+    default:
+      return bits;
+  }
+
+  BigInt intValue = 0;
+  for (char digit : digits) {
+    digit = static_cast<char>(std::tolower(static_cast<unsigned char>(digit)));
+    const int valueDigit = parseDigit(digit);
+    if (valueDigit < 0 || valueDigit >= radix) {
+      return bits;
+    }
+    intValue *= radix;
+    intValue += valueDigit;
+  }
+  fillFromBigInt(intValue);
+  return bits;
+}
+
+std::vector<std::optional<bool>> getMemoryInitBits(
+    const naja::NL::SNLInstance* instance,
+    size_t width,
+    size_t depth) {
+  const size_t totalBits = width * depth;
+  if (totalBits == 0) {
+    return {};
+  }
+  return parseVerilogLiteralBits(
+      getEffectiveParameterValue(instance, "INIT"), totalBits);
 }
 
 std::string normalizePinName(const std::string& name) {
@@ -657,6 +971,45 @@ std::optional<bool> detectInitialStateValue(const PendingTransition& pending) {
   return std::nullopt;
 }
 
+BoolExpr* makeBoolConstant(bool value) {
+  return value ? BoolExpr::createTrue() : BoolExpr::createFalse();
+}
+
+BoolExpr* buildAddressMatchExpr(const std::vector<BoolExpr*>& addrBits, size_t value) {
+  BoolExpr* match = BoolExpr::createTrue();
+  for (size_t bit = 0; bit < addrBits.size(); ++bit) {
+    BoolExpr* bitExpr = addrBits[bit];
+    const bool expected = ((value >> bit) & 1u) != 0;
+    match = BoolExpr::And(
+        match,
+        expected ? bitExpr : BoolExpr::Not(bitExpr));
+  }
+  return match;
+}
+
+BoolExpr* buildIfThenElse(BoolExpr* condition, BoolExpr* whenTrue, BoolExpr* whenFalse) {
+  return BoolExpr::Or(
+      BoolExpr::And(condition, whenTrue),
+      BoolExpr::And(BoolExpr::Not(condition), whenFalse));
+}
+
+std::optional<ConnectivitySkipInfo> getMemoryPortSkipInfo(
+    naja::DNL::DNLID termID,
+    const std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>& skippedOutputsByTerm,
+    const std::string& pinName) {
+  const auto skippedIt = skippedOutputsByTerm.find(termID);
+  if (skippedIt == skippedOutputsByTerm.end()) {
+    return std::nullopt;
+  }
+  auto skipInfo = getConnectivitySkipInfo(skippedIt->second);
+  if (!skipInfo.has_value()) {
+    return std::nullopt;
+  }
+  skipInfo->detail =
+      "Memory pin `" + pinName + "` was skipped because " + skippedIt->second.detail;
+  return skipInfo;
+}
+
 bool isConstBoolExpr(BoolExpr* expr, bool value) {
   return expr != nullptr && expr->getOp() == Op::VAR &&
          expr->getId() == static_cast<size_t>(value ? 1 : 0);
@@ -834,24 +1187,24 @@ void inferSynthesizedResetInitialStateValues(SequentialDesignModel& model) {
   constexpr size_t kMaxResetSpecializedExprNodesForInitInference = 50000;
   const size_t resetSpecializedExprNodes =
       countUniqueExprNodes(resetSpecializedNextStateByKey);
-  if (std::getenv("KEPLER_SEC_DIAG") != nullptr) {
-    fprintf(
-        stderr,
-        "SEC diag: reset-specialized next-state nodes=%zu limit=%zu states=%zu\n",
+  if (isSecDiagEnabled()) {
+    emitSecDiag(
+        "SEC diag: reset-specialized next-state nodes=",
         resetSpecializedExprNodes,
+        " limit=",
         kMaxResetSpecializedExprNodesForInitInference,
+        " states=",
         model.stateBits.size());
-    fflush(stderr);
   }
   if (resetSpecializedExprNodes >
       kMaxResetSpecializedExprNodesForInitInference) {
-    if (std::getenv("KEPLER_SEC_DIAG") != nullptr) {
-      fprintf(
-          stderr,
-          "SEC diag: skip synthesized init inference for %zu reset-specialized nodes (limit=%zu)\n",
+    if (isSecDiagEnabled()) {
+      emitSecDiag(
+          "SEC diag: skip synthesized init inference for ",
           resetSpecializedExprNodes,
-          kMaxResetSpecializedExprNodesForInitInference);
-      fflush(stderr);
+          " reset-specialized nodes (limit=",
+          kMaxResetSpecializedExprNodesForInitInference,
+          ")");
     }
     return;
   }
@@ -994,7 +1347,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
 
   SequentialDesignModel model;
   auto* previousTop = universe->getTopDesign();
-  const bool secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr;
+  const bool secDiagEnabled = isSecDiagEnabled();
 
   naja::DNL::destroy();
   universe->setTopDesign(top);
@@ -1003,20 +1356,20 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   // Reuse the existing miter frontend to discover the relevant boundary
   // signals before we ask it to build Boolean formulas.
   if (secDiagEnabled) {
-    fprintf(
-        stderr, "SEC diag: extract(%s) collect begin\n",
-        top->getName().getString().c_str());
-    fflush(stderr);
+    emitSecDiag(
+        "SEC diag: extract(",
+        top->getName().getString().c_str(),
+        ") collect begin");
   }
   builder.collect();
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) collect end inputs=%zu outputs=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") collect end inputs=",
         builder.getInputs().size(),
+        " outputs=",
         builder.getOutputs().size());
-    fflush(stderr);
   }
 
   auto* dnl = naja::DNL::get();
@@ -1032,6 +1385,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   std::unordered_set<SignalKey, SignalKeyHash> abstractedBoundaryObservedKeys;
   std::unordered_set<SignalKey, SignalKeyHash> unsupportedStateBits;
   std::vector<PendingTransition> pendingTransitions;
+  std::vector<PendingMemoryInstance> pendingMemoryInstances;
   std::vector<InstanceBoundaryInfo> instanceBoundaryInfos;
   const bool abstractUncomputableSequentialBoundaries =
       KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary();
@@ -1043,6 +1397,17 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     const auto& term = dnl->getDNLTerminalFromID(termID);
     if (term.getSnlBitTerm()->getDirection() == naja::NL::SNLBitTerm::Direction::Input) {
       continue;
+    }
+    if (secDiagEnabled) {
+      static size_t loggedTopBoundaryTerms = 0;
+      if (loggedTopBoundaryTerms < 8) {
+        ++loggedTopBoundaryTerms;
+        emitSecDiag(
+            "SEC diag: top-boundary term=",
+            getTerminalDisplayName(term),
+            " dir=",
+            term.getSnlBitTerm()->getDirection().getString());
+      }
     }
     SignalKey key = getTerminalPathKey(term);
     topOutputKeyByTerm.emplace(termID, key);
@@ -1076,6 +1441,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   // Boolean expressions have been built.
   for (auto leafID : dnl->getLeaves()) {
     const auto& instance = dnl->getDNLInstanceFromID(leafID);
+    std::unordered_map<const naja::NL::SNLBitTerm*, naja::DNL::DNLID> termIDByBitTerm;
     PendingPinMap pinTermIDs;
     std::vector<StateOutputTerm> stateOutputs;
     for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
@@ -1083,6 +1449,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
          termID <= instance.getTermIndexes().second;
          ++termID) {
       const auto& term = dnl->getDNLTerminalFromID(termID);
+      termIDByBitTerm.emplace(term.getSnlBitTerm(), termID);
       if (isSequentialStateOutput(term) &&
           term.getSnlBitTerm()->getDirection() !=
               naja::NL::SNLBitTerm::Direction::Input) {
@@ -1096,6 +1463,129 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
               naja::NL::SNLBitTerm::Direction::Output) {
         pinTermIDs[normalizePinName(term.getSnlBitTerm()->getName().getString())]
             .push_back({termID, term.getSnlBitTerm()->getBit()});
+      }
+    }
+
+    const auto* snlInstance = instance.getSNLInstance();
+    const auto* instanceModel = snlInstance->getModel();
+    if (secDiagEnabled &&
+        instance.getFullPath().find("_q_mem") != std::string::npos) {
+      emitSecDiag(
+          "SEC diag: memory-candidate instance=",
+          instance.getFullPath(),
+          " model=",
+          instanceModel && !instanceModel->isUnnamed()
+              ? instanceModel->getName().getString()
+              : std::string("<unnamed>"),
+          " library=",
+          instanceModel && instanceModel->getLibrary()
+              ? instanceModel->getLibrary()->getName().getString()
+              : std::string("<null>"),
+          " isMemory=",
+          naja::NL::NLDB0::isMemory(instanceModel));
+    }
+    if (naja::NL::NLDB0::isMemory(instanceModel)) {
+      try {
+        PendingMemoryInstance pendingMemory;
+        pendingMemory.instancePath = instance.getFullPath();
+        const auto signature = naja::NL::NLDB0::getMemorySignature(snlInstance);
+        pendingMemory.width = signature.width;
+        pendingMemory.depth = signature.depth;
+        pendingMemory.abits = signature.abits;
+        pendingMemory.readPorts = signature.readPorts;
+        pendingMemory.writePorts = signature.writePorts;
+        pendingMemory.resetEnabled = signature.resetMode !=
+                                     naja::NL::NLDB0::MemoryResetMode::None;
+        pendingMemory.resetAsync = signature.resetMode ==
+                                       naja::NL::NLDB0::MemoryResetMode::AsyncLow ||
+                                   signature.resetMode ==
+                                       naja::NL::NLDB0::MemoryResetMode::AsyncHigh;
+        pendingMemory.resetActiveLow = signature.resetMode ==
+                                           naja::NL::NLDB0::MemoryResetMode::AsyncLow ||
+                                       signature.resetMode ==
+                                           naja::NL::NLDB0::MemoryResetMode::SyncLow;
+        pendingMemory.initBits =
+            getMemoryInitBits(snlInstance, pendingMemory.width, pendingMemory.depth);
+
+        const auto lookupTermID =
+            [&](const naja::NL::SNLBitTerm* bitTerm,
+                const char* pinName) -> naja::DNL::DNLID {
+          const auto termIt = termIDByBitTerm.find(bitTerm);
+          if (termIt == termIDByBitTerm.end()) {
+            throw std::runtime_error(
+                "Unable to resolve DNL term for memory pin `" + std::string(pinName) +
+                "`");
+          }
+          return termIt->second;
+        };
+
+        auto* rdata = naja::NL::NLDB0::getMemoryReadData(instanceModel);
+        auto* raddr = naja::NL::NLDB0::getMemoryReadAddress(instanceModel);
+        auto* waddr = naja::NL::NLDB0::getMemoryWriteAddress(instanceModel);
+        auto* wdata = naja::NL::NLDB0::getMemoryWriteData(instanceModel);
+        auto* we = naja::NL::NLDB0::getMemoryWriteEnable(instanceModel);
+        auto* rst = naja::NL::NLDB0::getMemoryReset(instanceModel);
+
+        if (rdata == nullptr || raddr == nullptr || waddr == nullptr || wdata == nullptr ||
+            we == nullptr || (pendingMemory.resetEnabled && rst == nullptr)) {
+          throw std::runtime_error("Memory primitive is missing required interface terms");
+        }
+
+        for (size_t bit = 0; bit < rdata->getWidth(); ++bit) {
+          auto* bitTerm = static_cast<naja::NL::SNLBitTerm*>(
+              rdata->getBit(static_cast<naja::NL::NLID::Bit>(bit)));
+          const auto termID = lookupTermID(bitTerm, "RDATA");
+          pendingMemory.rdataTermIDs.push_back(termID);
+          pendingMemory.rdataKeys.push_back(inputKeyByTerm.at(termID));
+        }
+        for (size_t bit = 0; bit < raddr->getWidth(); ++bit) {
+          auto* bitTerm = static_cast<naja::NL::SNLBitTerm*>(
+              raddr->getBit(static_cast<naja::NL::NLID::Bit>(bit)));
+          pendingMemory.raddrTermIDs.push_back(lookupTermID(bitTerm, "RADDR"));
+        }
+        for (size_t bit = 0; bit < waddr->getWidth(); ++bit) {
+          auto* bitTerm = static_cast<naja::NL::SNLBitTerm*>(
+              waddr->getBit(static_cast<naja::NL::NLID::Bit>(bit)));
+          pendingMemory.waddrTermIDs.push_back(lookupTermID(bitTerm, "WADDR"));
+        }
+        for (size_t bit = 0; bit < wdata->getWidth(); ++bit) {
+          auto* bitTerm = static_cast<naja::NL::SNLBitTerm*>(
+              wdata->getBit(static_cast<naja::NL::NLID::Bit>(bit)));
+          pendingMemory.wdataTermIDs.push_back(lookupTermID(bitTerm, "WDATA"));
+        }
+        for (size_t bit = 0; bit < we->getWidth(); ++bit) {
+          auto* bitTerm = static_cast<naja::NL::SNLBitTerm*>(
+              we->getBit(static_cast<naja::NL::NLID::Bit>(bit)));
+          pendingMemory.weTermIDs.push_back(lookupTermID(bitTerm, "WE"));
+        }
+        if (pendingMemory.resetEnabled) {
+          pendingMemory.rstTermID = lookupTermID(rst, "RST");
+        }
+
+        pendingMemory.cellKeys.reserve(pendingMemory.depth * pendingMemory.width);
+        for (size_t addr = 0; addr < pendingMemory.depth; ++addr) {
+          for (size_t bit = 0; bit < pendingMemory.width; ++bit) {
+            const std::string baseName =
+                "SEC_MEM_CELL_" + std::to_string(addr);
+            const auto key = makeSyntheticInstanceBitKey(instance, baseName, bit);
+            pendingMemory.cellKeys.push_back(key);
+            model.displayNameByKey.try_emplace(
+                key, makeSyntheticInstanceBitDisplayName(instance, baseName, bit));
+          }
+        }
+
+        pendingMemoryInstances.push_back(std::move(pendingMemory));
+        if (secDiagEnabled) {
+          emitSecDiag(
+              "SEC diag: registered memory model for instance=",
+              instance.getFullPath());
+        }
+        continue;
+      } catch (const std::exception& e) {
+        model.unsupportedReasons.push_back(
+            "Unsupported memory primitive in `" + instance.getFullPath() + "`: " +
+            e.what());
+        continue;
       }
     }
 
@@ -1142,6 +1632,13 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     auto abstractUnsupportedInstanceAsBoundary =
         [&](const std::string& reason) {
           const auto& info = instanceBoundaryInfos[boundaryInfoIndex];
+          if (secDiagEnabled) {
+            emitSecDiag(
+                "SEC diag: abstracting instance as boundary path=",
+                info.instancePath,
+                " reason=",
+                reason);
+          }
           model.abstractedSequentialBoundaries.push_back(
               "Abstracted uncomputable sequential instance `" +
               info.instancePath + "` as a SEC boundary: " + reason);
@@ -1253,63 +1750,75 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       universe->setTopDesign(previousTop);
     }
     if (secDiagEnabled) {
-      fprintf(
-          stderr,
-          "SEC diag: extract(%s) early unsupported exit before build\n",
-          top->getName().getString().c_str());
-      fflush(stderr);
+      emitSecDiag(
+          "SEC diag: extract(",
+          top->getName().getString().c_str(),
+          ") early unsupported exit before build");
     }
     return model;
   }
 
-  std::vector<naja::DNL::DNLID> initialObservedTerms;
-  initialObservedTerms.reserve(
-      topOutputKeyByTerm.size() + abstractedBoundaryObservedTerms.size());
-  std::unordered_set<naja::DNL::DNLID> initialObservedTermSet;
+  const auto requiredSequentialOutputTerms =
+      collectRequiredSequentialOutputTerms(pendingTransitions);
+  const auto requiredMemoryDependencyTerms =
+      collectRequiredMemoryDependencyTerms(pendingMemoryInstances);
+  std::unordered_map<naja::DNL::DNLID, naja::DNL::DNLID> observedSourceTermByObservedTerm;
+  observedSourceTermByObservedTerm.reserve(topOutputKeyByTerm.size());
   for (const auto& [termID, _] : topOutputKeyByTerm) {
-    if (initialObservedTermSet.insert(termID).second) {
-      initialObservedTerms.push_back(termID);
+    const auto sourceTermID = resolveObservedOutputSourceTerm(dnl, termID);
+    if (sourceTermID.has_value()) {
+      observedSourceTermByObservedTerm.emplace(termID, *sourceTermID);
     }
+  }
+  std::unordered_set<naja::DNL::DNLID> requiredObservedBuilderTerms;
+  for (const auto& [termID, _] : topOutputKeyByTerm) {
+    const auto sourceIt = observedSourceTermByObservedTerm.find(termID);
+    if (sourceIt == observedSourceTermByObservedTerm.end()) {
+      continue;
+    }
+    requiredObservedBuilderTerms.insert(sourceIt->second);
   }
   for (const auto& [termID, _] : abstractedBoundaryObservedTerms) {
-    if (initialObservedTermSet.insert(termID).second) {
-      initialObservedTerms.push_back(termID);
-    }
+    requiredObservedBuilderTerms.insert(termID);
   }
-  std::unordered_set<naja::DNL::DNLID> collectedOutputSet(
-      builder.getOutputs().begin(), builder.getOutputs().end());
-  std::vector<naja::DNL::DNLID> initialMaterializedOutputs;
-  initialMaterializedOutputs.reserve(initialObservedTerms.size());
-  for (const auto outputTermID : initialObservedTerms) {
-    if (collectedOutputSet.find(outputTermID) != collectedOutputSet.end()) {
-      initialMaterializedOutputs.push_back(outputTermID);
-    }
-  }
+  std::unordered_set<naja::DNL::DNLID> requiredDependencyTerms =
+      requiredSequentialOutputTerms;
+  requiredDependencyTerms.insert(
+      requiredMemoryDependencyTerms.begin(), requiredMemoryDependencyTerms.end());
+
+  std::vector<naja::DNL::DNLID> initialMaterializedOutputs =
+      selectRequiredBuilderOutputs(
+          builder.getOutputs(),
+          requiredObservedBuilderTerms,
+          requiredDependencyTerms,
+          prunedBuilderOutputTerms);
+
   builder.setOutputs(initialMaterializedOutputs);
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) abstracted_boundaries=%zu pruned_builder_outputs=%zu initial_observed_outputs=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") abstracted_boundaries=",
         model.abstractedSequentialBoundaries.size(),
+        " pruned_builder_outputs=",
         prunedBuilderOutputTerms.size(),
+        " initial_observed_outputs=",
         initialMaterializedOutputs.size());
-    fflush(stderr);
   }
 
   // Materialize the combinational BoolExpr DAGs for the design boundary.
   if (secDiagEnabled) {
-    fprintf(
-        stderr, "SEC diag: extract(%s) build begin\n",
-        top->getName().getString().c_str());
-    fflush(stderr);
+    emitSecDiag(
+        "SEC diag: extract(",
+        top->getName().getString().c_str(),
+        ") build begin");
   }
   builder.build();
   if (secDiagEnabled) {
-    fprintf(
-        stderr, "SEC diag: extract(%s) build end\n",
-        top->getName().getString().c_str());
-    fflush(stderr);
+    emitSecDiag(
+        "SEC diag: extract(",
+        top->getName().getString().c_str(),
+        ") build end");
   }
 
   for (const auto& key : abstractedBoundaryStateKeys) {
@@ -1321,15 +1830,17 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   model.stateBits.assign(stateBits.begin(), stateBits.end());
   model.allObservedOutputs.assign(allObservedOutputs.begin(), allObservedOutputs.end());
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) boundary normalized env=%zu state=%zu outputs=%zu pending=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") boundary normalized env=",
         model.environmentInputs.size(),
+        " state=",
         model.stateBits.size(),
+        " outputs=",
         model.allObservedOutputs.size(),
+        " pending=",
         pendingTransitions.size());
-    fflush(stderr);
   }
 
   const auto& termDNLID2varID = builder.getTermDNLID2VarID();
@@ -1350,12 +1861,11 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       model.inputVarByKey.emplace(keyIt->second, varID);
   }
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) mapped boundary vars=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") mapped boundary vars=",
         model.inputVarByKey.size());
-    fflush(stderr);
   }
 
   std::unordered_map<naja::DNL::DNLID, BoolExpr*> outputExprByTerm;
@@ -1371,6 +1881,247 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       continue;
     }
     outputExprByTerm.emplace(outputTerms[i], expr);
+  }
+
+  std::set<SignalKey, SignalKeyLess> modeledMemoryReadKeys;
+  if (!pendingMemoryInstances.empty()) {
+    size_t nextSyntheticVar = 2;
+    for (const auto varID : termDNLID2varID) {
+      if (varID >= 2) {
+        nextSyntheticVar = std::max(nextSyntheticVar, varID + 1);
+      }
+    }
+
+    std::unordered_map<size_t, BoolExpr*> memoryReadExprByVar;
+    auto markMemoryConnectivitySkip =
+        [&](const PendingMemoryInstance& pendingMemory,
+            const ConnectivitySkipInfo& skipInfo) {
+          for (const auto& key : pendingMemory.rdataKeys) {
+            model.connectivitySkipInfoByKey.emplace(key, skipInfo);
+          }
+        };
+
+    auto getOrBuildRequiredExpr =
+        [&](const PendingMemoryInstance& pendingMemory,
+            naja::DNL::DNLID termID,
+            const std::string& pinName,
+            BoolExpr*& exprOut,
+            bool& unsupportedMemory) -> std::optional<ConnectivitySkipInfo> {
+          if (const auto skipInfo =
+                  getMemoryPortSkipInfo(termID, skippedOutputsByTerm, pinName);
+              skipInfo.has_value()) {
+            return skipInfo;
+          }
+
+          if (const auto exprIt = outputExprByTerm.find(termID);
+              exprIt != outputExprByTerm.end()) {
+            exprOut = exprIt->second;
+            return std::nullopt;
+          }
+
+          const auto built = buildObservedExprForTerm(
+              termID,
+              outputExprByTerm,
+              builder.getInputs(),
+              builder.getOutputs(),
+              termDNLID2varID);
+          if (built.expr != nullptr) {
+            outputExprByTerm.emplace(termID, built.expr);
+            exprOut = built.expr;
+            return std::nullopt;
+          }
+          if (built.connectivitySkip.has_value()) {
+            return built.connectivitySkip;
+          }
+
+          model.unsupportedReasons.push_back(
+              "Unsupported memory primitive for `" + pendingMemory.instancePath +
+              "`: Missing combinational expression for memory pin `" + pinName +
+              "`: " + built.unsupportedReason);
+          unsupportedMemory = true;
+          return ConnectivitySkipInfo{};
+        };
+
+    for (const auto& pendingMemory : pendingMemoryInstances) {
+      bool unsupportedMemory = false;
+      auto unsupportedMarker = ConnectivitySkipInfo{};
+      std::vector<BoolExpr*> raddrExprs;
+      std::vector<BoolExpr*> waddrExprs;
+      std::vector<BoolExpr*> wdataExprs;
+      std::vector<BoolExpr*> weExprs;
+      raddrExprs.reserve(pendingMemory.raddrTermIDs.size());
+      waddrExprs.reserve(pendingMemory.waddrTermIDs.size());
+      wdataExprs.reserve(pendingMemory.wdataTermIDs.size());
+      weExprs.reserve(pendingMemory.weTermIDs.size());
+
+      auto collectExprs =
+          [&](const std::vector<naja::DNL::DNLID>& termIDs,
+              const char* pinName,
+              std::vector<BoolExpr*>& exprs) -> std::optional<ConnectivitySkipInfo> {
+            for (size_t bit = 0; bit < termIDs.size(); ++bit) {
+              BoolExpr* expr = nullptr;
+              const auto skipInfo = getOrBuildRequiredExpr(
+                  pendingMemory,
+                  termIDs[bit],
+                  std::string(pinName) + "[" + std::to_string(bit) + "]",
+                  expr,
+                  unsupportedMemory);
+              if (skipInfo.has_value()) {
+                if (expr == nullptr && !model.unsupportedReasons.empty() &&
+                    skipInfo->detail.empty()) {
+                  unsupportedMemory = true;
+                  return unsupportedMarker;
+                }
+                return skipInfo;
+              }
+              exprs.push_back(expr);
+            }
+            return std::nullopt;
+          };
+
+      if (const auto skipInfo = collectExprs(pendingMemory.raddrTermIDs, "RADDR", raddrExprs);
+          skipInfo.has_value()) {
+        if (!unsupportedMemory) {
+          markMemoryConnectivitySkip(pendingMemory, *skipInfo);
+        }
+        continue;
+      }
+      if (const auto skipInfo = collectExprs(pendingMemory.waddrTermIDs, "WADDR", waddrExprs);
+          skipInfo.has_value()) {
+        if (!unsupportedMemory) {
+          markMemoryConnectivitySkip(pendingMemory, *skipInfo);
+        }
+        continue;
+      }
+      if (const auto skipInfo = collectExprs(pendingMemory.wdataTermIDs, "WDATA", wdataExprs);
+          skipInfo.has_value()) {
+        if (!unsupportedMemory) {
+          markMemoryConnectivitySkip(pendingMemory, *skipInfo);
+        }
+        continue;
+      }
+      if (const auto skipInfo = collectExprs(pendingMemory.weTermIDs, "WE", weExprs);
+          skipInfo.has_value()) {
+        if (!unsupportedMemory) {
+          markMemoryConnectivitySkip(pendingMemory, *skipInfo);
+        }
+        continue;
+      }
+
+      BoolExpr* resetExpr = nullptr;
+      if (pendingMemory.rstTermID.has_value()) {
+        const auto skipInfo = getOrBuildRequiredExpr(
+            pendingMemory,
+            *pendingMemory.rstTermID,
+            "RST",
+            resetExpr,
+            unsupportedMemory);
+        if (skipInfo.has_value()) {
+          if (!unsupportedMemory) {
+            markMemoryConnectivitySkip(pendingMemory, *skipInfo);
+          }
+          continue;
+        }
+      }
+      if (unsupportedMemory) {
+        continue;
+      }
+
+      for (const auto& cellKey : pendingMemory.cellKeys) {
+        model.inputVarByKey.emplace(cellKey, nextSyntheticVar++);
+        stateBits.insert(cellKey);
+      }
+
+      std::vector<std::vector<BoolExpr*>> writeAddressMatches(
+          pendingMemory.writePorts, std::vector<BoolExpr*>(pendingMemory.depth, nullptr));
+      for (size_t wp = 0; wp < pendingMemory.writePorts; ++wp) {
+        std::vector<BoolExpr*> writeAddrBits;
+        writeAddrBits.reserve(pendingMemory.abits);
+        for (size_t bit = 0; bit < pendingMemory.abits; ++bit) {
+          writeAddrBits.push_back(waddrExprs[wp * pendingMemory.abits + bit]);
+        }
+        for (size_t addr = 0; addr < pendingMemory.depth; ++addr) {
+          writeAddressMatches[wp][addr] = buildAddressMatchExpr(writeAddrBits, addr);
+        }
+      }
+
+      std::vector<std::vector<BoolExpr*>> readAddressMatches(
+          pendingMemory.readPorts, std::vector<BoolExpr*>(pendingMemory.depth, nullptr));
+      for (size_t rp = 0; rp < pendingMemory.readPorts; ++rp) {
+        std::vector<BoolExpr*> readAddrBits;
+        readAddrBits.reserve(pendingMemory.abits);
+        for (size_t bit = 0; bit < pendingMemory.abits; ++bit) {
+          readAddrBits.push_back(raddrExprs[rp * pendingMemory.abits + bit]);
+        }
+        for (size_t addr = 0; addr < pendingMemory.depth; ++addr) {
+          readAddressMatches[rp][addr] = buildAddressMatchExpr(readAddrBits, addr);
+        }
+      }
+
+      const BoolExpr* resetActive = nullptr;
+      if (pendingMemory.resetEnabled && resetExpr != nullptr) {
+        resetActive = pendingMemory.resetActiveLow
+                          ? BoolExpr::Not(resetExpr)
+                          : resetExpr;
+      }
+
+      for (size_t addr = 0; addr < pendingMemory.depth; ++addr) {
+        for (size_t bit = 0; bit < pendingMemory.width; ++bit) {
+          const size_t flatIndex = addr * pendingMemory.width + bit;
+          const auto& cellKey = pendingMemory.cellKeys[flatIndex];
+          BoolExpr* nextExpr = BoolExpr::Var(model.inputVarByKey.at(cellKey));
+          for (size_t wp = pendingMemory.writePorts; wp-- > 0;) {
+            BoolExpr* writeCond = BoolExpr::And(
+                weExprs[wp], writeAddressMatches[wp][addr]);
+            nextExpr = buildIfThenElse(
+                writeCond,
+                wdataExprs[wp * pendingMemory.width + bit],
+                nextExpr);
+          }
+          if (resetActive != nullptr) {
+            const bool initBit = pendingMemory.initBits[flatIndex].value_or(false);
+            nextExpr = buildIfThenElse(
+                const_cast<BoolExpr*>(resetActive),
+                makeBoolConstant(initBit),
+                nextExpr);
+            if (pendingMemory.resetAsync &&
+                pendingMemory.initBits[flatIndex].has_value()) {
+              model.initialStateValueByKey.emplace(cellKey, initBit);
+            }
+          }
+          model.nextStateExprByStateKey.emplace(cellKey, nextExpr);
+        }
+      }
+
+      for (size_t rp = 0; rp < pendingMemory.readPorts; ++rp) {
+        for (size_t bit = 0; bit < pendingMemory.width; ++bit) {
+          BoolExpr* readExpr = BoolExpr::createFalse();
+          for (size_t addr = 0; addr < pendingMemory.depth; ++addr) {
+            const auto& cellKey = pendingMemory.cellKeys[addr * pendingMemory.width + bit];
+            readExpr = BoolExpr::Or(
+                readExpr,
+                BoolExpr::And(
+                    readAddressMatches[rp][addr],
+                    BoolExpr::Var(model.inputVarByKey.at(cellKey))));
+          }
+          const auto& rdataKey = pendingMemory.rdataKeys[rp * pendingMemory.width + bit];
+          memoryReadExprByVar.emplace(model.inputVarByKey.at(rdataKey), readExpr);
+          modeledMemoryReadKeys.insert(rdataKey);
+        }
+      }
+    }
+
+    if (!memoryReadExprByVar.empty()) {
+      std::unordered_map<BoolExpr*, BoolExpr*> substitutionMemo;
+      for (auto& [_, expr] : outputExprByTerm) {
+        expr = substituteBoolExprSubexpressions(expr, memoryReadExprByVar, substitutionMemo);
+      }
+    }
+    for (const auto& key : modeledMemoryReadKeys) {
+      stateBits.erase(key);
+      model.inputVarByKey.erase(key);
+      model.initialStateValueByKey.erase(key);
+    }
   }
 
   for (const auto& [termID, key] : abstractedBoundaryObservedTerms) {
@@ -1412,13 +2163,43 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   }
 
   for (const auto& [termID, key] : topOutputKeyByTerm) {
-    auto exprIt = outputExprByTerm.find(termID);
+    if (secDiagEnabled) {
+      static size_t loggedObservedTerms = 0;
+      if (loggedObservedTerms < 8) {
+        ++loggedObservedTerms;
+        const auto& term = dnl->getDNLTerminalFromID(termID);
+        emitSecDiag(
+            "SEC diag: observed-term term=",
+            getTerminalDisplayName(term),
+            " dir=",
+            term.getSnlBitTerm()->getDirection().getString());
+      }
+    }
+    const auto sourceIt = observedSourceTermByObservedTerm.find(termID);
+    const auto sourceTermID =
+        sourceIt == observedSourceTermByObservedTerm.end() ? termID : sourceIt->second;
+    auto exprIt = outputExprByTerm.find(sourceTermID);
     if (exprIt != outputExprByTerm.end()) {
       model.observedOutputExprByKey.emplace(key, exprIt->second);
       continue;
     }
 
-    auto skippedIt = skippedOutputsByTerm.find(termID);
+    const auto built = buildObservedExprForTerm(
+        sourceTermID,
+        outputExprByTerm,
+        builder.getInputs(),
+        builder.getOutputs(),
+        termDNLID2varID);
+    if (built.expr != nullptr) {
+      model.observedOutputExprByKey.emplace(key, built.expr);
+      continue;
+    }
+    if (built.connectivitySkip.has_value()) {
+      model.connectivitySkipInfoByKey.emplace(key, *built.connectivitySkip);
+      continue;
+    }
+
+    auto skippedIt = skippedOutputsByTerm.find(sourceTermID);
     if (skippedIt != skippedOutputsByTerm.end()) {
       if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second);
           skipInfo.has_value()) {
@@ -1432,16 +2213,17 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     }
 
     model.unsupportedReasons.push_back(
-        "Missing observed output expression for `" + signalKeyToString(key) + "`");
+        "Missing observed output expression for `" + signalKeyToString(key) +
+        "`: " + built.unsupportedReason);
   }
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) materialized output exprs observed=%zu total=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") materialized output exprs observed=",
         model.observedOutputExprByKey.size(),
+        " total=",
         outputExprByTerm.size());
-    fflush(stderr);
   }
 
   // Rebuild next-state equations for the supported sequential cells.
@@ -1466,6 +2248,13 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
         }
 
         const auto& info = instanceBoundaryInfos[boundaryInfoIndex];
+        if (secDiagEnabled) {
+          emitSecDiag(
+              "SEC diag: late-abstracting instance as boundary path=",
+              info.instancePath,
+              " reason=",
+              reason);
+        }
         model.abstractedSequentialBoundaries.push_back(
             "Abstracted uncomputable sequential instance `" +
             info.instancePath + "` as a SEC boundary: " + reason);
@@ -1662,13 +2451,13 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     }
   }
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) rebuilt next-state exprs=%zu init=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") rebuilt next-state exprs=",
         model.nextStateExprByStateKey.size(),
+        " init=",
         model.initialStateValueByKey.size());
-    fflush(stderr);
   }
 
   model.stateBits.erase(
@@ -1804,13 +2593,13 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
         model.complementedStateRelations.end());
   }
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) filtered env=%zu state=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") filtered env=",
         model.environmentInputs.size(),
+        " state=",
         model.stateBits.size());
-    fflush(stderr);
   }
 
   std::unordered_map<size_t, SignalKey> stateKeyByVarID;
@@ -1936,12 +2725,11 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
 
   inferSynthesizedResetInitialStateValues(model);
   if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: extract(%s) synthesized init inference done init=%zu\n",
+    emitSecDiag(
+        "SEC diag: extract(",
         top->getName().getString().c_str(),
+        ") synthesized init inference done init=",
         model.initialStateValueByKey.size());
-    fflush(stderr);
   }
 
   // Missing formulas mean we do not have a sound SEC model, so report the
@@ -1972,8 +2760,10 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     universe->setTopDesign(previousTop);
   }
   if (secDiagEnabled) {
-    fprintf(stderr, "SEC diag: extract(%s) end\n", top->getName().getString().c_str());
-    fflush(stderr);
+    emitSecDiag(
+        "SEC diag: extract(",
+        top->getName().getString().c_str(),
+        ") end");
   }
 
   return model;
