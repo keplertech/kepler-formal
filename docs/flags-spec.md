@@ -36,7 +36,7 @@ build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <fi
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
-| `--compact` | Enable compact mode. If the whole miter is SAT, per-PO analysis is skipped after the whole-design `DIFFERENT` result. |
+| `--compact` | Per-PO analysis is skipped in case the design is different. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 
 ### Stable binary behavior
@@ -75,8 +75,6 @@ build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <fi
 | `clean_scopes` | bool | Clean extracted scopes before scoped verification. Used with `use_scopes`. |
 | `cnf_export` | bool | Enable CNF export. |
 | `cnf_export_path` | string | Output path for CNF export. Defaults to `miter.cnf`, or `miter_<scope>.cnf` in scoped `naja_if` mode. |
-| `dump_cnf` | bool | Accepted by the parser. Use `cnf_export` for the active CNF export switch. |
-| `dump_cnf_path` | string | Accepted by the parser. Use `cnf_export_path` for the active CNF export path. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `solver` | string | SAT solver selection. Supported values: `kissat`, `glucose`. If omitted, the implementation defaults to `kissat`. |
