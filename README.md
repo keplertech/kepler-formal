@@ -121,8 +121,6 @@ Notes:
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
-| `cnf_export` | bool | Write CNF for the generated miter. |
-| `cnf_export_path` | string | Output path for CNF export. Defaults to `miter.cnf`, or `miter_<scope>.cnf` in scoped `naja_if` mode. |
 
 Example:
 
@@ -135,10 +133,8 @@ liberty_files:
   - library_file0.lib
   - library_file1.lib
 py_tech_files:
-  - primitives.py              # Optional: Python tech loaders are YAML-only
+  - primitives.py             # Optional: Python tech loaders are YAML-only
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
-compact_mode: true            # Optional: skips per-PO analysis after a SAT whole-miter result
-report_skipped_pos: true      # Optional: writes skipped PO reports, default is false
 ```
 
 ## Example 
