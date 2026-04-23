@@ -76,8 +76,6 @@ Bazel build notes, dependency details, release flow, and the BCR publication roa
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md).
 
-### Binary Flags
-
 ```bash
 # YAML config
 build/src/bin/kepler-formal --config <file.yaml>
@@ -90,12 +88,7 @@ build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <fi
   [--liberty <library-file>...] [--compact] [--report-skipped-pos]
 ```
 
-Stable formats documented here:
-
-- CLI: `-verilog`, `-naja_if`
-- YAML `format`: `verilog`, `v`, `naja_if`
-
-CLI flags:
+### Binary Flags
 
 | Flag | Meaning |
 | --- | --- |
@@ -105,13 +98,6 @@ CLI flags:
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
-
-Notes:
-
-- `-naja_if` supports exactly one input file per design.
-- In the single-file form, extra positional files after the first two inputs are treated as Liberty files.
-- `--liberty` and `liberty_files` inputs are loaded as Liberty without suffix checks.
-- Python tech loaders are YAML-only through `py_tech_files`.
 
 ### YAML Configuration File
 
