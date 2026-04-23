@@ -120,6 +120,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
+| `format` | string | `verilog`, `v`, or `naja_if`. Defaults to `verilog` if omitted. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
