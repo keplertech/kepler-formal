@@ -20,10 +20,3 @@ python edit.py
 ../build/src/bin/kepler-formal --config test_config_naja_if.yaml
 ../build/src/bin/kepler-formal --config test_config_verilog.yaml
 ```
-
-### YAML input_paths notes
-
-- Flat list (single file per design):
-  `input_paths: [design0.v, design1.v]`
-- Nested list (multi-file per design):
-  `input_paths: [[design0_a.v, design0_b.v], [design1_a.v, design1_b.v]]`
