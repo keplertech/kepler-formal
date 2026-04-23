@@ -72,9 +72,9 @@ cmake .. \
 
 Bazel build notes, dependency details, release flow, and the BCR publication roadmap are tracked in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
-The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md).
-
 ## Usage
+
+The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md).
 
 ### Binary Flags
 
