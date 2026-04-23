@@ -122,7 +122,7 @@ Notes:
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
 
-Example:
+Yaml file example:
 
 ```yaml
 format: verilog
