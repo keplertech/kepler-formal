@@ -134,16 +134,21 @@ Notes:
 | `dump_cnf` | bool | Accepted by the parser. Use `cnf_export` for the active CNF export setting. |
 | `dump_cnf_path` | string | Accepted by the parser. Use `cnf_export_path` for the active CNF export path. |
 
-`input_paths` examples:
+Example:
 
 ```yaml
-input_paths: [design0.v, design1.v]
-```
-
-```yaml
+format: verilog
 input_paths:
-  - [design0_a.v, design0_b.v]
-  - [design1_a.v, design1_b.v]
+  - [design0_part1.v, design0_part2.v] # design 0
+  - [design1_part1.v, design1_part2.v] # design 1
+liberty_files:
+  - library_file0.lib
+  - library_file1.lib
+py_tech_files:
+  - primitives.py              # Optional: Python tech loaders are YAML-only
+verilog_preprocessing: true   # Optional: enables Verilog preprocessor
+compact_mode: true            # Optional: skips per-PO analysis after a SAT whole-miter result
+report_skipped_pos: true      # Optional: writes skipped PO reports, default is false
 ```
 
 ## Example 
