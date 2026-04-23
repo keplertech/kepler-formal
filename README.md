@@ -76,10 +76,9 @@ Bazel build notes, dependency details, release flow, and the BCR publication roa
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md).
 
-```bash
-# YAML config
-build/src/bin/kepler-formal --config <file.yaml>
+### Binary Flags
 
+```bash
 # Single file per design
 build/src/bin/kepler-formal <-verilog/-naja_if> [options] <design1> <design2> [<library-file>...]
 
@@ -87,8 +86,6 @@ build/src/bin/kepler-formal <-verilog/-naja_if> [options] <design1> <design2> [<
 build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <file...> \
   [--liberty <library-file>...] [--compact] [--report-skipped-pos]
 ```
-
-### Binary Flags
 
 | Flag | Meaning |
 | --- | --- |
