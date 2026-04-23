@@ -70,134 +70,85 @@ cmake .. \
 
 ### Bazel (experimental)
 
-Bazel build support is available alongside CMake. It uses [bzlmod](https://bazel.build/external/overview#bzlmod) (MODULE.bazel) and pulls most dependencies from the [Bazel Central Registry](https://registry.bazel.build/).
-
-```bash
-git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
-cd kepler-formal
-bazel build //src/bin:kepler-formal
-```
-
-Run tests:
-
-```bash
-bazel test //test/...
-```
-
-**Dependency strategy:**
-- **BCR**: yaml-cpp, googletest, zlib, spdlog, oneTBB (pulled automatically by Bazel)
-- **Native BUILD files**: kissat and glucose SAT solvers (simple C/C++ libraries)
-- **rules_foreign_cc** (cmake wrapper): naja (too complex for native BUILD files — uses flex/bison codegen, Cap'n Proto, nested submodules)
-- **System packages still required**: Boost headers, Cap'n Proto, Python3 (used by naja's cmake build inside the rules_foreign_cc sandbox)
-
-### Future work: bazel-orfs integration
-
-Once kepler-formal is fully buildable with Bazel, it can be consumed directly by [bazel-orfs](https://github.com/The-OpenROAD-Project/bazel-orfs) as a proper Bazel dependency instead of the current `$PATH`-based wrapper ([bazel-orfs#523](https://github.com/The-OpenROAD-Project/bazel-orfs/pull/523)). This enables:
-
-- **`bazel_dep` or `git_override`** in bazel-orfs MODULE.bazel to pin kepler-formal to a specific version or commit
-- **Hermetic LEC tests** in bazel-orfs CI without requiring a pre-installed kepler-formal binary
-- **Remote caching** of kepler-formal build artifacts shared across bazel-orfs users
-- **Eventual BCR publication** of kepler-formal as a first-class Bazel module
+Bazel build notes, dependency details, release flow, and the BCR publication roadmap are tracked in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 
+### Binary mode
+
 ```bash
-# Classic (single file per design)
-build/src/bin/kepler-formal <-verilog/-naja_if> [--verilog_preprocessing] [--compact] [--report-skipped-pos] <netlist1> <netlist2> [<library-file>...]
+# YAML config
+build/src/bin/kepler-formal --config <file.yaml>
 
-# Multi-file Verilog designs
-build/src/bin/kepler-formal -verilog [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
+# Single file per design
+build/src/bin/kepler-formal <-verilog/-naja_if> [options] <design1> <design2> [<library-file>...]
+
+# Multi-file Verilog
+build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <file...> \
   [--liberty <library-file>...] [--compact] [--report-skipped-pos]
-
-# Through yaml config file
-build/src/bin/kepler-formal --config <yaml file>
 ```
 
-`--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
+Stable formats documented here:
 
-Experimental SystemVerilog notes are tracked in [docs/systemverilog/README.md](docs/systemverilog/README.md). That flow is still ongoing work and is not part of the stable top-level interface yet.
+- CLI: `-verilog`, `-naja_if`
+- YAML `format`: `verilog`, `v`, `naja_if`
 
-### Supported formats
+CLI flags:
 
-- CLI:
-  - `-verilog`
-  - `-naja_if`
-- YAML `format`:
-  - `verilog`
-  - `naja_if`
+| Flag | Meaning |
+| --- | --- |
+| `--help`, `-h` | Print usage. |
+| `--config <file>`, `-c <file>` | Load a YAML config. If present, the YAML file takes precedence over the rest of the CLI. |
+| `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
+| `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
+| `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
+| `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
+| `--compact` | Skip per-PO analysis after a SAT whole-miter result. |
+| `--report-skipped-pos` | Write skipped-PO reports in the current working directory. |
 
-### Library files
+Notes:
 
-Liberty inputs continue to use the existing `--liberty` CLI flag and `liberty_files` YAML field.
+- `-naja_if` supports exactly one input file per design.
+- In the single-file form, extra positional files after the first two inputs are treated as Liberty files.
+- `--liberty` and `liberty_files` inputs are loaded as Liberty without suffix checks.
+- Python tech loaders are YAML-only through `py_tech_files`.
 
-These entries are loaded as Liberty without suffix checks.
+### YAML spec
 
-Python tech loaders are supported only through YAML `py_tech_files`.
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `format` | string | `verilog`, `v`, or `naja_if`. Defaults to `verilog` if omitted. |
+| `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
+| `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
+| `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
+| `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
+| `compact_mode` | bool | Same behavior as `--compact`. |
+| `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
+| `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
+| `log_level` | string | `info` or `debug`. Other values currently fall back to `info`. |
+| `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
+| `use_scopes` | bool | Run scoped verification for `naja_if` inputs. |
+| `clean_scopes` | bool | Apply scope cleanup before scoped verification. Used with `use_scopes`. |
+| `cnf_export` | bool | Write CNF for the generated miter. |
+| `cnf_export_path` | string | Output path for CNF export. Defaults to `miter.cnf`, or `miter_<scope>.cnf` in scoped `naja_if` mode. |
+| `dump_cnf` | bool | Accepted by the parser. Use `cnf_export` for the active CNF export setting. |
+| `dump_cnf_path` | string | Accepted by the parser. Use `cnf_export_path` for the active CNF export path. |
 
-Behavior:
-
-- `--liberty` and `liberty_files` entries are loaded through `SNLLibertyConstructor`
-- `py_tech_files` entries are loaded through `SNLPyLoader`
-
-### Optional compact mode
-
-Compact mode is disabled by default.
-
-Enable it with either:
-
-- CLI: `--compact`
-- YAML: `compact_mode: true`
-
-Behavior:
-
-- the full miter is still checked normally
-- if the miter is SAT, Kepler-Formal stops after the whole-design `DIFFERENT` result
-- per-PO analysis is skipped in that SAT case
-
-### Optional skipped-PO reports
-
-Skipped-PO reporting is disabled by default.
-
-Enable it with either:
-
-- CLI: `--report-skipped-pos`
-- YAML: `report_skipped_pos: true`
-
-When enabled, Kepler-Formal may emit the following files in the current working directory:
-
-- `skipped_multi_driver_pos.txt`
-- `skipped_no_driver_pos.txt`
-- `skipped_logical_loop_pos.txt`
-
-These reports are generated only for skipped POs, for example when a PO is ignored because it is driven by multiple drivers, has no driver, or closes a logical loop during cloud expansion.
-
-### YAML Input Paths
-
-The YAML `input_paths` field accepts either:
-
-- A flat list of two files (one per design), or
-- A nested list with one list of files per design (multi-file Verilog).
-
-Example:
+`input_paths` examples:
 
 ```yaml
-format: verilog
+input_paths: [design0.v, design1.v]
+```
+
+```yaml
 input_paths:
-  - [design0_part1.v, design0_part2.v] # design 0
-  - [design1_part1.v, design1_part2.v] # design 1
-liberty_files:
-  - library_file0.lib
-  - library_file1.lib
-py_tech_files:
-  - primitives.py              # Optional: Python tech loaders are YAML-only
-verilog_preprocessing: true   # Optional: enables Verilog preprocessor
-compact_mode: true            # Optional: skips per-PO analysis after a SAT whole-miter result
-report_skipped_pos: true      # Optional: writes skipped PO reports, default is false
+  - [design0_a.v, design0_b.v]
+  - [design1_a.v, design1_b.v]
 ```
 
 ## Example 
 
-https://github.com/keplertech/kepler-formal/tree/main/example
+See [example/README.md](example/README.md), [example/test_config_verilog.yaml](example/test_config_verilog.yaml), and [example/test_config_naja_if.yaml](example/test_config_naja_if.yaml).
 
 ## Contact
 

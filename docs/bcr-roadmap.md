@@ -18,6 +18,43 @@ kepler-formal supports two build systems:
 Both build systems use the same source code and overlay BUILD files
 (in `bazel/`). The cmake flow is unaffected by Bazel changes.
 
+### Current Bazel usage
+
+Bazel build support is available alongside CMake. It uses [bzlmod](https://bazel.build/external/overview#bzlmod) (`MODULE.bazel`) and pulls most dependencies from the [Bazel Central Registry](https://registry.bazel.build/).
+
+Build with Bazel:
+
+```bash
+git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
+cd kepler-formal
+bazel build //src/bin:kepler-formal
+```
+
+Run tests:
+
+```bash
+bazel test //test/...
+```
+
+### Dependency strategy
+
+- **BCR**: `yaml-cpp`, `googletest`, `zlib`, `spdlog`
+- **Native BUILD files**: `kissat` and `glucose`
+- **`rules_foreign_cc`**: `naja` and its nested sources
+- **System packages still required**: Boost headers, Cap'n Proto,
+  Python 3 headers, and TBB
+
+### Future work: bazel-orfs integration
+
+Once kepler-formal is fully buildable with Bazel, it can be consumed directly by [bazel-orfs](https://github.com/The-OpenROAD-Project/bazel-orfs) as a proper Bazel dependency instead of the current `$PATH`-based wrapper
+([bazel-orfs#523](https://github.com/The-OpenROAD-Project/bazel-orfs/pull/523)).
+This enables:
+
+- **`bazel_dep` or `git_override`** in bazel-orfs `MODULE.bazel` to pin kepler-formal to a specific version or commit
+- **Hermetic LEC tests** in bazel-orfs CI without requiring a pre-installed kepler-formal binary
+- **Remote caching** of kepler-formal build artifacts shared across bazel-orfs users
+- **Eventual BCR publication** of kepler-formal as a first-class Bazel module
+
 ## Phases
 
 ### Phase 1: http_archive deps (done)
