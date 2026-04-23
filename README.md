@@ -142,9 +142,9 @@ py_tech_files:
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ```
 
-## Example 
+## Examples 
 
-See [example/README.md](example/README.md), [example/test_config_verilog.yaml](example/test_config_verilog.yaml), and [example/test_config_naja_if.yaml](example/test_config_naja_if.yaml).
+See [example tests](example)
 
 ## Contact
 
