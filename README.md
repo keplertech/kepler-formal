@@ -103,8 +103,6 @@ CLI flags:
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
-| `--compact` | Skip per-PO analysis after a SAT whole-miter result. |
-| `--report-skipped-pos` | Write skipped-PO reports in the current working directory. |
 
 Notes:
 
@@ -117,22 +115,14 @@ Notes:
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, or `naja_if`. Defaults to `verilog` if omitted. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
-| `compact_mode` | bool | Same behavior as `--compact`. |
-| `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
-| `log_level` | string | `info` or `debug`. Other values currently fall back to `info`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
-| `use_scopes` | bool | Run scoped verification for `naja_if` inputs. |
-| `clean_scopes` | bool | Apply scope cleanup before scoped verification. Used with `use_scopes`. |
 | `cnf_export` | bool | Write CNF for the generated miter. |
 | `cnf_export_path` | string | Output path for CNF export. Defaults to `miter.cnf`, or `miter_<scope>.cnf` in scoped `naja_if` mode. |
-| `dump_cnf` | bool | Accepted by the parser. Use `cnf_export` for the active CNF export setting. |
-| `dump_cnf_path` | string | Accepted by the parser. Use `cnf_export_path` for the active CNF export path. |
 
 Example:
 
