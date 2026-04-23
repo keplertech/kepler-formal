@@ -7,29 +7,10 @@ The stable top-level overview remains in [README.md](../README.md).
 
 ## Binary flags
 
-### Stable formats
-
-- `-verilog`
-- `-naja_if`
-
-### Stable invocation forms
-
-```bash
-# YAML config
-build/src/bin/kepler-formal --config <file.yaml>
-
-# Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if> [options] <design1> <design2> [<library-file>...]
-
-# Multi-file Verilog
-build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <file...> \
-  [--liberty <library-file>...]
-```
-
-### Stable binary flags
-
 | Flag | Meaning |
 | --- | --- |
+| `-verilog` | Use Verilog Format. |
+| `-naja_if` | Use naja-if format. |
 | `--help`, `-h` | Print usage and exit. |
 | `--config <file>`, `-c <file>` | Load a YAML config file. If present anywhere on the CLI, YAML parsing takes precedence over the rest of the arguments. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
@@ -39,32 +20,11 @@ build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <fi
 | `--compact` | Per-PO analysis is skipped in case the design is different. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 
-### Stable binary behavior
-
-- `-naja_if` requires exactly one input file per design.
-- In the single-file positional form, extra positional arguments after the
-  first two design inputs are treated as Liberty files.
-- `--design1` and `--design2` switch the parser into explicit multi-file
-  mode.
-- `--liberty` and `--lib` load files through `SNLLibertyConstructor`.
-- Python loader files (`.py`) are rejected on the `--liberty` / `--lib`
-  path. Use YAML `py_tech_files` instead.
-- `--report-skipped-pos` may produce `skipped_multi_driver_pos.txt`,
-  `skipped_no_driver_pos.txt`, and `skipped_logical_loop_pos.txt`.
-
 ## YAML config flags
-
-### Stable format values
-
-- `verilog`
-- `v`
-- `naja_if`
-
-### Stable config keys
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Input format. If omitted, the implementation defaults to `verilog`. |
+| `format` | string | Input format[verilog, naja_if]. If omitted, the implementation defaults to `verilog`. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
@@ -78,15 +38,6 @@ build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <fi
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `solver` | string | SAT solver selection. Supported values: `kissat`, `glucose`. If omitted, the implementation defaults to `kissat`. |
-
-### Stable YAML behavior
-
-- Unknown YAML keys are rejected.
-- `input_paths` must contain exactly two design entries.
-- In nested-list form, each design entry must contain at least one file.
-- `use_scopes` and `clean_scopes` are meaningful only for `naja_if`.
-- `liberty_files` entries are loaded as Liberty without suffix checks.
-- `py_tech_files` is YAML-only.
 
 Example:
 
