@@ -74,7 +74,7 @@ Bazel build notes, dependency details, release flow, and the BCR publication roa
 
 ## Usage
 
-### Binary mode
+### Binary Flags
 
 ```bash
 # YAML config
@@ -111,7 +111,12 @@ Notes:
 - `--liberty` and `liberty_files` inputs are loaded as Liberty without suffix checks.
 - Python tech loaders are YAML-only through `py_tech_files`.
 
-### YAML spec
+### YAML Configuration File
+
+```bash
+# YAML config
+build/src/bin/kepler-formal --config <file.yaml>
+```
 
 | Key | Type | Meaning |
 | --- | --- | --- |
