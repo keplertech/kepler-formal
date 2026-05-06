@@ -54,54 +54,60 @@ jobs:
     - name: Run cts_aes_asap7_base
       working-directory: ${{github.workspace}}
       run: |
-        cd kepler-formal-regress/cts_aes_asap7_base
-        ../../build/src/bin/kepler-formal --config objects/asap7/aes/base/4_rsz_lec_test.yml
-        grep "Circuits are IDENTICAL" logs/asap7/aes/base/4_rsz_lec_check.log
+        bash regress/run_cnf_regress.sh \
+          cts_aes_asap7_base \
+          "${{github.workspace}}/kepler-formal-regress/cts_aes_asap7_base" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          objects/asap7/aes/base/4_rsz_lec_test.yml \
+          expect-identical
   
     - name: Run sky130hd_gcd
       working-directory: ${{github.workspace}}
       run: |
-        cd kepler-formal-regress/sky130hd_gcd
-        ../../build/src/bin/kepler-formal --config objects/sky130hd/gcd/base/4_rsz_lec_test.yml 
-        grep "Circuits are IDENTICAL" logs/sky130hd/gcd/base/4_rsz_lec_check.log 
+        bash regress/run_cnf_regress.sh \
+          sky130hd_gcd \
+          "${{github.workspace}}/kepler-formal-regress/sky130hd_gcd" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          objects/sky130hd/gcd/base/4_rsz_lec_test.yml \
+          expect-identical
     
     - name: Run nangate45_black_parrot
       working-directory: ${{github.workspace}}
       run: |
-        cd kepler-formal-regress/nangate45_black_parrot
-        ../../build/src/bin/kepler-formal --config objects/nangate45/bp/base/4_rsz_lec_test.yml
-        grep "Circuits are IDENTICAL" logs/nangate45/bp/base/4_rsz_lec_check.log 
+        bash regress/run_cnf_regress.sh \
+          nangate45_black_parrot \
+          "${{github.workspace}}/kepler-formal-regress/nangate45_black_parrot" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          objects/nangate45/bp/base/4_rsz_lec_test.yml \
+          expect-identical
     
     - name: Run ihp-sg13g2_i2c-gpio-expander
       working-directory: ${{github.workspace}}
       run: |
-        cd kepler-formal-regress/ihp-sg13g2_i2c-gpio-expander
-        ../../build/src/bin/kepler-formal --config objects/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_test.yml
-        grep "Circuits are IDENTICAL" logs/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_check.log 
+        bash regress/run_cnf_regress.sh \
+          ihp_sg13g2_i2c_gpio_expander \
+          "${{github.workspace}}/kepler-formal-regress/ihp-sg13g2_i2c-gpio-expander" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          objects/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_test.yml \
+          expect-identical
   
     - name: Run on naja if
       working-directory: ${{github.workspace}}
       run: |
-        mkdir -p regress-output
-        # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler-formal -naja_if \
-          ./example/tinyrocket_naja.if \
-          ./example/tinyrocket_naja.if \
-          ./example/NangateOpenCellLibrary_typical.lib \
-          ./example/fakeram45_1024x32.lib \
-          ./example/fakeram45_64x32.lib 
+        bash regress/run_cnf_regress.sh \
+          tinyrocket_naja_if \
+          "${{github.workspace}}" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          regress/tinyrocket_naja_if/config.yaml
     
     - name: Run on verilog
       working-directory: ${{github.workspace}}
       run: |
-        mkdir -p regress-output
-        # Run kepler-formal on the example files (files are in example/)
-        ./build/src/bin/kepler-formal -verilog \
-          ./example/tinyrocket.v \
-          ./example/tinyrocket.v \
-          ./example/NangateOpenCellLibrary_typical.lib \
-          ./example/fakeram45_1024x32.lib \
-          ./example/fakeram45_64x32.lib 
+        bash regress/run_cnf_regress.sh \
+          tinyrocket_verilog \
+          "${{github.workspace}}" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          regress/tinyrocket_verilog/config.yaml
           
     - name: Install najaeda
       run: pip install najaeda
@@ -111,15 +117,19 @@ jobs:
       run: python edit.py
 
     - name: Run on naja if edited
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}
       run: |
-        mkdir -p regress-output
-        # Run kepler-formal on the example files (files are in example/)
-        ../build/src/bin/kepler-formal --config test_config_naja_if.yaml
+        bash regress/run_cnf_regress.sh \
+          tinyrocket_naja_if_edited \
+          "${{github.workspace}}" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          regress/tinyrocket_naja_if_edited/config.yaml
     
     - name: Run on verilog edited
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}
       run: |
-        mkdir -p regress-output
-        # Run kepler-formal on the example files (files are in example/)
-        ../build/src/bin/kepler-formal --config test_config_verilog.yaml
+        bash regress/run_cnf_regress.sh \
+          tinyrocket_verilog_edited \
+          "${{github.workspace}}" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          regress/tinyrocket_verilog_edited/config.yaml

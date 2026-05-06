@@ -1,0 +1,14 @@
+# Copyright 2024-2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+format: verilog
+input_paths:
+  - ./example/tinyrocket.v
+  - ./example/tinyrocket_edited.v
+liberty_files:
+  - ./example/NangateOpenCellLibrary_typical.lib
+  - ./example/fakeram45_1024x32.lib
+  - ./example/fakeram45_64x32.lib
+  - ./example/fakeram45_64x15.lib
+log_level: info
+solver: kissat

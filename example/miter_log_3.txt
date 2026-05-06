@@ -1,0 +1,38 @@
+[2026-02-27 17:30:03.428] [miter_logger] [info] MiterStrategy::run starting
+[2026-02-27 17:30:03.428] [miter_logger] [info] Collecting POs for design 0: RocketTile
+
+[2026-02-27 17:30:03.540] [miter_logger] [info] Collected 8348 POs for design 0
+
+[2026-02-27 17:30:03.541] [miter_logger] [info] Collecting POs for design 1: RocketTile
+
+[2026-02-27 17:30:03.670] [miter_logger] [info] Collected 8348 POs for design 1
+
+[2026-02-27 17:30:03.670] [miter_logger] [info] normalizeInputs: starting
+[2026-02-27 17:30:03.676] [miter_logger] [info] diff1 input: logic_1_inst.Z.
+[2026-02-27 17:30:03.678] [miter_logger] [info] size of common inputs: 8278
+[2026-02-27 17:30:03.678] [miter_logger] [info] size of diff0 inputs: 0
+[2026-02-27 17:30:03.678] [miter_logger] [info] size of diff1 inputs: 1
+[2026-02-27 17:30:03.679] [miter_logger] [info] normalizeOutputs: starting
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of common outputs: 8348
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of diff0 outputs: 0
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of diff1 outputs: 0
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of PIs in circuit 0: 8278
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of PIs in circuit 1: 8279
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of POs in circuit 0: 8348
+[2026-02-27 17:30:03.685] [miter_logger] [info] size of POs in circuit 1: 8348
+[2026-02-27 17:30:04.144] [miter_logger] [info] Building miter expression
+[2026-02-27 17:30:04.145] [miter_logger] [info] Finished building miter expression
+[2026-02-27 17:30:04.145] [miter_logger] [info] Dumped miter CNF to ./sat.cnf
+[2026-02-27 17:30:04.146] [miter_logger] [info] SAT solver starting
+[2026-02-27 17:30:04.146] [miter_logger] [info] SAT solver finished: SAT
+[2026-02-27 17:30:04.146] [miter_logger] [info] Miter found a difference -> moving to analyze individual POs
+[2026-02-27 17:30:04.146] [miter_logger] [info] Found difference for PO: 8318
+[2026-02-27 17:30:04.236] [miter_logger] [info] Path of differing PO 8318: intsink.SynchronizerShiftReg_w1_d3.sync_2$_DFF_P_.D.0.
+[2026-02-27 17:30:04.236] [miter_logger] [info] Path of differing PO 8318: intsink.SynchronizerShiftReg_w1_d3.sync_2$_DFF_P_.D.0.
+[2026-02-27 17:30:04.418] [miter_logger] [info] Diff 0 term: auto_intsink_in_sync_0
+[2026-02-27 17:30:04.418] [miter_logger] [info] Diff 1 inst term RocketTile.logic_1_inst.Z.0
+[2026-02-27 17:30:04.418] [miter_logger] [info] size of intersection of terms: 0
+[2026-02-27 17:30:04.418] [miter_logger] [info] size of diff of terms: 1
+[2026-02-27 17:30:04.418] [miter_logger] [info] size of intersection of inst terms: 0
+[2026-02-27 17:30:04.418] [miter_logger] [info] size of diff of inst terms: 1
+[2026-02-27 17:30:04.418] [miter_logger] [info] Circuits are DIFFERENT

@@ -5,9 +5,13 @@
 
 #include "BoolExpr.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <stack>
 #include <stdexcept>
+#include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace KEPLER_FORMAL {
@@ -21,6 +25,90 @@ struct Frame {
   int rightLit = 0;
 };
 
+struct StableKey {
+  uint64_t h0 = 0;
+  uint64_t h1 = 0;
+  size_t size = 0;
+  Op op = Op::NONE;
+  size_t varID = 0;
+};
+
+uint64_t mix64(uint64_t value) {
+  value += 0x9e3779b97f4a7c15ULL;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  return value ^ (value >> 31);
+}
+
+bool isCommutative(Op op) {
+  return op == Op::AND || op == Op::OR || op == Op::XOR;
+}
+
+bool stableLess(const StableKey& a, const StableKey& b) {
+  return std::tie(a.h0, a.h1, a.size, a.op, a.varID) <
+         std::tie(b.h0, b.h1, b.size, b.op, b.varID);
+}
+
+StableKey combineKey(Op op, size_t varID, const StableKey* left, const StableKey* right) {
+  StableKey key;
+  key.op = op;
+  key.varID = varID;
+  key.size = 1 + (left ? left->size : 0) + (right ? right->size : 0);
+  key.h0 = mix64(static_cast<uint64_t>(op) ^ (mix64(varID) << 1));
+  key.h1 = mix64((static_cast<uint64_t>(op) << 32) ^ mix64(varID + 0x517cc1b727220a95ULL));
+  if (left) {
+    key.h0 = mix64(key.h0 ^ left->h0 ^ (left->h1 << 1));
+    key.h1 = mix64(key.h1 ^ left->h1 ^ (left->h0 >> 1));
+  }
+  if (right) {
+    key.h0 = mix64(key.h0 ^ right->h0 ^ (right->h1 << 1));
+    key.h1 = mix64(key.h1 ^ right->h1 ^ (right->h0 >> 1));
+  }
+  return key;
+}
+
+std::unordered_map<BoolExpr*, StableKey> buildStableKeys(BoolExpr* root) {
+  // BoolExpr canonicalization can depend on pointer order; use structural keys
+  // here so DIMACS export is stable enough for byte-for-byte regression goldens.
+  std::unordered_map<BoolExpr*, StableKey> keys;
+  std::stack<Frame> stk;
+  stk.push({root, false, 0, 0});
+
+  while (!stk.empty()) {
+    Frame fr = stk.top();
+    stk.pop();
+    BoolExpr* e = fr.expr;
+    if (!e || keys.count(e)) {
+      continue;
+    }
+    if (!fr.visited) {
+      stk.push({e, true, 0, 0});
+      if (e->getRight()) {
+        stk.push({e->getRight(), false, 0, 0});
+      }
+      if (e->getLeft()) {
+        stk.push({e->getLeft(), false, 0, 0});
+      }
+      continue;
+    }
+
+    const StableKey* leftKey = nullptr;
+    const StableKey* rightKey = nullptr;
+    if (e->getLeft()) {
+      leftKey = &keys.at(e->getLeft());
+    }
+    if (e->getRight()) {
+      rightKey = &keys.at(e->getRight());
+    }
+    if (rightKey && isCommutative(e->getOp()) && stableLess(*rightKey, *leftKey)) {
+      std::swap(leftKey, rightKey);
+    }
+    keys.emplace(e, combineKey(e->getOp(), e->getId(), leftKey, rightKey));
+  }
+
+  return keys;
+}
+
 }  // namespace
 
 CnfFormula encodeBoolExprToCnf(BoolExpr* root) {
@@ -31,6 +119,7 @@ CnfFormula encodeBoolExprToCnf(BoolExpr* root) {
   CnfFormula cnf;
   std::unordered_map<BoolExpr*, int> node2lit;
   std::unordered_set<std::string> forcedConstants;
+  const auto stableKeys = buildStableKeys(root);
 
   int nextVar = 0; // DIMACS variables are 1-based.
 
@@ -85,20 +174,32 @@ CnfFormula encodeBoolExprToCnf(BoolExpr* root) {
 
     if (!fr.visited) {
       fr.visited = true;
-      if (e->getRight()) {
-        stk.push({e->getRight(), false, 0, 0});
+      BoolExpr* left = e->getLeft();
+      BoolExpr* right = e->getRight();
+      if (right && isCommutative(e->getOp()) &&
+          stableLess(stableKeys.at(right), stableKeys.at(left))) {
+        std::swap(left, right);
       }
-      if (e->getLeft()) {
-        stk.push({e->getLeft(), false, 0, 0});
+      if (right) {
+        stk.push({right, false, 0, 0});
+      }
+      if (left) {
+        stk.push({left, false, 0, 0});
       }
       continue;
     }
 
-    if (e->getLeft()) {
-      fr.leftLit = node2lit[e->getLeft()];
+    BoolExpr* left = e->getLeft();
+    BoolExpr* right = e->getRight();
+    if (right && isCommutative(e->getOp()) &&
+        stableLess(stableKeys.at(right), stableKeys.at(left))) {
+      std::swap(left, right);
     }
-    if (e->getRight()) {
-      fr.rightLit = node2lit[e->getRight()];
+    if (left) {
+      fr.leftLit = node2lit[left];
+    }
+    if (right) {
+      fr.rightLit = node2lit[right];
     }
 
     int v = allocVar();
