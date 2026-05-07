@@ -34,6 +34,7 @@ class MiterStrategy {
                            const CompactSnapshot& snapshot1);
 
   void setCnfDump(bool enabled, const std::string& path = "");
+  void setPoCnfDump(bool enabled, const std::string& path = "");
 
   size_t normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
@@ -70,6 +71,8 @@ class MiterStrategy {
   size_t lastCommonVarID_ = 1;
   bool dumpCnf_ = false;
   std::string dumpCnfPath_;
+  bool dumpPoCnf_ = false;
+  std::string dumpPoCnfPath_;
 };
 
 }  // namespace KEPLER_FORMAL

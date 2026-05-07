@@ -69,7 +69,8 @@ jobs:
           "${{github.workspace}}/kepler-formal-regress/sky130hd_gcd" \
           "${{github.workspace}}/build/src/bin/kepler-formal" \
           objects/sky130hd/gcd/base/4_rsz_lec_test.yml \
-          expect-identical
+          expect-identical \
+          po-cnfs
     
     - name: Run nangate45_black_parrot
       working-directory: ${{github.workspace}}
@@ -89,7 +90,8 @@ jobs:
           "${{github.workspace}}/kepler-formal-regress/ihp-sg13g2_i2c-gpio-expander" \
           "${{github.workspace}}/build/src/bin/kepler-formal" \
           objects/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_test.yml \
-          expect-identical
+          expect-identical \
+          po-cnfs
   
     - name: Run on naja if
       working-directory: ${{github.workspace}}

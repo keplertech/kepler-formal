@@ -8,6 +8,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -600,6 +601,34 @@ TEST(KeplerFormalCliTests, DumpCnfFromConfig) {
   std::filesystem::remove(cnfPath);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(tmpDir);
+}
+
+TEST(KeplerFormalCliTests, DumpPoCnfFromConfig) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto poCnfDir = fixture.tmpDir / "po_cnfs";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "po_cnf_export: true\n"
+      "po_cnf_export_path: " + poCnfDir.string() + "\n");
+
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  ASSERT_TRUE(std::filesystem::exists(poCnfDir / "top0"));
+  ASSERT_TRUE(std::filesystem::exists(poCnfDir / "top1"));
+  EXPECT_EQ(std::distance(std::filesystem::directory_iterator(poCnfDir / "top0"),
+                          std::filesystem::directory_iterator{}), 1);
+  EXPECT_EQ(std::distance(std::filesystem::directory_iterator(poCnfDir / "top1"),
+                          std::filesystem::directory_iterator{}), 1);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
 }
 
 TEST(KeplerFormalCliTests, MultiFileVerilogConfig) {

@@ -35,6 +35,8 @@ The stable top-level overview remains in [README.md](../README.md).
 | `clean_scopes` | bool | Clean extracted scopes before scoped verification. Used with `use_scopes`. |
 | `cnf_export` | bool | Enable CNF export. |
 | `cnf_export_path` | string | Output path for CNF export. Defaults to `miter.cnf`, or `miter_<scope>.cnf` in scoped `naja_if` mode. |
+| `po_cnf_export` | bool | Enable per-primary-output CNF export for each compared top. |
+| `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `solver` | string | SAT solver selection. Supported values: `kissat`, `glucose`. If omitted, the implementation defaults to `kissat`. |
@@ -57,4 +59,6 @@ compact_mode: true
 report_skipped_pos: true
 cnf_export: true
 cnf_export_path: ./miter.cnf
+po_cnf_export: true
+po_cnf_export_path: ./po_cnfs
 ```

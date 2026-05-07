@@ -83,6 +83,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "clean_scopes",
       "cnf_export",
       "cnf_export_path",
+      "po_cnf_export",
+      "po_cnf_export_path",
       "dump_cnf",
       "dump_cnf_path",
       "compact_mode",
@@ -391,10 +393,12 @@ int KeplerFormalMain(int argc, char** argv) {
   bool useScopes = false;
   bool cleanScopes = false;
   bool dumpCnf = false;
+  bool dumpPoCnf = false;
   bool compactMode = false;
   bool reportSkippedPOs = false;
   bool verilogPreprocessing = false;
   std::string dumpCnfPath;
+  std::string dumpPoCnfPath;
 
   KEPLER_FORMAL::Config::setReportSkippedPOs(false);
 
@@ -468,6 +472,16 @@ int KeplerFormalMain(int argc, char** argv) {
         // cnf_export_path (optional)
         if (cfg["cnf_export_path"] && cfg["cnf_export_path"].IsScalar()) {
           dumpCnfPath = cfg["cnf_export_path"].as<std::string>();
+        }
+
+        // po_cnf_export
+        if (cfg["po_cnf_export"] && cfg["po_cnf_export"].IsScalar()) {
+          dumpPoCnf = cfg["po_cnf_export"].as<bool>();
+        }
+
+        // po_cnf_export_path (optional)
+        if (cfg["po_cnf_export_path"] && cfg["po_cnf_export_path"].IsScalar()) {
+          dumpPoCnfPath = cfg["po_cnf_export_path"].as<std::string>();
         }
 
         // compact_mode
@@ -878,6 +892,10 @@ int KeplerFormalMain(int argc, char** argv) {
           const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
           MiterS.setCnfDump(true, outPath);
         }
+        if (dumpPoCnf) {
+          const std::string outPath = dumpPoCnfPath.empty() ? "po_cnfs" : dumpPoCnfPath;
+          MiterS.setPoCnfDump(true, outPath);
+        }
         if (MiterS.runCompactSnapshots(snapshot0, snapshot1)) {
           SPDLOG_INFO("No difference was found.");
         } else {
@@ -1073,6 +1091,13 @@ int KeplerFormalMain(int argc, char** argv) {
                                     : dumpCnfPath;
           MiterScope.setCnfDump(true, outPath);
         }
+        if (dumpPoCnf) {
+          std::string scopeName = sanitizeFileToken(scopes.first->getName().getString());
+          std::string outPath = dumpPoCnfPath.empty()
+                                    ? ("po_cnfs_" + scopeName)
+                                    : dumpPoCnfPath;
+          MiterScope.setPoCnfDump(true, outPath);
+        }
         MiterScope.init();
         if (MiterScope.run(compactMode)) {
           SPDLOG_INFO("No difference was found for scope: {} , {}",
@@ -1099,6 +1124,10 @@ int KeplerFormalMain(int argc, char** argv) {
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
         MiterS.setCnfDump(true, outPath);
+      }
+      if (dumpPoCnf) {
+        const std::string outPath = dumpPoCnfPath.empty() ? "po_cnfs" : dumpPoCnfPath;
+        MiterS.setPoCnfDump(true, outPath);
       }
       MiterS.init();
       if (MiterS.run(compactMode)) {
