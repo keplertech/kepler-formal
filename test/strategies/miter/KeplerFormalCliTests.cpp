@@ -994,6 +994,7 @@ TEST(KeplerFormalCliTests, ConfigSystemVerilogFlistAndTopAccepted) {
 TEST(KeplerFormalCliTests, ConfigCompactSystemVerilogFlistWithLibertyAndCnfAccepted) {
   const auto fixture = createSystemVerilogFlistFixture();
   const auto cnfPath = fixture.tmpDir / "compact_sv.cnf";
+  const auto poCnfDir = fixture.tmpDir / "compact_sv_po_cnfs";
   const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
   const auto cfgPath = writeTempConfig(
       "format: systemverilog\n"
@@ -1004,11 +1005,15 @@ TEST(KeplerFormalCliTests, ConfigCompactSystemVerilogFlistWithLibertyAndCnfAccep
       "compact_mode: true\n"
       "cnf_export: true\n"
       "cnf_export_path: " + cnfPath.string() + "\n"
+      "po_cnf_export: true\n"
+      "po_cnf_export_path: " + poCnfDir.string() + "\n"
       "liberty_files:\n"
       "  - " + libertyPath.string() + "\n");
 
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   EXPECT_TRUE(std::filesystem::exists(cnfPath));
+  EXPECT_TRUE(std::filesystem::exists(poCnfDir / "top0" / "po_000000.cnf"));
+  EXPECT_TRUE(std::filesystem::exists(poCnfDir / "top1" / "po_000000.cnf"));
 
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
@@ -1989,6 +1994,7 @@ TEST(KeplerFormalCliTests, SnlScopesCreatesOnlyOneDefaultMiterLogPerScopeRun) {
 TEST(KeplerFormalCliTests, SnlScopesCanCleanAndDumpCnf) {
   const auto fixture = createEquivalentScopedNajaIfFixture();
   const auto cnfPath = fixture.tmpDir / "scoped_miter.cnf";
+  const auto poCnfDir = fixture.tmpDir / "scoped_po_cnfs";
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
       "input_paths:\n"
@@ -1999,11 +2005,15 @@ TEST(KeplerFormalCliTests, SnlScopesCanCleanAndDumpCnf) {
       "use_scopes: true\n"
       "clean_scopes: true\n"
       "cnf_export: true\n"
-      "cnf_export_path: " + cnfPath.string() + "\n");
+      "cnf_export_path: " + cnfPath.string() + "\n"
+      "po_cnf_export: true\n"
+      "po_cnf_export_path: " + poCnfDir.string() + "\n");
 
   int rc = runWithConfigFile(cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
   EXPECT_TRUE(std::filesystem::exists(cnfPath));
+  EXPECT_TRUE(std::filesystem::exists(poCnfDir / "top0" / "po_000000.cnf"));
+  EXPECT_TRUE(std::filesystem::exists(poCnfDir / "top1" / "po_000000.cnf"));
 
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
@@ -2012,7 +2022,9 @@ TEST(KeplerFormalCliTests, SnlScopesCanCleanAndDumpCnf) {
 TEST(KeplerFormalCliTests, SnlScopesDumpCnfUsesDefaultScopedPath) {
   const auto fixture = createEquivalentScopedNajaIfFixture();
   const auto defaultCnfPath = std::filesystem::current_path() / "miter_child.cnf";
+  const auto defaultPoCnfPath = std::filesystem::current_path() / "po_cnfs_child";
   std::filesystem::remove(defaultCnfPath);
+  std::filesystem::remove_all(defaultPoCnfPath);
 
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
@@ -2022,12 +2034,16 @@ TEST(KeplerFormalCliTests, SnlScopesDumpCnfUsesDefaultScopedPath) {
       "liberty_files:\n"
       "  - " + fixture.libertyPath.string() + "\n"
       "use_scopes: true\n"
-      "cnf_export: true\n");
+      "cnf_export: true\n"
+      "po_cnf_export: true\n");
 
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   EXPECT_TRUE(std::filesystem::exists(defaultCnfPath));
+  EXPECT_TRUE(std::filesystem::exists(defaultPoCnfPath / "top0" / "po_000000.cnf"));
+  EXPECT_TRUE(std::filesystem::exists(defaultPoCnfPath / "top1" / "po_000000.cnf"));
 
   std::filesystem::remove(cfgPath);
   std::filesystem::remove(defaultCnfPath);
+  std::filesystem::remove_all(defaultPoCnfPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }

@@ -1167,13 +1167,96 @@ TEST(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWrit
                       "kepler_formal_compact_snapshot_cnf";
   std::filesystem::create_directories(tmpDir);
   const auto cnfPath = tmpDir / "compact_snapshot.cnf";
+  const auto poCnfDir = tmpDir / "po_cnfs";
 
   MiterStrategy strategy(nullptr, nullptr,
                          (tmpDir / "compact_snapshot.log").string());
   strategy.setCnfDump(true, cnfPath.string());
+  strategy.setPoCnfDump(true, poCnfDir.string());
 
   EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
   EXPECT_TRUE(std::filesystem::exists(cnfPath));
+  EXPECT_TRUE(std::filesystem::exists(poCnfDir / "top0" / "po_000000.cnf"));
+  EXPECT_TRUE(std::filesystem::exists(poCnfDir / "top1" / "po_000000.cnf"));
+
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST(MiterStrategyStandaloneTests, RunCompactSnapshotsPoCnfHandlesInvalidAndWriteFailure) {
+  using PathKey = BuildPrimaryOutputClauses::PathKey;
+  auto makePathKey = [](int nameID, int objectID) -> PathKey {
+    return {{static_cast<NLName::ID>(nameID)},
+            {static_cast<NLID::DesignObjectID>(objectID)}};
+  };
+
+  BoolExpr invalid0;
+  BoolExpr invalid1;
+
+  const PathKey in = makePathKey(1, 10);
+  const PathKey invalidOut = makePathKey(2, 20);
+  const PathKey validOut = makePathKey(3, 30);
+
+  MiterStrategy::CompactSnapshot snapshot0;
+  snapshot0.inputs = {in};
+  snapshot0.outputs = {invalidOut, validOut};
+  snapshot0.POs.emplace_back(&invalid0);
+  snapshot0.POs.emplace_back(BoolExpr::Var(2));
+
+  MiterStrategy::CompactSnapshot snapshot1;
+  snapshot1.inputs = {in};
+  snapshot1.outputs = {invalidOut, validOut};
+  snapshot1.POs.emplace_back(&invalid1);
+  snapshot1.POs.emplace_back(BoolExpr::Var(2));
+
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_compact_snapshot_po_failures";
+  const auto poCnfDir = tmpDir / "po_cnfs";
+  std::filesystem::create_directories(poCnfDir / "top0" / "po_000001.cnf");
+  std::filesystem::create_directories(poCnfDir / "top1" / "po_000001.cnf");
+
+  MiterStrategy strategy(nullptr, nullptr,
+                         (tmpDir / "compact_snapshot_po_failures.log").string());
+  strategy.setPoCnfDump(true, poCnfDir.string());
+
+  EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
+
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST(MiterStrategyStandaloneTests, RunCompactSnapshotsPoCnfHandlesDirectoryCreationFailure) {
+  using PathKey = BuildPrimaryOutputClauses::PathKey;
+  auto makePathKey = [](int nameID, int objectID) -> PathKey {
+    return {{static_cast<NLName::ID>(nameID)},
+            {static_cast<NLID::DesignObjectID>(objectID)}};
+  };
+
+  const PathKey in = makePathKey(1, 10);
+  const PathKey out = makePathKey(2, 20);
+
+  MiterStrategy::CompactSnapshot snapshot0;
+  snapshot0.inputs = {in};
+  snapshot0.outputs = {out};
+  snapshot0.POs.emplace_back(BoolExpr::Var(2));
+
+  MiterStrategy::CompactSnapshot snapshot1;
+  snapshot1.inputs = {in};
+  snapshot1.outputs = {out};
+  snapshot1.POs.emplace_back(BoolExpr::Var(2));
+
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_compact_snapshot_po_dir_failure";
+  std::filesystem::create_directories(tmpDir);
+  const auto poCnfPath = tmpDir / "po_cnfs";
+  {
+    std::ofstream outFile(poCnfPath);
+    outFile << "not a directory\n";
+  }
+
+  MiterStrategy strategy(nullptr, nullptr,
+                         (tmpDir / "compact_snapshot_po_dir_failure.log").string());
+  strategy.setPoCnfDump(true, poCnfPath.string());
+
+  EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
 
   std::filesystem::remove_all(tmpDir);
 }
