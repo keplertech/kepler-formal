@@ -7,19 +7,11 @@ cc_binary(
         "KeplerFormalUtils.h",
     ],
     linkopts = [
-        # Statically link what we can for portable release binaries.
-        # Cap'n Proto and libstdc++/libgcc are linked statically.
-        # TBB has no static libs (by design) — bundled in release tarball.
-        # Naja .so files are also bundled (see release workflow).
+        # Statically link libstdc++/libgcc for portable release binaries.
+        # Cap'n Proto, kj, TBB, ZLIB now linked via BCR cc_library deps below.
+        # Naja .so files are bundled with the release tarball (see release workflow).
         "-static-libstdc++",
         "-static-libgcc",
-        "-Wl,-Bstatic",
-        "-lcapnp",
-        "-lkj",
-        "-Wl,-Bdynamic",
-        "-ltbb",
-        "-ltbbmalloc",
-        "-lz",
         "-lpthread",
         "-ldl",
     ],
@@ -29,10 +21,15 @@ cc_binary(
         "//src/sec:kepler_sec",
         "//src/scope:scope_extraction",
         "//src/strategies:formal_strategies",
+        "@capnp-cpp//src/capnp",
+        "@capnp-cpp//src/kj",
         "@kissat",
         "@naja",
         "@naja//:naja_extra_headers",
+        "@onetbb//:tbb",
+        "@onetbb//:tbbmalloc",
         "@spdlog",
         "@yaml-cpp",
+        "@zlib",
     ],
 )

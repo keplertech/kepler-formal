@@ -120,7 +120,7 @@ def _deps_impl(_module_ctx):
         url = "https://github.com/audemard/glucose/archive/{}.tar.gz".format(_GLUCOSE_COMMIT),
         sha256 = "3033a27047f35653f63559e4f31d664cb8b57a7dcdab9d90233be1d1f52f4eda",
         strip_prefix = "glucose-{}".format(_GLUCOSE_COMMIT),
-        build_file = "@@//bazel:glucose.BUILD.bazel",
+        build_file = Label("//bazel:glucose.BUILD.bazel"),
     )
 
     http_archive(
@@ -128,7 +128,7 @@ def _deps_impl(_module_ctx):
         url = "https://github.com/arminbiere/kissat/archive/{}.tar.gz".format(_KISSAT_COMMIT),
         sha256 = "9268b6daaf76ea34ea9da503338beddc5539eb783d1a83a37a7af2a028f3b236",
         strip_prefix = "kissat-{}".format(_KISSAT_COMMIT),
-        build_file = "@@//bazel:kissat.BUILD.bazel",
+        build_file = Label("//bazel:kissat.BUILD.bazel"),
     )
 
     naja_repo(
@@ -151,7 +151,7 @@ def _deps_impl(_module_ctx):
         googletest_url = "https://github.com/google/googletest/archive/{}.tar.gz".format(_GOOGLETEST_COMMIT),
         googletest_sha256 = "745c55415660044610f7fcd3af7a6420d5de16a7dbb9ebfe2e131275676232be",
         googletest_strip_prefix = "googletest-{}".format(_GOOGLETEST_COMMIT),
-        build_file = "@@//bazel:naja.BUILD.bazel",
+        build_file = Label("//bazel:naja.BUILD.bazel"),
     )
 
 deps = module_extension(

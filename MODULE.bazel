@@ -4,17 +4,51 @@ module(
 )
 
 # Infrastructure
-bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_cc", version = "0.2.18")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 
 # Direct dependencies from BCR
-bazel_dep(name = "yaml-cpp", version = "0.8.0")
-bazel_dep(name = "googletest", version = "1.17.0", dev_dependency = True)
-bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
-bazel_dep(name = "spdlog", version = "1.15.1")
-# onetbb BCR module is incompatible with Bazel 8/9.
-# Use system TBB via linkopts instead.
+bazel_dep(name = "yaml-cpp", version = "0.9.0")
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+bazel_dep(name = "zlib", version = "1.3.2")
+bazel_dep(name = "spdlog", version = "1.17.0")
+# BCR deps replacing system-installed Boost / Flex / TBB / CapnProto / Python.
+# `linkopts = ["-ltbb"]` in src/formal/BUILD.bazel is replaced with
+# `deps = ["@onetbb//:tbb"]`; the binary's `-lcapnp/-lkj/-ltbb/-ltbbmalloc/-lz`
+# are similarly replaced. The previous "incompatible with Bazel 8/9" comment
+# was stale; onetbb 2022.3.0 builds on Bazel 8.6.
+bazel_dep(name = "boost.dynamic_bitset", version = "1.90.0.bcr.1")
+bazel_dep(name = "boost.intrusive", version = "1.90.0.bcr.1")
+bazel_dep(name = "boost.unordered", version = "1.90.0.bcr.1")
+bazel_dep(name = "capnp-cpp", version = "1.1.0")
+bazel_dep(name = "flex", version = "2.6.4.bcr.5")
+bazel_dep(name = "onetbb", version = "2022.3.0")
+# Python3 (interpreter + Development.Embed/Module) is still resolved
+# from the host via cmake's FindPython3 in naja's CMakeLists.txt;
+# rules_python BCR ships Python 3.11 by default which mismatches the
+# host interpreter 3.13. Downstream consumers that want fully hermetic
+# Python should `register_toolchains` an explicit rules_python version
+# matching the host interpreter and add
+# `@rules_python//python/cc:current_py_cc_headers` to naja's cmake deps.
+
+# Patch rules_foreign_cc to stop leaf-flattening individual headers from
+# cc_library deps into `${EXT_BUILD_DEPS}/include/`. The default behaviour
+# breaks cc_libraries that use `include_prefix` (e.g. @capnp-cpp's
+# kj/string.h ends up at include/string.h, shadowing libc <string.h> and
+# breaking libstdc++ <cstring>'s `using ::memchr`). Upstream tracking:
+# rules_foreign_cc issue #418, open since 2020. This single_version_override
+# only takes effect when kepler-formal is the root module; downstream
+# consumers that pull kepler-formal in via bazel_dep must apply the same
+# single_version_override from their own root MODULE.bazel.
+single_version_override(
+    module_name = "rules_foreign_cc",
+    patch_strip = 1,
+    patches = [
+        "//rules-foreign-cc-patches:no-leaf-flatten-headers.patch",
+    ],
+    version = "0.15.1",
+)
 
 # Use preinstalled cmake/make/pkg-config instead of bootstrapping.
 # The bundled glib in rules_foreign_cc pkg-config bootstrap fails

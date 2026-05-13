@@ -1,0 +1,73 @@
+Stop leaf-flattening cc_library headers into ${EXT_BUILD_DEPS}/include/
+
+`_get_headers()` in framework.bzl returns two lists from a CcInfo:
+  * include_dirs — directories that are added as -I/-isystem to the
+    compile and (via `symlink_contents_to_dir`) get staged with their
+    directory structure preserved.
+  * headers — individual header files NOT under any include_dir, which
+    get staged via `symlink_to_dir` per file, which strips the path to
+    the basename and creates `${EXT_BUILD_DEPS}/include/<basename>`.
+
+The basename-flattening breaks cc_libraries that use `include_prefix`.
+For example, `@capnp-cpp//src/kj:kj` exposes `kj/string.h` via
+`include_prefix = "kj"`. Bazel creates a `_virtual_includes/kj/`
+directory containing kj/string.h, but the actual on-disk path is
+`external/capnp-cpp+/src/kj/string.h`. `_get_headers` checks whether
+the on-disk path starts with any include_dir; the `_virtual_includes`
+path is in the include_dirs list but the source path is NOT under it,
+so `kj/string.h` is added to `headers`. It then gets symlinked at
+`${EXT_BUILD_DEPS}/include/string.h`, shadowing libc's <string.h>
+and breaking libstdc++'s <cstring> in any downstream compile that
+walks `${EXT_BUILD_DEPS}/include` via -isystem.
+
+This affects every BCR cc_library that uses `include_prefix` —
+@capnp-cpp, @onetbb (tbb/time.h, tbb/semaphore.h), @zlib (zlib/gzguts.h
+when packaged that way), and others.
+
+The simplest fix: trust the include_dirs list. Modern cc_libraries
+always expose their headers under some include directory (either via
+`includes` or `include_prefix`'s virtual_includes path); both forms
+end up in compilation_info.includes / .system_includes. Staging only
+the directories preserves the `<kj/string.h>` vs libc `<string.h>`
+distinction.
+
+Risk: a cc_library that exposes a header file WITHOUT including its
+parent directory in `includes` would no longer have that header
+visible to the foreign_cc-driven compile. In practice modern Bazel
+cc_libraries always set `includes` (or `include_prefix`); the
+fallback to per-file staging existed for very old / unusual cc_library
+authoring patterns. Worth upstreaming as opt-in (e.g., a feature
+flag) but the immediate-need fix is to flip the default.
+
+Upstream tracking: rules_foreign_cc issue #418 (open since 2020),
+"Configure directory structure of $EXT_BUILD_DEPS".
+
+--- a/foreign_cc/private/framework.bzl
++++ b/foreign_cc/private/framework.bzl
+@@ -1029,16 +1029,16 @@ def _get_headers(compilation_info):
+     # do not use quote includes, currently they do not contain
+     # library-specific information
+     include_dirs = collections.uniq(include_dirs)
+-    headers = []
+-    for header in compilation_info.headers.to_list():
+-        path = header.path
+-        included = False
+-        for dir_ in include_dirs:
+-            if path.startswith(dir_):
+-                included = True
+-                break
+-        if not included:
+-            headers.append(header)
++    # Skip per-file leaf-flattening: cc_libraries with `include_prefix`
++    # expose their headers via _virtual_includes paths whose source-
++    # path does not match any include_dir, so the original code added
++    # them to `headers` and `symlink_contents_to_dir` then placed each
++    # at `${EXT_BUILD_DEPS}/include/<basename>` — shadowing libc when
++    # any included file (e.g. kj/string.h) shares a basename with a
++    # libc header. Trust the include_dirs list instead; modern
++    # cc_libraries always expose their hdrs under some include
++    # directory via `includes`/`include_prefix`. Issue #418.
++    headers = []
+     return struct(
+         headers = headers,
+         include_dirs = include_dirs,
