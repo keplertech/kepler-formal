@@ -23,10 +23,6 @@ Files: bazel/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
 
-Files: rules-foreign-cc-patches/*
-Copyright: 2026 keplertech.io
-License: Apache-2.0
-
 Files: tools/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only

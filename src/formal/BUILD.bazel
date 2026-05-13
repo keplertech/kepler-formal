@@ -14,5 +14,5 @@ cc_library(
     ],
     includes = ["."],
     visibility = ["//visibility:public"],
-    deps = ["@onetbb//:tbb"],
+    linkopts = ["-ltbb"],
 )
