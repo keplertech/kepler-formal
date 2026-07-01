@@ -47,3 +47,61 @@ else()
 endif()
 
 GTEST_DISCOVER_TESTS(keplerFormalCliTests)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND)
+  set(KEPLER_VERILOG_C_BENCHMARK_CASES
+    safe/Arbiter
+    safe/Barrel
+    safe/BufAl
+    safe/CRC
+    safe/FIFO
+    safe/FourbyFour
+    safe/RCU
+    safe/Rrobin
+    safe/Spinner
+    safe/TicTacToe
+    safe/TreeArb
+    safe/Vending
+    safe/Vlunc
+    safe/Vsa16
+    safe/b01
+    safe/b02
+    safe/b03
+    safe/b06
+    safe/b07
+    safe/b08
+    safe/traffic_light_example
+    unsafe/DAIO
+    unsafe/Dekker
+    unsafe/FIFO
+    unsafe/Ibuf
+    unsafe/NullModem
+    unsafe/ReqAck
+    unsafe/Rotate
+    unsafe/Unidec
+    unsafe/Vlunc
+    unsafe/b01
+    unsafe/non-pipelined-microprocessor
+  )
+
+  foreach(_verilog_c_case IN LISTS KEPLER_VERILOG_C_BENCHMARK_CASES)
+    string(REPLACE "/" "." _verilog_c_test_suffix "${_verilog_c_case}")
+    add_test(
+      NAME KeplerFormalCliBenchmarks.VerilogC.${_verilog_c_test_suffix}
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/RunVerilogCBenchmark.py
+              --kepler-formal $<TARGET_FILE:kepler-formal>
+              --benchmarks-root ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/verilog-c
+              --case ${_verilog_c_case}
+              --timeout 120
+    )
+    set_tests_properties(
+      KeplerFormalCliBenchmarks.VerilogC.${_verilog_c_test_suffix}
+      PROPERTIES
+        LABELS "cli;c2rtl;benchmark;verilog-c"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 180
+    )
+  endforeach()
+endif()

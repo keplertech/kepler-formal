@@ -1,0 +1,40 @@
+# upstream	https://github.com/rajdeep87/verilog-c
+# commit	0b46ae072a477b3d8c00559e0df2483be470dcc4
+# complete cases are runnable as C-vs-RTL equivalence fixtures
+case	status	c_source	rtl_source	c_top	rtl_top	upstream_expected_safety	note
+safe/Arbiter	complete	main.c	main.v	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/Barrel	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/BufAl	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/CRC	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/FIFO	complete	main.c	main.v	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/FourbyFour	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/RCU	complete	main.c	main.v	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/Rrobin	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/Spinner	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/TicTacToe	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/TreeArb	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/Vending	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/Vlunc	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/Vsa16	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/b01	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/b02	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/b03	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/b06	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/b07	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/b08	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+safe/traffic_light_example	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+unsafe/DAIO	complete	main.c	main.v	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/Dekker	complete	main.c	main.v	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/FIFO	complete	main.c	main.v	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/Ibuf	complete	main.c	main.sv	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/NullModem	complete	main.c	main.sv	main	nullModem	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/ReqAck	complete	main.c	main.sv	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/Rotate	complete	main.c	main.v	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/Unidec	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
+unsafe/Vlunc	complete	main.c	main.sv	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/b01	complete	main.c	main.sv	main	main	VERIFICATION FAILED	paired C and RTL inputs
+unsafe/non-pipelined-microprocessor	complete	main.c	main.v	main	main	VERIFICATION FAILED	paired C and RTL inputs
+safe/b04	incomplete					VERIFICATION SUCCESSFUL	upstream snapshot has 0 C files and 1 RTL files at benchmark root
+safe/b05	incomplete					VERIFICATION SUCCESSFUL	upstream snapshot has 0 C files and 1 RTL files at benchmark root
+safe/translate/segments	incomplete						upstream snapshot has 0 C files and 1 RTL files at benchmark root
+unsafe/b02	incomplete					VERIFICATION FAILED	upstream snapshot has 0 C files and 0 RTL files at benchmark root
