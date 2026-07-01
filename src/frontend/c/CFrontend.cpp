@@ -3,8 +3,9 @@
 
 #include "CFrontend.h"
 
+#include "MetronTranslator.h"
+
 #include <chrono>
-#include <cstdlib>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -12,21 +13,6 @@
 
 namespace KEPLER_FORMAL::C2RTL {
 namespace {
-
-std::string shellQuote(const std::string& text) {
-  std::string quoted;
-  quoted.reserve(text.size() + 2);
-  quoted.push_back('\'');
-  for (char c : text) {
-    if (c == '\'') {
-      quoted += "'\\''";
-    } else {
-      quoted.push_back(c);
-    }
-  }
-  quoted.push_back('\'');
-  return quoted;
-}
 
 std::string jsonQuote(const std::string& text) {
   std::string quoted;
@@ -66,18 +52,16 @@ std::filesystem::path defaultWorkDir(int designIndex) {
           std::to_string(stamp));
 }
 
-std::string translatorExecutable() {
-  if (const char* env = std::getenv("KEPLER_C_FRONTEND_TRANSLATOR")) {
-    if (*env != '\0') {
-      return env;
-    }
+bool looksLikeSupportedHardwareC(const std::filesystem::path& inputPath) {
+  std::ifstream input(inputPath);
+  if (!input) {
+    return false;
   }
-  if (const char* env = std::getenv("KEPLER_C2RTL_TRANSLATOR")) {
-    if (*env != '\0') {
-      return env;
-    }
-  }
-  return "metron";
+
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  const auto text = contents.str();
+  return text.find("metron/metron_tools.h") != std::string::npos;
 }
 
 std::set<std::filesystem::path> collectIncludePaths(
@@ -153,6 +137,11 @@ CFrontendResult CFrontend::translateToSystemVerilog(
           "C frontend input does not exist: `" + inputPath.string() + "`");
     }
   }
+  if (!looksLikeSupportedHardwareC(options.inputPaths.front())) {
+    throw std::runtime_error(
+        "C frontend input is outside the currently supported synthesizable "
+        "hardware C subset: `" + options.inputPaths.front().string() + "`");
+  }
 
   CFrontendResult result;
   result.workDir = options.workDir.value_or(defaultWorkDir(options.designIndex));
@@ -166,28 +155,34 @@ CFrontendResult CFrontend::translateToSystemVerilog(
   result.stderrLog = result.workDir / "c_frontend_stderr.log";
   result.manifest = result.workDir / "input_manifest.json";
 
-  const auto translator = translatorExecutable();
   const auto includes = collectIncludePaths(options.inputPaths, options.includePaths);
+  const std::vector<std::filesystem::path> includeVector(includes.begin(),
+                                                         includes.end());
 
   std::ostringstream command;
-  command << shellQuote(translator)
-          << " --quiet"
-          << " --convert " << shellQuote(options.inputPaths.front().string())
-          << " --output " << shellQuote(result.generatedSystemVerilog.string());
+  command << "kepler-formal internal-c2rtl --convert "
+          << options.inputPaths.front().string()
+          << " --output " << result.generatedSystemVerilog.string();
   for (const auto& includePath : includes) {
-    command << " --include " << shellQuote(includePath.string());
+    command << " --include " << includePath.string();
   }
-  command << " > " << shellQuote(result.stdoutLog.string())
-          << " 2> " << shellQuote(result.stderrLog.string());
 
   const auto commandString = command.str();
-  writeManifest(options, result, translator, commandString);
+  writeManifest(options, result, "internal-metron", commandString);
 
-  const int rc = std::system(commandString.c_str());
-  if (rc != 0) {
+  MetronTranslationOptions metronOptions;
+  metronOptions.inputPath = options.inputPaths.front();
+  metronOptions.outputPath = result.generatedSystemVerilog;
+  metronOptions.stdoutLog = result.stdoutLog;
+  metronOptions.stderrLog = result.stderrLog;
+  metronOptions.includePaths = includeVector;
+  try {
+    translateWithMetron(metronOptions);
+  } catch (const std::exception& e) {
     throw std::runtime_error(
         "C frontend failed to translate `" + options.inputPaths.front().string() +
-        "` to SystemVerilog; see `" + result.stderrLog.string() + "`");
+        "` to SystemVerilog; see `" + result.stderrLog.string() +
+        "`: " + e.what());
   }
 
   ec.clear();

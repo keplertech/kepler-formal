@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -57,58 +56,6 @@ std::filesystem::path makeUniqueTempDir(const std::string& prefix) {
   const auto dir = std::filesystem::temp_directory_path() / uniqueName;
   std::filesystem::create_directories(dir);
   return dir;
-}
-
-class ScopedEnvVar {
- public:
-  ScopedEnvVar(const char* name, const std::string& value): name_(name) {
-    if (const char* oldValue = std::getenv(name)) {
-      hadOldValue_ = true;
-      oldValue_ = oldValue;
-    }
-    setenv(name_.c_str(), value.c_str(), 1);
-  }
-
-  ~ScopedEnvVar() {
-    if (hadOldValue_) {
-      setenv(name_.c_str(), oldValue_.c_str(), 1);
-    } else {
-      unsetenv(name_.c_str());
-    }
-  }
-
- private:
-  std::string name_;
-  bool hadOldValue_ = false;
-  std::string oldValue_;
-};
-
-std::filesystem::path writeFakeCTranslator(const std::filesystem::path& dir) {
-  const auto translatorPath = dir / "fake_c_to_sv.sh";
-  std::ofstream translator(translatorPath);
-  translator
-      << "#!/bin/sh\n"
-      << "out=''\n"
-      << "while [ \"$#\" -gt 0 ]; do\n"
-      << "  case \"$1\" in\n"
-      << "    -o|--output) shift; out=\"$1\" ;;\n"
-      << "  esac\n"
-      << "  shift\n"
-      << "done\n"
-      << "if [ -z \"$out\" ]; then exit 2; fi\n"
-      << "cat > \"$out\" <<'SV'\n"
-      << "module ctop(input logic a, output logic y);\n"
-      << "  assign y = a;\n"
-      << "endmodule\n"
-      << "SV\n";
-  translator.close();
-  std::filesystem::permissions(
-      translatorPath,
-      std::filesystem::perms::owner_exec |
-          std::filesystem::perms::owner_read |
-          std::filesystem::perms::owner_write,
-      std::filesystem::perm_options::add);
-  return translatorPath;
 }
 
 int runWithConfigFile(const std::filesystem::path& cfgPath) {
@@ -1249,20 +1196,32 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogAccepted) {
 
 TEST_F(KeplerFormalCliTests, ConfigCDesignSectionRunsTranslatorAndComparesGeneratedSystemVerilog) {
   const auto tmpDir = makeUniqueTempDir("kepler_c_frontend");
-  const auto translatorPath = writeFakeCTranslator(tmpDir);
   const auto cPath = tmpDir / "model.c";
   const auto rtlPath = tmpDir / "rtl.sv";
   const auto workDir = tmpDir / "c_work";
 
   {
     std::ofstream cFile(cPath);
-    cFile << "int placeholder(void) { return 0; }\n";
+    cFile
+        << "#include \"metron/metron_tools.h\"\n"
+        << "class Adder {\n"
+        << "public:\n"
+        << "  logic<8> add(logic<8> a, logic<8> b) {\n"
+        << "    return a + b;\n"
+        << "  }\n"
+        << "};\n";
   }
   {
     std::ofstream rtlFile(rtlPath);
     rtlFile
-        << "module ctop(input logic a, output logic y);\n"
-        << "  assign y = a;\n"
+        << "module Adder(\n"
+        << "  input logic[7:0] add_a,\n"
+        << "  input logic[7:0] add_b,\n"
+        << "  output logic[7:0] add_ret\n"
+        << ");\n"
+        << "  always_comb begin : add\n"
+        << "    add_ret = add_a + add_b;\n"
+        << "  end\n"
         << "endmodule\n";
   }
 
@@ -1271,19 +1230,19 @@ TEST_F(KeplerFormalCliTests, ConfigCDesignSectionRunsTranslatorAndComparesGenera
       "  format: c\n"
       "  input_paths:\n"
       "    - " + cPath.string() + "\n"
-      "  top: ctop\n"
+      "  top: Adder\n"
       "  work_dir: " + workDir.string() + "\n"
       "  keep_generated: true\n"
       "design2:\n"
       "  format: systemverilog\n"
       "  input_paths:\n"
       "    - " + rtlPath.string() + "\n"
-      "  top: ctop\n");
+      "  top: Adder\n");
 
-  ScopedEnvVar translatorEnv("KEPLER_C_FRONTEND_TRANSLATOR", translatorPath.string());
   int rc = runWithConfigFile(cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
-  EXPECT_TRUE(std::filesystem::exists(workDir / "design1_ctop_from_c.sv"));
+  EXPECT_TRUE(std::filesystem::exists(workDir / "design1_Adder_from_c.sv"));
+  EXPECT_TRUE(std::filesystem::exists(workDir / "metron" / "metron_tools.sv"));
   EXPECT_TRUE(std::filesystem::exists(workDir / "input_manifest.json"));
 
   std::filesystem::remove(cfgPath);
@@ -1292,20 +1251,32 @@ TEST_F(KeplerFormalCliTests, ConfigCDesignSectionRunsTranslatorAndComparesGenera
 
 TEST_F(KeplerFormalCliTests, ConfigCDesignSectionCleansGeneratedArtifactsByDefault) {
   const auto tmpDir = makeUniqueTempDir("kepler_c_frontend_cleanup");
-  const auto translatorPath = writeFakeCTranslator(tmpDir);
   const auto cPath = tmpDir / "model.c";
   const auto rtlPath = tmpDir / "rtl.sv";
   const auto workDir = tmpDir / "c_work";
 
   {
     std::ofstream cFile(cPath);
-    cFile << "int placeholder(void) { return 0; }\n";
+    cFile
+        << "#include \"metron/metron_tools.h\"\n"
+        << "class Adder {\n"
+        << "public:\n"
+        << "  logic<8> add(logic<8> a, logic<8> b) {\n"
+        << "    return a + b;\n"
+        << "  }\n"
+        << "};\n";
   }
   {
     std::ofstream rtlFile(rtlPath);
     rtlFile
-        << "module ctop(input logic a, output logic y);\n"
-        << "  assign y = a;\n"
+        << "module Adder(\n"
+        << "  input logic[7:0] add_a,\n"
+        << "  input logic[7:0] add_b,\n"
+        << "  output logic[7:0] add_ret\n"
+        << ");\n"
+        << "  always_comb begin : add\n"
+        << "    add_ret = add_a + add_b;\n"
+        << "  end\n"
         << "endmodule\n";
   }
 
@@ -1313,14 +1284,13 @@ TEST_F(KeplerFormalCliTests, ConfigCDesignSectionCleansGeneratedArtifactsByDefau
       "design1:\n"
       "  format: c\n"
       "  input_paths: " + cPath.string() + "\n"
-      "  top: ctop\n"
+      "  top: Adder\n"
       "  work_dir: " + workDir.string() + "\n"
       "design2:\n"
       "  format: systemverilog\n"
       "  input_paths: " + rtlPath.string() + "\n"
-      "  top: ctop\n");
+      "  top: Adder\n");
 
-  ScopedEnvVar translatorEnv("KEPLER_C_FRONTEND_TRANSLATOR", translatorPath.string());
   int rc = runWithConfigFile(cfgPath);
   EXPECT_EQ(rc, EXIT_SUCCESS);
   EXPECT_FALSE(std::filesystem::exists(workDir));

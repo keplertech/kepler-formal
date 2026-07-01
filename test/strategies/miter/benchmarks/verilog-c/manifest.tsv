@@ -1,6 +1,7 @@
 # upstream	https://github.com/rajdeep87/verilog-c
 # commit	0b46ae072a477b3d8c00559e0df2483be470dcc4
-# complete cases are runnable as C-vs-RTL equivalence fixtures
+# complete cases have paired C/RTL inputs; the runner skips sources outside
+# the currently supported synthesizable C2RTL subset
 case	status	c_source	rtl_source	c_top	rtl_top	upstream_expected_safety	note
 safe/Arbiter	complete	main.c	main.v	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs
 safe/Barrel	complete	main.c	main.sv	main	main	VERIFICATION SUCCESSFUL	paired C and RTL inputs

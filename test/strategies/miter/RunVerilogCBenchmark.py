@@ -4,24 +4,12 @@
 
 import argparse
 import os
-import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 SKIP_RETURN_CODE = 77
-
-
-def find_translator(env):
-    configured = env.get("KEPLER_C_FRONTEND_TRANSLATOR") or env.get("KEPLER_C2RTL_TRANSLATOR")
-    if configured:
-        first = shlex.split(configured)[0]
-        if Path(first).is_file() or shutil.which(first):
-            return configured
-        return None
-    return shutil.which("metron")
 
 
 def load_manifest(benchmarks_root):
@@ -46,17 +34,14 @@ def yaml_quote(path):
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def uses_supported_c2rtl_subset(path):
+    return "metron/metron_tools.h" in path.read_text(errors="ignore")
+
+
 def run_case(args):
     env = os.environ.copy()
-    if not find_translator(env):
-        print(
-            "Skipping verilog-c benchmark: no real C frontend translator found "
-            "(set KEPLER_C_FRONTEND_TRANSLATOR, KEPLER_C2RTL_TRANSLATOR, or put metron on PATH)",
-            file=sys.stderr,
-        )
-        return SKIP_RETURN_CODE
-
     benchmarks_root = Path(args.benchmarks_root).resolve()
+
     cases = load_manifest(benchmarks_root)
     if args.case not in cases:
         print(f"Unknown benchmark case {args.case!r}", file=sys.stderr)
@@ -75,6 +60,13 @@ def run_case(args):
         print(f"  C:   {c_path}", file=sys.stderr)
         print(f"  RTL: {rtl_path}", file=sys.stderr)
         return 2
+    if not uses_supported_c2rtl_subset(c_path):
+        print(
+            f"Skipping {args.case}: upstream verilog-c source is ANSI C verifier "
+            "code outside the currently supported synthesizable C2RTL subset",
+            file=sys.stderr,
+        )
+        return SKIP_RETURN_CODE
 
     with tempfile.TemporaryDirectory(prefix="kepler_verilog_c_") as tmp:
         tmp_dir = Path(tmp)

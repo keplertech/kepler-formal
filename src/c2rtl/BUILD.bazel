@@ -1,0 +1,62 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+METRON_SRCS = [
+    "//:thirdparty/metron/metron/CContext.cpp",
+    "//:thirdparty/metron/metron/CInstance.cpp",
+    "//:thirdparty/metron/metron/CLexer.cpp",
+    "//:thirdparty/metron/metron/CNode.cpp",
+    "//:thirdparty/metron/metron/CParser.cpp",
+    "//:thirdparty/metron/metron/CScope.cpp",
+    "//:thirdparty/metron/metron/CSourceFile.cpp",
+    "//:thirdparty/metron/metron/CSourceRepo.cpp",
+    "//:thirdparty/metron/metron/CToken.cpp",
+    "//:thirdparty/metron/metron/Checker.cpp",
+    "//:thirdparty/metron/metron/Cursor.cpp",
+    "//:thirdparty/metron/metron/Dumper.cpp",
+    "//:thirdparty/metron/metron/Emitter.cpp",
+    "//:thirdparty/metron/metron/MtUtils.cpp",
+    "//:thirdparty/metron/metron/Tracer.cpp",
+    "//:thirdparty/metron/metron/main/main_new.cpp",
+    "//:thirdparty/metron/metron/metron_tools.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeClass.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeDeclaration.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeField.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeFunction.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeStruct.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeTranslationUnit.cpp",
+    "//:thirdparty/metron/metron/nodes/CNodeUnion.cpp",
+]
+
+METROLIB_SRCS = [
+    "//:thirdparty/metrolib/metrolib/core/Blobs.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Check.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Constants.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Dumper.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Err.cpp",
+    "//:thirdparty/metrolib/metrolib/core/FieldInfo.cpp",
+    "//:thirdparty/metrolib/metrolib/core/File.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Log.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Platform.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Result.cpp",
+    "//:thirdparty/metrolib/metrolib/core/StateStack.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Tests.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Types.cpp",
+    "//:thirdparty/metrolib/metrolib/core/Utils.cpp",
+]
+
+cc_library(
+    name = "kepler_c2rtl",
+    srcs = [
+        "MetronTranslator.cpp",
+    ] + METRON_SRCS + METROLIB_SRCS,
+    hdrs = ["MetronTranslator.h"],
+    copts = [
+        "-Ithirdparty/metron",
+        "-Ithirdparty/metron/symlinks",
+        "-Ithirdparty/metrolib",
+        "-Ithirdparty/matcheroni",
+        "-w",
+    ],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)

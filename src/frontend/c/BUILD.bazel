@@ -6,4 +6,5 @@ cc_library(
     hdrs = ["CFrontend.h"],
     includes = ["."],
     visibility = ["//visibility:public"],
+    deps = ["//src/c2rtl:kepler_c2rtl"],
 )

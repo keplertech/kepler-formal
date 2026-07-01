@@ -6,3 +6,7 @@ add_library(kepler_c_frontend
 )
 
 target_include_directories(kepler_c_frontend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kepler_c_frontend
+    PRIVATE
+        kepler_c2rtl
+)

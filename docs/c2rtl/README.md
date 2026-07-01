@@ -41,9 +41,8 @@ design2:
 ```
 
 `format: c` is user-facing. The translator backend is an implementation detail.
-For local development, the executable can be overridden with
-`KEPLER_C_FRONTEND_TRANSLATOR` or `KEPLER_C2RTL_TRANSLATOR`; otherwise
-`kepler-formal` looks for `metron` on `PATH`.
+`kepler-formal` links the bundled Metron frontend from `thirdparty/metron` and
+performs the C-to-RTL conversion in-process before loading the generated RTL.
 
 ## Artifacts
 
@@ -53,7 +52,8 @@ and removed at the end of the run. Set `keep_generated: true` to preserve them.
 Each preserved C frontend work directory contains:
 
 - `designN_<top>_from_c.sv`: generated SystemVerilog passed to the RTL loader.
-- `input_manifest.json`: source paths, top, clock/reset metadata, command line,
+- `input_manifest.json`: source paths, top, clock/reset metadata, internal
+  translation command description,
   and log paths.
 - `c_frontend_stdout.log`
 - `c_frontend_stderr.log`

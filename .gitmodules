@@ -13,3 +13,12 @@
 [submodule "thirdparty/cadical"]
 	path = thirdparty/cadical
 	url = https://github.com/arminbiere/cadical
+[submodule "thirdparty/metron"]
+	path = thirdparty/metron
+	url = https://github.com/aappleby/metron
+[submodule "thirdparty/metrolib"]
+	path = thirdparty/metrolib
+	url = https://github.com/aappleby/metrolib
+[submodule "thirdparty/matcheroni"]
+	path = thirdparty/matcheroni
+	url = https://github.com/aappleby/matcheroni
