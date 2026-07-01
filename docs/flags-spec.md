@@ -43,6 +43,7 @@ that page describes the current implementation rather than a frozen contract.
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `solver` | string | SAT solver selection. Supported values: `kissat`, `glucose`. If omitted, the implementation defaults to `kissat`. |
+| `design1`, `design2` | map | Per-design input sections for mixed frontend runs such as C-vs-RTL. Supported per-design formats are currently `c`, `verilog`, and `systemverilog`. |
 
 Example:
 
@@ -65,3 +66,20 @@ cnf_export_path: ./miter.cnf
 po_cnf_export: true
 po_cnf_export_path: ./po_cnfs
 ```
+
+Mixed C-vs-RTL example:
+
+```yaml
+verification: sec
+design1:
+  format: c
+  input_paths: [model/foo.c]
+  top: foo
+design2:
+  format: systemverilog
+  input_paths: [rtl/foo.sv]
+  top: foo
+```
+
+The C frontend generates temporary SystemVerilog and then reuses the normal
+SystemVerilog flow. See [C-to-RTL SEC Frontend](c2rtl/README.md).

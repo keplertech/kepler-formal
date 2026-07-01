@@ -34,6 +34,7 @@
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
 #include "Config.h"
+#include "CFrontend.h"
 #include "KeplerFormalUtils.h"
 #include "Tree2BoolExpr.h"
 #include "model/SequentialDesignModel.h"
@@ -361,6 +362,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "sv_design2_flist",
       "sv_design1_top",
       "sv_design2_top",
+      "design1",
+      "design2",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -892,7 +895,19 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF };
+  enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF, C };
+  struct CDesignOptions {
+    std::optional<std::string> top;
+    std::optional<std::string> clock;
+    std::optional<std::string> reset;
+    std::vector<std::string> includePaths;
+    std::optional<std::string> workDir;
+    bool keepArtifacts = false;
+  };
+  struct DesignFormatOptions {
+    FormatType format = FormatType::VERILOG;
+    CDesignOptions c;
+  };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
     naja::DNL::destroy();
@@ -910,6 +925,8 @@ int KeplerFormalMain(int argc, char** argv) {
   FormatType inputFormatType = FormatType::VERILOG;
   DesignInputs designInputs;
   SystemVerilogOptions systemVerilogOptions;
+  DesignFormatOptions designFormatOptions[2];
+  bool usedDesignSections = false;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
@@ -953,6 +970,66 @@ int KeplerFormalMain(int argc, char** argv) {
   KEPLER_FORMAL::Config::setSecSteadyFrontierGuard(false);
   KEPLER_FORMAL::Config::setSecInternalStateCorrespondence(false);
 
+  const auto parseFormatToken = [](const std::string& fmt,
+                                   FormatType& format) {
+    if (fmt == "naja_if") {
+      format = FormatType::NAJA_IF;
+      return true;
+    }
+    if (fmt == "verilog" || fmt == "v") {
+      format = FormatType::VERILOG;
+      return true;
+    }
+    if (fmt == "systemverilog" || fmt == "sv") {
+      format = FormatType::SYSTEMVERILOG;
+      return true;
+    }
+    if (fmt == "c") {
+      format = FormatType::C;
+      return true;
+    }
+    return false;
+  };
+
+  const auto formatTypeName = [](FormatType format) {
+    switch (format) {
+      case FormatType::NAJA_IF:
+        return "SNL";
+      case FormatType::SYSTEMVERILOG:
+        return "SYSTEMVERILOG";
+      case FormatType::C:
+        return "C";
+      case FormatType::VERILOG:
+      default:
+        return "VERILOG";
+    }
+  };
+
+  const auto yamlScalarOrSequenceToVector =
+      [](const YAML::Node& node, std::vector<std::string>& out,
+         std::string& error, const char* key) {
+        out.clear();
+        if (!node) {
+          return true;
+        }
+        if (node.IsScalar()) {
+          out.emplace_back(node.as<std::string>());
+          return true;
+        }
+        if (!node.IsSequence()) {
+          error = std::string(key) + " must be a scalar or sequence";
+          return false;
+        }
+        for (const auto& entry : node) {
+          if (!entry.IsScalar()) {
+            error = std::string(key) + " entries must be scalar file paths";
+            return false;
+          }
+          out.emplace_back(entry.as<std::string>());
+        }
+        return true;
+      };
+
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--config" || a == "-c") {
@@ -974,19 +1051,9 @@ int KeplerFormalMain(int argc, char** argv) {
         // format
         if (cfg["format"] && cfg["format"].IsScalar()) {
           std::string fmt = cfg["format"].as<std::string>();
-          if (fmt == "naja_if") {
-            // LCOV_EXCL_START
-            inputFormatType = FormatType::NAJA_IF;
-            // LCOV_EXCL_STOP
-          } else if (fmt == "verilog" || fmt == "v") {
-            inputFormatType = FormatType::VERILOG;
-          } else if (fmt == "systemverilog" || fmt == "sv") {
-            // LCOV_EXCL_START
-            inputFormatType = FormatType::SYSTEMVERILOG;
-          } else {
+          if (!parseFormatToken(fmt, inputFormatType)) {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
-            // LCOV_EXCL_STOP
           }
         }
 
@@ -1103,6 +1170,164 @@ int KeplerFormalMain(int argc, char** argv) {
             SPDLOG_CRITICAL("Invalid input_paths in config: {}", inputError);
             return EXIT_FAILURE;
             // LCOV_EXCL_STOP
+          }
+        }
+
+        if (cfg["design1"] || cfg["design2"]) {
+          if (!cfg["design1"] || !cfg["design2"]) {
+            SPDLOG_CRITICAL("design1 and design2 must both be present when using per-design config");
+            return EXIT_FAILURE;
+          }
+          if (!cfg["design1"].IsMap() || !cfg["design2"].IsMap()) {
+            SPDLOG_CRITICAL("design1 and design2 must be YAML maps");
+            return EXIT_FAILURE;
+          }
+          usedDesignSections = true;
+
+          const auto parseDesignSection =
+              [&](const YAML::Node& designNode, int designIndex,
+                  const char* designKey) {
+                static const std::unordered_set<std::string> kAllowedDesignKeys = {
+                    "format",
+                    "input_paths",
+                    "top",
+                    "sv_flist",
+                    "flist",
+                    "clock",
+                    "reset",
+                    "include_paths",
+                    "work_dir",
+                    "keep_generated",
+                    "keep_c2rtl_work",
+                };
+
+                for (auto it = designNode.begin(); it != designNode.end(); ++it) {
+                  if (!it->first.IsScalar()) {
+                    SPDLOG_CRITICAL("{} contains a non-scalar key", designKey);
+                    return false;
+                  }
+                  const auto key = it->first.as<std::string>();
+                  if (kAllowedDesignKeys.find(key) == kAllowedDesignKeys.end()) {
+                    SPDLOG_CRITICAL("Unknown {} option: {}", designKey, key);
+                    return false;
+                  }
+                }
+
+                auto& designFormat = designFormatOptions[designIndex];
+                auto& designInput =
+                    designIndex == 0 ? designInputs.design0 : designInputs.design1;
+                auto& svOptions = designIndex == 0
+                                      ? systemVerilogOptions.design0
+                                      : systemVerilogOptions.design1;
+
+                if (!designNode["format"] || !designNode["format"].IsScalar()) {
+                  SPDLOG_CRITICAL("{} requires scalar format", designKey);
+                  return false;
+                }
+                const auto fmt = designNode["format"].as<std::string>();
+                if (!parseFormatToken(fmt, designFormat.format)) {
+                  SPDLOG_CRITICAL("Unrecognized {} format: {}", designKey, fmt);
+                  return false;
+                }
+                if (designFormat.format == FormatType::NAJA_IF) {
+                  SPDLOG_CRITICAL("{} format naja_if is not supported in per-design config yet", designKey);
+                  return false;
+                }
+
+                std::string vectorError;
+                if (!yamlScalarOrSequenceToVector(
+                        designNode["input_paths"], designInput, vectorError, "input_paths")) {
+                  SPDLOG_CRITICAL("Invalid {} input_paths: {}", designKey, vectorError);
+                  return false;
+                }
+
+                const auto parseScalar = [&](const char* key,
+                                             std::optional<std::string>& target) {
+                  const auto node = designNode[key];
+                  if (!node) {
+                    return true;
+                  }
+                  if (!node.IsScalar()) {
+                    SPDLOG_CRITICAL("{} {} must be a scalar", designKey, key);
+                    return false;
+                  }
+                  const auto value = node.as<std::string>();
+                  if (value.empty()) {
+                    SPDLOG_CRITICAL("{} {} must not be empty", designKey, key);
+                    return false;
+                  }
+                  target = value;
+                  return true;
+                };
+
+                if (!parseScalar("top", svOptions.top) ||
+                    !parseScalar("top", designFormat.c.top)) {
+                  return false;
+                }
+                if (!parseScalar("sv_flist", svOptions.flist) ||
+                    !parseScalar("flist", svOptions.flist) ||
+                    !parseScalar("clock", designFormat.c.clock) ||
+                    !parseScalar("reset", designFormat.c.reset) ||
+                    !parseScalar("work_dir", designFormat.c.workDir)) {
+                  return false;
+                }
+
+                if (designNode["include_paths"]) {
+                  if (!yamlScalarOrSequenceToVector(
+                          designNode["include_paths"],
+                          designFormat.c.includePaths,
+                          vectorError,
+                          "include_paths")) {
+                    SPDLOG_CRITICAL("Invalid {} include_paths: {}", designKey, vectorError);
+                    return false;
+                  }
+                }
+                if (designNode["keep_generated"]) {
+                  if (!designNode["keep_generated"].IsScalar()) {
+                    SPDLOG_CRITICAL("{} keep_generated must be a scalar", designKey);
+                    return false;
+                  }
+                  designFormat.c.keepArtifacts =
+                      designNode["keep_generated"].as<bool>();
+                }
+                if (designNode["keep_c2rtl_work"]) {
+                  if (!designNode["keep_c2rtl_work"].IsScalar()) {
+                    SPDLOG_CRITICAL("{} keep_c2rtl_work must be a scalar", designKey);
+                    return false;
+                  }
+                  designFormat.c.keepArtifacts =
+                      designNode["keep_c2rtl_work"].as<bool>();
+                }
+
+                if (designFormat.format == FormatType::C && designInput.empty()) {
+                  SPDLOG_CRITICAL("{} format c requires input_paths", designKey);
+                  return false;
+                }
+                if ((designFormat.format == FormatType::VERILOG ||
+                     designFormat.format == FormatType::SYSTEMVERILOG) &&
+                    designInput.empty() && !svOptions.flist) {
+                  SPDLOG_CRITICAL(
+                      "{} requires input_paths or flist/sv_flist", designKey);
+                  return false;
+                }
+                return true;
+              };
+
+          if (!parseDesignSection(cfg["design1"], 0, "design1") ||
+              !parseDesignSection(cfg["design2"], 1, "design2")) {
+            return EXIT_FAILURE;
+          }
+
+          const bool anyC =
+              designFormatOptions[0].format == FormatType::C ||
+              designFormatOptions[1].format == FormatType::C;
+          const bool anySystemVerilog =
+              designFormatOptions[0].format == FormatType::SYSTEMVERILOG ||
+              designFormatOptions[1].format == FormatType::SYSTEMVERILOG;
+          if (anyC || anySystemVerilog) {
+            inputFormatType = FormatType::SYSTEMVERILOG;
+          } else {
+            inputFormatType = FormatType::VERILOG;
           }
         }
 
@@ -1592,23 +1817,90 @@ int KeplerFormalMain(int argc, char** argv) {
       logLevel, verificationMode == VerificationMode::SEC, logFileName);
 
   SPDLOG_INFO("KEPLER FORMAL: Run.");
-  std::string inputFormatName = "VERILOG";
-  if (inputFormatType == FormatType::NAJA_IF) {
-    // LCOV_EXCL_START
-    inputFormatName = "SNL";
+  std::string inputFormatName = formatTypeName(inputFormatType);
+  if (usedDesignSections) {
+    inputFormatName = std::string(formatTypeName(designFormatOptions[0].format)) +
+                      "/" + formatTypeName(designFormatOptions[1].format);
   }
-  // LCOV_EXCL_STOP
-  if (inputFormatType == FormatType::SYSTEMVERILOG) {
-    // LCOV_EXCL_START
-    inputFormatName = "SYSTEMVERILOG";
-  }
-  // LCOV_EXCL_STOP
   SPDLOG_INFO("Input format: {}", inputFormatName);
   if (!runLogFilePath.empty()) {
     SPDLOG_INFO("Run log: {}", runLogFilePath);
   }
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);
+
+  std::vector<KEPLER_FORMAL::C2RTL::CFrontendResult> cFrontendResults;
+  struct CFrontendCleanupGuard {
+    std::vector<KEPLER_FORMAL::C2RTL::CFrontendResult>* results;
+    ~CFrontendCleanupGuard() {
+      if (results == nullptr) {
+        return;
+      }
+      for (const auto& result : *results) {
+        if (result.keepArtifacts) {
+          continue;
+        }
+        std::error_code ec;
+        std::filesystem::remove_all(result.workDir, ec);
+      }
+    }
+  } cFrontendCleanupGuard{&cFrontendResults};
+  const auto materializeCDesign =
+      [&](int designIndex,
+          std::vector<std::string>& designPaths,
+          SystemVerilogDesignOptions& svOptions) {
+        const auto& cOptions = designFormatOptions[designIndex].c;
+        KEPLER_FORMAL::C2RTL::CFrontendOptions options;
+        options.designIndex = designIndex;
+        options.top = cOptions.top;
+        options.clock = cOptions.clock;
+        options.reset = cOptions.reset;
+        options.keepArtifacts = cOptions.keepArtifacts;
+        if (cOptions.workDir) {
+          options.workDir = std::filesystem::path(*cOptions.workDir);
+        }
+        for (const auto& inputPath : designPaths) {
+          options.inputPaths.emplace_back(inputPath);
+        }
+        for (const auto& includePath : cOptions.includePaths) {
+          options.includePaths.emplace_back(includePath);
+        }
+
+        KEPLER_FORMAL::C2RTL::CFrontend frontend;
+        auto result = frontend.translateToSystemVerilog(options);
+        SPDLOG_INFO(
+            "C frontend generated SystemVerilog for design {}: {}",
+            designIndex + 1,
+            result.generatedSystemVerilog.string());
+        designPaths.clear();
+        designPaths.emplace_back(result.generatedSystemVerilog.string());
+        svOptions.top = cOptions.top;
+        cFrontendResults.push_back(std::move(result));
+      };
+
+  if (inputFormatType == FormatType::C && !usedDesignSections) {
+    SPDLOG_CRITICAL("format: c requires per-design YAML sections design1 and design2");
+    return EXIT_FAILURE;
+  }
+
+  if (usedDesignSections) {
+    try {
+      if (designFormatOptions[0].format == FormatType::C) {
+        materializeCDesign(
+            0, designInputs.design0, systemVerilogOptions.design0);
+        designFormatOptions[0].format = FormatType::SYSTEMVERILOG;
+      }
+      if (designFormatOptions[1].format == FormatType::C) {
+        materializeCDesign(
+            1, designInputs.design1, systemVerilogOptions.design1);
+        designFormatOptions[1].format = FormatType::SYSTEMVERILOG;
+      }
+    } catch (const std::exception& e) {
+      SPDLOG_CRITICAL("C frontend failed: {}", e.what());
+      return EXIT_FAILURE;
+    }
+    inputFormatType = FormatType::SYSTEMVERILOG;
+  }
 
   // Basic validation
   if (inputFormatType == FormatType::SYSTEMVERILOG) {

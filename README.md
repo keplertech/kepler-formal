@@ -110,6 +110,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
+| `design1`, `design2` | map | Per-design sections for mixed frontend runs such as C-vs-RTL SEC. |
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
 
@@ -128,6 +129,24 @@ py_tech_files:
   - primitives.py             # Optional: Python tech loaders are YAML-only
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ```
+
+C-vs-RTL SEC uses per-design YAML sections. The C side is translated to
+temporary SystemVerilog and then compared through the normal RTL SEC flow:
+
+```yaml
+verification: sec
+design1:
+  format: c
+  input_paths: [model/foo.c]
+  top: foo
+design2:
+  format: systemverilog
+  input_paths: [rtl/foo.sv]
+  top: foo
+```
+
+See [docs/c2rtl/README.md](docs/c2rtl/README.md) for the current C frontend
+contract and generated artifacts.
 
 ## Examples 
 

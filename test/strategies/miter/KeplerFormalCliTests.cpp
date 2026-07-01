@@ -59,6 +59,58 @@ std::filesystem::path makeUniqueTempDir(const std::string& prefix) {
   return dir;
 }
 
+class ScopedEnvVar {
+ public:
+  ScopedEnvVar(const char* name, const std::string& value): name_(name) {
+    if (const char* oldValue = std::getenv(name)) {
+      hadOldValue_ = true;
+      oldValue_ = oldValue;
+    }
+    setenv(name_.c_str(), value.c_str(), 1);
+  }
+
+  ~ScopedEnvVar() {
+    if (hadOldValue_) {
+      setenv(name_.c_str(), oldValue_.c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+ private:
+  std::string name_;
+  bool hadOldValue_ = false;
+  std::string oldValue_;
+};
+
+std::filesystem::path writeFakeCTranslator(const std::filesystem::path& dir) {
+  const auto translatorPath = dir / "fake_c_to_sv.sh";
+  std::ofstream translator(translatorPath);
+  translator
+      << "#!/bin/sh\n"
+      << "out=''\n"
+      << "while [ \"$#\" -gt 0 ]; do\n"
+      << "  case \"$1\" in\n"
+      << "    -o|--output) shift; out=\"$1\" ;;\n"
+      << "  esac\n"
+      << "  shift\n"
+      << "done\n"
+      << "if [ -z \"$out\" ]; then exit 2; fi\n"
+      << "cat > \"$out\" <<'SV'\n"
+      << "module ctop(input logic a, output logic y);\n"
+      << "  assign y = a;\n"
+      << "endmodule\n"
+      << "SV\n";
+  translator.close();
+  std::filesystem::permissions(
+      translatorPath,
+      std::filesystem::perms::owner_exec |
+          std::filesystem::perms::owner_read |
+          std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::add);
+  return translatorPath;
+}
+
 int runWithConfigFile(const std::filesystem::path& cfgPath) {
   std::string argv0 = "kepler-formal";
   std::string argv1 = "--config";
@@ -1193,6 +1245,88 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogAccepted) {
   EXPECT_EQ(rc, EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCDesignSectionRunsTranslatorAndComparesGeneratedSystemVerilog) {
+  const auto tmpDir = makeUniqueTempDir("kepler_c_frontend");
+  const auto translatorPath = writeFakeCTranslator(tmpDir);
+  const auto cPath = tmpDir / "model.c";
+  const auto rtlPath = tmpDir / "rtl.sv";
+  const auto workDir = tmpDir / "c_work";
+
+  {
+    std::ofstream cFile(cPath);
+    cFile << "int placeholder(void) { return 0; }\n";
+  }
+  {
+    std::ofstream rtlFile(rtlPath);
+    rtlFile
+        << "module ctop(input logic a, output logic y);\n"
+        << "  assign y = a;\n"
+        << "endmodule\n";
+  }
+
+  const auto cfgPath = writeTempConfig(
+      "design1:\n"
+      "  format: c\n"
+      "  input_paths:\n"
+      "    - " + cPath.string() + "\n"
+      "  top: ctop\n"
+      "  work_dir: " + workDir.string() + "\n"
+      "  keep_generated: true\n"
+      "design2:\n"
+      "  format: systemverilog\n"
+      "  input_paths:\n"
+      "    - " + rtlPath.string() + "\n"
+      "  top: ctop\n");
+
+  ScopedEnvVar translatorEnv("KEPLER_C_FRONTEND_TRANSLATOR", translatorPath.string());
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_TRUE(std::filesystem::exists(workDir / "design1_ctop_from_c.sv"));
+  EXPECT_TRUE(std::filesystem::exists(workDir / "input_manifest.json"));
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCDesignSectionCleansGeneratedArtifactsByDefault) {
+  const auto tmpDir = makeUniqueTempDir("kepler_c_frontend_cleanup");
+  const auto translatorPath = writeFakeCTranslator(tmpDir);
+  const auto cPath = tmpDir / "model.c";
+  const auto rtlPath = tmpDir / "rtl.sv";
+  const auto workDir = tmpDir / "c_work";
+
+  {
+    std::ofstream cFile(cPath);
+    cFile << "int placeholder(void) { return 0; }\n";
+  }
+  {
+    std::ofstream rtlFile(rtlPath);
+    rtlFile
+        << "module ctop(input logic a, output logic y);\n"
+        << "  assign y = a;\n"
+        << "endmodule\n";
+  }
+
+  const auto cfgPath = writeTempConfig(
+      "design1:\n"
+      "  format: c\n"
+      "  input_paths: " + cPath.string() + "\n"
+      "  top: ctop\n"
+      "  work_dir: " + workDir.string() + "\n"
+      "design2:\n"
+      "  format: systemverilog\n"
+      "  input_paths: " + rtlPath.string() + "\n"
+      "  top: ctop\n");
+
+  ScopedEnvVar translatorEnv("KEPLER_C_FRONTEND_TRANSLATOR", translatorPath.string());
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_FALSE(std::filesystem::exists(workDir));
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, CliSvAliasAccepted) {

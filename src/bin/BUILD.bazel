@@ -39,6 +39,7 @@ cc_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//src/config:kepler_config",
+        "//src/frontend/c:kepler_c_frontend",
         "//src/sec:kepler_sec",
         "//src/scope:scope_extraction",
         "//src/strategies:formal_strategies",

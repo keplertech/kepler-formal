@@ -50,6 +50,29 @@ kepler-formal -sv \
   -k 32
 ```
 
+For C-vs-RTL, use per-design YAML sections. The C side is translated to
+temporary SystemVerilog and then compared through the normal SystemVerilog SEC
+flow:
+
+```yaml
+verification: sec
+sec_engine: pdr
+sec_encoding: dual_rail_steady
+max_k: 32
+
+design1:
+  format: c
+  input_paths:
+    - model/foo.c
+  top: foo
+
+design2:
+  format: systemverilog
+  input_paths:
+    - rtl/foo.sv
+  top: foo
+```
+
 ## YAML Shape
 
 When `--config` or `-c` is present, YAML config mode takes precedence over the
