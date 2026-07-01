@@ -897,9 +897,12 @@ int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
   enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF, C };
   struct CDesignOptions {
+    std::optional<std::string> frontend;
     std::optional<std::string> top;
     std::optional<std::string> clock;
     std::optional<std::string> reset;
+    std::optional<std::string> blockProto;
+    std::optional<std::string> moduleName;
     std::vector<std::string> includePaths;
     std::optional<std::string> workDir;
     bool keepArtifacts = false;
@@ -1189,12 +1192,19 @@ int KeplerFormalMain(int argc, char** argv) {
                   const char* designKey) {
                 static const std::unordered_set<std::string> kAllowedDesignKeys = {
                     "format",
+                    "frontend",
                     "input_paths",
                     "top",
                     "sv_flist",
                     "flist",
                     "clock",
                     "reset",
+                    "block_proto",
+                    "block_pb",
+                    "xls_block_proto",
+                    "module_name",
+                    "rtl_top",
+                    "generated_top",
                     "include_paths",
                     "work_dir",
                     "keep_generated",
@@ -1264,11 +1274,38 @@ int KeplerFormalMain(int argc, char** argv) {
                     !parseScalar("top", designFormat.c.top)) {
                   return false;
                 }
-                if (!parseScalar("sv_flist", svOptions.flist) ||
+                if (!parseScalar("frontend", designFormat.c.frontend) ||
+                    !parseScalar("sv_flist", svOptions.flist) ||
                     !parseScalar("flist", svOptions.flist) ||
                     !parseScalar("clock", designFormat.c.clock) ||
                     !parseScalar("reset", designFormat.c.reset) ||
                     !parseScalar("work_dir", designFormat.c.workDir)) {
+                  return false;
+                }
+                const auto parseBlockProto = [&]() {
+                  std::optional<std::string> blockProto;
+                  if (!parseScalar("block_proto", blockProto) ||
+                      !parseScalar("block_pb", blockProto) ||
+                      !parseScalar("xls_block_proto", blockProto)) {
+                    return false;
+                  }
+                  designFormat.c.blockProto = std::move(blockProto);
+                  return true;
+                };
+                if (!parseBlockProto()) {
+                  return false;
+                }
+                const auto parseGeneratedTop = [&]() {
+                  std::optional<std::string> moduleName;
+                  if (!parseScalar("module_name", moduleName) ||
+                      !parseScalar("rtl_top", moduleName) ||
+                      !parseScalar("generated_top", moduleName)) {
+                    return false;
+                  }
+                  designFormat.c.moduleName = std::move(moduleName);
+                  return true;
+                };
+                if (!parseGeneratedTop()) {
                   return false;
                 }
 
@@ -1852,6 +1889,9 @@ int KeplerFormalMain(int argc, char** argv) {
         const auto& cOptions = designFormatOptions[designIndex].c;
         KEPLER_FORMAL::C2RTL::CFrontendOptions options;
         options.designIndex = designIndex;
+        if (cOptions.frontend) {
+          options.frontend = *cOptions.frontend;
+        }
         options.top = cOptions.top;
         options.clock = cOptions.clock;
         options.reset = cOptions.reset;
@@ -1859,6 +1899,10 @@ int KeplerFormalMain(int argc, char** argv) {
         if (cOptions.workDir) {
           options.workDir = std::filesystem::path(*cOptions.workDir);
         }
+        if (cOptions.blockProto) {
+          options.blockProto = std::filesystem::path(*cOptions.blockProto);
+        }
+        options.moduleName = cOptions.moduleName;
         for (const auto& inputPath : designPaths) {
           options.inputPaths.emplace_back(inputPath);
         }
@@ -1874,7 +1918,7 @@ int KeplerFormalMain(int argc, char** argv) {
             result.generatedSystemVerilog.string());
         designPaths.clear();
         designPaths.emplace_back(result.generatedSystemVerilog.string());
-        svOptions.top = cOptions.top;
+        svOptions.top = cOptions.moduleName.value_or(*cOptions.top);
         cFrontendResults.push_back(std::move(result));
       };
 

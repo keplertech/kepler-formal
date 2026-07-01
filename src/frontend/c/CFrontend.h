@@ -11,8 +11,11 @@
 namespace KEPLER_FORMAL::C2RTL {
 
 struct CFrontendOptions {
+  std::string frontend = "auto";
   std::vector<std::filesystem::path> inputPaths;
   std::vector<std::filesystem::path> includePaths;
+  std::optional<std::filesystem::path> blockProto;
+  std::optional<std::string> moduleName;
   std::optional<std::string> top;
   std::optional<std::string> clock;
   std::optional<std::string> reset;

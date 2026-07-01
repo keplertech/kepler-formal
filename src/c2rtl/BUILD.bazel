@@ -48,8 +48,12 @@ cc_library(
     name = "kepler_c2rtl",
     srcs = [
         "MetronTranslator.cpp",
+        "XlsTranslator.cpp",
     ] + METRON_SRCS + METROLIB_SRCS,
-    hdrs = ["MetronTranslator.h"],
+    hdrs = [
+        "MetronTranslator.h",
+        "XlsTranslator.h",
+    ],
     copts = [
         "-Ithirdparty/metron",
         "-Ithirdparty/metron/symlinks",

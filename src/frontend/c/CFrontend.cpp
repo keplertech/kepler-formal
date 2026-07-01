@@ -4,8 +4,11 @@
 #include "CFrontend.h"
 
 #include "MetronTranslator.h"
+#include "XlsTranslator.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -64,6 +67,38 @@ bool looksLikeSupportedHardwareC(const std::filesystem::path& inputPath) {
   return text.find("metron/metron_tools.h") != std::string::npos;
 }
 
+bool looksLikeXlsHardwareC(const std::filesystem::path& inputPath) {
+  std::ifstream input(inputPath);
+  if (!input) {
+    return false;
+  }
+
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  const auto text = contents.str();
+  return text.find("#pragma hls_top") != std::string::npos ||
+         text.find("#pragma hls_design top") != std::string::npos ||
+         text.find("xls_int.h") != std::string::npos ||
+         text.find("__xls_channel") != std::string::npos ||
+         text.find("XlsInt<") != std::string::npos;
+}
+
+std::string normalizedFrontend(std::string frontend) {
+  std::transform(frontend.begin(),
+                 frontend.end(),
+                 frontend.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  if (frontend.empty()) {
+    return "auto";
+  }
+  if (frontend == "xlscc") {
+    return "xls";
+  }
+  return frontend;
+}
+
 std::set<std::filesystem::path> collectIncludePaths(
     const std::vector<std::filesystem::path>& inputPaths,
     const std::vector<std::filesystem::path>& explicitIncludePaths) {
@@ -98,11 +133,20 @@ void writeManifest(const CFrontendOptions& options,
   manifest << "  \"top\": "
            << (options.top ? jsonQuote(*options.top) : std::string("null"))
            << ",\n";
+  manifest << "  \"module_name\": "
+           << (options.moduleName ? jsonQuote(*options.moduleName)
+                                  : std::string("null"))
+           << ",\n";
   manifest << "  \"clock\": "
            << (options.clock ? jsonQuote(*options.clock) : std::string("null"))
            << ",\n";
   manifest << "  \"reset\": "
            << (options.reset ? jsonQuote(*options.reset) : std::string("null"))
+           << ",\n";
+  manifest << "  \"block_proto\": "
+           << (options.blockProto
+                   ? jsonQuote(options.blockProto->string())
+                   : std::string("null"))
            << ",\n";
   manifest << "  \"inputs\": [";
   for (size_t i = 0; i < options.inputPaths.size(); ++i) {
@@ -137,10 +181,42 @@ CFrontendResult CFrontend::translateToSystemVerilog(
           "C frontend input does not exist: `" + inputPath.string() + "`");
     }
   }
-  if (!looksLikeSupportedHardwareC(options.inputPaths.front())) {
+  ec.clear();
+  if (options.blockProto && !std::filesystem::exists(*options.blockProto, ec)) {
     throw std::runtime_error(
-        "C frontend input is outside the currently supported synthesizable "
-        "hardware C subset: `" + options.inputPaths.front().string() + "`");
+        "C frontend XLS block proto does not exist: `" +
+        options.blockProto->string() + "`");
+  }
+
+  auto frontend = normalizedFrontend(options.frontend);
+  if (frontend != "auto" && frontend != "metron" && frontend != "xls") {
+    throw std::runtime_error(
+        "unknown C frontend `" + options.frontend +
+        "`; expected `auto`, `metron`, or `xls`");
+  }
+  if (frontend == "auto") {
+    if (looksLikeSupportedHardwareC(options.inputPaths.front())) {
+      frontend = "metron";
+    } else if (looksLikeXlsHardwareC(options.inputPaths.front())) {
+      frontend = "xls";
+    } else {
+      throw std::runtime_error(
+          "C frontend input is outside the currently supported synthesizable "
+          "hardware C subsets: `" + options.inputPaths.front().string() +
+          "`; expected Metron-style C++ or XLS/xlscc-style C++");
+    }
+  }
+  if (frontend == "metron" &&
+      !looksLikeSupportedHardwareC(options.inputPaths.front())) {
+    throw std::runtime_error(
+        "metron C frontend input is outside the currently supported "
+        "synthesizable hardware C subset: `" +
+        options.inputPaths.front().string() + "`");
+  }
+  if (frontend == "xls" && !looksLikeXlsHardwareC(options.inputPaths.front())) {
+    throw std::runtime_error(
+        "xls C frontend input does not look like XLS/xlscc C++: `" +
+        options.inputPaths.front().string() + "`");
   }
 
   CFrontendResult result;
@@ -160,24 +236,44 @@ CFrontendResult CFrontend::translateToSystemVerilog(
                                                          includes.end());
 
   std::ostringstream command;
-  command << "kepler-formal internal-c2rtl --convert "
+  command << "kepler-formal internal-c2rtl --frontend " << frontend
+          << " --convert "
           << options.inputPaths.front().string()
           << " --output " << result.generatedSystemVerilog.string();
   for (const auto& includePath : includes) {
     command << " --include " << includePath.string();
   }
+  if (options.blockProto) {
+    command << " --xls-block-proto " << options.blockProto->string();
+  }
+  if (options.moduleName) {
+    command << " --module-name " << *options.moduleName;
+  }
 
   const auto commandString = command.str();
-  writeManifest(options, result, "internal-metron", commandString);
+  writeManifest(options, result, "internal-" + frontend, commandString);
 
-  MetronTranslationOptions metronOptions;
-  metronOptions.inputPath = options.inputPaths.front();
-  metronOptions.outputPath = result.generatedSystemVerilog;
-  metronOptions.stdoutLog = result.stdoutLog;
-  metronOptions.stderrLog = result.stderrLog;
-  metronOptions.includePaths = includeVector;
   try {
-    translateWithMetron(metronOptions);
+    if (frontend == "metron") {
+      MetronTranslationOptions metronOptions;
+      metronOptions.inputPath = options.inputPaths.front();
+      metronOptions.outputPath = result.generatedSystemVerilog;
+      metronOptions.stdoutLog = result.stdoutLog;
+      metronOptions.stderrLog = result.stderrLog;
+      metronOptions.includePaths = includeVector;
+      translateWithMetron(metronOptions);
+    } else {
+      XlsTranslationOptions xlsOptions;
+      xlsOptions.inputPath = options.inputPaths.front();
+      xlsOptions.outputPath = result.generatedSystemVerilog;
+      xlsOptions.stdoutLog = result.stdoutLog;
+      xlsOptions.stderrLog = result.stderrLog;
+      xlsOptions.includePaths = includeVector;
+      xlsOptions.blockProto = options.blockProto;
+      xlsOptions.moduleName = options.moduleName;
+      xlsOptions.top = *options.top;
+      translateWithXls(xlsOptions);
+    }
   } catch (const std::exception& e) {
     throw std::runtime_error(
         "C frontend failed to translate `" + options.inputPaths.front().string() +

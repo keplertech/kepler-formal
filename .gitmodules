@@ -15,10 +15,13 @@
 	url = https://github.com/arminbiere/cadical
 [submodule "thirdparty/metron"]
 	path = thirdparty/metron
-	url = https://github.com/aappleby/metron
+	url = https://github.com/keplertech/metron
 [submodule "thirdparty/metrolib"]
 	path = thirdparty/metrolib
 	url = https://github.com/aappleby/metrolib
 [submodule "thirdparty/matcheroni"]
 	path = thirdparty/matcheroni
 	url = https://github.com/aappleby/matcheroni
+[submodule "thirdparty/xls"]
+	path = thirdparty/xls
+	url = https://github.com/keplertech/xls
