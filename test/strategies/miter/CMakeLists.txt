@@ -104,4 +104,23 @@ if (Python3_Interpreter_FOUND)
         TIMEOUT 180
     )
   endforeach()
+
+  add_test(
+    NAME KeplerFormalCliBenchmarks.VerilogC.NonEquivalent.safe.Spinner.reference_mutated
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/RunVerilogCBenchmark.py
+            --kepler-formal $<TARGET_FILE:kepler-formal>
+            --benchmarks-root ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/verilog-c
+            --case safe/Spinner
+            --reference-mutation spinner_reference_identity
+            --expect different
+            --timeout 120
+  )
+  set_tests_properties(
+    KeplerFormalCliBenchmarks.VerilogC.NonEquivalent.safe.Spinner.reference_mutated
+    PROPERTIES
+      LABELS "cli;c2rtl;benchmark;verilog-c;verilog-c-negative"
+      SKIP_RETURN_CODE 77
+      TIMEOUT 180
+  )
 endif()

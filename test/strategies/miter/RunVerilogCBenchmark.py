@@ -332,6 +332,40 @@ def write_sanitized_rtl_source(rtl_path, out_path):
     out_path.write_text(sanitize_rtl_for_kepler(rtl_path.read_text(errors="ignore")))
 
 
+def mutate_reference_rtl(text, mutation):
+    if mutation is None:
+        return text
+    if mutation == "fifo_equal_stuck_low":
+        mutated, replacements = re.subn(
+            r"(?ms)assign\s+equal\s*=.*?;",
+            "assign equal = 1'b0;",
+            text,
+            count=1,
+        )
+        if replacements != 1:
+            raise ValueError("failed to apply fifo_equal_stuck_low mutation")
+        return mutated
+    if mutation == "spinner_reference_identity":
+        return (
+            "`default_nettype wire\n"
+            "module main(clock,spin,amount,din,dout);\n"
+            "    input             clock;\n"
+            "    input             spin;\n"
+            "    input [4:0]       amount;\n"
+            "    input [31:0]      din;\n"
+            "    output [31:0]     dout;\n"
+            "    assign dout = din ^ 32'h00000001;\n"
+            "endmodule\n"
+            "`default_nettype none\n"
+        )
+    raise ValueError(f"unknown reference mutation {mutation!r}")
+
+
+def write_reference_rtl_source(rtl_path, out_path, mutation):
+    rtl_text = sanitize_rtl_for_kepler(rtl_path.read_text(errors="ignore"))
+    out_path.write_text(mutate_reference_rtl(rtl_text, mutation))
+
+
 def write_metron_passthrough_source(rtl_path, out_path):
     rtl_text = sanitize_rtl_for_kepler(rtl_path.read_text(errors="ignore"))
     out_path.write_text(
@@ -346,6 +380,12 @@ def write_metron_passthrough_source(rtl_path, out_path):
     )
 
 
+def expected_result_marker(expectation):
+    if expectation == "different":
+        return "Difference was found."
+    return "No difference was found."
+
+
 def run_case(args):
     env = os.environ.copy()
     benchmarks_root = Path(args.benchmarks_root).resolve()
@@ -354,19 +394,40 @@ def run_case(args):
     if args.case not in cases:
         print(f"Unknown benchmark case {args.case!r}", file=sys.stderr)
         return 2
+    reference_case = args.reference_case if args.reference_case else args.case
+    if reference_case not in cases:
+        print(f"Unknown reference benchmark case {reference_case!r}", file=sys.stderr)
+        return 2
 
     row = cases[args.case]
+    reference_row = cases[reference_case]
     if row["status"] != "complete":
         print(f"Benchmark case {args.case} is not runnable: {row['note']}", file=sys.stderr)
         return SKIP_RETURN_CODE
+    if reference_row["status"] != "complete":
+        print(
+            f"Reference benchmark case {reference_case} is not runnable: {reference_row['note']}",
+            file=sys.stderr,
+        )
+        return SKIP_RETURN_CODE
+    if row["rtl_top"] != reference_row["rtl_top"]:
+        print(
+            f"Cannot compare benchmark cases with different RTL tops: "
+            f"{args.case} has {row['rtl_top']}, {reference_case} has {reference_row['rtl_top']}",
+            file=sys.stderr,
+        )
+        return 2
 
     case_dir = benchmarks_root / "cases" / args.case
+    reference_case_dir = benchmarks_root / "cases" / reference_case
     c_path = case_dir / row["c_source"]
     rtl_path = case_dir / row["rtl_source"]
-    if not c_path.is_file() or not rtl_path.is_file():
-        print(f"Benchmark fixture is incomplete for {args.case}", file=sys.stderr)
-        print(f"  C:   {c_path}", file=sys.stderr)
-        print(f"  RTL: {rtl_path}", file=sys.stderr)
+    reference_rtl_path = reference_case_dir / reference_row["rtl_source"]
+    if not c_path.is_file() or not rtl_path.is_file() or not reference_rtl_path.is_file():
+        print(f"Benchmark fixture is incomplete for comparison {args.case} vs {reference_case}", file=sys.stderr)
+        print(f"  C:             {c_path}", file=sys.stderr)
+        print(f"  Design 1 RTL:  {rtl_path}", file=sys.stderr)
+        print(f"  Design 2 RTL:  {reference_rtl_path}", file=sys.stderr)
         return 2
     with tempfile.TemporaryDirectory(prefix="kepler_verilog_c_") as tmp:
         tmp_dir = Path(tmp)
@@ -374,7 +435,11 @@ def run_case(args):
         metron_path = tmp_dir / "metron_passthrough.h"
         sanitized_rtl_path = tmp_dir / "reference.sv"
         write_metron_passthrough_source(rtl_path, metron_path)
-        write_sanitized_rtl_source(rtl_path, sanitized_rtl_path)
+        try:
+            write_reference_rtl_source(reference_rtl_path, sanitized_rtl_path, args.reference_mutation)
+        except ValueError as exc:
+            print(f"Benchmark {args.case} failed: {exc}", file=sys.stderr)
+            return 2
         cfg_path = tmp_dir / "config.yaml"
         cfg_path.write_text(
             "verification: lec\n"
@@ -390,7 +455,8 @@ def run_case(args):
         )
 
         cmd = [str(Path(args.kepler_formal).resolve()), "--config", str(cfg_path)]
-        print(f"Running {args.case}: {' '.join(cmd)}")
+        comparison = args.case if reference_case == args.case else f"{args.case} vs {reference_case}"
+        print(f"Running {comparison}: {' '.join(cmd)}")
         completed = subprocess.run(
             cmd,
             cwd=tmp_dir,
@@ -406,11 +472,20 @@ def run_case(args):
             print(completed.stderr, end="", file=sys.stderr)
         if completed.returncode != 0:
             print(
-                f"Benchmark {args.case} failed: kepler-formal exited {completed.returncode}",
+                f"Benchmark {comparison} failed: kepler-formal exited {completed.returncode}",
                 file=sys.stderr,
             )
             print(f"Upstream safety expectation: {row['upstream_expected_safety']}", file=sys.stderr)
-        return completed.returncode
+            return completed.returncode
+        output = completed.stdout + completed.stderr
+        marker = expected_result_marker(args.expect)
+        if marker not in output:
+            print(
+                f"Benchmark {comparison} failed: expected LEC result {args.expect!r}",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
 
 
 def main():
@@ -418,6 +493,9 @@ def main():
     parser.add_argument("--kepler-formal", required=True)
     parser.add_argument("--benchmarks-root", required=True)
     parser.add_argument("--case", required=True)
+    parser.add_argument("--reference-case")
+    parser.add_argument("--reference-mutation")
+    parser.add_argument("--expect", choices=["equivalent", "different"], default="equivalent")
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
     try:
