@@ -1186,6 +1186,35 @@ TEST_F(KeplerFormalCliTests, ConfigUnknownFormatFails) {
   std::filesystem::remove(cfgPath);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigCcFormatRequiresTop) {
+  const auto cfgPath = writeTempConfig(
+      "format: cc\n"
+      "verification: sec\n"
+      "input_paths: [design0.cc, design1.cc]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCcFormatRequiresSec) {
+  const auto cfgPath = writeTempConfig(
+      "format: cxx\n"
+      "cc_top: top\n"
+      "input_paths: [design0.cc, design1.cc]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCcIncludePathsMustBeSequence) {
+  const auto cfgPath = writeTempConfig(
+      "format: cc\n"
+      "verification: sec\n"
+      "cc_top: top\n"
+      "cc_include_paths: include\n"
+      "input_paths: [design0.cc, design1.cc]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSystemVerilogAccepted) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",
@@ -3110,6 +3139,25 @@ TEST_F(KeplerFormalCliTests, CliOutOfRangeMaxKBeforeFormatFails) {
 
 TEST_F(KeplerFormalCliTests, CliUnrecognizedOptionBeforeFormatFails) {
   EXPECT_EQ(runWithArgs({"kepler-formal", "--mystery"}), EXIT_FAILURE);
+}
+
+TEST_F(KeplerFormalCliTests, CliCcFormatRequiresTop) {
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal", "-v", "sec", "-cc", "design0.cc", "design1.cc"}),
+      EXIT_FAILURE);
+}
+
+TEST_F(KeplerFormalCliTests, CliCcFormatRequiresSec) {
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-cc",
+                   "--cc_top",
+                   "top",
+                   "--cc_include",
+                   "include",
+                   "design0.cc",
+                   "design1.cc"}),
+      EXIT_FAILURE);
 }
 
 TEST_F(KeplerFormalCliTests, CliMissingInputFormatAfterPreOptionsFails) {

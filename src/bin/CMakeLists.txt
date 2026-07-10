@@ -18,6 +18,7 @@ target_link_libraries(kepler-formal
     scope_extraction
     yaml-cpp
     ${SPDLOG_TARGET}
+    kepler_xls_c2rtl
 )
 
 install(TARGETS kepler-formal DESTINATION ${CMAKE_INSTALL_BINDIR})

@@ -41,6 +41,7 @@
 #include "Tree2BoolExpr.h"
 #include "model/SequentialDesignModel.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
+#include "xls/contrib/kepler/kepler_xls_c2rtl.h"
 
 #if defined(__SANITIZE_ADDRESS__)
 #define KEPLER_FORMAL_ASAN_BUILD 1
@@ -66,6 +67,8 @@ static void print_usage(const char* prog) {
       "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos] | "
+      "-cc/-cxx --cc_top <function> [--cc_include <dir>...] "
+      "[--cc_output_dir <dir>] [-v sec] <source1.cc> <source2.cc> | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--design1 <file...>] [--design2 <file...>] "
@@ -362,6 +365,17 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "sv_design2_flist",
       "sv_design1_top",
       "sv_design2_top",
+      "cc_top",
+      "cc_design1_top",
+      "cc_design2_top",
+      "cc_module_name",
+      "cc_design1_module_name",
+      "cc_design2_module_name",
+      "cc_block_proto_path",
+      "cc_design1_block_proto_path",
+      "cc_design2_block_proto_path",
+      "cc_include_paths",
+      "cc_output_dir",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -528,6 +542,32 @@ struct SystemVerilogDesignOptions {
 struct SystemVerilogOptions {
   SystemVerilogDesignOptions design0;
   SystemVerilogDesignOptions design1;
+};
+
+struct CcDesignOptions {
+  std::optional<std::string> top;
+  std::optional<std::string> moduleName;
+  std::optional<std::string> blockProtoPath;
+};
+
+struct CcSynthesisOptions {
+  std::optional<std::string> top;
+  std::optional<std::string> moduleName;
+  std::optional<std::string> blockProtoPath;
+  std::optional<std::string> outputDir;
+  std::vector<std::string> includePaths;
+  CcDesignOptions design0;
+  CcDesignOptions design1;
+};
+
+struct SynthesizedCcDesign {
+  std::string svPath;
+  std::string top;
+};
+
+struct SynthesizedCcInputs {
+  SynthesizedCcDesign design0;
+  SynthesizedCcDesign design1;
 };
 
 static bool parseConfigInputPaths(const YAML::Node& node,
@@ -776,6 +816,186 @@ static bool validateSystemVerilogOptions(const SystemVerilogOptions& options,
 
   return validateDesign(options.design0, "design1") &&
          validateDesign(options.design1, "design2");
+}
+
+static bool applyCcConfigOption(const YAML::Node& cfg,
+                                const char* key,
+                                std::optional<std::string>& target,
+                                std::string& error) {
+  const auto node = cfg[key];
+  if (!node) {
+    return true;
+  }
+  if (!node.IsScalar()) {
+    error = std::string(key) + " must be a scalar";
+    return false;
+  }
+  const auto value = node.as<std::string>();
+  if (value.empty()) {
+    error = std::string(key) + " must not be empty";
+    return false;
+  }
+  target = value;
+  return true;
+}
+
+static bool applyCcIncludePathsConfigOption(const YAML::Node& cfg,
+                                            CcSynthesisOptions& options,
+                                            std::string& error) {
+  const auto node = cfg["cc_include_paths"];
+  if (!node) {
+    return true;
+  }
+  if (!node.IsSequence()) {
+    error = "cc_include_paths must be a sequence";
+    return false;
+  }
+  for (const auto& includePath : node) {
+    if (!includePath.IsScalar()) {
+      error = "cc_include_paths entries must be scalar paths";
+      return false;
+    }
+    const auto value = includePath.as<std::string>();
+    if (!value.empty()) {
+      options.includePaths.push_back(value);
+    }
+  }
+  return true;
+}
+
+static const std::optional<std::string>& resolveCcDesignOption(
+    const std::optional<std::string>& designValue,
+    const std::optional<std::string>& commonValue) {
+  return designValue ? designValue : commonValue;
+}
+
+static bool validateCcSynthesisOptions(const DesignInputs& designInputs,
+                                       const CcSynthesisOptions& options,
+                                       std::string& error) {
+  if (designInputs.design0.size() != 1 || designInputs.design1.size() != 1) {
+    error = "cc format currently supports exactly one C/C++ translation unit per design";
+    return false;
+  }
+  if (!resolveCcDesignOption(options.design0.top, options.top) ||
+      !resolveCcDesignOption(options.design1.top, options.top)) {
+    error = "cc format requires cc_top or both cc_design1_top and cc_design2_top";
+    return false;
+  }
+  return true;
+}
+
+static std::filesystem::path chooseCcOutputDir(
+    const CcSynthesisOptions& options) {
+  const auto outputDir =
+      options.outputDir
+          ? std::filesystem::path(*options.outputDir)
+          : (std::filesystem::current_path() / "kepler_formal_c2rtl");
+  std::error_code ec;
+  std::filesystem::create_directories(outputDir, ec);
+  if (ec) {
+    throw std::runtime_error(
+        "Failed to create cc_output_dir `" + outputDir.string() + "`: " +
+        ec.message());
+  }
+  return outputDir;
+}
+
+static void appendUniquePath(std::vector<std::string>& paths,
+                             const std::filesystem::path& path) {
+  if (path.empty()) {
+    return;
+  }
+  const auto value = path.string();
+  if (std::find(paths.begin(), paths.end(), value) == paths.end()) {
+    paths.push_back(value);
+  }
+}
+
+static std::vector<std::string> buildCcIncludePaths(
+    const std::string& inputPath,
+    const CcSynthesisOptions& options) {
+  std::vector<std::string> includePaths = options.includePaths;
+  std::error_code ec;
+  const auto absoluteInput =
+      std::filesystem::weakly_canonical(inputPath, ec);
+  if (!ec) {
+    appendUniquePath(includePaths, absoluteInput.parent_path());
+  } else {
+    appendUniquePath(includePaths, std::filesystem::path(inputPath).parent_path());
+  }
+  return includePaths;
+}
+
+static SynthesizedCcDesign synthesizeOneCcDesign(
+    const std::vector<std::string>& designPaths,
+    const CcSynthesisOptions& options,
+    const CcDesignOptions& designOptions,
+    const std::filesystem::path& outputDir,
+    const std::string& designLabel) {
+  const std::string& inputPath = designPaths.front();
+  const auto& topOption = resolveCcDesignOption(designOptions.top, options.top);
+  const auto& moduleOption =
+      resolveCcDesignOption(designOptions.moduleName, options.moduleName);
+  const auto& blockProtoOption =
+      resolveCcDesignOption(designOptions.blockProtoPath, options.blockProtoPath);
+  const std::string top = *topOption;
+  const std::string moduleName = moduleOption ? *moduleOption : top;
+  const auto outputPath =
+      outputDir /
+      (designLabel + "_" + sanitizeFileToken(std::filesystem::path(inputPath).stem().string()) +
+       ".sv");
+  auto includePaths = buildCcIncludePaths(inputPath, options);
+  std::vector<const char*> includePathPtrs;
+  includePathPtrs.reserve(includePaths.size());
+  for (const auto& includePath : includePaths) {
+    includePathPtrs.push_back(includePath.c_str());
+  }
+
+  const auto outputPathString = outputPath.string();
+  const char* blockProtoPath =
+      blockProtoOption ? blockProtoOption->c_str() : nullptr;
+  KeplerXlsC2RtlOptions c2rtlOptions{
+      inputPath.c_str(),
+      outputPathString.c_str(),
+      top.c_str(),
+      moduleName.c_str(),
+      blockProtoPath,
+      includePathPtrs.empty() ? nullptr : includePathPtrs.data(),
+      includePathPtrs.size(),
+      1,
+  };
+  SPDLOG_INFO(
+      "Synthesizing {} C/C++ source {} to SystemVerilog {}",
+      designLabel,
+      inputPath,
+      outputPathString);
+  char* errorMessage = nullptr;
+  const int rc = kepler_xls_c2rtl_translate(&c2rtlOptions, &errorMessage);
+  std::string errorText;
+  if (errorMessage != nullptr) {
+    errorText = errorMessage;
+    kepler_xls_c2rtl_free(errorMessage);
+  }
+  if (rc != 0) {
+    if (errorText.empty()) {
+      errorText = "unknown XLS C2RTL error";
+    }
+    throw std::runtime_error(
+        "XLS C2RTL synthesis failed for " + designLabel + ": " + errorText);
+  }
+  return {outputPathString, moduleName};
+}
+
+static SynthesizedCcInputs synthesizeCcInputsToSystemVerilog(
+    const DesignInputs& designInputs,
+    const CcSynthesisOptions& options) {
+  const auto outputDir = chooseCcOutputDir(options);
+  return {
+      synthesizeOneCcDesign(
+          designInputs.design0, options, options.design0, outputDir, "design1"),
+      synthesizeOneCcDesign(
+          designInputs.design1, options, options.design1, outputDir, "design2"),
+  };
 }
 
 // LCOV_EXCL_START
@@ -1083,7 +1303,7 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, NAJA_IF };
+  enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, CC, NAJA_IF };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
     naja::DNL::destroy();
@@ -1101,6 +1321,7 @@ int KeplerFormalMain(int argc, char** argv) {
   FormatType inputFormatType = FormatType::VERILOG;
   DesignInputs designInputs;
   SystemVerilogOptions systemVerilogOptions;
+  CcSynthesisOptions ccSynthesisOptions;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
@@ -1172,6 +1393,9 @@ int KeplerFormalMain(int argc, char** argv) {
             inputFormatType = FormatType::SYSTEMVERILOG;
           } else if (fmt == "sv2v") {
             inputFormatType = FormatType::SV2V;
+          } else if (fmt == "cc" || fmt == "c" || fmt == "cxx" ||
+                     fmt == "cpp" || fmt == "c2rtl") {
+            inputFormatType = FormatType::CC;
           } else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
@@ -1391,6 +1615,43 @@ int KeplerFormalMain(int argc, char** argv) {
           // LCOV_EXCL_STOP
         }
 
+        std::string ccConfigError;
+        if (!applyCcConfigOption(cfg, "cc_top", ccSynthesisOptions.top, ccConfigError) ||
+            !applyCcConfigOption(
+                cfg, "cc_design1_top", ccSynthesisOptions.design0.top, ccConfigError) ||
+            !applyCcConfigOption(
+                cfg, "cc_design2_top", ccSynthesisOptions.design1.top, ccConfigError) ||
+            !applyCcConfigOption(
+                cfg, "cc_module_name", ccSynthesisOptions.moduleName, ccConfigError) ||
+            !applyCcConfigOption(
+                cfg,
+                "cc_design1_module_name",
+                ccSynthesisOptions.design0.moduleName,
+                ccConfigError) ||
+            !applyCcConfigOption(
+                cfg,
+                "cc_design2_module_name",
+                ccSynthesisOptions.design1.moduleName,
+                ccConfigError) ||
+            !applyCcConfigOption(
+                cfg, "cc_block_proto_path", ccSynthesisOptions.blockProtoPath, ccConfigError) ||
+            !applyCcConfigOption(
+                cfg,
+                "cc_design1_block_proto_path",
+                ccSynthesisOptions.design0.blockProtoPath,
+                ccConfigError) ||
+            !applyCcConfigOption(
+                cfg,
+                "cc_design2_block_proto_path",
+                ccSynthesisOptions.design1.blockProtoPath,
+                ccConfigError) ||
+            !applyCcConfigOption(
+                cfg, "cc_output_dir", ccSynthesisOptions.outputDir, ccConfigError) ||
+            !applyCcIncludePathsConfigOption(cfg, ccSynthesisOptions, ccConfigError)) {
+          SPDLOG_CRITICAL("Invalid C/C++ synthesis config option: {}", ccConfigError);
+          return EXIT_FAILURE;
+        }
+
         usedConfig = true;
       } catch (const std::exception& e) {
         // LCOV_EXCL_START
@@ -1525,6 +1786,12 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       if (arg == "-sv2v") {
         inputFormatType = FormatType::SV2V;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
+      if (arg == "-cc" || arg == "-cxx" || arg == "-cpp") {
+        inputFormatType = FormatType::CC;
         ++parseStart;
         formatFound = true;
         break;
@@ -1698,6 +1965,60 @@ int KeplerFormalMain(int argc, char** argv) {
         // LCOV_EXCL_START
         continue;
       }
+      if (arg == "--cc_include" || arg == "--cc_include_path" || arg == "-I") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string value = argv[++i];
+        if (value.empty()) {
+          SPDLOG_CRITICAL("Empty value provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        ccSynthesisOptions.includePaths.push_back(value);
+        continue;
+      }
+      if (arg.size() > 2 && arg.rfind("-I", 0) == 0) {
+        ccSynthesisOptions.includePaths.push_back(arg.substr(2));
+        continue;
+      }
+      if (arg == "--cc_top" || arg == "--cc_design1_top" ||
+          arg == "--cc_design2_top" || arg == "--cc_module_name" ||
+          arg == "--cc_design1_module_name" || arg == "--cc_design2_module_name" ||
+          arg == "--cc_block_proto_path" || arg == "--cc_design1_block_proto_path" ||
+          arg == "--cc_design2_block_proto_path" || arg == "--cc_output_dir") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string value = argv[++i];
+        if (value.empty()) {
+          SPDLOG_CRITICAL("Empty value provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        if (arg == "--cc_top") {
+          ccSynthesisOptions.top = value;
+        } else if (arg == "--cc_design1_top") {
+          ccSynthesisOptions.design0.top = value;
+        } else if (arg == "--cc_design2_top") {
+          ccSynthesisOptions.design1.top = value;
+        } else if (arg == "--cc_module_name") {
+          ccSynthesisOptions.moduleName = value;
+        } else if (arg == "--cc_design1_module_name") {
+          ccSynthesisOptions.design0.moduleName = value;
+        } else if (arg == "--cc_design2_module_name") {
+          ccSynthesisOptions.design1.moduleName = value;
+        } else if (arg == "--cc_block_proto_path") {
+          ccSynthesisOptions.blockProtoPath = value;
+        } else if (arg == "--cc_design1_block_proto_path") {
+          ccSynthesisOptions.design0.blockProtoPath = value;
+        } else if (arg == "--cc_design2_block_proto_path") {
+          ccSynthesisOptions.design1.blockProtoPath = value;
+        } else {
+          ccSynthesisOptions.outputDir = value;
+        }
+        continue;
+      }
       // LCOV_EXCL_STOP
 
       // LCOV_EXCL_START
@@ -1766,6 +2087,9 @@ int KeplerFormalMain(int argc, char** argv) {
   if (inputFormatType == FormatType::SV2V) {
     inputFormatName = "SV2V";
   }
+  if (inputFormatType == FormatType::CC) {
+    inputFormatName = "CC";
+  }
   SPDLOG_INFO("Input format: {}", inputFormatName);
   if (!runLogFilePath.empty()) {
     SPDLOG_INFO("Run log: {}", runLogFilePath);
@@ -1798,6 +2122,18 @@ int KeplerFormalMain(int argc, char** argv) {
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
+  } else if (inputFormatType == FormatType::CC) {
+    if (designInputs.design0.empty() || designInputs.design1.empty()) {
+      SPDLOG_CRITICAL("Need two C/C++ input paths (one per design)");
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+    std::string ccValidationError;
+    if (!validateCcSynthesisOptions(
+            designInputs, ccSynthesisOptions, ccValidationError)) {
+      SPDLOG_CRITICAL("Invalid C/C++ synthesis inputs: {}", ccValidationError);
+      return EXIT_FAILURE;
+    }
   } else if (designInputs.design0.empty() || designInputs.design1.empty()) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL("Need two input netlist paths (one per design)");
@@ -1813,10 +2149,12 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
   }
   if ((inputFormatType == FormatType::SYSTEMVERILOG ||
-       inputFormatType == FormatType::SV2V) &&
+       inputFormatType == FormatType::SV2V ||
+       inputFormatType == FormatType::CC) &&
       verificationMode != VerificationMode::SEC) {
     SPDLOG_CRITICAL(
-        "SystemVerilog input formats require SEC verification (-v sec or verification: sec)");
+        "{} input format requires SEC verification (-v sec or verification: sec)",
+        inputFormatType == FormatType::CC ? "C/C++" : "SystemVerilog");
     return EXIT_FAILURE;
   }
   if (verificationMode == VerificationMode::LEC && secMaxKExplicit) {
@@ -1926,6 +2264,27 @@ int KeplerFormalMain(int argc, char** argv) {
     for (const auto& pf : pythonFiles) SPDLOG_INFO("Python library: {}", pf);
   }
   // LCOV_EXCL_STOP
+
+  if (inputFormatType == FormatType::CC) {
+    try {
+      const auto synthesized =
+          synthesizeCcInputsToSystemVerilog(designInputs, ccSynthesisOptions);
+      designInputs.design0 = {synthesized.design0.svPath};
+      designInputs.design1 = {synthesized.design1.svPath};
+      systemVerilogOptions.design0 = {};
+      systemVerilogOptions.design1 = {};
+      systemVerilogOptions.design0.top = synthesized.design0.top;
+      systemVerilogOptions.design1.top = synthesized.design1.top;
+      inputFormatType = FormatType::SYSTEMVERILOG;
+      SPDLOG_INFO(
+          "C/C++ synthesis complete. Reloading generated SystemVerilog designs.");
+      logDesignPaths("Synthesized netlist 1", designInputs.design0);
+      logDesignPaths("Synthesized netlist 2", designInputs.design1);
+    } catch (const std::exception& e) {
+      SPDLOG_CRITICAL("C/C++ synthesis failed: {}", e.what());
+      return EXIT_FAILURE;
+    }
+  }
 
   auto emitSecResult =
       [&](const KEPLER_FORMAL::SEC::SequentialEquivalenceResult& result) {

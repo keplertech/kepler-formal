@@ -24,6 +24,7 @@ target_compile_definitions(keplerFormalCliTests PRIVATE KEPLER_FORMAL_NO_MAIN)
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)
 
 target_link_libraries(keplerFormalCliTests
+    PRIVATE
     kepler_config
     kepler_sec
     naja_snl_pyloader
@@ -34,15 +35,16 @@ target_link_libraries(keplerFormalCliTests
     scope_extraction
     yaml-cpp
     ${SPDLOG_TARGET}
+    kepler_xls_c2rtl
     pthread
 )
 
 if (TARGET GTest::gtest_main)
-    target_link_libraries(keplerFormalCliTests GTest::gtest_main)
+    target_link_libraries(keplerFormalCliTests PRIVATE GTest::gtest_main)
 elseif (DEFINED GTEST_MAIN_LIBRARIES)
-    target_link_libraries(keplerFormalCliTests ${GTEST_MAIN_LIBRARIES})
+    target_link_libraries(keplerFormalCliTests PRIVATE ${GTEST_MAIN_LIBRARIES})
 else()
-    target_link_libraries(keplerFormalCliTests ${GTEST_LIBRARIES})
+    target_link_libraries(keplerFormalCliTests PRIVATE ${GTEST_LIBRARIES})
 endif()
 
 GTEST_DISCOVER_TESTS(keplerFormalCliTests)

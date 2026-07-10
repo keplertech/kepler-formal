@@ -19,6 +19,59 @@ project(kepler-formal
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 
+set(KEPLER_XLS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xls)
+set(CPPITERTOOLS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cppitertools)
+
+add_library(cppitertools INTERFACE)
+target_include_directories(cppitertools INTERFACE ${CPPITERTOOLS_ROOT})
+
+find_package(absl CONFIG REQUIRED)
+find_package(Protobuf REQUIRED)
+find_package(OpenSSL REQUIRED)
+if(EXISTS "/opt/homebrew/opt/llvm/lib/cmake/llvm")
+  list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/llvm")
+endif()
+find_package(LLVM CONFIG REQUIRED)
+find_package(Clang CONFIG REQUIRED)
+find_path(Z3_INCLUDE_DIR z3.h
+  HINTS
+    /opt/homebrew/opt/z3/include
+    /opt/homebrew/include
+)
+find_library(Z3_LIBRARY z3
+  HINTS
+    /opt/homebrew/opt/z3/lib
+    /opt/homebrew/lib
+)
+if(NOT Z3_INCLUDE_DIR OR NOT Z3_LIBRARY)
+  message(FATAL_ERROR "Z3 is required for XLS C2RTL")
+endif()
+add_library(z3::z3 UNKNOWN IMPORTED)
+set_target_properties(z3::z3 PROPERTIES
+  IMPORTED_LOCATION "${Z3_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${Z3_INCLUDE_DIR}"
+)
+find_path(RE2_INCLUDE_DIR re2/re2.h
+  HINTS
+    ${CMAKE_BINARY_DIR}/_deps/re2-install/include
+    /opt/homebrew/opt/re2/include
+    /opt/homebrew/include
+)
+find_library(RE2_LIBRARY re2
+  HINTS
+    ${CMAKE_BINARY_DIR}/_deps/re2-install/lib
+    /opt/homebrew/opt/re2/lib
+    /opt/homebrew/lib
+)
+if(NOT RE2_INCLUDE_DIR OR NOT RE2_LIBRARY)
+  message(FATAL_ERROR "RE2 is required for XLS C2RTL")
+endif()
+add_library(re2::re2 UNKNOWN IMPORTED)
+set_target_properties(re2::re2 PROPERTIES
+  IMPORTED_LOCATION "${RE2_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${RE2_INCLUDE_DIR}"
+)
+
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
