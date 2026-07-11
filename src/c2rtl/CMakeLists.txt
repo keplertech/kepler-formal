@@ -153,6 +153,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/ir/value_utils.cc
   ${KEPLER_XLS_ROOT}/xls/ir/verifier.cc
   ${KEPLER_XLS_ROOT}/xls/ir/verify_node.cc
+  ${KEPLER_XLS_ROOT}/xls/passes/array_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/basic_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/bdd_query_engine.cc
   ${KEPLER_XLS_ROOT}/xls/passes/bit_count_query_engine.cc
@@ -168,6 +169,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/passes/lazy_ternary_query_engine.cc
   ${KEPLER_XLS_ROOT}/xls/passes/node_dependency_analysis.cc
   ${KEPLER_XLS_ROOT}/xls/passes/optimization_pass.cc
+  ${KEPLER_XLS_ROOT}/xls/passes/optimization_pass_registry.cc
   ${KEPLER_XLS_ROOT}/xls/passes/partial_info_query_engine.cc
   ${KEPLER_XLS_ROOT}/xls/passes/pass_base.cc
   ${KEPLER_XLS_ROOT}/xls/passes/query_engine.cc

@@ -23,8 +23,17 @@
 #include "xls/contrib/xlscc/translator.h"
 #include "xls/contrib/xlscc/translator_types.h"
 #include "xls/ir/function_base.h"
+#include "xls/ir/op.h"
 #include "xls/ir/package.h"
 #include "xls/ir/proc.h"
+#include "xls/passes/array_simplification_pass.h"
+#include "xls/passes/basic_simplification_pass.h"
+#include "xls/passes/constant_folding_pass.h"
+#include "xls/passes/cse_pass.h"
+#include "xls/passes/dce_pass.h"
+#include "xls/passes/inlining_pass.h"
+#include "xls/passes/optimization_pass.h"
+#include "xls/passes/pass_base.h"
 
 namespace {
 
@@ -113,11 +122,71 @@ absl::StatusOr<std::string> GeneratePackageIr(
   return entry_name;
 }
 
+template <typename PassT>
+absl::StatusOr<bool> RunOptimizationPass(
+    xls::Package* package, const xls::OptimizationPassOptions& pass_options,
+    xls::PassResults* pass_results, xls::OptimizationContext* pass_context) {
+  PassT pass;
+  return pass.Run(package, pass_options, pass_results, *pass_context);
+}
+
+absl::Status RunPreCodegenPasses(xls::Package* package) {
+  xls::OptimizationPassOptions pass_options;
+  xls::PassResults pass_results;
+  xls::OptimizationContext pass_context;
+
+  bool changed = true;
+  int64_t iteration = 0;
+  while (changed && iteration < 20) {
+    changed = false;
+    ++iteration;
+
+    XLS_ASSIGN_OR_RETURN(bool pass_changed,
+                         RunOptimizationPass<xls::InliningPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
+    changed |= pass_changed;
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::ArraySimplificationPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
+    changed |= pass_changed;
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::ConstantFoldingPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
+    changed |= pass_changed;
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::BasicSimplificationPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
+    changed |= pass_changed;
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::CsePass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
+    changed |= pass_changed;
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::DeadCodeEliminationPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
+    changed |= pass_changed;
+  }
+
+  if (changed) {
+    return absl::InternalError(
+        "XLS C2RTL pre-codegen optimization did not converge");
+  }
+  return absl::OkStatus();
+}
+
 absl::Status TranslateToVerilog(const KeplerXlsC2RtlOptions& options) {
   XLS_RETURN_IF_ERROR(ValidateOptions(options));
 
   xls::Package package("kepler_xls_c2rtl");
   XLS_ASSIGN_OR_RETURN(std::string top_name, GeneratePackageIr(options, package));
+
+  XLS_RETURN_IF_ERROR(RunPreCodegenPasses(&package));
 
   std::optional<xls::FunctionBase*> top = package.GetTop();
   if (!top.has_value()) {
@@ -127,6 +196,15 @@ absl::Status TranslateToVerilog(const KeplerXlsC2RtlOptions& options) {
   xls::verilog::CodegenOptions codegen_options;
   codegen_options.entry(top_name);
   codegen_options.use_system_verilog(options.use_system_verilog != 0);
+  codegen_options.array_index_bounds_checking(false);
+  codegen_options.SetOpOverride(
+      xls::Op::kSMul,
+      xls::verilog::OpOverrideAssignment(
+          "assign {output} = $unsigned($signed({input0}) * $signed({input1}))"));
+  codegen_options.SetOpOverride(
+      xls::Op::kShra,
+      xls::verilog::OpOverrideAssignment(
+          "assign {output} = $unsigned($signed({input0}) >>> {input1})"));
   if (options.module_name != nullptr &&
       !std::string_view(options.module_name).empty()) {
     codegen_options.module_name(options.module_name);
