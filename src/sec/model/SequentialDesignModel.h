@@ -40,6 +40,14 @@ struct AbstractedSequentialBoundaryDetail {  // LCOV_EXCL_LINE
   std::vector<SignalKey> observedKeys;
 };
 
+struct SequentialDesignExtractOptions {
+  // PDR can prove purely combinational wide-output surfaces one output batch at
+  // a time.  In that mode extraction publishes the boundary and input symbol
+  // map, but leaves top-output BoolExprs for the proof strategy to materialize
+  // on demand.
+  bool deferCombinationalObservedOutputs = false;
+};
+
 // Normalized view of a sequential design after extracting the interface we
 // need for SEC: environment inputs, current-state bits, observed outputs, and
 // the Boolean formulas that describe outputs and next-state updates.
@@ -74,10 +82,14 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::vector<AbstractedSequentialBoundaryDetail>
       abstractedSequentialBoundaryDetails;
   std::vector<std::string> unsupportedReasons;
+  bool observedOutputExprsMaterialized = true;
 
   // Extract the model from the given top design. Unsupported sequential
   // structures are recorded in unsupportedReasons instead of being guessed.
   static SequentialDesignModel extract(naja::NL::SNLDesign* top);
+  static SequentialDesignModel extract(
+      naja::NL::SNLDesign* top,
+      const SequentialDesignExtractOptions& options);
 
   bool hasUnsupportedFeatures() const {
     return !unsupportedReasons.empty();
