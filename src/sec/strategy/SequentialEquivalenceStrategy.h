@@ -17,7 +17,6 @@ class SNLDesign;
 namespace KEPLER_FORMAL::SEC {
 
 enum class SecEngine {
-  Legacy,
   KInduction,
   Imc,
   Pdr,
@@ -81,9 +80,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
 struct SequentialDesignModel;
 
 // Builds a combined SEC problem from two sequential designs and discharges it
-// with the selected SEC proof engine. "Legacy" preserves the historical hybrid
-// path, while K_INDUCTION, IMC, and PDR expose distinct top-level engines over
-// the same extracted transition system.
+// with the selected SEC proof engine over the extracted transition system.
 class SequentialEquivalenceStrategy {
  public:
   SequentialEquivalenceStrategy(
@@ -91,7 +88,7 @@ class SequentialEquivalenceStrategy {
       naja::NL::SNLDesign* top1,
       KEPLER_FORMAL::Config::SolverType solverType =
           KEPLER_FORMAL::Config::getSolverType(),
-      SecEngine secEngine = SecEngine::Legacy,
+      SecEngine secEngine = SecEngine::Pdr,
       SecEncoding encoding = SecEncoding::DualRailSteady);
 
   SequentialEquivalenceResult run(size_t maxK) const;

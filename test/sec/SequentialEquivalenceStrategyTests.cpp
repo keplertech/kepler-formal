@@ -1556,7 +1556,7 @@ class SequentialEquivalenceStrategyTests : public ::testing::Test {
 SequentialEquivalenceStrategy makeBinarySecStrategy(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
-    SecEngine engine = SecEngine::Legacy) {
+    SecEngine engine = SecEngine::Pdr) {
   return SequentialEquivalenceStrategy(
       top0,
       top1,
@@ -1566,7 +1566,7 @@ SequentialEquivalenceStrategy makeBinarySecStrategy(
 }
 
 SequentialEquivalenceStrategy makeBinaryExtractedSecStrategy(
-    SecEngine engine = SecEngine::Legacy) {
+    SecEngine engine = SecEngine::Pdr) {
   return makeBinarySecStrategy(nullptr, nullptr, engine);
 }
 
@@ -14738,11 +14738,10 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto model0 = makeCombinationalExtractedModel(BoolExpr::Var(2));
   const auto model1 = makeCombinationalExtractedModel(BoolExpr::Var(2));
   const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
-  const std::array<std::pair<SecEngine, const char*>, 4> expected = {{
+  const std::array<std::pair<SecEngine, const char*>, 3> expected = {{
       {SecEngine::Pdr, "pdr engine"},
       {SecEngine::Imc, "imc engine"},
       {SecEngine::KInduction, "classic k-induction engine"},
-      {SecEngine::Legacy, "legacy engine"},
   }};
 
   for (const auto& [engine, label] : expected) {
@@ -21682,7 +21681,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
       stderrOutput.find("SEC diag: remapped next-state formulas"),
       std::string::npos);
   EXPECT_NE(
-      stderrOutput.find("SEC diag: entering legacy engine"),
+      stderrOutput.find("SEC diag: entering pdr engine"),
       std::string::npos);
   EXPECT_NE(stdoutOutput.find("SEC diag: aligned_inputs="), std::string::npos);
   EXPECT_NE(stdoutOutput.find("SEC summary: property_is_true="), std::string::npos);

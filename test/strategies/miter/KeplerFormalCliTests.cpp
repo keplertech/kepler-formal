@@ -2304,7 +2304,7 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithPdrEngine) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithLegacyEngine) {
+TEST_F(KeplerFormalCliTests, ConfigSecVerificationRejectsLegacyEngine) {
   SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
   const auto cfgPath = writeTempConfig(
@@ -2316,7 +2316,7 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithLegacyEngine) {
       "input_paths:\n"
       "  - " + fixture.design0IfPath.string() + "\n"
       "  - " + fixture.design1IfPath.string() + "\n");
-  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }

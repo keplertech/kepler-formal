@@ -62,15 +62,15 @@ static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
       "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <netlist1> <netlist2> [<library-file>...] | "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos] | "
       "-cc/-cxx --cc_top <function> [--cc_include <dir>...] "
       "[--cc_output_dir <dir>] [-v sec] <source1.cc> <source2.cc> | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos]",
@@ -146,12 +146,6 @@ static bool parseSecEngineToken(const std::string& token,
                                 std::string& error) {
   // Keep the binary-level selector intentionally small for now so the
   // user-facing SEC modes stay explicit and predictable.
-  if (token == "legacy") {
-    // LCOV_EXCL_START
-    engine = KEPLER_FORMAL::SEC::SecEngine::Legacy;
-    return true;
-    // LCOV_EXCL_STOP
-  }
   if (token == "k_induction") {
     // LCOV_EXCL_START
     engine = KEPLER_FORMAL::SEC::SecEngine::KInduction;
@@ -169,7 +163,7 @@ static bool parseSecEngineToken(const std::string& token,
     return true;
   }
   // LCOV_EXCL_START
-  error = "expected legacy, k_induction, imc, or pdr, got `" + token + "`";
+  error = "expected k_induction, imc, or pdr, got `" + token + "`";
   return false;
   // LCOV_EXCL_STOP
 }
@@ -186,12 +180,9 @@ static const char* secEngineName(KEPLER_FORMAL::SEC::SecEngine engine) {
       // LCOV_EXCL_STOP
     case KEPLER_FORMAL::SEC::SecEngine::Pdr:
       return "pdr";
-    // LCOV_EXCL_START
-    case KEPLER_FORMAL::SEC::SecEngine::Legacy:
-    // LCOV_EXCL_STOP
     default:
       // LCOV_EXCL_START
-      return "legacy";
+      return "pdr";
       // LCOV_EXCL_STOP
   }
 }
@@ -1326,7 +1317,7 @@ int KeplerFormalMain(int argc, char** argv) {
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
   VerificationMode verificationMode = VerificationMode::LEC;
-  KEPLER_FORMAL::SEC::SecEngine secEngine = KEPLER_FORMAL::SEC::SecEngine::Legacy;
+  KEPLER_FORMAL::SEC::SecEngine secEngine = KEPLER_FORMAL::SEC::SecEngine::Pdr;
   KEPLER_FORMAL::SEC::SecEncoding secEncoding =
       KEPLER_FORMAL::SEC::SecEncoding::DualRailSteady;
   bool secEngineExplicit = false;

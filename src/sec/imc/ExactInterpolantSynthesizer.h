@@ -11,10 +11,9 @@
 
 namespace KEPLER_FORMAL::SEC {
 
-// A small-state exact interpolant helper used by IMC and the legacy SEC flow
-// to strengthen induction. It enumerates shared-state valuations exactly, so
-// it is only enabled for compact transition systems where the symbolic support
-// stays manageable.
+// A small-state exact interpolant helper used by IMC to strengthen induction.
+// It enumerates shared-state valuations exactly, so it is only enabled for
+// compact transition systems where the symbolic support stays manageable.
 class ExactInterpolantSynthesizer {
  public:
   ExactInterpolantSynthesizer(const KInductionProblem& problem,

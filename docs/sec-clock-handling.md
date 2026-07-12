@@ -11,7 +11,6 @@ not use this clock model.
 
 The SEC clock model is enabled by default for all SEC engines:
 
-- `legacy`
 - `k_induction`
 - `imc`
 - `pdr`

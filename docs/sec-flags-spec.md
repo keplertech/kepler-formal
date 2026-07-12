@@ -99,7 +99,7 @@ liberty_files:
 | --- | --- | --- | --- | --- |
 | `-v sec`, `--verification sec` | `verification: sec` | `lec` | `lec`, `sec` | Selects SEC instead of combinational LEC. Values are lowercase. |
 | `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the maximum SEC proof/search bound used by the selected engine. `0` is valid and only permits zero-bound checks. |
-| `--sec-engine <engine>` | `sec_engine: <engine>` | `legacy` | `legacy`, `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
+| `--sec-engine <engine>` | `sec_engine: <engine>` | `pdr` | `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
 | `--sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: true` | `true` | boolean | Abstracts unsupported sequential instances as SEC boundaries instead of failing immediately. |
 | `--no-sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: false` | `true` | boolean | Uses strict mode: unsupported sequential interfaces cause SEC to fail as unsupported. |
@@ -110,7 +110,6 @@ Accepted values for `sec_engine`:
 
 | Engine | Accepted value |
 | --- | --- |
-| `legacy` | `legacy` |
 | `k_induction` | `k_induction` |
 | `imc` | `imc` |
 | `pdr` | `pdr` |
@@ -131,7 +130,6 @@ flows that require stable behavior should always spell out either `binary` or
 
 | Engine | Current behavior |
 | --- | --- |
-| `legacy` | Historical SEC flow. It derives an exact one-step reachable-state strengthening when possible, then runs the shared k-induction engine. |
 | `k_induction` | Explicit classic k-induction flow: bounded base-case search followed by induction-step proof over the extracted SEC transition system. |
 | `imc` | Interpolation-Based Model Checking flow over the same extracted SEC problem. It uses the shared base-case search and exact interpolant strengthening where applicable. |
 | `pdr` | Property Directed Reachability flow over the extracted SEC transition system. It first accepts immediate zero-bound k-induction results, then runs PDR frames up to `max_k`. |
@@ -245,8 +243,9 @@ SEC still depends on the normal front-end and library flags:
 
 ## Known Construction Notes
 
-- `legacy` remains the default for compatibility, but new SEC work should choose
-  an explicit engine (`k_induction`, `imc`, or `pdr`) when comparing behavior.
+- `pdr` is the default SEC engine. Tests, scripts, and regression flows can
+  still choose an explicit engine (`k_induction`, `imc`, or `pdr`) when
+  comparing behavior.
 - `dual_rail_steady` is the default SEC encoding. New tests and regressions should
   still set `sec_encoding` explicitly when they depend on a specific mode.
 - `report_skipped_pos` still has historical LEC naming even though SEC also uses
