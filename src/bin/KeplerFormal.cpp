@@ -61,16 +61,31 @@ static const char* kSkippedMultiClockDomainPOReport =
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <netlist1> <netlist2> [<library-file>...] | "
-      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
+      "Usage: {} [--config <file>] | "
+      "-verilog [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <gate1.v> <gate2.v> [<library-file>...] | "
+      "<-systemverilog/-sv> [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <rtl1.sv> <rtl2.sv> [<library-file>...] | "
+      "-sv2v [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <rtl.sv> <gate.v> [<library-file>...] | "
+      "<-naja_if/-verilog> --design1 <file...> --design2 "
       "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "[--no-sec-uncomputable-seq-boundary] [--compact] "
+      "[--report-skipped-pos] | "
+      "<-systemverilog/-sv> --design1 <rtl file...> --design2 "
+      "<file...> [--liberty <library-file>...] [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "[--no-sec-uncomputable-seq-boundary] [--compact] "
+      "[--report-skipped-pos] | "
+      "-sv2v --design1 <rtl file...> --design2 <gate file...> "
+      "[--liberty <library-file>...] [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos] | "
       "-cc/-cxx --cc_top <function> [--cc_include <dir>...] "
       "[--cc_output_dir <dir>] [-v sec] <source1.cc> <source2.cc> | "
-      "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "-c_vs_rtl --cc_top <function> [--cc_include <dir>...] "
+      "[--cc_output_dir <dir>] [--sv_design2_top <name>] [-v sec] "
+      "<source.cc> <rtl.sv> | "
+      "-rtl_vs_gate [--sv_design1_top <name>] "
+      "[--liberty <library-file>...] [-v sec] <rtl.sv> <gate.v> | "
+      "-systemverilog/-sv/-sv2v [--sv_design1_flist <file>] [--sv_design1_top <name>] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--no-sec-uncomputable-seq-boundary] [--compact] "
       "[--report-skipped-pos]",
@@ -561,6 +576,16 @@ struct SynthesizedCcInputs {
   SynthesizedCcDesign design1;
 };
 
+struct LoweredCcDesign {
+  std::vector<std::string> inputPaths;
+  std::optional<std::string> top;
+};
+
+struct LoweredCcInputs {
+  LoweredCcDesign design0;
+  LoweredCcDesign design1;
+};
+
 static bool parseConfigInputPaths(const YAML::Node& node,
                                   DesignInputs& out,
                                   std::string& error) {
@@ -809,6 +834,18 @@ static bool validateSystemVerilogOptions(const SystemVerilogOptions& options,
          validateDesign(options.design1, "design2");
 }
 
+static std::string lowerAscii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return value;
+}
+
+static bool hasSystemVerilogDesignOptions(
+    const SystemVerilogDesignOptions& designOptions) {
+  return designOptions.flist.has_value() || designOptions.top.has_value();
+}
+
 static bool applyCcConfigOption(const YAML::Node& cfg,
                                 const char* key,
                                 std::optional<std::string>& target,
@@ -862,14 +899,47 @@ static const std::optional<std::string>& resolveCcDesignOption(
 
 static bool validateCcSynthesisOptions(const DesignInputs& designInputs,
                                        const CcSynthesisOptions& options,
+                                       bool synthesizeDesign0,
+                                       bool synthesizeDesign1,
                                        std::string& error) {
-  if (designInputs.design0.size() != 1 || designInputs.design1.size() != 1) {
-    error = "cc format currently supports exactly one C/C++ translation unit per design";
+  if (!synthesizeDesign0 && !synthesizeDesign1) {
+    error = "C/C++ synthesis mode requires at least one C/C++ design side";
     return false;
   }
-  if (!resolveCcDesignOption(options.design0.top, options.top) ||
-      !resolveCcDesignOption(options.design1.top, options.top)) {
-    error = "cc format requires cc_top or both cc_design1_top and cc_design2_top";
+
+  const auto validateCcDesign = [&](const std::vector<std::string>& designPaths,
+                                    const CcDesignOptions& designOptions,
+                                    bool synthesizeDesign,
+                                    const char* designLabel,
+                                    const char* designTopKey) {
+    if (!synthesizeDesign) {
+      return true;
+    }
+    if (designPaths.size() != 1) {
+      error = std::string(designLabel) +
+              " C/C++ side supports exactly one translation unit";
+      return false;
+    }
+    if (!resolveCcDesignOption(designOptions.top, options.top)) {
+      error = std::string(designLabel) + " C/C++ side requires cc_top or " +
+              designTopKey;
+      return false;
+    }
+    return true;
+  };
+
+  if (!validateCcDesign(
+          designInputs.design0,
+          options.design0,
+          synthesizeDesign0,
+          "design1",
+          "cc_design1_top") ||
+      !validateCcDesign(
+          designInputs.design1,
+          options.design1,
+          synthesizeDesign1,
+          "design2",
+          "cc_design2_top")) {
     return false;
   }
   return true;
@@ -1023,26 +1093,63 @@ static SynthesizedCcDesign synthesizeOneCcDesign(
   return {outputPathString, moduleName};
 }
 
-static SynthesizedCcInputs synthesizeCcInputsToSystemVerilog(
+static LoweredCcDesign lowerOneCcDesignToSystemVerilog(
+    const std::vector<std::string>& designPaths,
+    const CcSynthesisOptions& options,
+    const CcDesignOptions& designOptions,
+    const std::filesystem::path& outputDir,
+    bool synthesizeDesign,
+    const std::string& designLabel) {
+  if (!synthesizeDesign) {
+    return {designPaths, std::nullopt};
+  }
+  const auto synthesized =
+      synthesizeOneCcDesign(designPaths, options, designOptions, outputDir, designLabel);
+  return {{synthesized.svPath}, synthesized.top};
+}
+
+static LoweredCcInputs lowerCcInputsToSystemVerilog(
     const DesignInputs& designInputs,
-    const CcSynthesisOptions& options) {
+    const CcSynthesisOptions& options,
+    bool synthesizeDesign0,
+    bool synthesizeDesign1) {
   const auto outputDir = chooseCcOutputDir(options);
-  const auto design0Spec =
-      makeEffectiveCcSynthesisSpec(designInputs.design0, options, options.design0);
-  const auto design1Spec =
-      makeEffectiveCcSynthesisSpec(designInputs.design1, options, options.design1);
-  SynthesizedCcDesign synthesized0 = synthesizeOneCcDesign(
-      designInputs.design0, options, options.design0, outputDir, "design1");
-  if (sameEffectiveCcSynthesisSpec(design0Spec, design1Spec)) {
+
+  if (synthesizeDesign0 && synthesizeDesign1) {
+    const auto design0Spec =
+        makeEffectiveCcSynthesisSpec(designInputs.design0, options, options.design0);
+    const auto design1Spec =
+        makeEffectiveCcSynthesisSpec(designInputs.design1, options, options.design1);
+    SynthesizedCcDesign synthesized0 = synthesizeOneCcDesign(
+        designInputs.design0, options, options.design0, outputDir, "design1");
+    if (!sameEffectiveCcSynthesisSpec(design0Spec, design1Spec)) {
+      auto synthesized1 = synthesizeOneCcDesign(
+          designInputs.design1, options, options.design1, outputDir, "design2");
+      return {{{synthesized0.svPath}, synthesized0.top},
+              {{synthesized1.svPath}, synthesized1.top}};
+    }
     SPDLOG_INFO(
         "Reusing design1 C/C++ synthesis output for design2: {}",
         synthesized0.svPath);
-    return {synthesized0, synthesized0};
+    return {{{synthesized0.svPath}, synthesized0.top},
+            {{synthesized0.svPath}, synthesized0.top}};
   }
+
   return {
-      synthesized0,
-      synthesizeOneCcDesign(
-          designInputs.design1, options, options.design1, outputDir, "design2"),
+      lowerOneCcDesignToSystemVerilog(
+          designInputs.design0,
+          options,
+          options.design0,
+          outputDir,
+          synthesizeDesign0,
+          "design1"),
+      lowerOneCcDesignToSystemVerilog(
+          designInputs.design1,
+          options,
+          options.design1,
+          outputDir,
+          synthesizeDesign1,
+          "design2"),
   };
 }
 
@@ -1351,7 +1458,15 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, CC, NAJA_IF };
+  enum class FormatType {
+    VERILOG,
+    SYSTEMVERILOG,
+    SV2V,
+    CC,
+    C_VS_RTL,
+    RTL_VS_GATE,
+    NAJA_IF
+  };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
     naja::DNL::destroy();
@@ -1429,7 +1544,7 @@ int KeplerFormalMain(int argc, char** argv) {
 
         // format
         if (cfg["format"] && cfg["format"].IsScalar()) {
-          std::string fmt = cfg["format"].as<std::string>();
+          std::string fmt = lowerAscii(cfg["format"].as<std::string>());
           if (fmt == "naja_if") {
             // LCOV_EXCL_START
             inputFormatType = FormatType::NAJA_IF;
@@ -1444,6 +1559,13 @@ int KeplerFormalMain(int argc, char** argv) {
           } else if (fmt == "cc" || fmt == "c" || fmt == "cxx" ||
                      fmt == "cpp" || fmt == "c2rtl") {
             inputFormatType = FormatType::CC;
+          } else if (fmt == "c_vs_rtl" || fmt == "cc_vs_rtl" ||
+                     fmt == "c2rtl_vs_rtl" || fmt == "c_vs_sv" ||
+                     fmt == "cc_vs_sv") {
+            inputFormatType = FormatType::C_VS_RTL;
+          } else if (fmt == "rtl_vs_gate" || fmt == "rtl_vs_gl" ||
+                     fmt == "rtl_vs_gates" || fmt == "rtl_vs_netlist") {
+            inputFormatType = FormatType::RTL_VS_GATE;
           } else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
@@ -1844,6 +1966,20 @@ int KeplerFormalMain(int argc, char** argv) {
         formatFound = true;
         break;
       }
+      if (arg == "-c_vs_rtl" || arg == "-cc_vs_rtl" ||
+          arg == "--c-vs-rtl" || arg == "--cc-vs-rtl") {
+        inputFormatType = FormatType::C_VS_RTL;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
+      if (arg == "-rtl_vs_gate" || arg == "--rtl-vs-gate" ||
+          arg == "-rtl_vs_gl" || arg == "--rtl-vs-gl") {
+        inputFormatType = FormatType::RTL_VS_GATE;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
       // LCOV_EXCL_START
       SPDLOG_CRITICAL("Unrecognized option before input format type: {}", arg);
       return EXIT_FAILURE;
@@ -2138,6 +2274,12 @@ int KeplerFormalMain(int argc, char** argv) {
   if (inputFormatType == FormatType::CC) {
     inputFormatName = "CC";
   }
+  if (inputFormatType == FormatType::C_VS_RTL) {
+    inputFormatName = "C_VS_RTL";
+  }
+  if (inputFormatType == FormatType::RTL_VS_GATE) {
+    inputFormatName = "RTL_VS_GATE";
+  }
   SPDLOG_INFO("Input format: {}", inputFormatName);
   if (!runLogFilePath.empty()) {
     SPDLOG_INFO("Run log: {}", runLogFilePath);
@@ -2145,8 +2287,18 @@ int KeplerFormalMain(int argc, char** argv) {
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);
 
+  const bool isCcLoweringFormat =
+      inputFormatType == FormatType::CC ||
+      inputFormatType == FormatType::C_VS_RTL;
+  const bool synthesizeCcDesign0 =
+      inputFormatType == FormatType::CC ||
+      inputFormatType == FormatType::C_VS_RTL;
+  const bool synthesizeCcDesign1 = inputFormatType == FormatType::CC;
+  const bool isPureSystemVerilogLikeFormat =
+      inputFormatType == FormatType::SYSTEMVERILOG;
+
   // Basic validation
-  if (inputFormatType == FormatType::SYSTEMVERILOG) {
+  if (isPureSystemVerilogLikeFormat) {
     // LCOV_EXCL_START
     if (!hasSystemVerilogSources(designInputs.design0, systemVerilogOptions.design0) ||
         !hasSystemVerilogSources(designInputs.design1, systemVerilogOptions.design1)) {
@@ -2170,15 +2322,30 @@ int KeplerFormalMain(int argc, char** argv) {
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
-  } else if (inputFormatType == FormatType::CC) {
+  } else if (inputFormatType == FormatType::RTL_VS_GATE) {
+    if (!hasSystemVerilogSources(designInputs.design0, systemVerilogOptions.design0) ||
+        designInputs.design1.empty()) {
+      SPDLOG_CRITICAL(
+          "Need design1 SystemVerilog RTL input and design2 Verilog gate-level input");
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+  } else if (isCcLoweringFormat) {
     if (designInputs.design0.empty() || designInputs.design1.empty()) {
-      SPDLOG_CRITICAL("Need two C/C++ input paths (one per design)");
+      SPDLOG_CRITICAL(
+          inputFormatType == FormatType::C_VS_RTL
+              ? "Need design1 C/C++ input path and design2 RTL input path"
+              : "Need two C/C++ input paths (one per design)");
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
     std::string ccValidationError;
     if (!validateCcSynthesisOptions(
-            designInputs, ccSynthesisOptions, ccValidationError)) {
+            designInputs,
+            ccSynthesisOptions,
+            synthesizeCcDesign0,
+            synthesizeCcDesign1,
+            ccValidationError)) {
       SPDLOG_CRITICAL("Invalid C/C++ synthesis inputs: {}", ccValidationError);
       return EXIT_FAILURE;
     }
@@ -2196,13 +2363,19 @@ int KeplerFormalMain(int argc, char** argv) {
     return EXIT_FAILURE;
     // LCOV_EXCL_STOP
   }
-  if ((inputFormatType == FormatType::SYSTEMVERILOG ||
-       inputFormatType == FormatType::SV2V ||
-       inputFormatType == FormatType::CC) &&
-      verificationMode != VerificationMode::SEC) {
+  const bool inputFormatRequiresSec =
+      isPureSystemVerilogLikeFormat ||
+      inputFormatType == FormatType::SV2V ||
+      inputFormatType == FormatType::RTL_VS_GATE ||
+      isCcLoweringFormat;
+  if (inputFormatRequiresSec && verificationMode != VerificationMode::SEC) {
+    const char* secOnlyFormatName =
+        isCcLoweringFormat
+            ? "C/C++"
+            : (inputFormatType == FormatType::RTL_VS_GATE ? "rtl_vs_gate" : "SystemVerilog");
     SPDLOG_CRITICAL(
         "{} input format requires SEC verification (-v sec or verification: sec)",
-        inputFormatType == FormatType::CC ? "C/C++" : "SystemVerilog");
+        secOnlyFormatName);
     return EXIT_FAILURE;
   }
   if (verificationMode == VerificationMode::LEC && secMaxKExplicit) {
@@ -2250,15 +2423,32 @@ int KeplerFormalMain(int argc, char** argv) {
       // LCOV_EXCL_STOP
     }
   }
-  if (inputFormatType != FormatType::SYSTEMVERILOG &&
+  if (!isPureSystemVerilogLikeFormat &&
+      inputFormatType != FormatType::RTL_VS_GATE &&
       inputFormatType != FormatType::SV2V &&
-      (systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
-       systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
+      inputFormatType != FormatType::C_VS_RTL &&
+      (hasSystemVerilogDesignOptions(systemVerilogOptions.design0) ||
+       hasSystemVerilogDesignOptions(systemVerilogOptions.design1))) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL(
-        "SystemVerilog design options are only valid with -systemverilog/-sv/-sv2v input");
+        "SystemVerilog design options are only valid with SystemVerilog, sv2v, "
+        "c_vs_rtl, or rtl_vs_gate input");
     return EXIT_FAILURE;
     // LCOV_EXCL_STOP
+  }
+  if (inputFormatType == FormatType::C_VS_RTL &&
+      hasSystemVerilogDesignOptions(systemVerilogOptions.design0)) {
+    SPDLOG_CRITICAL(
+        "c_vs_rtl format only accepts SystemVerilog options for design 2; "
+        "design 1 is synthesized from C/C++");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType == FormatType::RTL_VS_GATE &&
+      hasSystemVerilogDesignOptions(systemVerilogOptions.design1)) {
+    SPDLOG_CRITICAL(
+        "rtl_vs_gate format only accepts SystemVerilog options for design 1; "
+        "design 2 is parsed as gate-level Verilog");
+    return EXIT_FAILURE;
   }
   if (inputFormatType == FormatType::SV2V &&
       (systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
@@ -2313,21 +2503,26 @@ int KeplerFormalMain(int argc, char** argv) {
   }
   // LCOV_EXCL_STOP
 
-  if (inputFormatType == FormatType::CC) {
+  if (isCcLoweringFormat) {
     try {
-      const auto synthesized =
-          synthesizeCcInputsToSystemVerilog(designInputs, ccSynthesisOptions);
-      designInputs.design0 = {synthesized.design0.svPath};
-      designInputs.design1 = {synthesized.design1.svPath};
-      systemVerilogOptions.design0 = {};
-      systemVerilogOptions.design1 = {};
-      systemVerilogOptions.design0.top = synthesized.design0.top;
-      systemVerilogOptions.design1.top = synthesized.design1.top;
+      const auto lowered = lowerCcInputsToSystemVerilog(
+          designInputs,
+          ccSynthesisOptions,
+          synthesizeCcDesign0,
+          synthesizeCcDesign1);
+      designInputs.design0 = lowered.design0.inputPaths;
+      designInputs.design1 = lowered.design1.inputPaths;
+      if (lowered.design0.top) {
+        systemVerilogOptions.design0.top = *lowered.design0.top;
+      }
+      if (lowered.design1.top) {
+        systemVerilogOptions.design1.top = *lowered.design1.top;
+      }
       inputFormatType = FormatType::SYSTEMVERILOG;
       SPDLOG_INFO(
-          "C/C++ synthesis complete. Reloading generated SystemVerilog designs.");
-      logDesignPaths("Synthesized netlist 1", designInputs.design0);
-      logDesignPaths("Synthesized netlist 2", designInputs.design1);
+          "C/C++ lowering complete. Reloading SystemVerilog designs.");
+      logDesignPaths("Lowered netlist 1", designInputs.design0);
+      logDesignPaths("Lowered netlist 2", designInputs.design1);
     } catch (const std::exception& e) {
       SPDLOG_CRITICAL("C/C++ synthesis failed: {}", e.what());
       return EXIT_FAILURE;
@@ -2494,11 +2689,13 @@ int KeplerFormalMain(int argc, char** argv) {
     const auto isHdlFormat = [&]() {
       return inputFormatType == FormatType::VERILOG ||
              inputFormatType == FormatType::SYSTEMVERILOG ||
-             inputFormatType == FormatType::SV2V;
+             inputFormatType == FormatType::SV2V ||
+             inputFormatType == FormatType::RTL_VS_GATE;
     };
 
     const auto designUsesSystemVerilog = [&](int designIndex) {
       return inputFormatType == FormatType::SYSTEMVERILOG ||
+             (inputFormatType == FormatType::RTL_VS_GATE && designIndex == 0) ||
              (inputFormatType == FormatType::SV2V && designIndex == 0);
     };
 
@@ -2538,7 +2735,9 @@ int KeplerFormalMain(int argc, char** argv) {
           std::vector<std::filesystem::path> temporaryFiles;
           // LCOV_EXCL_STOP
           const auto* sv2vPrimitiveLibraries =
-              (inputFormatType == FormatType::SV2V && designIndex == 0)
+              ((inputFormatType == FormatType::SV2V ||
+                inputFormatType == FormatType::RTL_VS_GATE) &&
+               designIndex == 0)
                   ? &primitiveLibraries
                   : nullptr;
           const auto svInputPaths =
@@ -2756,6 +2955,7 @@ int KeplerFormalMain(int argc, char** argv) {
             2,
             "design 1");
         if (inputFormatType != FormatType::SV2V &&
+            inputFormatType != FormatType::RTL_VS_GATE &&
             sameCompactSecDesignSpec(
                 inputFormatType == FormatType::SYSTEMVERILOG,
                 designInputs,
@@ -2832,7 +3032,10 @@ int KeplerFormalMain(int argc, char** argv) {
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            inputFormatType == FormatType::SV2V ? &db0PrimitiveLibraries : nullptr;
+            (inputFormatType == FormatType::SV2V ||
+             inputFormatType == FormatType::RTL_VS_GATE)
+                ? &db0PrimitiveLibraries
+                : nullptr;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design0,
             systemVerilogOptions.design0,

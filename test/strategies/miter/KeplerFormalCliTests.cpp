@@ -1235,6 +1235,77 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogAccepted) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigRtlVsGateAcceptedWithSec) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_rtl_vs_gate");
+  fixture.design0Path = fixture.tmpDir / "design0.sv";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input logic a, output logic y);\n";
+    design0 << "  assign y = a;\n";
+    design0 << "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, output y);\n";
+    design1 << "  assign y = a;\n";
+    design1 << "endmodule\n";
+  }
+  const auto cfgPath = writeTempConfig(
+      "format: rtl_vs_gate\n"
+      "verification: sec\n"
+      "sec_encoding: binary\n"
+      "max_k: 4\n"
+      "sv_design1_top: top\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigRtlVsGateRequiresSec) {
+  const auto cfgPath = writeTempConfig(
+      "format: rtl_vs_gate\n"
+      "verification: lec\n"
+      "sv_design1_top: top\n"
+      "input_paths: [design0.sv, design1.v]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigRtlVsGateRejectsDesign2SystemVerilogOptions) {
+  const auto cfgPath = writeTempConfig(
+      "format: rtl_vs_gate\n"
+      "verification: sec\n"
+      "sv_design2_top: top\n"
+      "input_paths: [design0.sv, design1.v]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCVsRtlRequiresSec) {
+  const auto cfgPath = writeTempConfig(
+      "format: c_vs_rtl\n"
+      "cc_top: top\n"
+      "input_paths: [design0.cc, design1.sv]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCVsRtlRejectsDesign1SystemVerilogOptions) {
+  const auto cfgPath = writeTempConfig(
+      "format: c_vs_rtl\n"
+      "verification: sec\n"
+      "cc_top: top\n"
+      "sv_design1_top: top\n"
+      "input_paths: [design0.cc, design1.sv]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSystemVerilogLecRejected) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",
