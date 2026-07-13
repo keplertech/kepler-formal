@@ -70,7 +70,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/common/string_to_int.cc
   ${KEPLER_XLS_ROOT}/xls/common/symbolized_stacktrace.cc
   ${KEPLER_XLS_ROOT}/xls/common/to_string_utils.cc
-  ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/cc_parser.cc
+  ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/cc_parser.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/continuations.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/expr_clone.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/generate_fsm.cc
@@ -178,6 +178,7 @@ file(MAKE_DIRECTORY ${XLS_C2RTL_PROTO_OUT_DIR})
 
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen)
+file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph)
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph/graph.h
   "#ifndef ORTOOLS_GRAPH_GRAPH_H_\n"
@@ -229,6 +230,61 @@ string(REPLACE
 )
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen/op_override_impls.cc
   "${XLS_C2RTL_OP_OVERRIDE_IMPLS_CC}"
+)
+
+file(READ ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/cc_parser.cc
+  XLS_C2RTL_CC_PARSER_CC)
+string(REPLACE
+  [=[#include "llvm/Support/raw_ostream.h"]=]
+  [=[#include "llvm/Support/raw_ostream.h"
+#include "llvm/Config/llvm-config.h"]=]
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "namespace xlscc {\nnamespace {\n"
+  "namespace xlscc {\nnamespace {\n\nconst clang::IdentifierInfo* KeplerC2rtlParsedAttrIdentifierInfo(\n    const clang::IdentifierLoc* ident) {\n#if LLVM_VERSION_MAJOR >= 21\n  return ident->getIdentifierInfo();\n#else\n  return ident->Ident;\n#endif\n}\n\nclang::SourceLocation KeplerC2rtlParsedAttrIdentifierLoc(\n    const clang::IdentifierLoc* ident) {\n#if LLVM_VERSION_MAJOR >= 21\n  return ident->getLoc();\n#else\n  return ident->Loc;\n#endif\n}\n\n"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "class clang::Attr*& Result) const override {"
+  "class clang::Attr*& Result) const {"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "clang::Attr*& Result) const override {"
+  "clang::Attr*& Result) const {"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "Attr.getArgAsIdent(0)->getIdentifierInfo()->getName()"
+  "KeplerC2rtlParsedAttrIdentifierInfo(Attr.getArgAsIdent(0))->getName()"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "Attr.getArgAsIdent(0)->getLoc()"
+  "KeplerC2rtlParsedAttrIdentifierLoc(Attr.getArgAsIdent(0))"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "      } else if (std::optional<std::string> maybe_strictness =\n                     args[0]->tryEvaluateString(S.Context);\n                 maybe_strictness.has_value()) {\n        strictness_str = *maybe_strictness;\n      } else if (clang::Expr::EvalResult result;"
+  "#if LLVM_VERSION_MAJOR >= 21\n      } else if (std::optional<std::string> maybe_strictness =\n                     args[0]->tryEvaluateString(S.Context);\n                 maybe_strictness.has_value()) {\n        strictness_str = *maybe_strictness;\n#endif\n      } else if (clang::Expr::EvalResult result;"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+string(REPLACE
+  "      : clang::TextDiagnosticPrinter(os, *diags, OwnsOutputStream),"
+  "#if LLVM_VERSION_MAJOR >= 21\n      : clang::TextDiagnosticPrinter(os, *diags, OwnsOutputStream),\n#else\n      : clang::TextDiagnosticPrinter(os, diags, OwnsOutputStream),\n#endif"
+  XLS_C2RTL_CC_PARSER_CC
+  "${XLS_C2RTL_CC_PARSER_CC}"
+)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/cc_parser.cc
+  "${XLS_C2RTL_CC_PARSER_CC}"
 )
 set(XLS_C2RTL_PROTOS
   ${CMAKE_CURRENT_SOURCE_DIR}/proto/google/api/field_behavior.proto
