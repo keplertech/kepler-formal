@@ -41,7 +41,7 @@
 #include "Tree2BoolExpr.h"
 #include "model/SequentialDesignModel.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
-#include "xls/contrib/kepler/kepler_xls_c2rtl.h"
+#include "KeplerXlsC2Rtl.h"
 
 #if defined(__SANITIZE_ADDRESS__)
 #define KEPLER_FORMAL_ASAN_BUILD 1

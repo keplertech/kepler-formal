@@ -8,6 +8,12 @@ build --host_cxxopt=-std=c++20
 # host toolchain, so the guard is Linux-scoped.
 common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 
+# rules_foreign_cc invokes host tools such as cmake from sandboxed actions.
+# On macOS those tools usually live under Homebrew, which is not always present
+# in Bazel's default action PATH.
+build:macos --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+build:macos --repo_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
 # Force C11 for host tools to work around rules_foreign_cc pkg-config
 # bootstrap failure: bundled glib uses 'bool' as a struct field name,
 # which is a keyword in GCC 15's default C23 mode.

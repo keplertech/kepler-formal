@@ -14,6 +14,31 @@ bazel_dep(name = "yaml-cpp", version = "0.9.0")
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
 bazel_dep(name = "zlib", version = "1.3.2")
 bazel_dep(name = "spdlog", version = "1.17.0")
+bazel_dep(name = "abseil-cpp", version = "20260107.0")
+bazel_dep(name = "boringssl", version = "0.20250114.0")
+bazel_dep(name = "cppitertools", version = "2.2")
+bazel_dep(name = "googleapis", version = "0.0.0-20240819-fe8ba054a")
+bazel_dep(name = "protobuf", version = "33.0")
+bazel_dep(name = "re2", version = "2024-07-02.bcr.1")
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "rules_python", version = "1.9.0")
+bazel_dep(name = "rules_shell", version = "0.6.1")
+
+single_version_override(
+    module_name = "googleapis",
+    version = "0.0.0-20240819-fe8ba054a",
+)
+PYTHON_VERSION = "3.13"
+PYTHON_VERSION_NAME = PYTHON_VERSION.replace(".", "_")
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    python_version = PYTHON_VERSION,
+)
+use_repo(
+    python,
+    project_python = "python_{}".format(PYTHON_VERSION_NAME),
+    project_python_host = "python_{}_host".format(PYTHON_VERSION_NAME),
+)
 # TBB comes from the cmake-built @onetbb repo (bazel/deps.bzl), not the BCR
 # onetbb module (which is Bazel-8-compatible nowadays): naja's shared libs
 # and the kepler-formal binary must share a single libtbb.so.12 runtime,
@@ -61,6 +86,44 @@ register_toolchains(
     "@rules_foreign_cc//toolchains:preinstalled_make_toolchain",
     "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
 )
+
+xls_c2rtl_repository = use_repo_rule(
+    "//bazel:xls_c2rtl_repo.bzl",
+    "xls_c2rtl_repository",
+)
+local_repository = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:local.bzl",
+    "local_repository",
+)
+
+local_repository(
+    name = "com_google_xls",
+    path = "thirdparty/xls",
+)
+xls_c2rtl_repository(
+    name = "xls_c2rtl_src",
+    build_file = "//bazel:xls_c2rtl.BUILD.bazel",
+    src_marker = "@com_google_xls//:MODULE.bazel",
+)
+
+llvm_raw_ext = use_extension("//bazel:xls_llvm_extension.bzl", "llvm_raw_ext")
+use_repo(llvm_raw_ext, "llvm-raw")
+llvm_configure = use_repo_rule(
+    "@llvm-raw//utils/bazel:configure.bzl",
+    "llvm_configure",
+)
+llvm_configure(
+    name = "llvm-project",
+    targets = [
+        "AArch64",
+        "X86",
+    ],
+)
+bazel_dep(name = "zlib-ng", version = "2.3.3", repo_name = "llvm_zlib")
+bazel_dep(name = "zstd", version = "1.5.7.bcr.1", repo_name = "llvm_zstd")
+
+z3_ext = use_extension("//bazel:xls_z3_extension.bzl", "z3_extension")
+use_repo(z3_ext, "z3")
 
 # Third-party dependencies fetched via http_archive for BCR compatibility.
 # BUILD file overlays live in bazel/*.BUILD.bazel.

@@ -1,0 +1,21 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "kepler_xls_c2rtl",
+    srcs = [
+        "XlsC2Rtl.cpp",
+        "XlsPassProfileShim.cpp",
+        "XlsPipelineScheduleShim.cpp",
+    ],
+    hdrs = ["KeplerXlsC2Rtl.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@xls_c2rtl_src//:xls_c2rtl",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/types:span",
+    ],
+)

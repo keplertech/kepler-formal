@@ -1,7 +1,7 @@
 // Copyright 2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
-#include "xls/contrib/kepler/kepler_xls_c2rtl.h"
+#include "KeplerXlsC2Rtl.h"
 
 #include <cstdlib>
 #include <cstring>

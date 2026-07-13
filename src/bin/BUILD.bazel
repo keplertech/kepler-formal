@@ -22,6 +22,7 @@ cc_binary(
         "@naja",
         "@naja//:naja_extra_headers",
         "@spdlog",
+        "//src/c2rtl:kepler_xls_c2rtl",
         "@yaml-cpp",
     ],
 )

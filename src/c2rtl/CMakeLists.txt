@@ -229,6 +229,7 @@ protobuf_generate(
 
 target_include_directories(kepler_xls_c2rtl
   PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${KEPLER_XLS_ROOT}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/compat
