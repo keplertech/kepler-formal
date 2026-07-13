@@ -31,6 +31,8 @@ jobs:
       run: |
         cmake -B ${{github.workspace}}/build-sec-regress \
           -GNinja \
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_CXX_COMPILER=clang++ \
           -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-14" \
           -DPYTHON_INTERFACE=OFF \
           -DENABLE_UNIT_TESTS=OFF \

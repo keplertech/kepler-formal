@@ -26,6 +26,8 @@ jobs:
       run: |
         cmake -B ${{github.workspace}}/build \
           -GNinja \
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_CXX_COMPILER=clang++ \
           -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-14" \
           -DPYTHON_INTERFACE=OFF \
           -DCMAKE_BUILD_TYPE=Release \
