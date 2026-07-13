@@ -20,24 +20,16 @@ jobs:
         fetch-depth: 0
         submodules: true
 
-     # install dependencies
-    - name: Install GoogleTest
-      run: sudo apt-get update && sudo apt-get install -y libgtest-dev cmake
     - name: Checkout submodules
       run: git submodule update --init --recursive
  
     - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -yq \
-          build-essential cmake ninja-build clang pkg-config \
-          libboost-dev libfl-dev libtbb-dev capnproto libcapnp-dev \
-          libgtest-dev libspdlog-dev libfmt-dev libboost-iostreams-dev zlib1g-dev lcov
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh lcov
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCODE_COVERAGE=ON -DLONG_TESTS=ON
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-14" -DCODE_COVERAGE=ON -DLONG_TESTS=ON
 
     - name: Build
       # Build your program with the given configuration

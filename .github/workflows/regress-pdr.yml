@@ -37,12 +37,7 @@ jobs:
         submodules: true
 
     - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
-          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
-          libboost-iostreams-dev zlib1g-dev
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh
 
     - name: Checkout submodules
       run: git submodule update --init --recursive
@@ -51,6 +46,7 @@ jobs:
       run: |
         cmake -B ${{github.workspace}}/build-sec-regress \
           -GNinja \
+          -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-14" \
           -DPYTHON_INTERFACE=OFF \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_STANDARD=20 \

@@ -22,12 +22,7 @@ jobs:
         submodules: true
 
     - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
-          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
-          libboost-iostreams-dev zlib1g-dev
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh
 
     - name: Checkout submodules
       run: git submodule update --init --recursive
@@ -36,6 +31,7 @@ jobs:
       run: |
         cmake -B ${{github.workspace}}/build-sec-regress \
           -GNinja \
+          -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-14" \
           -DPYTHON_INTERFACE=OFF \
           -DENABLE_UNIT_TESTS=OFF \
           -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/stage \
@@ -217,11 +213,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install runtime dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          git python3 python3-pip capnproto libcapnp-dev libtbb-dev \
-          libboost-iostreams-dev zlib1g-dev
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh git python3 python3-pip
 
     - name: Download SEC runtime
       uses: actions/download-artifact@v4
@@ -478,11 +470,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install runtime dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          git python3 python3-pip capnproto libcapnp-dev libtbb-dev \
-          libboost-iostreams-dev zlib1g-dev
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh git python3 python3-pip
 
     - name: Download SEC runtime
       uses: actions/download-artifact@v4
@@ -577,11 +565,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install runtime dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          git python3 python3-pip capnproto libcapnp-dev libtbb-dev \
-          libboost-iostreams-dev zlib1g-dev
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh git python3 python3-pip
 
     - name: Download SEC runtime
       uses: actions/download-artifact@v4
