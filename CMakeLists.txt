@@ -126,6 +126,28 @@ string(JOIN " " CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS
     ${CADICAL_KITTEN_SYMBOL_PREFIX_DEFINES}
 )
 
+set(CADICAL_CFLAGS "${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}")
+set(CADICAL_CXXFLAGS "${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}")
+if(CMAKE_C_FLAGS)
+    string(PREPEND CADICAL_CFLAGS "${CMAKE_C_FLAGS} ")
+endif()
+if(CMAKE_CXX_FLAGS)
+    string(PREPEND CADICAL_CXXFLAGS "${CMAKE_CXX_FLAGS} ")
+endif()
+if(CMAKE_BUILD_TYPE)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" KEPLER_BUILD_TYPE_UPPER)
+    if(CMAKE_C_FLAGS_${KEPLER_BUILD_TYPE_UPPER})
+        string(PREPEND CADICAL_CFLAGS "${CMAKE_C_FLAGS_${KEPLER_BUILD_TYPE_UPPER}} ")
+    endif()
+    if(CMAKE_CXX_FLAGS_${KEPLER_BUILD_TYPE_UPPER})
+        string(PREPEND CADICAL_CXXFLAGS "${CMAKE_CXX_FLAGS_${KEPLER_BUILD_TYPE_UPPER}} ")
+    endif()
+endif()
+if(ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    string(APPEND CADICAL_CFLAGS " -fsanitize=address -fno-omit-frame-pointer")
+    string(APPEND CADICAL_CXXFLAGS " -fsanitize=address -fno-omit-frame-pointer")
+endif()
+
 ExternalProject_Add(kissat_external
     SOURCE_DIR ${KISSAT_ROOT}
     # Keep Kissat small and quiet for embedded use, but do not use
@@ -168,8 +190,8 @@ ExternalProject_Add(cadical_external
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
         "CXX=${CMAKE_CXX_COMPILER}"
-        "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
-        "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
+        "CFLAGS=${CADICAL_CFLAGS}"
+        "CXXFLAGS=${CADICAL_CXXFLAGS}"
         ./configure -q --no-tracing --no-contrib
     BUILD_COMMAND make -C build libcadical.a
     INSTALL_COMMAND ""
