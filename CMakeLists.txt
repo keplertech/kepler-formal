@@ -191,6 +191,14 @@ add_dependencies(cadical cadical_external)
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  foreach(glucose_target glucose glucose-simp glucosep glucose-syrup)
+    if(TARGET ${glucose_target})
+      target_compile_options(${glucose_target} PRIVATE -include stddef.h)
+    endif()
+  endforeach()
+endif()
+
 if(TARGET slang_slang)
   # fmt 12 no longer exposes fmt::format through <fmt/core.h>. Keep vendored
   # slang sources untouched and provide the full formatting declarations here.
