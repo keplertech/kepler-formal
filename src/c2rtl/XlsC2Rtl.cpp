@@ -17,6 +17,7 @@
 #include "absl/types/span.h"
 #include "xls/codegen/codegen_options.h"
 #include "xls/codegen/combinational_generator.h"
+#include "xls/codegen/pipeline_generator.h"
 #include "xls/common/file/filesystem.h"
 #include "xls/common/status/status_macros.h"
 #include "xls/contrib/xlscc/hls_block.pb.h"
@@ -34,6 +35,7 @@
 #include "xls/passes/inlining_pass.h"
 #include "xls/passes/optimization_pass.h"
 #include "xls/passes/pass_base.h"
+#include "xls/scheduling/pipeline_schedule.h"
 
 namespace {
 
@@ -193,26 +195,52 @@ absl::Status TranslateToVerilog(const KeplerXlsC2RtlOptions& options) {
     return absl::InternalError("XLS package has no top after C synthesis");
   }
 
-  xls::verilog::CodegenOptions codegen_options;
-  codegen_options.entry(top_name);
-  codegen_options.use_system_verilog(options.use_system_verilog != 0);
-  codegen_options.array_index_bounds_checking(false);
-  codegen_options.SetOpOverride(
-      xls::Op::kSMul,
-      xls::verilog::OpOverrideAssignment(
-          "assign {output} = $unsigned($signed({input0}) * $signed({input1}))"));
-  codegen_options.SetOpOverride(
-      xls::Op::kShra,
-      xls::verilog::OpOverrideAssignment(
-          "assign {output} = $unsigned($signed({input0}) >>> {input1})"));
-  if (options.module_name != nullptr &&
-      !std::string_view(options.module_name).empty()) {
-    codegen_options.module_name(options.module_name);
-  }
+  auto configure_common_codegen_options =
+      [&](xls::verilog::CodegenOptions& codegen_options) {
+        codegen_options.entry(top_name);
+        codegen_options.use_system_verilog(options.use_system_verilog != 0);
+        codegen_options.array_index_bounds_checking(false);
+        codegen_options.SetOpOverride(
+            xls::Op::kSMul,
+            xls::verilog::OpOverrideAssignment(
+                "assign {output} = $unsigned($signed({input0}) * "
+                "$signed({input1}))"));
+        codegen_options.SetOpOverride(
+            xls::Op::kShra,
+            xls::verilog::OpOverrideAssignment(
+                "assign {output} = $unsigned($signed({input0}) >>> "
+                "{input1})"));
+        if (options.module_name != nullptr &&
+            !std::string_view(options.module_name).empty()) {
+          codegen_options.module_name(options.module_name);
+        }
+      };
 
-  XLS_ASSIGN_OR_RETURN(
-      xls::verilog::CodegenResult codegen_result,
-      xls::verilog::GenerateCombinationalModule(top.value(), codegen_options));
+  xls::verilog::CodegenResult codegen_result;
+  if (top.value()->IsProc()) {
+    xls::verilog::CodegenOptions codegen_options =
+        xls::verilog::BuildPipelineOptions();
+    configure_common_codegen_options(codegen_options);
+    codegen_options.use_system_verilog(false);
+    codegen_options.clock_name("clk");
+    codegen_options.reset("rst", /*asynchronous=*/false,
+                          /*active_low=*/false, /*reset_data_path=*/false);
+    codegen_options.emit_as_pipeline(false);
+    XLS_ASSIGN_OR_RETURN(
+        xls::PipelineSchedule schedule,
+        xls::PipelineSchedule::SingleStage(top.value()));
+    XLS_ASSIGN_OR_RETURN(
+        codegen_result,
+        xls::verilog::ToPipelineModuleText(schedule, top.value(),
+                                           codegen_options));
+  } else {
+    xls::verilog::CodegenOptions codegen_options;
+    configure_common_codegen_options(codegen_options);
+    XLS_ASSIGN_OR_RETURN(
+        codegen_result,
+        xls::verilog::GenerateCombinationalModule(top.value(),
+                                                  codegen_options));
+  }
 
   return xls::SetFileContents(options.output_path, codegen_result.verilog_text);
 }

@@ -917,6 +917,52 @@ static std::vector<std::string> buildCcIncludePaths(
   return includePaths;
 }
 
+struct EffectiveCcSynthesisSpec {
+  std::string inputPath;
+  std::string top;
+  std::string moduleName;
+  std::string blockProtoPath;
+  std::vector<std::string> includePaths;
+};
+
+static std::string normalizeOptionalCcPathForComparison(
+    const std::optional<std::string>& path) {
+  return path ? normalizeInputPathForComparison(*path) : "";
+}
+
+static EffectiveCcSynthesisSpec makeEffectiveCcSynthesisSpec(
+    const std::vector<std::string>& designPaths,
+    const CcSynthesisOptions& options,
+    const CcDesignOptions& designOptions) {
+  const std::string& inputPath = designPaths.front();
+  const auto& topOption = resolveCcDesignOption(designOptions.top, options.top);
+  const auto& moduleOption =
+      resolveCcDesignOption(designOptions.moduleName, options.moduleName);
+  const auto& blockProtoOption =
+      resolveCcDesignOption(designOptions.blockProtoPath, options.blockProtoPath);
+  EffectiveCcSynthesisSpec spec{
+      normalizeInputPathForComparison(inputPath),
+      *topOption,
+      moduleOption ? *moduleOption : *topOption,
+      normalizeOptionalCcPathForComparison(blockProtoOption),
+      buildCcIncludePaths(inputPath, options),
+  };
+  for (auto& includePath : spec.includePaths) {
+    includePath = normalizeInputPathForComparison(includePath);
+  }
+  return spec;
+}
+
+static bool sameEffectiveCcSynthesisSpec(
+    const EffectiveCcSynthesisSpec& lhs,
+    const EffectiveCcSynthesisSpec& rhs) {
+  return lhs.inputPath == rhs.inputPath &&
+         lhs.top == rhs.top &&
+         lhs.moduleName == rhs.moduleName &&
+         lhs.blockProtoPath == rhs.blockProtoPath &&
+         lhs.includePaths == rhs.includePaths;
+}
+
 static SynthesizedCcDesign synthesizeOneCcDesign(
     const std::vector<std::string>& designPaths,
     const CcSynthesisOptions& options,
@@ -981,9 +1027,20 @@ static SynthesizedCcInputs synthesizeCcInputsToSystemVerilog(
     const DesignInputs& designInputs,
     const CcSynthesisOptions& options) {
   const auto outputDir = chooseCcOutputDir(options);
+  const auto design0Spec =
+      makeEffectiveCcSynthesisSpec(designInputs.design0, options, options.design0);
+  const auto design1Spec =
+      makeEffectiveCcSynthesisSpec(designInputs.design1, options, options.design1);
+  SynthesizedCcDesign synthesized0 = synthesizeOneCcDesign(
+      designInputs.design0, options, options.design0, outputDir, "design1");
+  if (sameEffectiveCcSynthesisSpec(design0Spec, design1Spec)) {
+    SPDLOG_INFO(
+        "Reusing design1 C/C++ synthesis output for design2: {}",
+        synthesized0.svPath);
+    return {synthesized0, synthesized0};
+  }
   return {
-      synthesizeOneCcDesign(
-          designInputs.design0, options, options.design0, outputDir, "design1"),
+      synthesized0,
       synthesizeOneCcDesign(
           designInputs.design1, options, options.design1, outputDir, "design2"),
   };

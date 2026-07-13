@@ -3,6 +3,7 @@
 
 add_library(kepler_xls_c2rtl STATIC
   XlsC2Rtl.cpp
+  XlsPipelineScheduleShim.cpp
   XlsPassProfileShim.cpp
 )
 
@@ -25,6 +26,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/codegen/ffi_instantiation_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/finite_state_machine.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/lint_annotate.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/mark_channel_fifos_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/maybe_materialize_fifos_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/module_builder.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/module_signature.cc
@@ -32,6 +34,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/codegen/name_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/node_expressions.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/op_override_impls.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/pipeline_generator.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/port_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/priority_select_reduction_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/proc_block_conversion.cc

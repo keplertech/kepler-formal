@@ -3191,17 +3191,19 @@ bool lazyStructuralMaterializerDisabled() {
 }
 
 std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>
-materializeDeferredObservedOutputBatch(
+materializeDeferredObservedOutputBatchFromDnl(
     const SequentialDesignModel& model,
-    naja::NL::SNLDesign* top,
+    naja::DNL::DNLFull* dnl,
+    const std::vector<naja::DNL::DNLID>& inputTerms,
     const std::vector<SignalKey>& outputKeys,
+    const std::vector<naja::DNL::DNLID>& outputTerms,
     bool secDiagEnabled,
     const char* designLabel,
     LazyStructuralConeMaterializerCache* structuralCache = nullptr) {
-  ScopedDnlContext dnlContext(top);
-  auto* dnl = dnlContext.dnl();
-  const auto inputTerms = resolveDeferredInputTermsByLocalVar(model, dnl);
-  const auto outputTerms = resolveOutputTermsForBatch(model, dnl, outputKeys);
+  if (outputKeys.size() != outputTerms.size()) {
+    throw std::runtime_error(
+        "Deferred SEC output materialization got mismatched keys and terms");
+  }
 
   if (!lazyStructuralMaterializerDisabled()) {
     try {
@@ -3281,6 +3283,62 @@ materializeDeferredObservedOutputBatch(
   }
 
   return exprByKey;
+}
+
+std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>
+materializeDeferredObservedOutputsForDesign(
+    const SequentialDesignModel& model,
+    naja::NL::SNLDesign* top,
+    const std::vector<SignalKey>& outputKeys,
+    size_t batchSize,
+    bool secDiagEnabled,
+    const char* designLabel) {
+  ScopedDnlContext dnlContext(top);
+  auto* dnl = dnlContext.dnl();
+  const auto inputTerms = resolveDeferredInputTermsByLocalVar(model, dnl);
+
+  LazyStructuralConeMaterializerCache structuralCache;
+  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> exprByKey;
+  exprByKey.reserve(outputKeys.size());
+  for (size_t firstOutput = 0; firstOutput < outputKeys.size();
+       firstOutput += batchSize) {
+    const size_t endOutput =
+        std::min(outputKeys.size(), firstOutput + batchSize);
+    std::vector<SignalKey> batchOutputKeys(
+        outputKeys.begin() + static_cast<std::ptrdiff_t>(firstOutput),
+        outputKeys.begin() + static_cast<std::ptrdiff_t>(endOutput));
+    const auto outputTerms =
+        resolveOutputTermsForBatch(model, dnl, batchOutputKeys);
+    auto batchExprs = materializeDeferredObservedOutputBatchFromDnl(
+        model,
+        dnl,
+        inputTerms,
+        batchOutputKeys,
+        outputTerms,
+        secDiagEnabled,
+        designLabel,
+        &structuralCache);
+    for (auto& [key, expr] : batchExprs) {
+      exprByKey.emplace(std::move(key), expr);
+    }
+  }
+  return exprByKey;
+}
+
+std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>
+selectMaterializedOutputExprs(
+    const std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>& exprByKey,
+    const std::vector<SignalKey>& outputKeys) {
+  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> selected;
+  selected.reserve(outputKeys.size());
+  for (const auto& key : outputKeys) {
+    const auto exprIt = exprByKey.find(key);
+    if (exprIt == exprByKey.end()) {
+      throw std::runtime_error("missing deferred SEC output expression");
+    }
+    selected.emplace(key, exprIt->second);
+  }
+  return selected;
 }
 
 SequentialDesignModel makeMaterializedOutputBatchModel(
@@ -5366,8 +5424,6 @@ SequentialEquivalenceResult runLazyCombinationalPdrSecEngine(
   const size_t outputCount = aligned.outputs.names.size();
   const size_t batchSize = std::max<size_t>(1, lazyPdrOutputBatchSize());
   size_t provedBound = 0;
-  LazyStructuralConeMaterializerCache structuralCache0;
-  LazyStructuralConeMaterializerCache structuralCache1;
 
   if (secDiagEnabled || pdrStrategyStatsEnabled()) {
     emitSecDiag(
@@ -5376,6 +5432,21 @@ SequentialEquivalenceResult runLazyCombinationalPdrSecEngine(
         " batch_size=",
         batchSize);
   }
+
+  const auto materializedExprs0 = materializeDeferredObservedOutputsForDesign(
+      model0,
+      top0,
+      aligned.outputs.keys0,
+      batchSize,
+      secDiagEnabled,
+      "design0");
+  const auto materializedExprs1 = materializeDeferredObservedOutputsForDesign(
+      model1,
+      top1,
+      aligned.outputs.keys1,
+      batchSize,
+      secDiagEnabled,
+      "design1");
 
   for (size_t firstOutput = 0; firstOutput < outputCount;
        firstOutput += batchSize) {
@@ -5393,20 +5464,10 @@ SequentialEquivalenceResult runLazyCombinationalPdrSecEngine(
           ")");
     }
 
-    const auto exprs0 = materializeDeferredObservedOutputBatch(
-        model0,
-        top0,
-        batchOutputs.keys0,
-        secDiagEnabled,
-        "design0",
-        &structuralCache0);
-    const auto exprs1 = materializeDeferredObservedOutputBatch(
-        model1,
-        top1,
-        batchOutputs.keys1,
-        secDiagEnabled,
-        "design1",
-        &structuralCache1);
+    const auto exprs0 =
+        selectMaterializedOutputExprs(materializedExprs0, batchOutputs.keys0);
+    const auto exprs1 =
+        selectMaterializedOutputExprs(materializedExprs1, batchOutputs.keys1);
     const SequentialDesignModel batchModel0 =
         makeMaterializedOutputBatchModel(model0, batchOutputs.keys0, exprs0);
     const SequentialDesignModel batchModel1 =
