@@ -290,6 +290,7 @@ target_include_directories(kepler_xls_c2rtl
     ${XLS_C2RTL_PROTO_OUT_DIR}
     ${LLVM_INCLUDE_DIRS}
     ${CLANG_INCLUDE_DIRS}
+    ${CLANG_AST_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
 )
 

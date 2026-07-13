@@ -33,6 +33,24 @@ if(EXISTS "/opt/homebrew/opt/llvm/lib/cmake/llvm")
 endif()
 find_package(LLVM CONFIG REQUIRED)
 find_package(Clang CONFIG REQUIRED)
+set(KEPLER_CLANG_INCLUDE_HINTS
+  ${CLANG_INCLUDE_DIRS}
+  ${LLVM_INCLUDE_DIRS}
+  /usr/lib/llvm-18/include
+  /usr/lib/llvm-17/include
+  /usr/lib/llvm-16/include
+  /usr/lib/llvm-15/include
+  /usr/lib/llvm-14/include
+  /opt/homebrew/opt/llvm/include
+  /opt/homebrew/include
+)
+find_path(CLANG_AST_INCLUDE_DIR clang/AST/TypeBase.h
+  HINTS ${KEPLER_CLANG_INCLUDE_HINTS}
+)
+if(NOT CLANG_AST_INCLUDE_DIR)
+  message(FATAL_ERROR
+    "Clang C++ headers are required for XLS C2RTL (missing clang/AST/TypeBase.h)")
+endif()
 find_path(Z3_INCLUDE_DIR z3.h
   HINTS
     /opt/homebrew/opt/z3/include
