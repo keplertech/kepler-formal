@@ -74,9 +74,9 @@ and likewise for kissat) so no objects from the other compiler linger.
 ### Option B: system packages
 
 On Ubuntu, the CMake build requires a C++20-capable LLVM/Clang toolchain with
-Clang C++ headers. C2RTL uses XLS/xlscc, which also requires Protobuf,
-OpenSSL, RE2, Z3, and Abseil. The CI helper installs the supported package set
-and builds the pinned Abseil release:
+Clang C++ headers. C2RTL uses XLS/xlscc, which also requires OpenSSL,
+RE2, Z3, Abseil, and Protobuf 35.1.0 or newer. The CI helper installs the
+supported package set and builds the pinned Abseil and Protobuf releases:
 
 ```bash
 .github/scripts/install-cmake-deps-ubuntu.sh
@@ -88,21 +88,25 @@ cmake -B build \
   -DCMAKE_CXX_STANDARD=20
 ```
 
-For a manual Ubuntu setup, add the apt.llvm.org repository for your distro and
-install at least:
+For a manual Ubuntu setup without the helper, add the apt.llvm.org repository
+for your distro, install at least:
 
 ```bash
 sudo apt-get install build-essential cmake ninja-build pkg-config bison flex \
   doxygen python3-dev capnproto libcapnp-dev libtbb-dev libspdlog-dev libfmt-dev \
   libboost-dev libboost-iostreams-dev libfl-dev zlib1g-dev \
   clang-18 clang-tools-18 llvm-18-dev libclang-18-dev libclang-cpp18-dev \
-  libprotobuf-dev protobuf-compiler libssl-dev libre2-dev libz3-dev
+  libssl-dev libre2-dev libz3-dev
+
+# Then build/install Abseil 20260107.0 and Protobuf 35.1.0 into /usr/local.
+# Ubuntu 22.04 apt Protobuf is too old for the XLS C2RTL sources.
 ```
 
 On macOS, using [Homebrew](https://brew.sh/):
 
 ```bash
-brew install cmake doxygen capnp tbb bison flex boost spdlog zlib
+brew install cmake doxygen capnp tbb bison flex boost spdlog zlib \
+  abseil protobuf openssl@3 llvm z3 re2 googletest
 ```
 
 Ensure the versions of `bison` and `flex` installed via Homebrew take precedence over the macOS defaults by modifying your $PATH environment variable as follows:

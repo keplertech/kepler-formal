@@ -26,7 +26,7 @@ add_library(cppitertools INTERFACE)
 target_include_directories(cppitertools INTERFACE ${CPPITERTOOLS_ROOT})
 
 find_package(absl CONFIG REQUIRED)
-find_package(Protobuf REQUIRED)
+find_package(Protobuf 35.1.0 CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 if(EXISTS "/opt/homebrew/opt/llvm/lib/cmake/llvm")
   list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/llvm")
