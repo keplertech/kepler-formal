@@ -5,23 +5,23 @@ add_library(kepler_xls_c2rtl STATIC
   XlsC2Rtl.cpp
   XlsPipelineScheduleShim.cpp
   XlsPassProfileShim.cpp
+  XlsProcElaborationStub.cpp
+)
+
+target_compile_definitions(kepler_xls_c2rtl PRIVATE
+  KEPLER_C2RTL_LOCAL_PIPELINE_SIGNAL_NAME=1
 )
 
 set(XLS_C2RTL_XLS_SOURCES
-  ${KEPLER_XLS_ROOT}/xls/codegen/block_conversion.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/block_metrics.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/block_stitching_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/bdd_io_analysis.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/clone_nodes_into_block_handler.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/concurrent_stage_groups.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_checker.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_options.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_pass.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/codegen_pass_pipeline.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_util.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_wrapper_pass.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/combinational_generator.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/conversion_utils.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/expression_flattening.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/ffi_instantiation_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/finite_state_machine.cc
@@ -34,12 +34,9 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/codegen/name_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/node_expressions.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/op_override_impls.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/pipeline_generator.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/port_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/priority_select_reduction_pass.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/proc_block_conversion.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/ram_configuration.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/ram_rewrite_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/register_chaining_analysis.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/register_combining_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/register_legalization_pass.cc
@@ -132,7 +129,6 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/ir/partial_ops.cc
   ${KEPLER_XLS_ROOT}/xls/ir/proc.cc
   ${KEPLER_XLS_ROOT}/xls/ir/proc_conversion.cc
-  ${KEPLER_XLS_ROOT}/xls/ir/proc_elaboration.cc
   ${KEPLER_XLS_ROOT}/xls/ir/proc_instantiation.cc
   ${KEPLER_XLS_ROOT}/xls/ir/register.cc
   ${KEPLER_XLS_ROOT}/xls/ir/scheduled_builder.cc
@@ -177,6 +173,16 @@ file(MAKE_DIRECTORY ${XLS_C2RTL_PROTO_OUT_DIR})
 
 set(XLS_C2RTL_COMPAT_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/compat)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes)
+file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph/graph.h
+  "#ifndef ORTOOLS_GRAPH_GRAPH_H_\n"
+  "#define ORTOOLS_GRAPH_GRAPH_H_\n"
+  "namespace util {\n"
+  "template <typename NodeIndexType, typename ArcIndexType>\n"
+  "class ReverseArcStaticGraph {};\n"
+  "}  // namespace util\n"
+  "#endif  // ORTOOLS_GRAPH_GRAPH_H_\n"
+)
 
 # Keep thirdparty/xls pristine while smoothing over standalone CMake builds with
 # older Clang/protobuf combinations than XLS' Bazel build normally uses.
