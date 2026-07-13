@@ -3663,7 +3663,7 @@ RemappedSecExpressions remapSecExpressions(
   } else {
     logSecDiagLine(
         secDiagEnabled,
-        "SEC diag: deferred next-state formula remapping for k-induction");
+        "SEC diag: deferred next-state formula remapping");
   }
   return remapped;
 }
@@ -4205,7 +4205,7 @@ const char* describeSecEngine(SecEngine secEngine) {
     case SecEngine::KInduction:
       return "classic k-induction engine";
     default:
-      return "pdr engine";
+      return "pdr engine";  // LCOV_EXCL_LINE
   }
 }
 
@@ -5733,6 +5733,9 @@ SequentialEquivalenceResult runSelectedSecEngine(
           abstractedSequentialBoundaries,
           extractedBoundaryReports);
     default:
+      // Defensive fallback for corrupted enum values; public parsing rejects
+      // unknown SEC engines before strategy construction.
+      // LCOV_EXCL_START
       return runPdrSecEngine(
           proofProblem,
           maxK,
@@ -5744,6 +5747,7 @@ SequentialEquivalenceResult runSelectedSecEngine(
           outputCoverage,
           abstractedSequentialBoundaries,
           extractedBoundaryReports);
+      // LCOV_EXCL_STOP
   }
 }
 
