@@ -86,16 +86,8 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/estimators/delay_model/delay_estimator.cc
   ${KEPLER_XLS_ROOT}/xls/estimators/delay_model/delay_estimators.cc
   ${KEPLER_XLS_ROOT}/xls/estimators/delay_model/ffi_delay_estimator.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/block_evaluator.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/block_interpreter.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/channel_queue.cc
   ${KEPLER_XLS_ROOT}/xls/interpreter/function_interpreter.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/interpreter_proc_runtime.cc
   ${KEPLER_XLS_ROOT}/xls/interpreter/ir_interpreter.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/proc_evaluator.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/proc_interpreter.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/proc_runtime.cc
-  ${KEPLER_XLS_ROOT}/xls/interpreter/serial_proc_runtime.cc
   ${KEPLER_XLS_ROOT}/xls/ir/big_int.cc
   ${KEPLER_XLS_ROOT}/xls/ir/bit_push_buffer.cc
   ${KEPLER_XLS_ROOT}/xls/ir/bits.cc
@@ -156,10 +148,6 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/passes/array_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/basic_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/bdd_query_engine.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/bit_count_query_engine.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/bit_provenance_analysis.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/bit_slice_simplification_pass.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/boolean_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/constant_folding_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/cse_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/dce_pass.cc
@@ -173,13 +161,8 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/passes/partial_info_query_engine.cc
   ${KEPLER_XLS_ROOT}/xls/passes/pass_base.cc
   ${KEPLER_XLS_ROOT}/xls/passes/query_engine.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/query_engine_checker.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/range_query_engine.cc
   ${KEPLER_XLS_ROOT}/xls/passes/stateless_query_engine.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/ternary_query_engine.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/token_provenance_analysis.cc
   ${KEPLER_XLS_ROOT}/xls/passes/union_query_engine.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/verifier_checker.cc
   ${KEPLER_XLS_ROOT}/xls/solvers/solver.cc
   ${KEPLER_XLS_ROOT}/xls/solvers/z3_ir_translator.cc
   ${KEPLER_XLS_ROOT}/xls/solvers/z3_op_translator.cc
@@ -243,8 +226,9 @@ protobuf_generate(
 
 target_include_directories(kepler_xls_c2rtl
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/compat
     ${KEPLER_XLS_ROOT}
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/compat
     ${XLS_C2RTL_PROTO_OUT_DIR}
     ${LLVM_INCLUDE_DIRS}
     ${CLANG_INCLUDE_DIRS}
@@ -252,7 +236,7 @@ target_include_directories(kepler_xls_c2rtl
 )
 
 target_link_libraries(kepler_xls_c2rtl
-  PUBLIC
+  PRIVATE
     protobuf::libprotobuf
     OpenSSL::Crypto
     cppitertools
