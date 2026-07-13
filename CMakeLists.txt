@@ -214,9 +214,12 @@ add_subdirectory(src)
 add_subdirectory(thirdparty)
 
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(GLUCOSE_APPLE_COMPAT_HEADER
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/sat/GlucoseAppleCompat.h")
   foreach(glucose_target glucose glucose-simp glucosep glucose-syrup)
     if(TARGET ${glucose_target})
-      target_compile_options(${glucose_target} PRIVATE -include stddef.h)
+      target_compile_options(${glucose_target}
+        PRIVATE -include ${GLUCOSE_APPLE_COMPAT_HEADER})
     endif()
   endforeach()
 endif()

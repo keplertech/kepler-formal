@@ -217,15 +217,69 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   )
 endif()
 
-protobuf_generate(
-  TARGET kepler_xls_c2rtl
-  LANGUAGE cpp
-  PROTOC_OUT_DIR ${XLS_C2RTL_PROTO_OUT_DIR}
-  IMPORT_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/proto
-    ${KEPLER_XLS_ROOT}
-    ${Protobuf_INCLUDE_DIRS}
+set(XLS_C2RTL_PROTO_IMPORT_DIRS
+  ${CMAKE_CURRENT_SOURCE_DIR}/proto
+  ${KEPLER_XLS_ROOT}
+  ${Protobuf_INCLUDE_DIRS}
 )
+
+set(XLS_C2RTL_PROTO_IMPORT_ARGS)
+foreach(_import_dir IN LISTS XLS_C2RTL_PROTO_IMPORT_DIRS)
+  list(APPEND XLS_C2RTL_PROTO_IMPORT_ARGS -I ${_import_dir})
+endforeach()
+
+if(TARGET protobuf::protoc)
+  set(XLS_C2RTL_PROTOC $<TARGET_FILE:protobuf::protoc>)
+else()
+  set(XLS_C2RTL_PROTOC ${Protobuf_PROTOC_EXECUTABLE})
+endif()
+if(NOT XLS_C2RTL_PROTOC)
+  message(FATAL_ERROR "protoc is required for XLS C2RTL")
+endif()
+
+set(XLS_C2RTL_PROTO_GENERATED_SRCS)
+foreach(_proto IN LISTS XLS_C2RTL_PROTOS)
+  set(_proto_rel "")
+  foreach(_import_dir IN LISTS XLS_C2RTL_PROTO_IMPORT_DIRS)
+    file(RELATIVE_PATH _candidate "${_import_dir}" "${_proto}")
+    if(NOT _candidate MATCHES "^\\.\\." AND NOT IS_ABSOLUTE "${_candidate}")
+      set(_proto_rel "${_candidate}")
+      break()
+    endif()
+  endforeach()
+  if(_proto_rel STREQUAL "")
+    message(FATAL_ERROR "Could not map proto ${_proto} to an import root")
+  endif()
+
+  get_filename_component(_proto_rel_dir "${_proto_rel}" DIRECTORY)
+  get_filename_component(_proto_name_we "${_proto_rel}" NAME_WE)
+  if(_proto_rel_dir STREQUAL "")
+    set(_proto_out_base "${XLS_C2RTL_PROTO_OUT_DIR}/${_proto_name_we}")
+  else()
+    set(_proto_out_base "${XLS_C2RTL_PROTO_OUT_DIR}/${_proto_rel_dir}/${_proto_name_we}")
+  endif()
+
+  add_custom_command(
+    OUTPUT
+      ${_proto_out_base}.pb.cc
+      ${_proto_out_base}.pb.h
+    COMMAND ${XLS_C2RTL_PROTOC}
+    ARGS
+      --experimental_allow_proto3_optional
+      --cpp_out ${XLS_C2RTL_PROTO_OUT_DIR}
+      ${XLS_C2RTL_PROTO_IMPORT_ARGS}
+      ${_proto}
+    DEPENDS ${_proto}
+    COMMENT "Running cpp protocol buffer compiler on ${_proto}"
+    VERBATIM
+  )
+  list(APPEND XLS_C2RTL_PROTO_GENERATED_SRCS
+    ${_proto_out_base}.pb.cc
+    ${_proto_out_base}.pb.h
+  )
+endforeach()
+
+target_sources(kepler_xls_c2rtl PRIVATE ${XLS_C2RTL_PROTO_GENERATED_SRCS})
 
 target_include_directories(kepler_xls_c2rtl
   PUBLIC
