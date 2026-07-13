@@ -12,6 +12,10 @@ target_compile_definitions(kepler_xls_c2rtl PRIVATE
   KEPLER_C2RTL_LOCAL_PIPELINE_SIGNAL_NAME=1
 )
 
+# Compatibility sources are generated under the build tree before they are
+# added to the C2RTL source list.
+set(XLS_C2RTL_COMPAT_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/compat)
+
 set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/codegen/block_metrics.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/bdd_io_analysis.cc
@@ -33,7 +37,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/codegen/mulp_combining_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/name_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/node_expressions.cc
-  ${KEPLER_XLS_ROOT}/xls/codegen/op_override_impls.cc
+  ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen/op_override_impls.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/port_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/priority_select_reduction_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/ram_configuration.cc
@@ -52,6 +56,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/common/case_converters.cc
   ${KEPLER_XLS_ROOT}/xls/common/attribute_data.cc
   ${KEPLER_XLS_ROOT}/xls/common/file/filesystem.cc
+  ${KEPLER_XLS_ROOT}/xls/common/file/temp_file.cc
   ${KEPLER_XLS_ROOT}/xls/common/file/path.cc
   ${KEPLER_XLS_ROOT}/xls/common/indent.cc
   ${KEPLER_XLS_ROOT}/xls/common/logging/log_lines.cc
@@ -171,8 +176,8 @@ set(XLS_C2RTL_XLS_SOURCES
 set(XLS_C2RTL_PROTO_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${XLS_C2RTL_PROTO_OUT_DIR})
 
-set(XLS_C2RTL_COMPAT_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/compat)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes)
+file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph)
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph/graph.h
   "#ifndef ORTOOLS_GRAPH_GRAPH_H_\n"
@@ -213,6 +218,18 @@ string(REPLACE
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes/pipeline_generator.h
   "${XLS_C2RTL_PIPELINE_GENERATOR_H}"
 )
+
+file(READ ${KEPLER_XLS_ROOT}/xls/codegen/op_override_impls.cc
+  XLS_C2RTL_OP_OVERRIDE_IMPLS_CC)
+string(REPLACE
+  "std::string_view piece(fmt_string);"
+  "re2::StringPiece piece(fmt_string.data(), fmt_string.size());"
+  XLS_C2RTL_OP_OVERRIDE_IMPLS_CC
+  "${XLS_C2RTL_OP_OVERRIDE_IMPLS_CC}"
+)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen/op_override_impls.cc
+  "${XLS_C2RTL_OP_OVERRIDE_IMPLS_CC}"
+)
 set(XLS_C2RTL_PROTOS
   ${CMAKE_CURRENT_SOURCE_DIR}/proto/google/api/field_behavior.proto
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/hls_block.proto
@@ -248,7 +265,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     -fno-lto
     -O0
     -Wno-deprecated-declarations
-    -Wno-deprecated-ofast
     -Wno-inconsistent-missing-override
     -Wno-nullability-completeness
     -Wno-unused-result
