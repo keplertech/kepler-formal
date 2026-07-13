@@ -73,10 +73,29 @@ and likewise for kissat) so no objects from the other compiler linger.
 
 ### Option B: system packages
 
-On Ubuntu:
+On Ubuntu, the CMake build requires a C++20-capable LLVM/Clang toolchain with
+Clang C++ headers. C2RTL uses XLS/xlscc, which also requires Protobuf,
+OpenSSL, RE2, Z3, and Abseil. The CI helper installs the supported package set
+and builds the pinned Abseil release:
 
 ```bash
-sudo apt-get install g++ libboost-dev python3.9-dev capnproto libcapnp-dev libtbb-dev pkg-config bison flex doxygen libspdlog-dev libfmt-dev libboost-iostreams-dev zlib1g-dev
+.github/scripts/install-cmake-deps-ubuntu.sh
+cmake -B build \
+  -DCMAKE_C_COMPILER=clang-18 \
+  -DCMAKE_CXX_COMPILER=clang++-18 \
+  -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-18" \
+  -DCMAKE_CXX_STANDARD=20
+```
+
+For a manual Ubuntu setup, add the apt.llvm.org repository for your distro and
+install at least:
+
+```bash
+sudo apt-get install build-essential cmake ninja-build pkg-config bison flex \
+  doxygen python3-dev capnproto libcapnp-dev libtbb-dev libspdlog-dev libfmt-dev \
+  libboost-dev libboost-iostreams-dev libfl-dev zlib1g-dev \
+  clang-18 llvm-18-dev libclang-18-dev libclang-cpp18-dev \
+  libprotobuf-dev protobuf-compiler libssl-dev libre2-dev libz3-dev
 ```
 
 On macOS, using [Homebrew](https://brew.sh/):
