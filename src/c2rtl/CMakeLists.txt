@@ -174,6 +174,39 @@ set(XLS_C2RTL_XLS_SOURCES
 
 set(XLS_C2RTL_PROTO_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${XLS_C2RTL_PROTO_OUT_DIR})
+
+set(XLS_C2RTL_COMPAT_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/compat)
+file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes)
+
+# Keep thirdparty/xls pristine while smoothing over standalone CMake builds with
+# older Clang/protobuf combinations than XLS' Bazel build normally uses.
+file(READ ${KEPLER_XLS_ROOT}/xls/passes/pass_base.h XLS_C2RTL_PASS_BASE_H)
+string(REPLACE
+  "const PassBase<OptionsT, ContextT...>::InvariantChecker* checker)"
+  "const typename PassBase<OptionsT, ContextT...>::InvariantChecker* checker)"
+  XLS_C2RTL_PASS_BASE_H
+  "${XLS_C2RTL_PASS_BASE_H}"
+)
+string(REPLACE
+  "using InvariantChecker = PassBase<OptionsT, ContextT...>::InvariantChecker;"
+  "using InvariantChecker = typename PassBase<OptionsT, ContextT...>::InvariantChecker;"
+  XLS_C2RTL_PASS_BASE_H
+  "${XLS_C2RTL_PASS_BASE_H}"
+)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes/pass_base.h
+  "${XLS_C2RTL_PASS_BASE_H}"
+)
+
+file(READ ${KEPLER_XLS_ROOT}/xls/passes/pipeline_generator.h XLS_C2RTL_PIPELINE_GENERATOR_H)
+string(REPLACE
+  "if (element.has_pass_name()) {"
+  "if (element.type_case() == PassPipelineProto::Element::kPassName) {"
+  XLS_C2RTL_PIPELINE_GENERATOR_H
+  "${XLS_C2RTL_PIPELINE_GENERATOR_H}"
+)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes/pipeline_generator.h
+  "${XLS_C2RTL_PIPELINE_GENERATOR_H}"
+)
 set(XLS_C2RTL_PROTOS
   ${CMAKE_CURRENT_SOURCE_DIR}/proto/google/api/field_behavior.proto
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/hls_block.proto
@@ -292,6 +325,10 @@ target_include_directories(kepler_xls_c2rtl
     ${CLANG_INCLUDE_DIRS}
     ${CLANG_AST_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
+)
+
+target_include_directories(kepler_xls_c2rtl BEFORE PRIVATE
+  ${XLS_C2RTL_COMPAT_OUT_DIR}
 )
 
 target_link_libraries(kepler_xls_c2rtl
