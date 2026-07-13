@@ -26,7 +26,8 @@ sudo apt-get update
 sudo apt-get install -yq \
   build-essential cmake ninja-build pkg-config curl ca-certificates \
   bison flex doxygen python3-dev \
-  "clang-${llvm_version}" "llvm-${llvm_version}-dev" \
+  "clang-${llvm_version}" "clang-tools-${llvm_version}" \
+  "llvm-${llvm_version}-dev" \
   "libclang-${llvm_version}-dev" "libclang-cpp${llvm_version}-dev" \
   libboost-dev libboost-iostreams-dev libfl-dev \
   capnproto libcapnp-dev libtbb-dev libspdlog-dev libfmt-dev \

@@ -49,6 +49,7 @@ jobs:
           -DCMAKE_C_COMPILER=clang-18 \
           -DCMAKE_CXX_COMPILER=clang++-18 \
           -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-18" \
+          -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-18 \
           -DPYTHON_INTERFACE=OFF \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_STANDARD=20 \

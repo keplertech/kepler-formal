@@ -84,6 +84,7 @@ cmake -B build \
   -DCMAKE_C_COMPILER=clang-18 \
   -DCMAKE_CXX_COMPILER=clang++-18 \
   -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-18" \
+  -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-18 \
   -DCMAKE_CXX_STANDARD=20
 ```
 
@@ -94,7 +95,7 @@ install at least:
 sudo apt-get install build-essential cmake ninja-build pkg-config bison flex \
   doxygen python3-dev capnproto libcapnp-dev libtbb-dev libspdlog-dev libfmt-dev \
   libboost-dev libboost-iostreams-dev libfl-dev zlib1g-dev \
-  clang-18 llvm-18-dev libclang-18-dev libclang-cpp18-dev \
+  clang-18 clang-tools-18 llvm-18-dev libclang-18-dev libclang-cpp18-dev \
   libprotobuf-dev protobuf-compiler libssl-dev libre2-dev libz3-dev
 ```
 
