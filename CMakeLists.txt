@@ -44,12 +44,12 @@ set(KEPLER_CLANG_INCLUDE_HINTS
   /opt/homebrew/opt/llvm/include
   /opt/homebrew/include
 )
-find_path(CLANG_AST_INCLUDE_DIR clang/AST/TypeBase.h
+find_path(CLANG_AST_INCLUDE_DIR clang/AST/Type.h
   HINTS ${KEPLER_CLANG_INCLUDE_HINTS}
 )
 if(NOT CLANG_AST_INCLUDE_DIR)
   message(FATAL_ERROR
-    "Clang C++ headers are required for XLS C2RTL (missing clang/AST/TypeBase.h)")
+    "Clang C++ headers are required for XLS C2RTL (missing clang/AST/Type.h)")
 endif()
 find_path(Z3_INCLUDE_DIR z3.h
   HINTS
