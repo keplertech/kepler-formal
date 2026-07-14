@@ -32,7 +32,10 @@ jobs:
       run: |
         echo "/usr/local/opt/flex/bin" >> $GITHUB_PATH; echo "/usr/local/opt/bison/bin" >> $GITHUB_PATH;
         echo "/opt/homebrew/opt/flex/bin" >> $GITHUB_PATH; echo "/opt/homebrew/opt/bison/bin" >> $GITHUB_PATH
-        echo "CMAKE_PREFIX_PATH=$(brew --prefix llvm);$(brew --prefix openssl@3);$(brew --prefix abseil);$(brew --prefix protobuf);$(brew --prefix re2);$(brew --prefix z3)" >> $GITHUB_ENV
+        echo "GTEST_PREFIX=$(brew --prefix googletest)" >> $GITHUB_ENV
+        echo "CMAKE_PREFIX_PATH=$(brew --prefix llvm);$(brew --prefix openssl@3);$(brew --prefix abseil);$(brew --prefix protobuf);$(brew --prefix re2);$(brew --prefix z3);$(brew --prefix googletest)" >> $GITHUB_ENV
+        echo "CPATH=$(brew --prefix googletest)/include${CPATH:+:${CPATH}}" >> $GITHUB_ENV
+        echo "CPLUS_INCLUDE_PATH=$(brew --prefix googletest)/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}" >> $GITHUB_ENV
     - name: Install OR-Tools headers
       run: |
         ORTOOLS_VERSION=9.15
@@ -55,7 +58,7 @@ jobs:
         echo "CPLUS_INCLUDE_PATH=/usr/local/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}" >> "${GITHUB_ENV}"
         echo "CXXFLAGS=-I/usr/local/include${CXXFLAGS:+ ${CXXFLAGS}}" >> "${GITHUB_ENV}"
     - name: Configure CMake
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_CXX_FLAGS="-I/usr/local/include" -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_CXX_FLAGS="-I/usr/local/include -I${GTEST_PREFIX}/include" -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" -DENABLE_SANITIZERS=ON -DPYTHON_INTERFACE=OFF -DCMAKE_CXX_STANDARD=20
     - name: Build
       # Build your program with the given configuration
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
