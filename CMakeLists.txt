@@ -26,31 +26,13 @@ add_library(cppitertools INTERFACE)
 target_include_directories(cppitertools INTERFACE ${CPPITERTOOLS_ROOT})
 
 find_package(absl CONFIG REQUIRED)
-find_package(Protobuf 35.1.0 CONFIG REQUIRED)
+find_package(Protobuf REQUIRED)
 find_package(OpenSSL REQUIRED)
 if(EXISTS "/opt/homebrew/opt/llvm/lib/cmake/llvm")
   list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/llvm")
 endif()
 find_package(LLVM CONFIG REQUIRED)
 find_package(Clang CONFIG REQUIRED)
-set(KEPLER_CLANG_INCLUDE_HINTS
-  ${CLANG_INCLUDE_DIRS}
-  ${LLVM_INCLUDE_DIRS}
-  /usr/lib/llvm-22/include
-  /usr/lib/llvm-17/include
-  /usr/lib/llvm-16/include
-  /usr/lib/llvm-15/include
-  /usr/lib/llvm-14/include
-  /opt/homebrew/opt/llvm/include
-  /opt/homebrew/include
-)
-find_path(CLANG_AST_INCLUDE_DIR clang/AST/Type.h
-  HINTS ${KEPLER_CLANG_INCLUDE_HINTS}
-)
-if(NOT CLANG_AST_INCLUDE_DIR)
-  message(FATAL_ERROR
-    "Clang C++ headers are required for XLS C2RTL (missing clang/AST/Type.h)")
-endif()
 find_path(Z3_INCLUDE_DIR z3.h
   HINTS
     /opt/homebrew/opt/z3/include
@@ -232,12 +214,9 @@ add_subdirectory(src)
 add_subdirectory(thirdparty)
 
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set(GLUCOSE_APPLE_COMPAT_HEADER
-      "${CMAKE_CURRENT_SOURCE_DIR}/src/sat/GlucoseAppleCompat.h")
   foreach(glucose_target glucose glucose-simp glucosep glucose-syrup)
     if(TARGET ${glucose_target})
-      target_compile_options(${glucose_target}
-        PRIVATE -include ${GLUCOSE_APPLE_COMPAT_HEADER})
+      target_compile_options(${glucose_target} PRIVATE -include stddef.h)
     endif()
   endforeach()
 endif()

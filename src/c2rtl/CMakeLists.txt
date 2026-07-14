@@ -5,27 +5,23 @@ add_library(kepler_xls_c2rtl STATIC
   XlsC2Rtl.cpp
   XlsPipelineScheduleShim.cpp
   XlsPassProfileShim.cpp
-  XlsProcElaborationStub.cpp
 )
-
-target_compile_definitions(kepler_xls_c2rtl PRIVATE
-  KEPLER_C2RTL_LOCAL_PIPELINE_SIGNAL_NAME=1
-)
-
-# Compatibility sources are generated under the build tree before they are
-# added to the C2RTL source list.
-set(XLS_C2RTL_COMPAT_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/compat)
 
 set(XLS_C2RTL_XLS_SOURCES
+  ${KEPLER_XLS_ROOT}/xls/codegen/block_conversion.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/block_metrics.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/block_stitching_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/bdd_io_analysis.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/clone_nodes_into_block_handler.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/concurrent_stage_groups.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_checker.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_options.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_pass.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/codegen_pass_pipeline.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_util.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/codegen_wrapper_pass.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/combinational_generator.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/conversion_utils.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/expression_flattening.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/ffi_instantiation_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/finite_state_machine.cc
@@ -37,10 +33,13 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/codegen/mulp_combining_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/name_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/node_expressions.cc
-  ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen/op_override_impls.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/op_override_impls.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/pipeline_generator.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/port_legalization_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/priority_select_reduction_pass.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/proc_block_conversion.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/ram_configuration.cc
+  ${KEPLER_XLS_ROOT}/xls/codegen/ram_rewrite_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/register_chaining_analysis.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/register_combining_pass.cc
   ${KEPLER_XLS_ROOT}/xls/codegen/register_legalization_pass.cc
@@ -56,7 +55,6 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/common/case_converters.cc
   ${KEPLER_XLS_ROOT}/xls/common/attribute_data.cc
   ${KEPLER_XLS_ROOT}/xls/common/file/filesystem.cc
-  ${KEPLER_XLS_ROOT}/xls/common/file/temp_file.cc
   ${KEPLER_XLS_ROOT}/xls/common/file/path.cc
   ${KEPLER_XLS_ROOT}/xls/common/indent.cc
   ${KEPLER_XLS_ROOT}/xls/common/logging/log_lines.cc
@@ -80,7 +78,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translate_io.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translate_loops.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translate_metadata.cc
-  ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/translator.cc
+  ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translator.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translator_types.cc
   ${KEPLER_XLS_ROOT}/xls/data_structures/binary_decision_diagram.cc
   ${KEPLER_XLS_ROOT}/xls/data_structures/binary_search.cc
@@ -134,6 +132,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/ir/partial_ops.cc
   ${KEPLER_XLS_ROOT}/xls/ir/proc.cc
   ${KEPLER_XLS_ROOT}/xls/ir/proc_conversion.cc
+  ${KEPLER_XLS_ROOT}/xls/ir/proc_elaboration.cc
   ${KEPLER_XLS_ROOT}/xls/ir/proc_instantiation.cc
   ${KEPLER_XLS_ROOT}/xls/ir/register.cc
   ${KEPLER_XLS_ROOT}/xls/ir/scheduled_builder.cc
@@ -175,75 +174,6 @@ set(XLS_C2RTL_XLS_SOURCES
 
 set(XLS_C2RTL_PROTO_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${XLS_C2RTL_PROTO_OUT_DIR})
-
-file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes)
-file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen)
-file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc)
-file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph)
-file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph/graph.h
-  "#ifndef ORTOOLS_GRAPH_GRAPH_H_\n"
-  "#define ORTOOLS_GRAPH_GRAPH_H_\n"
-  "namespace util {\n"
-  "template <typename NodeIndexType, typename ArcIndexType>\n"
-  "class ReverseArcStaticGraph {};\n"
-  "}  // namespace util\n"
-  "#endif  // ORTOOLS_GRAPH_GRAPH_H_\n"
-)
-
-# Keep thirdparty/xls pristine while smoothing over standalone CMake builds with
-# dependency combinations that the XLS Bazel build does not expose directly.
-file(READ ${KEPLER_XLS_ROOT}/xls/passes/pass_base.h XLS_C2RTL_PASS_BASE_H)
-string(REPLACE
-  "const PassBase<OptionsT, ContextT...>::InvariantChecker* checker)"
-  "const typename PassBase<OptionsT, ContextT...>::InvariantChecker* checker)"
-  XLS_C2RTL_PASS_BASE_H
-  "${XLS_C2RTL_PASS_BASE_H}"
-)
-string(REPLACE
-  "using InvariantChecker = PassBase<OptionsT, ContextT...>::InvariantChecker;"
-  "using InvariantChecker = typename PassBase<OptionsT, ContextT...>::InvariantChecker;"
-  XLS_C2RTL_PASS_BASE_H
-  "${XLS_C2RTL_PASS_BASE_H}"
-)
-file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes/pass_base.h
-  "${XLS_C2RTL_PASS_BASE_H}"
-)
-
-file(READ ${KEPLER_XLS_ROOT}/xls/passes/pipeline_generator.h XLS_C2RTL_PIPELINE_GENERATOR_H)
-string(REPLACE
-  "if (element.has_pass_name()) {"
-  "if (element.type_case() == PassPipelineProto::Element::kPassName) {"
-  XLS_C2RTL_PIPELINE_GENERATOR_H
-  "${XLS_C2RTL_PIPELINE_GENERATOR_H}"
-)
-file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes/pipeline_generator.h
-  "${XLS_C2RTL_PIPELINE_GENERATOR_H}"
-)
-
-file(READ ${KEPLER_XLS_ROOT}/xls/codegen/op_override_impls.cc
-  XLS_C2RTL_OP_OVERRIDE_IMPLS_CC)
-string(REPLACE
-  "std::string_view piece(fmt_string);"
-  "re2::StringPiece piece(fmt_string.data(), fmt_string.size());"
-  XLS_C2RTL_OP_OVERRIDE_IMPLS_CC
-  "${XLS_C2RTL_OP_OVERRIDE_IMPLS_CC}"
-)
-file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen/op_override_impls.cc
-  "${XLS_C2RTL_OP_OVERRIDE_IMPLS_CC}"
-)
-
-file(READ ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translator.cc
-  XLS_C2RTL_TRANSLATOR_CC)
-string(REPLACE
-  "std::string_view asm_view(sasm);"
-  "re2::StringPiece asm_view(sasm.data(), sasm.size());"
-  XLS_C2RTL_TRANSLATOR_CC
-  "${XLS_C2RTL_TRANSLATOR_CC}"
-)
-file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/translator.cc
-  "${XLS_C2RTL_TRANSLATOR_CC}"
-)
-
 set(XLS_C2RTL_PROTOS
   ${CMAKE_CURRENT_SOURCE_DIR}/proto/google/api/field_behavior.proto
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/hls_block.proto
@@ -279,6 +209,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     -fno-lto
     -O0
     -Wno-deprecated-declarations
+    -Wno-deprecated-ofast
     -Wno-inconsistent-missing-override
     -Wno-nullability-completeness
     -Wno-unused-result
@@ -359,12 +290,7 @@ target_include_directories(kepler_xls_c2rtl
     ${XLS_C2RTL_PROTO_OUT_DIR}
     ${LLVM_INCLUDE_DIRS}
     ${CLANG_INCLUDE_DIRS}
-    ${CLANG_AST_INCLUDE_DIR}
     ${OPENSSL_INCLUDE_DIR}
-)
-
-target_include_directories(kepler_xls_c2rtl BEFORE PRIVATE
-  ${XLS_C2RTL_COMPAT_OUT_DIR}
 )
 
 target_link_libraries(kepler_xls_c2rtl

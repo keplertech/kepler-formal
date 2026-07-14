@@ -31,12 +31,13 @@ sudo apt-get install -yq \
   "libclang-${llvm_version}-dev" "libclang-cpp${llvm_version}-dev" \
   libboost-dev libboost-iostreams-dev libfl-dev \
   capnproto libcapnp-dev libtbb-dev libspdlog-dev libfmt-dev \
-  libgtest-dev libssl-dev libre2-dev \
+  libgtest-dev libssl-dev \
   libz3-dev zlib1g-dev \
   "$@"
 
 absl_version="20260107.0"
 protobuf_version="${KEPLER_PROTOBUF_VERSION:-35.1}"
+re2_version="${KEPLER_RE2_VERSION:-2025-11-05}"
 absl_prefix="/usr/local"
 absl_config="${absl_prefix}/lib/cmake/absl/abslConfig.cmake"
 
@@ -62,6 +63,35 @@ if [[ ! -f "${absl_config}" ]]; then
     -DABSL_ENABLE_INSTALL=ON \
     -DABSL_PROPAGATE_CXX_STD=ON \
     -DCMAKE_INSTALL_PREFIX="${absl_prefix}"
+  cmake --build "${build_dir}" -j "$(nproc)"
+  sudo cmake --install "${build_dir}"
+  sudo ldconfig
+fi
+
+re2_prefix="/usr/local"
+re2_header="${re2_prefix}/include/re2/re2.h"
+
+if [[ ! -f "${re2_header}" ]]; then
+  work_dir="${RUNNER_TEMP:-/tmp}/re2-${re2_version}"
+  src_dir="${work_dir}/src"
+  build_dir="${work_dir}/build"
+
+  rm -rf "${work_dir}"
+  mkdir -p "${work_dir}"
+  curl -L "https://github.com/google/re2/archive/refs/tags/${re2_version}.tar.gz" \
+    -o "${work_dir}/re2.tar.gz"
+  tar -xzf "${work_dir}/re2.tar.gz" -C "${work_dir}"
+  mv "${work_dir}/re2-${re2_version}" "${src_dir}"
+
+  cmake -S "${src_dir}" -B "${build_dir}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_STANDARD=20 \
+    -DCMAKE_C_COMPILER="clang-${llvm_version}" \
+    -DCMAKE_CXX_COMPILER="clang++-${llvm_version}" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DRE2_BUILD_TESTING=OFF \
+    -DCMAKE_PREFIX_PATH="${absl_prefix}" \
+    -DCMAKE_INSTALL_PREFIX="${re2_prefix}"
   cmake --build "${build_dir}" -j "$(nproc)"
   sudo cmake --install "${build_dir}"
   sudo ldconfig

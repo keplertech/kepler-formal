@@ -3,11 +3,9 @@
 
 #include "KeplerXlsC2Rtl.h"
 
-#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,20 +16,17 @@
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 #include "xls/codegen/codegen_options.h"
-#include "xls/codegen/verilog_conversion.h"
+#include "xls/codegen/combinational_generator.h"
+#include "xls/codegen/pipeline_generator.h"
 #include "xls/common/file/filesystem.h"
-#include "xls/common/status/ret_check.h"
 #include "xls/common/status/status_macros.h"
 #include "xls/contrib/xlscc/hls_block.pb.h"
 #include "xls/contrib/xlscc/translator.h"
 #include "xls/contrib/xlscc/translator_types.h"
-#include "xls/ir/block.h"
-#include "xls/ir/function.h"
 #include "xls/ir/function_base.h"
 #include "xls/ir/op.h"
 #include "xls/ir/package.h"
 #include "xls/ir/proc.h"
-#include "xls/ir/topo_sort.h"
 #include "xls/passes/array_simplification_pass.h"
 #include "xls/passes/basic_simplification_pass.h"
 #include "xls/passes/constant_folding_pass.h"
@@ -40,37 +35,15 @@
 #include "xls/passes/inlining_pass.h"
 #include "xls/passes/optimization_pass.h"
 #include "xls/passes/pass_base.h"
-
-#ifdef KEPLER_C2RTL_LOCAL_PIPELINE_SIGNAL_NAME
-namespace xls::verilog {
-
-std::string PipelineSignalName(std::string_view root, int64_t stage) {
-  std::string base(root);
-  if (base.size() > 2 && base[0] == 'p') {
-    size_t index = 1;
-    while (index < base.size() &&
-           std::isdigit(static_cast<unsigned char>(base[index]))) {
-      ++index;
-    }
-    if (index > 1 && index < base.size() && base[index] == '_') {
-      base.erase(0, index + 1);
-    }
-  }
-  return absl::StrCat("p", stage, "_", base);
-}
-
-} // namespace xls::verilog
-#endif
+#include "xls/scheduling/pipeline_schedule.h"
 
 namespace {
 
-absl::Status ValidateOptions(const KeplerXlsC2RtlOptions &options) {
-  if (options.input_path == nullptr ||
-      std::string_view(options.input_path).empty()) {
+absl::Status ValidateOptions(const KeplerXlsC2RtlOptions& options) {
+  if (options.input_path == nullptr || std::string_view(options.input_path).empty()) {
     return absl::InvalidArgumentError("input_path is required");
   }
-  if (options.output_path == nullptr ||
-      std::string_view(options.output_path).empty()) {
+  if (options.output_path == nullptr || std::string_view(options.output_path).empty()) {
     return absl::InvalidArgumentError("output_path is required");
   }
   if (options.top == nullptr || std::string_view(options.top).empty()) {
@@ -83,7 +56,7 @@ absl::Status ValidateOptions(const KeplerXlsC2RtlOptions &options) {
   return absl::OkStatus();
 }
 
-std::vector<std::string> BuildClangArgs(const KeplerXlsC2RtlOptions &options) {
+std::vector<std::string> BuildClangArgs(const KeplerXlsC2RtlOptions& options) {
   std::vector<std::string> clang_args;
   clang_args.reserve(options.include_path_count);
   for (size_t i = 0; i < options.include_path_count; ++i) {
@@ -96,49 +69,51 @@ std::vector<std::string> BuildClangArgs(const KeplerXlsC2RtlOptions &options) {
   return clang_args;
 }
 
-absl::StatusOr<std::string>
-GeneratePackageIr(const KeplerXlsC2RtlOptions &options, xls::Package &package) {
+absl::StatusOr<std::string> GeneratePackageIr(
+    const KeplerXlsC2RtlOptions& options, xls::Package& package) {
   xlscc::Translator translator(
       /*error_on_init_interval=*/false,
       /*error_on_uninitialized=*/false,
       /*generate_new_fsm=*/false,
       /*merge_states=*/true,
-      /*split_states_on_channel_ops=*/true, xlscc::DebugIrTraceFlags_None,
+      /*split_states_on_channel_ops=*/true,
+      xlscc::DebugIrTraceFlags_None,
       /*max_unroll_iters=*/1000,
       /*warn_unroll_iters=*/100,
-      /*z3_rlimit=*/100000, xlscc::IOOpOrdering::kNone);
+      /*z3_rlimit=*/100000,
+      xlscc::IOOpOrdering::kNone);
 
   XLS_RETURN_IF_ERROR(translator.SelectTop(options.top));
 
   std::vector<std::string> clang_arg_storage = BuildClangArgs(options);
   std::vector<std::string_view> clang_args;
   clang_args.reserve(clang_arg_storage.size());
-  for (const auto &arg : clang_arg_storage) {
+  for (const auto& arg : clang_arg_storage) {
     clang_args.push_back(arg);
   }
 
   XLS_RETURN_IF_ERROR(translator.ScanFile(
-      options.input_path, clang_args.empty() ? absl::Span<std::string_view>()
-                                             : absl::MakeSpan(clang_args)));
-  XLS_ASSIGN_OR_RETURN(std::string entry_name,
-                       translator.GetEntryFunctionName());
+      options.input_path, clang_args.empty()
+                              ? absl::Span<std::string_view>()
+                              : absl::MakeSpan(clang_args)));
+  XLS_ASSIGN_OR_RETURN(std::string entry_name, translator.GetEntryFunctionName());
 
   if (options.block_proto_path != nullptr &&
       !std::string_view(options.block_proto_path).empty()) {
     xlscc::HLSBlock block;
-    XLS_RETURN_IF_ERROR(
-        xls::ParseTextProtoFile(options.block_proto_path, &block));
+    XLS_RETURN_IF_ERROR(xls::ParseTextProtoFile(options.block_proto_path, &block));
     xlscc::ChannelOptions channel_options;
-    XLS_ASSIGN_OR_RETURN(xls::Proc * proc,
-                         translator.GenerateIR_Block(
-                             &package, block,
-                             /*top_level_init_interval=*/1, channel_options));
+    XLS_ASSIGN_OR_RETURN(
+        xls::Proc * proc,
+        translator.GenerateIR_Block(&package, block,
+                                    /*top_level_init_interval=*/1,
+                                    channel_options));
     XLS_RETURN_IF_ERROR(package.SetTop(proc));
     translator.AddSourceInfoToPackage(package);
     return proc->name();
   }
 
-  absl::flat_hash_map<const clang::NamedDecl *, xlscc::ChannelBundle>
+  absl::flat_hash_map<const clang::NamedDecl*, xlscc::ChannelBundle>
       top_channel_injections;
   XLS_ASSIGN_OR_RETURN(
       xlscc::GeneratedFunction * top_function,
@@ -151,59 +126,13 @@ GeneratePackageIr(const KeplerXlsC2RtlOptions &options, xls::Package &package) {
 
 template <typename PassT>
 absl::StatusOr<bool> RunOptimizationPass(
-    xls::Package *package, const xls::OptimizationPassOptions &pass_options,
-    xls::PassResults *pass_results, xls::OptimizationContext *pass_context) {
+    xls::Package* package, const xls::OptimizationPassOptions& pass_options,
+    xls::PassResults* pass_results, xls::OptimizationContext* pass_context) {
   PassT pass;
   return pass.Run(package, pass_options, pass_results, *pass_context);
 }
 
-absl::StatusOr<std::string> GenerateCombinationalFunctionVerilog(
-    xls::Function *function,
-    const xls::verilog::CodegenOptions &codegen_options) {
-  XLS_RET_CHECK(!codegen_options.valid_control().has_value())
-      << "Combinational C2RTL does not support valid control.";
-
-  std::string module_name(
-      codegen_options.module_name().value_or(function->name()));
-  xls::Block *block = function->package()->AddBlock(
-      std::make_unique<xls::Block>(module_name, function->package()));
-  block->SetFunctionBaseProvenance(function);
-
-  absl::flat_hash_map<xls::Node *, xls::Node *> node_map;
-  for (xls::Param *param : function->params()) {
-    XLS_ASSIGN_OR_RETURN(
-        xls::InputPort * input,
-        block->AddInputPort(param->GetName(), param->GetType(), param->loc()));
-    node_map[param] = input;
-  }
-
-  XLS_ASSIGN_OR_RETURN(std::vector<xls::Node *> topo_sort_nodes,
-                       xls::TopoSort(function));
-  for (xls::Node *node : topo_sort_nodes) {
-    if (node->Is<xls::Param>()) {
-      continue;
-    }
-
-    std::vector<xls::Node *> new_operands;
-    new_operands.reserve(node->operand_count());
-    for (xls::Node *operand : node->operands()) {
-      new_operands.push_back(node_map.at(operand));
-    }
-    XLS_ASSIGN_OR_RETURN(xls::Node * block_node,
-                         node->CloneInNewFunction(new_operands, block));
-    node_map[node] = block_node;
-  }
-
-  XLS_ASSIGN_OR_RETURN(
-      xls::OutputPort * output,
-      block->AddOutputPort(codegen_options.output_port_name(),
-                           node_map.at(function->return_value())));
-  (void)output;
-
-  return xls::verilog::GenerateVerilog(block, codegen_options);
-}
-
-absl::Status RunPreCodegenPasses(xls::Package *package) {
+absl::Status RunPreCodegenPasses(xls::Package* package) {
   xls::OptimizationPassOptions pass_options;
   xls::PassResults pass_results;
   xls::OptimizationContext pass_context;
@@ -214,30 +143,35 @@ absl::Status RunPreCodegenPasses(xls::Package *package) {
     changed = false;
     ++iteration;
 
-    XLS_ASSIGN_OR_RETURN(
-        bool pass_changed,
-        RunOptimizationPass<xls::InliningPass>(package, pass_options,
-                                               &pass_results, &pass_context));
+    XLS_ASSIGN_OR_RETURN(bool pass_changed,
+                         RunOptimizationPass<xls::InliningPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
     changed |= pass_changed;
-    XLS_ASSIGN_OR_RETURN(
-        pass_changed, RunOptimizationPass<xls::ArraySimplificationPass>(
-                          package, pass_options, &pass_results, &pass_context));
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::ArraySimplificationPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
     changed |= pass_changed;
-    XLS_ASSIGN_OR_RETURN(
-        pass_changed, RunOptimizationPass<xls::ConstantFoldingPass>(
-                          package, pass_options, &pass_results, &pass_context));
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::ConstantFoldingPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
     changed |= pass_changed;
-    XLS_ASSIGN_OR_RETURN(
-        pass_changed, RunOptimizationPass<xls::BasicSimplificationPass>(
-                          package, pass_options, &pass_results, &pass_context));
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::BasicSimplificationPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
     changed |= pass_changed;
-    XLS_ASSIGN_OR_RETURN(
-        pass_changed, RunOptimizationPass<xls::CsePass>(
-                          package, pass_options, &pass_results, &pass_context));
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::CsePass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
     changed |= pass_changed;
-    XLS_ASSIGN_OR_RETURN(
-        pass_changed, RunOptimizationPass<xls::DeadCodeEliminationPass>(
-                          package, pass_options, &pass_results, &pass_context));
+    XLS_ASSIGN_OR_RETURN(pass_changed,
+                         RunOptimizationPass<xls::DeadCodeEliminationPass>(
+                             package, pass_options, &pass_results,
+                             &pass_context));
     changed |= pass_changed;
   }
 
@@ -248,22 +182,21 @@ absl::Status RunPreCodegenPasses(xls::Package *package) {
   return absl::OkStatus();
 }
 
-absl::Status TranslateToVerilog(const KeplerXlsC2RtlOptions &options) {
+absl::Status TranslateToVerilog(const KeplerXlsC2RtlOptions& options) {
   XLS_RETURN_IF_ERROR(ValidateOptions(options));
 
   xls::Package package("kepler_xls_c2rtl");
-  XLS_ASSIGN_OR_RETURN(std::string top_name,
-                       GeneratePackageIr(options, package));
+  XLS_ASSIGN_OR_RETURN(std::string top_name, GeneratePackageIr(options, package));
 
   XLS_RETURN_IF_ERROR(RunPreCodegenPasses(&package));
 
-  std::optional<xls::FunctionBase *> top = package.GetTop();
+  std::optional<xls::FunctionBase*> top = package.GetTop();
   if (!top.has_value()) {
     return absl::InternalError("XLS package has no top after C synthesis");
   }
 
   auto configure_common_codegen_options =
-      [&](xls::verilog::CodegenOptions &codegen_options) {
+      [&](xls::verilog::CodegenOptions& codegen_options) {
         codegen_options.entry(top_name);
         codegen_options.use_system_verilog(options.use_system_verilog != 0);
         codegen_options.array_index_bounds_checking(false);
@@ -283,24 +216,37 @@ absl::Status TranslateToVerilog(const KeplerXlsC2RtlOptions &options) {
         }
       };
 
+  xls::verilog::CodegenResult codegen_result;
   if (top.value()->IsProc()) {
-    return absl::UnimplementedError(
-        "Embedded XLS C2RTL currently supports C function tops; proc/block "
-        "tops require XLS proc block conversion, which is intentionally not "
-        "linked into kepler-formal.");
+    xls::verilog::CodegenOptions codegen_options =
+        xls::verilog::BuildPipelineOptions();
+    configure_common_codegen_options(codegen_options);
+    codegen_options.use_system_verilog(false);
+    codegen_options.clock_name("clk");
+    codegen_options.reset("rst", /*asynchronous=*/false,
+                          /*active_low=*/false, /*reset_data_path=*/false);
+    codegen_options.emit_as_pipeline(false);
+    XLS_ASSIGN_OR_RETURN(
+        xls::PipelineSchedule schedule,
+        xls::PipelineSchedule::SingleStage(top.value()));
+    XLS_ASSIGN_OR_RETURN(
+        codegen_result,
+        xls::verilog::ToPipelineModuleText(schedule, top.value(),
+                                           codegen_options));
+  } else {
+    xls::verilog::CodegenOptions codegen_options;
+    configure_common_codegen_options(codegen_options);
+    XLS_ASSIGN_OR_RETURN(
+        codegen_result,
+        xls::verilog::GenerateCombinationalModule(top.value(),
+                                                  codegen_options));
   }
 
-  xls::verilog::CodegenOptions codegen_options;
-  configure_common_codegen_options(codegen_options);
-  XLS_ASSIGN_OR_RETURN(std::string verilog_text,
-                       GenerateCombinationalFunctionVerilog(
-                           top.value()->AsFunctionOrDie(), codegen_options));
-
-  return xls::SetFileContents(options.output_path, verilog_text);
+  return xls::SetFileContents(options.output_path, codegen_result.verilog_text);
 }
 
-char *CopyCString(std::string_view text) {
-  char *result = static_cast<char *>(std::malloc(text.size() + 1));
+char* CopyCString(std::string_view text) {
+  char* result = static_cast<char*>(std::malloc(text.size() + 1));
   if (result == nullptr) {
     return nullptr;
   }
@@ -309,10 +255,10 @@ char *CopyCString(std::string_view text) {
   return result;
 }
 
-} // namespace
+}  // namespace
 
-extern "C" int kepler_xls_c2rtl_translate(const KeplerXlsC2RtlOptions *options,
-                                          char **error_message) {
+extern "C" int kepler_xls_c2rtl_translate(
+    const KeplerXlsC2RtlOptions* options, char** error_message) {
   if (error_message != nullptr) {
     *error_message = nullptr;
   }
@@ -333,4 +279,4 @@ extern "C" int kepler_xls_c2rtl_translate(const KeplerXlsC2RtlOptions *options,
   return 1;
 }
 
-extern "C" void kepler_xls_c2rtl_free(char *text) { std::free(text); }
+extern "C" void kepler_xls_c2rtl_free(char* text) { std::free(text); }
