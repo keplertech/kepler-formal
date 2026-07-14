@@ -81,10 +81,10 @@ supported package set and builds the pinned Abseil and Protobuf releases:
 ```bash
 .github/scripts/install-cmake-deps-ubuntu.sh
 cmake -B build \
-  -DCMAKE_C_COMPILER=clang-18 \
-  -DCMAKE_CXX_COMPILER=clang++-18 \
-  -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-18" \
-  -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-18 \
+  -DCMAKE_C_COMPILER=clang-22 \
+  -DCMAKE_CXX_COMPILER=clang++-22 \
+  -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-22" \
+  -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-22 \
   -DCMAKE_CXX_STANDARD=20
 ```
 
@@ -95,7 +95,7 @@ for your distro, install at least:
 sudo apt-get install build-essential cmake ninja-build pkg-config bison flex \
   doxygen python3-dev capnproto libcapnp-dev libtbb-dev libspdlog-dev libfmt-dev \
   libboost-dev libboost-iostreams-dev libfl-dev zlib1g-dev \
-  clang-18 clang-tools-18 llvm-18-dev libclang-18-dev libclang-cpp18-dev \
+  clang-22 clang-tools-22 llvm-22-dev libclang-22-dev libclang-cpp22-dev \
   libssl-dev libre2-dev libz3-dev
 
 # Then build/install Abseil 20260107.0 and Protobuf 35.1.0 into /usr/local.

@@ -29,14 +29,14 @@ jobs:
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-18" -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-18 -DCODE_COVERAGE=ON -DLONG_TESTS=ON -DCMAKE_CXX_STANDARD=20
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_C_COMPILER=clang-22 -DCMAKE_CXX_COMPILER=clang++-22 -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-22" -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-22 -DCODE_COVERAGE=ON -DLONG_TESTS=ON -DCMAKE_CXX_STANDARD=20
 
     - name: Build
       # Build your program with the given configuration
       run: cmake --build ${{github.workspace}}/build -j 4 --config ${{env.BUILD_TYPE}}
       env:
-        CC:   clang-18
-        CXX:  clang++-18
+        CC:   clang-22
+        CXX:  clang++-22
 
     - name: Test
       working-directory: ${{github.workspace}}/build

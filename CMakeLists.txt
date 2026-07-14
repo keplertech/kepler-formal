@@ -36,7 +36,7 @@ find_package(Clang CONFIG REQUIRED)
 set(KEPLER_CLANG_INCLUDE_HINTS
   ${CLANG_INCLUDE_DIRS}
   ${LLVM_INCLUDE_DIRS}
-  /usr/lib/llvm-18/include
+  /usr/lib/llvm-22/include
   /usr/lib/llvm-17/include
   /usr/lib/llvm-16/include
   /usr/lib/llvm-15/include

@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-llvm_version="${KEPLER_LLVM_VERSION:-18}"
+llvm_version="${KEPLER_LLVM_VERSION:-22}"
 # shellcheck disable=SC1091
 source /etc/os-release
 ubuntu_codename="${VERSION_CODENAME:-jammy}"
