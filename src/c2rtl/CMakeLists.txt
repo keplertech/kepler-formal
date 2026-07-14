@@ -80,7 +80,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translate_io.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translate_loops.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translate_metadata.cc
-  ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translator.cc
+  ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/translator.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translator_types.cc
   ${KEPLER_XLS_ROOT}/xls/data_structures/binary_decision_diagram.cc
   ${KEPLER_XLS_ROOT}/xls/data_structures/binary_search.cc
@@ -178,6 +178,7 @@ file(MAKE_DIRECTORY ${XLS_C2RTL_PROTO_OUT_DIR})
 
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/passes)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen)
+file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc)
 file(MAKE_DIRECTORY ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph)
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/ortools/graph/graph.h
   "#ifndef ORTOOLS_GRAPH_GRAPH_H_\n"
@@ -229,6 +230,18 @@ string(REPLACE
 )
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/codegen/op_override_impls.cc
   "${XLS_C2RTL_OP_OVERRIDE_IMPLS_CC}"
+)
+
+file(READ ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/translator.cc
+  XLS_C2RTL_TRANSLATOR_CC)
+string(REPLACE
+  "std::string_view asm_view(sasm);"
+  "re2::StringPiece asm_view(sasm.data(), sasm.size());"
+  XLS_C2RTL_TRANSLATOR_CC
+  "${XLS_C2RTL_TRANSLATOR_CC}"
+)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/translator.cc
+  "${XLS_C2RTL_TRANSLATOR_CC}"
 )
 
 set(XLS_C2RTL_PROTOS
