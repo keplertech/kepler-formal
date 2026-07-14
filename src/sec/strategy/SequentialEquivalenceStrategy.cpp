@@ -3351,6 +3351,30 @@ SequentialDesignModel makeMaterializedOutputBatchModel(
   return model;
 }
 
+SequentialDesignModel materializeDeferredOutputsForNormalSecPath(
+    const SequentialDesignModel& model,
+    naja::NL::SNLDesign* top,
+    const std::vector<SignalKey>& outputKeys,
+    bool secDiagEnabled,
+    const char* designLabel) {
+  if (model.observedOutputExprsMaterialized) {
+    return model;
+  }
+  if (top == nullptr) {
+    throw std::runtime_error(
+        "Deferred SEC output materialization requires the original top design");
+  }
+  auto materializedExprs = materializeDeferredObservedOutputsForDesign(
+      model,
+      top,
+      outputKeys,
+      std::max<size_t>(1, lazyPdrOutputBatchSize()),
+      secDiagEnabled,
+      designLabel);
+  return makeMaterializedOutputBatchModel(
+      model, outputKeys, std::move(materializedExprs));
+}
+
 AlignedSignals filterStructurallyProvedBatchOutputs(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
@@ -5971,11 +5995,26 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         secDiagEnabled);
   }
 
+  const SequentialDesignModel proofModel0 =
+      materializeDeferredOutputsForNormalSecPath(
+          model0,
+          top0_,
+          aligned.outputs.keys0,
+          secDiagEnabled,
+          "design0");
+  const SequentialDesignModel proofModel1 =
+      materializeDeferredOutputsForNormalSecPath(
+          model1,
+          top1_,
+          aligned.outputs.keys1,
+          secDiagEnabled,
+          "design1");
+
   // Phase 3: rewrite both designs into one shared symbol space, strengthen the
   // startup frontier with reset/bootstrap facts, and build the final SEC
   // property plus the induction-friendly variant that some engines consume.
   SharedSecSymbolSpace symbolSpace = buildSharedSecSymbolSpace(
-      model0, model1, aligned.inputs, aligned.outputs);
+      proofModel0, proofModel1, aligned.inputs, aligned.outputs);
   // KI / IMC consume explicit post-reset state values directly. SEC/PDR keeps
   // the reset cycle/input model and validates startup candidates with concrete
   // BMC / reset-frontier checks, so it can avoid the sampled full-design sweep
@@ -5984,16 +6023,16 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   // Reset bootstrap is allowed to add concrete values inside each design, but
   // it must not add any cross-design internal state relation.
   const auto reachableInvariant = integrateReachableStateInvariant(
-      model0,
-      model1,
+      proofModel0,
+      proofModel1,
       symbolSpace.state0Symbols,
       symbolSpace.state1Symbols,
       symbolSpace.problem,
       deriveResetBootstrapStrengthening);
   if (encoding_ == SecEncoding::Binary) {
     filterOutputsRequiringUnanchoredResetState(
-        model0,
-        model1,
+        proofModel0,
+        proofModel1,
         reachableInvariant,
         !symbolSpace.problem.resetBootstrapInputs.empty() &&
             symbolSpace.problem.resetBootstrapCycles != 0,
@@ -6027,8 +6066,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   KInductionProblem proofProblem;
   if (encoding_ == SecEncoding::DualRailSteady) {
     proofProblem = buildDualRailSecProblem(
-        model0,
-        model1,
+        proofModel0,
+        proofModel1,
         aligned.inputs,
         aligned.outputs,
         reachableInvariant,
@@ -6037,8 +6076,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         secDiagEnabled);
   } else {
     const auto remapped = remapSecExpressions(
-        model0,
-        model1,
+        proofModel0,
+        proofModel1,
         aligned.outputs,
         symbolSpace,
         symbolSpace.problem,
@@ -6046,8 +6085,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         secDiagEnabled);
     if (useLazyTransitionRemapping) {
       attachLazyTransitions(
-          model0,
-          model1,
+          proofModel0,
+          proofModel1,
           symbolSpace.state0Symbols,
           symbolSpace.state1Symbols,
           std::move(symbolSpace.localToCombined0),
@@ -6055,8 +6094,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
           symbolSpace.problem);
     }
     buildSecPropertiesAndTransitions(
-        model0,
-        model1,
+        proofModel0,
+        proofModel1,
         aligned.outputs,
         symbolSpace.state0Symbols,
         symbolSpace.state1Symbols,
@@ -6079,8 +6118,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       proofProblem,
       maxK,
       solverType_,
-      model0,
-      model1,
+      proofModel0,
+      proofModel1,
       top0_,
       top1_,
       aligned.outputCoverage,
