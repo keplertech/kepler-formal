@@ -72,7 +72,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/common/to_string_utils.cc
   ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/cc_parser.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/continuations.cc
-  ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/expr_clone.cc
+  ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/expr_clone.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/generate_fsm.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/node_manipulation.cc
   ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/tracked_bvalue.cc
@@ -285,6 +285,26 @@ string(REPLACE
 )
 file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/cc_parser.cc
   "${XLS_C2RTL_CC_PARSER_CC}"
+)
+
+file(READ ${KEPLER_XLS_ROOT}/xls/contrib/xlscc/expr_clone.cc
+  XLS_C2RTL_EXPR_CLONE_CC)
+string(REPLACE
+  [=[#if LLVM_VERSION_MAJOR >= 22
+    auto* cloned = new (ctx) clang::InitListExpr(
+        ctx, expr->getLBraceLoc(), inits, expr->getRBraceLoc());
+#else
+    auto* cloned = new (ctx) clang::InitListExpr(
+        ctx, expr->getLBraceLoc(), inits, expr->getRBraceLoc(),
+        expr->getLBraceLoc().isValid() && expr->getRBraceLoc().isValid());
+#endif]=]
+  [=[    auto* cloned = new (ctx) clang::InitListExpr(
+        ctx, expr->getLBraceLoc(), inits, expr->getRBraceLoc());]=]
+  XLS_C2RTL_EXPR_CLONE_CC
+  "${XLS_C2RTL_EXPR_CLONE_CC}"
+)
+file(WRITE ${XLS_C2RTL_COMPAT_OUT_DIR}/xls/contrib/xlscc/expr_clone.cc
+  "${XLS_C2RTL_EXPR_CLONE_CC}"
 )
 set(XLS_C2RTL_PROTOS
   ${CMAKE_CURRENT_SOURCE_DIR}/proto/google/api/field_behavior.proto

@@ -29,7 +29,10 @@ proto_library(
         "xls/passes/pass_pipeline.proto",
         "xls/scheduling/pipeline_schedule.proto",
     ],
-    deps = ["@googleapis//google/api:field_behavior_proto"],
+    deps = [
+        "@googleapis//google/api:field_behavior_proto",
+        "@protobuf//:duration_proto",
+    ],
 )
 
 cc_proto_library(
