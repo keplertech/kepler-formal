@@ -38,6 +38,7 @@ sudo apt-get install -yq \
 absl_version="20260107.0"
 protobuf_version="${KEPLER_PROTOBUF_VERSION:-35.1}"
 re2_version="${KEPLER_RE2_VERSION:-2025-11-05}"
+ortools_version="${KEPLER_ORTOOLS_VERSION:-9.15}"
 absl_prefix="/usr/local"
 absl_config="${absl_prefix}/lib/cmake/absl/abslConfig.cmake"
 
@@ -127,4 +128,30 @@ if [[ ! -f "${protobuf_config}" ]]; then
   cmake --build "${build_dir}" -j "$(nproc)"
   sudo cmake --install "${build_dir}"
   sudo ldconfig
+fi
+
+ortools_prefix="/usr/local"
+ortools_header="${ortools_prefix}/include/ortools/graph/graph.h"
+
+if [[ ! -f "${ortools_header}" ]]; then
+  work_dir="${RUNNER_TEMP:-/tmp}/or-tools-${ortools_version}"
+  src_dir="${work_dir}/src"
+
+  rm -rf "${work_dir}"
+  mkdir -p "${src_dir}"
+  curl -L \
+    "https://github.com/google/or-tools/releases/download/v${ortools_version}/or-tools-${ortools_version}.tar.gz" \
+    -o "${work_dir}/or-tools.tar.gz"
+  tar -xzf "${work_dir}/or-tools.tar.gz" \
+    -C "${src_dir}" \
+    --strip-components=1
+
+  sudo mkdir -p "${ortools_prefix}/include"
+  sudo cp -R "${src_dir}/ortools" "${ortools_prefix}/include/"
+fi
+
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "CPATH=${ortools_prefix}/include${CPATH:+:${CPATH}}" >> "${GITHUB_ENV}"
+  echo "CPLUS_INCLUDE_PATH=${ortools_prefix}/include${CPLUS_INCLUDE_PATH:+:${CPLUS_INCLUDE_PATH}}" >> "${GITHUB_ENV}"
+  echo "CXXFLAGS=-I${ortools_prefix}/include${CXXFLAGS:+ ${CXXFLAGS}}" >> "${GITHUB_ENV}"
 fi

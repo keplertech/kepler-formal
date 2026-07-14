@@ -77,6 +77,8 @@ On Ubuntu:
 
 ```bash
 sudo apt-get install g++ libboost-dev python3.9-dev capnproto libcapnp-dev libtbb-dev pkg-config bison flex doxygen libspdlog-dev libfmt-dev libboost-iostreams-dev zlib1g-dev
+# C2RTL CMake builds also need LLVM/Clang, Abseil, Protobuf, RE2, OpenSSL,
+# Z3, and OR-Tools graph headers. See .github/scripts/install-cmake-deps-ubuntu.sh.
 ```
 
 On macOS, using [Homebrew](https://brew.sh/):
@@ -84,6 +86,8 @@ On macOS, using [Homebrew](https://brew.sh/):
 ```bash
 brew install cmake doxygen capnp tbb bison flex boost spdlog zlib
 ```
+C2RTL CMake builds also need LLVM, Abseil, Protobuf, OpenSSL, Z3, RE2, and
+OR-Tools graph headers. The macOS CI workflow installs the pinned headers.
 
 Ensure the versions of `bison` and `flex` installed via Homebrew take precedence over the macOS defaults by modifying your $PATH environment variable as follows:
 
