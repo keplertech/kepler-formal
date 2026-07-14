@@ -56,6 +56,7 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/common/attribute_data.cc
   ${KEPLER_XLS_ROOT}/xls/common/file/filesystem.cc
   ${KEPLER_XLS_ROOT}/xls/common/file/path.cc
+  ${KEPLER_XLS_ROOT}/xls/common/file/temp_file.cc
   ${KEPLER_XLS_ROOT}/xls/common/indent.cc
   ${KEPLER_XLS_ROOT}/xls/common/logging/log_lines.cc
   ${KEPLER_XLS_ROOT}/xls/common/math_util.cc

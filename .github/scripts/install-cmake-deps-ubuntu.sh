@@ -120,6 +120,8 @@ if [[ ! -f "${protobuf_config}" ]]; then
     -DCMAKE_CXX_COMPILER="clang++-${llvm_version}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -Dprotobuf_BUILD_TESTS=OFF \
+    -DBUILD_SHARED_LIBS=ON \
+    -Dprotobuf_BUILD_SHARED_LIBS=ON \
     -Dprotobuf_ABSL_PROVIDER=package \
     -Dprotobuf_BUILD_PROTOC_BINARIES=ON \
     -Dprotobuf_INSTALL=ON \
