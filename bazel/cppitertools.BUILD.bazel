@@ -1,0 +1,46 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "cppitertools",
+    hdrs = [
+        "cppitertools/accumulate.hpp",
+        "cppitertools/batched.hpp",
+        "cppitertools/chain.hpp",
+        "cppitertools/chunked.hpp",
+        "cppitertools/combinations.hpp",
+        "cppitertools/combinations_with_replacement.hpp",
+        "cppitertools/compress.hpp",
+        "cppitertools/count.hpp",
+        "cppitertools/cycle.hpp",
+        "cppitertools/dropwhile.hpp",
+        "cppitertools/enumerate.hpp",
+        "cppitertools/filter.hpp",
+        "cppitertools/filterfalse.hpp",
+        "cppitertools/groupby.hpp",
+        "cppitertools/imap.hpp",
+        "cppitertools/itertools.hpp",
+        "cppitertools/permutations.hpp",
+        "cppitertools/powerset.hpp",
+        "cppitertools/product.hpp",
+        "cppitertools/range.hpp",
+        "cppitertools/repeat.hpp",
+        "cppitertools/reversed.hpp",
+        "cppitertools/slice.hpp",
+        "cppitertools/sliding_window.hpp",
+        "cppitertools/sorted.hpp",
+        "cppitertools/starmap.hpp",
+        "cppitertools/takewhile.hpp",
+        "cppitertools/unique_everseen.hpp",
+        "cppitertools/unique_justseen.hpp",
+        "cppitertools/zip.hpp",
+        "cppitertools/zip_longest.hpp",
+    ],
+    srcs = [
+        "cppitertools/internal/iter_tuples.hpp",
+        "cppitertools/internal/iterator_wrapper.hpp",
+        "cppitertools/internal/iteratoriterator.hpp",
+        "cppitertools/internal/iterbase.hpp",
+    ],
+)

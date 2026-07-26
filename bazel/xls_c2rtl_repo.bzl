@@ -5,6 +5,8 @@
 
 def _xls_c2rtl_repository_impl(repo_ctx):
     src_root = repo_ctx.path(repo_ctx.attr.src_marker).dirname
+    if repo_ctx.attr.src_subdir:
+        src_root = src_root.get_child(repo_ctx.attr.src_subdir)
     dst_root = repo_ctx.path(".")
     copy_result = repo_ctx.execute([
         "/bin/bash",
@@ -48,5 +50,6 @@ xls_c2rtl_repository = repository_rule(
     attrs = {
         "build_file": attr.label(mandatory = True, allow_single_file = True),
         "src_marker": attr.label(mandatory = True, allow_single_file = True),
+        "src_subdir": attr.string(default = ""),
     },
 )

@@ -122,6 +122,7 @@ _NAJA_COMMIT = "d2013782e7e8f5315be1161fc580bf6e78d6f4d8"
 _NAJA_VERILOG_COMMIT = "8a13b5986c765035548775808273d61defcaf738"
 _NAJA_IF_COMMIT = "8719bf93fdcd65534c75eb7a8a1f69393f74a75a"
 _CPPTRACE_COMMIT = "3db8da80111171c219ab5839905771386bee06b3"
+_CPPITERTOOLS_COMMIT = "5a7f4aa357ed9b0ad59823e3d2acd57217d5beaf"
 _SLANG_COMMIT = "aedd7bc0394e5621340be94ed58def33d74ac677"
 _GOOGLETEST_COMMIT = "52eb8108c5bdec04579160ae17225d66034bd723"
 
@@ -156,6 +157,14 @@ def _deps_impl(_module_ctx):
         sha256 = "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995",
         strip_prefix = "flex-{}".format(_FLEX_VERSION),
         build_file = Label("//bazel:flexlexer.BUILD.bazel"),
+    )
+
+    http_archive(
+        name = "cppitertools",
+        url = "https://github.com/ryanhaining/cppitertools/archive/{}.tar.gz".format(_CPPITERTOOLS_COMMIT),
+        sha256 = "d61fdb7be3222c7b6c039daafd1f6ff54d7f2b9edb77240b1c34376a3038972e",
+        strip_prefix = "cppitertools-{}".format(_CPPITERTOOLS_COMMIT),
+        build_file = Label("//bazel:cppitertools.BUILD.bazel"),
     )
 
     http_archive(

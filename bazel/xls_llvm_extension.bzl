@@ -13,9 +13,9 @@ def _llvm_raw_ext_impl(_ctx):
         name = "llvm-raw",
         build_file_content = "# empty",
         patches = [
-            Label("@com_google_xls//dependency_support/llvm:llvm.patch"),
-            Label("@com_google_xls//dependency_support/llvm:zlib-header.patch"),
-            Label("@com_google_xls//dependency_support/llvm:run_lit.patch"),
+            Label("//bazel:xls_llvm.patch"),
+            Label("//bazel:xls_llvm_zlib_header.patch"),
+            Label("//bazel:xls_llvm_run_lit.patch"),
         ],
         patch_args = ["-p1"],
         sha256 = llvm_sha256,
