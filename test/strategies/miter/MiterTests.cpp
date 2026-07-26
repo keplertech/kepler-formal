@@ -34,6 +34,7 @@
 #include "SNLScalarTerm.h"
 #include "SNLPath.h"
 #include "SNLCapnP.h"
+#include "SNLDumpManifest.h"
 #include "DNL.h"
 #include "Tree2BoolExpr.h"
 
@@ -2453,17 +2454,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     std::filesystem::path outputPath("top.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-  // Dump visual
-  {
-    std::string dotFileName("beforeEdit.dot");
-    std::string svgFileName("beforeEdit.svg");
-    SnlVisualiser snl(top);
-    snl.process();
-    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-                               std::string(" -o ") + svgFileName)
-                       .c_str());
-  }
   // clone the top design
   SNLDesign* topClone = top->clone(NLName("topClone"));
   // create an inverter instance in the clone
@@ -2476,18 +2466,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   SNLNet* net5 = SNLScalarNet::create(top, NLName("top_output_net_clone"));
   instInv->getInstTerm(invOut)->setNet(net5);
   topOut->setNet(net5);
-
-  // dump visual
-  {
-    std::string dotFileName("afterEdit.dot");
-    std::string svgFileName("afterEdit.svg");
-    SnlVisualiser snl(top);
-    snl.process();
-    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-                               std::string(" -o ") + svgFileName)
-                       .c_str());
-  }
 
   // test the miter strategy
   {
@@ -3240,12 +3218,46 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
     GTEST_SKIP() << "kepler-formal binary missing";
   }
 
-  std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se.yaml";
-  if (std::getenv("TEST_DATA_PREFIX")) {
-    config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se_bazel.yaml";
-  }
-  int rc = run_kepler_cli_with_args({"--config", config});
+  const auto tempDir = makeUniqueTestTempDir();
+  const auto dataRoot = std::filesystem::path(get_test_data_prefix());
+  const auto design0 = tempDir / "tinyrocket_naja.if";
+  const auto design1 = tempDir / "tinyrocket_naja_edited.if";
+  std::filesystem::copy(
+      dataRoot / "example/tinyrocket_naja.if", design0,
+      std::filesystem::copy_options::recursive);
+  std::filesystem::copy(
+      dataRoot / "example/tinyrocket_naja_edited.if", design1,
+      std::filesystem::copy_options::recursive);
+  // Keep the checked-in payloads while normalizing short-hash metadata to the
+  // exact Naja revision linked into this test binary and CLI subprocess.
+  naja::NL::SNLDumpManifest::dump(design0);
+  naja::NL::SNLDumpManifest::dump(design1);
+
+  const auto config = tempDir / "config.yaml";
+  std::ofstream configFile(config);
+  configFile
+      << "format: naja_if\n"
+      << "input_paths:\n"
+      << "  - " << design0.string() << "\n"
+      << "  - " << design1.string() << "\n"
+      << "liberty_files:\n"
+      << "  - "
+      << (dataRoot / "example/NangateOpenCellLibrary_typical.lib").string()
+      << "\n"
+      << "  - " << (dataRoot / "example/fakeram45_1024x32.lib").string()
+      << "\n"
+      << "  - " << (dataRoot / "example/fakeram45_64x32.lib").string()
+      << "\n"
+      << "log_level: info\n"
+      << "use_scopes: true\n"
+      << "clean_scopes: true\n"
+      << "solver: glucose\n"
+      << "cnf_export: true\n";
+  configFile.close();
+
+  int rc = run_kepler_cli_with_args({"--config", config.string()});
   EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove_all(tempDir);
 }
 
 // test failure with test_config_failure.yaml

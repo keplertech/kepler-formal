@@ -118,12 +118,12 @@ _FLEX_VERSION = "2.6.4"
 _CADICAL_COMMIT = "7b99c07f0bcab5824a5a3ce62c7066554017f641"
 _GLUCOSE_COMMIT = "7f887abba7cf13636a5ac2d28653668a20a91b25"
 _KISSAT_COMMIT = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
-_NAJA_COMMIT = "d2013782e7e8f5315be1161fc580bf6e78d6f4d8"
+_NAJA_COMMIT = "e1a649e2fce182d8b7ca5c5c80ab5d04aad3ffa3"
 _NAJA_VERILOG_COMMIT = "8a13b5986c765035548775808273d61defcaf738"
 _NAJA_IF_COMMIT = "8719bf93fdcd65534c75eb7a8a1f69393f74a75a"
 _CPPTRACE_COMMIT = "3db8da80111171c219ab5839905771386bee06b3"
 _CPPITERTOOLS_COMMIT = "5a7f4aa357ed9b0ad59823e3d2acd57217d5beaf"
-_SLANG_COMMIT = "aedd7bc0394e5621340be94ed58def33d74ac677"
+_SLANG_COMMIT = "512c327c209d3043aa98ecfd02d06a1b73fcd5fb"
 _GOOGLETEST_COMMIT = "52eb8108c5bdec04579160ae17225d66034bd723"
 
 def _deps_impl(_module_ctx):
@@ -193,8 +193,8 @@ def _deps_impl(_module_ctx):
 
     naja_repo(
         name = "naja",
-        naja_url = "https://github.com/nanocoh/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
-        naja_sha256 = "29b6701761e7b212afa29ad2ad12a7de10831cf49a26256ba6d333c4362d867a",
+        naja_url = "https://github.com/najaeda/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
+        naja_sha256 = "bedbb745eb5110278c3de9da9538b3e5ef025a736e4862d491bc8209626d3f45",
         naja_strip_prefix = "naja-{}".format(_NAJA_COMMIT),
         naja_verilog_url = "https://github.com/najaeda/naja-verilog/archive/{}.tar.gz".format(_NAJA_VERILOG_COMMIT),
         naja_verilog_sha256 = "e5caf041d7c8867bb0805b8a182cc4330afc40d0dde74760f4ee42d10b70c9cb",
@@ -206,7 +206,7 @@ def _deps_impl(_module_ctx):
         cpptrace_sha256 = "77d689fd7956ff80351a079d83e86a03865dbbe2433b4559cc6cea50bed77390",
         cpptrace_strip_prefix = "cpptrace-{}".format(_CPPTRACE_COMMIT),
         slang_url = "https://github.com/najaeda/slang/archive/{}.tar.gz".format(_SLANG_COMMIT),
-        slang_sha256 = "8253cc083c075bbf21215a07ab4f73814a553f990530089c175fde5db37792e2",
+        slang_sha256 = "144054285e246801a579e1365fe50c4d0a04a188025c8cb2bbe2355f653f2cbd",
         slang_strip_prefix = "slang-{}".format(_SLANG_COMMIT),
         googletest_url = "https://github.com/google/googletest/archive/{}.tar.gz".format(_GOOGLETEST_COMMIT),
         googletest_sha256 = "745c55415660044610f7fcd3af7a6420d5de16a7dbb9ebfe2e131275676232be",

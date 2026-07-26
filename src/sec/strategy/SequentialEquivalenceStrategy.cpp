@@ -8,9 +8,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
 #include <iterator>
-#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -22,16 +20,15 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#elif defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 #include "DNL.h"
-#include "NLBitDependencies.h"
-#include "NLDB0.h"
 #include "NLUniverse.h"
 #include "SNLPath.h"
-#include "SNLBusTerm.h"
-#include "SNLBusTermBit.h"
-#include "SNLDesignModeling.h"
-#include "SNLScalarTerm.h"
-#include "SNLTruthTable.h"
 #include "common/BoolExprUtils.h"
 #include "common/AlignedSignals.h"
 #include "common/SecDiag.h"
@@ -45,19 +42,17 @@
 #include "pdr/PDREngine.h"
 #include "proof/DualRailEncoding.h"
 #include "proof/TransitionExprResolver.h"
-#include "strategy/ReachableStateInvariant.h"
 #include "../../sat/SATSolverWrapper.h"
-#include "../../strategies/miter/BuildPrimaryOutputClauses.h"
 
 namespace KEPLER_FORMAL::SEC {
 
 // Overall SEC strategy pipeline:
 // 1. Extract both designs into the normalized sequential model used by SEC.
 // 2. Align environment inputs and observed outputs by stable external names.
-// 3. Keep cross-design internal state uncorrelated; only public/reset facts can
-//    constrain the two designs before the selected SEC engine proves outputs.
-// 4. Build reset/init reachable-state strengthening for startup anchoring.
-// 5. Remap both designs into one shared SAT symbol space.
+// 3. Keep cross-design internal state uncorrelated; only public facts constrain
+//    the two designs before the selected SEC engine proves outputs.
+// 4. Remap both designs into one shared SAT symbol space.
+// 5. Build F[0] from the extracted initial predicate.
 // 6. Build the checked SEC property and the stronger proof invariant.
 // 7. Hand the combined transition system to the selected top-level engine and
 //    translate its result back into user-facing SEC diagnostics.
@@ -78,6 +73,17 @@ struct PublicInputExprPairHash {
 using PublicInputExprPairMemo =
     std::unordered_map<std::pair<BoolExpr*, BoolExpr*>, bool,
                        PublicInputExprPairHash>;
+
+void releasePdrBatchAllocatorPages() {
+  // Recursive output batching destroys property-local PDR solvers between
+  // ranges. Return their free allocator pages before the next exact range
+  // starts so only the deliberately shared F[0] cache remains resident.
+#if defined(__APPLE__)
+  malloc_zone_pressure_relief(nullptr, 0);
+#elif defined(__GLIBC__)
+  malloc_trim(0);
+#endif
+}
 
 std::string joinReasons(const std::vector<std::string>& reasons) {
   std::ostringstream oss;
@@ -135,38 +141,18 @@ bool publicInputVarsMatch(size_t var0,
          it0->second == it1->second;
 }
 
-bool publicInputMapsUseSameLocalSymbols(
-    const PublicInputAbstractMap& abstractMap0,
-    const PublicInputAbstractMap& abstractMap1) {
-  if (abstractMap0.size() != abstractMap1.size()) {
-    return false;
-  }
-  for (const auto& [localVar, abstractSymbol] : abstractMap0) {
-    const auto it = abstractMap1.find(localVar);
-    if (it == abstractMap1.end() || it->second != abstractSymbol) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool areOutputExprsEquivalentUnderPublicInputs(
     BoolExpr* expr0,
     BoolExpr* expr1,
     const PublicInputAbstractMap& abstractMap0,
-    const PublicInputAbstractMap& abstractMap1,
-    PublicInputExprPairMemo* sharedMemo = nullptr) {
+    const PublicInputAbstractMap& abstractMap1) {
   struct StackFrame {
     BoolExpr* lhs = nullptr;
     BoolExpr* rhs = nullptr;
     bool visited = false;
   };
 
-  PublicInputExprPairMemo localMemo;
-  PublicInputExprPairMemo& memo =
-      sharedMemo == nullptr ? localMemo : *sharedMemo;
-  const bool pointerEqualityIsPublicEquivalence =
-      publicInputMapsUseSameLocalSymbols(abstractMap0, abstractMap1);
+  PublicInputExprPairMemo memo;
   std::vector<StackFrame> stack{{expr0, expr1, false}};
   while (!stack.empty()) {
     const StackFrame current = stack.back();
@@ -179,11 +165,6 @@ bool areOutputExprsEquivalentUnderPublicInputs(
     if (current.lhs == nullptr || current.rhs == nullptr) {
       cachePublicInputOutputEquivalence(
           memo, key, current.lhs == current.rhs);
-      continue;
-    }
-
-    if (pointerEqualityIsPublicEquivalence && current.lhs == current.rhs) {
-      cachePublicInputOutputEquivalence(memo, key, true);
       continue;
     }
 
@@ -288,100 +269,6 @@ std::string describeMismatchedNames(const std::vector<std::string>& lhs,
 
 std::string formatBoolValue(bool value) {
   return value ? "1" : "0";
-}
-
-std::string normalizeSignalBaseName(const std::string& name) {
-  std::string base = name;
-  const auto bracket = base.find('[');
-  if (bracket != std::string::npos) {
-    base = base.substr(0, bracket);
-  }
-  std::transform(base.begin(), base.end(), base.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::toupper(ch));
-  });
-  return base;
-}
-
-bool hasSuffix(const std::string& value, const std::string& suffix) {
-  return value.size() >= suffix.size() &&
-         value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool isResetNameToken(const std::string& candidate, const std::string& token) {
-  // Domain-prefixed top resets, for example `wb_rst_i`, normalize to `WB_RST`
-  // after input-suffix stripping.  Match only a final underscore-separated
-  // reset token so prefixes do not block reset bootstrap alignment.
-  return candidate == token || hasSuffix(candidate, "_" + token);
-// LCOV_EXCL_START
-}  // LCOV_EXCL_LINE
-// LCOV_EXCL_STOP
-
-bool isActiveLowResetToken(const std::string& candidate) {
-  return candidate == "RESET_N" || candidate == "RESETN" ||
-         candidate == "RESET_L" || candidate == "RST_N" ||
-         candidate == "RSTN" || candidate == "RST_L";
-}
-
-void appendDomainPrefixedActiveLowResetCandidates(
-    std::vector<std::string>& candidates) {
-  // LCOV_EXCL_START
-  const size_t originalSize = candidates.size();
-  for (size_t index = 0; index < originalSize; ++index) {
-  // LCOV_EXCL_STOP
-    const std::string& candidate = candidates[index];
-    if (candidate.size() <= 1) {
-      continue;
-    }
-    // LCOV_EXCL_START
-    const std::string strippedDomain = candidate.substr(1);
-    if (isActiveLowResetToken(strippedDomain)) {
-    // LCOV_EXCL_STOP
-      // Async FIFO top ports commonly use rrst_n/wrst_n.  Recognize those
-      // active-low one-letter domain prefixes without treating arbitrary
-      // embedded "rst" names as reset controls.
-      candidates.push_back(strippedDomain);  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-  }
-}
-
-std::vector<std::string> resetNameCandidates(const std::string& displayName) {
-  // The shared SEC symbol space sees user-visible top-input names such as
-  // `reset_i[0]`.  Match the same reset spelling policy as the reachable-state
-  // pass so a reset discovered during model analysis remains available when
-  // bootstrap constraints are converted to shared SAT symbols.
-  const std::string normalized = normalizeSignalBaseName(displayName);
-  std::vector<std::string> candidates = {normalized};
-  if (hasSuffix(normalized, "_IN")) {
-    candidates.push_back(normalized.substr(0, normalized.size() - 3));  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  if (hasSuffix(normalized, "_I")) {
-    candidates.push_back(normalized.substr(0, normalized.size() - 2));  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  if (hasSuffix(normalized, "_NI")) {
-    candidates.push_back(normalized.substr(0, normalized.size() - 1));  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  appendDomainPrefixedActiveLowResetCandidates(candidates);
-  return candidates;
-// LCOV_EXCL_START
-}
-// LCOV_EXCL_STOP
-
-std::optional<bool> getResetAssertionValue(const std::string& displayName) {
-  for (const auto& candidate : resetNameCandidates(displayName)) {
-    if (isResetNameToken(candidate, "RESET") ||
-        isResetNameToken(candidate, "RST")) {
-      return true;
-    }
-    if (isResetNameToken(candidate, "RESET_N") ||
-        isResetNameToken(candidate, "RESETN") ||
-        isResetNameToken(candidate, "RESET_L") ||
-        isResetNameToken(candidate, "RST_N") ||
-        isResetNameToken(candidate, "RSTN") ||
-        isResetNameToken(candidate, "RST_L")) {
-      return false;
-    }
-  }
-  return std::nullopt;
 }
 
 SignalKey getTerminalPathKey(const naja::DNL::DNLTerminalFull& terminal) {
@@ -1075,12 +962,10 @@ OutputCoverageSelection selectCoveredObservedOutputs(
       continue;
     }
 
-    if ((model0.observedOutputExprsMaterialized &&
-         model0.observedOutputExprByKey.find(key0) ==
-             model0.observedOutputExprByKey.end()) ||
-        (model1.observedOutputExprsMaterialized &&
-         model1.observedOutputExprByKey.find(key1) ==
-             model1.observedOutputExprByKey.end())) {
+    if (model0.observedOutputExprByKey.find(key0) ==
+            model0.observedOutputExprByKey.end() ||
+        model1.observedOutputExprByKey.find(key1) ==
+            model1.observedOutputExprByKey.end()) {
       throw std::runtime_error(
           "Missing observed output expression for aligned SEC output `" +
           name + "`");
@@ -1111,6 +996,11 @@ SequentialEquivalenceResult makeSecResult(
   result.coveredOutputs = coverage.checkedOutputs.names.size();
   // LCOV_EXCL_STOP
   result.totalOutputs = coverage.totalOutputs;
+  if (result.status == SequentialEquivalenceStatus::Equivalent &&
+      result.coveredOutputs > 0 &&
+      result.coveredOutputs < result.totalOutputs) {
+    result.status = SequentialEquivalenceStatus::PartiallyProved;
+  }
   result.skippedObservedOutputs = coverage.skippedOutputs;
   result.resetUnanchoredSkippedOutputs =
       // LCOV_EXCL_START
@@ -1138,7 +1028,7 @@ std::vector<bool> makeInitialPdrCoveredOutputs(
   return std::vector<bool>(problem.observedOutputExprs0.size(), false);
 }
 
-void markDualRailPdrOutputRangeCovered(
+void markPdrOutputRangeCovered(
     // LCOV_EXCL_START
     std::vector<bool>& coveredOutputs,
     std::unordered_map<size_t, std::string>& skipReasons,
@@ -1155,57 +1045,17 @@ void markDualRailPdrOutputRangeCovered(
 }
 // LCOV_EXCL_STOP
 
-bool markDualRailPdrOutputSkipped(
-    const KInductionProblem& problem,
-    // LCOV_EXCL_START
-    std::vector<bool>& coveredOutputs,
-    // LCOV_EXCL_STOP
-    std::unordered_map<size_t, std::string>& skipReasons,
-    // LCOV_DISABLED_START
-    size_t outputIndex) {
-  if (outputIndex >= coveredOutputs.size()) {
-    return true;  // LCOV_EXCL_LINE
-  }
-  const std::string reason =
-      "dual-rail PDR repair was inconclusive after isolating this output";
-  if (!coveredOutputs[outputIndex]) {
-    skipReasons[outputIndex] = reason;
-    // LCOV_DISABLED_START
-    return true;  // LCOV_EXCL_LINE
-    // LCOV_DISABLED_STOP
-  }
-  if (std::count(coveredOutputs.begin(), coveredOutputs.end(), true) <= 1) {  // LCOV_EXCL_LINE
-    // LCOV_DISABLED_START
-    // Partial coverage must not erase the whole proof surface.  A single-output
-    // LCOV_DISABLED_STOP
-    // dual-rail timeout remains inconclusive so a real mismatch cannot be
-    // hidden behind an empty covered set.
-    return false;  // LCOV_EXCL_LINE
-  }
-  coveredOutputs[outputIndex] = false;  // LCOV_EXCL_LINE
-  skipReasons[outputIndex] = reason;  // LCOV_EXCL_LINE
-  if (isSecDiagEnabled() ||  // LCOV_EXCL_LINE
-      std::getenv("KEPLER_SEC_SUMMARY_STATS") != nullptr) {  // LCOV_EXCL_LINE
-    emitSecDiag(  // LCOV_EXCL_LINE
-        "SEC diag: dual-rail PDR leaves output uncovered: ",
-        outputNameForProblemIndex(problem, outputIndex));  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  return true;  // LCOV_EXCL_LINE
-}
-
-void markPdrValidationUnknownOutputs(
+void markPdrOutputRangeSkipped(
     std::vector<bool>& coveredOutputs,
     std::unordered_map<size_t, std::string>& skipReasons,
     size_t firstOutput,
-    const std::vector<size_t>& localOutputIndices) {
-  for (const size_t localOutputIndex : localOutputIndices) {
-    const size_t outputIndex = firstOutput + localOutputIndex; // LCOV_EXCL_LINE
-    if (outputIndex >= coveredOutputs.size()) { // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }
-    coveredOutputs[outputIndex] = false; // LCOV_EXCL_LINE
-    skipReasons[outputIndex] = // LCOV_EXCL_LINE
-        "PDR concrete validation was inconclusive for this output";
+    size_t endOutput,
+    const std::string& reason) {
+  const size_t cappedEnd = std::min(endOutput, coveredOutputs.size());
+  for (size_t outputIndex = firstOutput; outputIndex < cappedEnd;
+       ++outputIndex) {
+    coveredOutputs[outputIndex] = false;
+    skipReasons[outputIndex] = reason;
   }
 }
 
@@ -1301,6 +1151,7 @@ KInductionProblem makeOutputSubsetProblem(
   subset.observedOutputNames.clear();
   subset.observedOutputExprs0.clear();
   subset.observedOutputExprs1.clear();
+  subset.dualRailOutputStrictEqualityExprs.clear();
   subset.dualRailOutputSkipReasons.clear();
 
   // LCOV_DISABLED_START
@@ -1309,6 +1160,9 @@ KInductionProblem makeOutputSubsetProblem(
       source.observedOutputs.size() == source.observedOutputExprs0.size();
   const bool copySkipReasons =
       source.dualRailOutputSkipReasons.size() ==
+      source.observedOutputExprs0.size();
+  const bool copyStrictEqualityExprs =
+      source.dualRailOutputStrictEqualityExprs.size() ==
       source.observedOutputExprs0.size();
   for (const size_t outputIndex : outputIndices) {
     if (copyObservedKeys) {
@@ -1320,6 +1174,10 @@ KInductionProblem makeOutputSubsetProblem(
         source.observedOutputExprs0[outputIndex]);
     subset.observedOutputExprs1.push_back(
         source.observedOutputExprs1[outputIndex]);
+    if (copyStrictEqualityExprs) {
+      subset.dualRailOutputStrictEqualityExprs.push_back(
+          source.dualRailOutputStrictEqualityExprs[outputIndex]);
+    }
     if (copySkipReasons) {
       subset.dualRailOutputSkipReasons.push_back(
           source.dualRailOutputSkipReasons[outputIndex]);
@@ -1394,14 +1252,13 @@ std::string describeUnanchoredStateSupport(
 
 void logSecDiagLine(bool secDiagEnabled, const char* message);
 
-void filterOutputsRequiringUnanchoredResetState(
+void filterOutputsRequiringUninitializedState(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
-    const ReachableStateInvariant& reachableInvariant,
-    bool resetBootstrapActive,
+    bool hasIncompleteInitialState,
     AlignedSecInterface& aligned,
     bool secDiagEnabled) {
-  if (!resetBootstrapActive || aligned.outputs.names.empty()) {
+  if (!hasIncompleteInitialState || aligned.outputs.names.empty()) {
     return;
   }
 
@@ -1466,10 +1323,8 @@ void filterOutputsRequiringUnanchoredResetState(
     }
 
     if (!reasons.empty()) {
-      // This is a coverage decision, not an internal-state equality shortcut:
-      // reset/bootstrap values are per-design facts at one frontier.  They do
-      // not justify comparing later state-dependent outputs unless SEC also
-      // has an inductive cross-design state relation for that support.
+      // Binary SEC cannot distinguish an initialization-only mismatch from a
+      // concrete design mismatch without an initial value for this state.
       const auto skippedOutput = name + ": " + joinReasons(reasons);
       aligned.outputCoverage.skippedOutputs.push_back(skippedOutput);
       aligned.outputCoverage.resetUnanchoredSkippedOutputs.push_back(
@@ -1494,7 +1349,7 @@ void filterOutputsRequiringUnanchoredResetState(
         aligned.outputCoverage.totalOutputs);  // LCOV_EXCL_LINE
     fprintf(  // LCOV_EXCL_LINE
         stderr,  // LCOV_EXCL_LINE
-        "SEC diag: reset-frontier checked outputs=%s\n",
+        "SEC diag: reset-anchored checked outputs=%s\n",
         formatStringList(aligned.outputs.names, aligned.outputs.names.size()).c_str());  // LCOV_EXCL_LINE
     fflush(stderr);  // LCOV_EXCL_LINE
   }  // LCOV_EXCL_LINE
@@ -1571,10 +1426,10 @@ bool secSummaryStatsEnabled() {
 constexpr size_t kMaxDualRailResidualOutputs = 128;
 constexpr size_t kMaxDualRailResidualProofStateSymbols = 4096;
 constexpr size_t kMaxDualRailResidualConcretePrecheckOutputs = 16;
-constexpr size_t kMaxDualRailFinalResetFrontierOriginalOutputs = 384;
 
 enum class DualRailResidualEngine {
   KInduction,
+  Imc,
 };
 
 struct DualRailResidualProofState {
@@ -1588,6 +1443,8 @@ const char* dualRailResidualEngineName(DualRailResidualEngine engine) {
   switch (engine) {
     case DualRailResidualEngine::KInduction:
       return "k-induction";
+    case DualRailResidualEngine::Imc:
+      return "IMC";
   }
   return "selected engine";  // LCOV_EXCL_LINE
 }
@@ -1623,6 +1480,18 @@ void markDualRailResidualOutputSkipped(
         "SEC diag: dual-rail ", dualRailResidualEngineName(engine),
         " leaves residual output uncovered: ",
         outputNameForProblemIndex(problem, outputIndex));
+  }
+}
+
+void markDualRailResidualOutputsSkipped(
+    const std::vector<size_t>& outputIndices,
+    const KInductionProblem& problem,
+    DualRailResidualEngine engine,
+    DualRailResidualProofState& proofState,
+    const std::string& reason) {
+  for (const size_t outputIndex : outputIndices) {
+    markDualRailResidualOutputSkipped(
+        outputIndex, problem, engine, proofState, reason);
   }
 }
 
@@ -1758,9 +1627,9 @@ findInputOnlyFrameZeroResidualCounterexample(
     return std::nullopt;
   }
 
-  // This is a witness-only guard for skipped residual top outputs.  Restrict it
-  // to frame-0 input/constant mismatches so equivalent reset-bootstrap designs
-  // do not pay to materialize transition cones before the selected SEC engine.
+  // This is a witness-only guard for skipped residual top outputs. Restrict it
+  // to frame-0 input/constant mismatches so stateful residuals do not pay to
+  // materialize transition cones before the selected SEC engine.
   const KInductionProblem inputOnlyProblem =
       makeOutputSubsetProblem(problem, inputOnlyOutputs);
   return SEC::findFastBaseCounterexampleAtFrontier(
@@ -2160,8 +2029,22 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
     return makeSecResult(
         SequentialEquivalenceStatus::Inconclusive,
         proofState.provedBound,
-        std::string("Dual-rail ") + dualRailResidualEngineName(engine) +
+        std::string("Dual-rail ") +
+            dualRailResidualEngineName(engine) +
             " did not prove any output",
+        finalCoverage,
+        abstractedSequentialBoundaries,
+        extractedBoundaryReports);
+  }
+
+  if (coveredCount != proofState.coveredOutputs.size()) {
+    return makeSecResult(
+        SequentialEquivalenceStatus::PartiallyProved,
+        proofState.provedBound,
+        std::string("Dual-rail ") + dualRailResidualEngineName(engine) +
+            " proved " + std::to_string(coveredCount) + " of " +
+            std::to_string(proofState.coveredOutputs.size()) +
+            " observed outputs; remaining outputs are inconclusive",
         finalCoverage,
         abstractedSequentialBoundaries,
         extractedBoundaryReports);
@@ -2174,184 +2057,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
       finalCoverage,
       abstractedSequentialBoundaries,
       extractedBoundaryReports);
-}
-
-size_t directObservedOutputSupportSize(const KInductionProblem& problem) {
-  std::unordered_set<size_t> support;
-  for (const auto* expr : problem.observedOutputExprs0) {
-    const auto exprSupport = expr->getSupportVars();
-    support.insert(exprSupport.begin(), exprSupport.end());
-  }
-  for (const auto* expr : problem.observedOutputExprs1) {
-    const auto exprSupport = expr->getSupportVars();
-    support.insert(exprSupport.begin(), exprSupport.end());
-  }
-  return support.size();
-}
-
-size_t pdrCertificateStateSymbolCount(const KInductionProblem& problem) {
-  if (!problem.usesDualRailStateEncoding) {
-    return problem.totalStateCount; // LCOV_EXCL_LINE
-  }
-  // Dual-rail PDR reasons about both value and known rails.  Runtime guards
-  // must count the actual rail symbols, not only the original flop count.
-  return problem.dualRailStatePairs.size() * 2;
-}
-
-bool canReportPdrValidationCounterexample(
-    const KInductionProblem& problem,
-    const KInductionResult::CounterexampleWitness& witness);
-
-bool shouldDeferWideDualRailPdrValidation(const KInductionProblem& problem) {
-  if (!problem.usesDualRailStateEncoding) {
-    return false;
-  }
-  const size_t outputCount = problem.originalObservedOutputCount == 0
-                                 ? problem.observedOutputExprs0.size()
-                                 : problem.originalObservedOutputCount;
-  return detail::shouldDeferPdrDualRailFrameZeroValidation(
-      outputCount, pdrCertificateStateSymbolCount(problem));
-}
-
-std::optional<KInductionResult::CounterexampleWitness>
-findPdrValidationCounterexample(const KInductionProblem& problem,
-                                KEPLER_FORMAL::Config::SolverType solverType,
-                                size_t maxK) {
-  // PDR uses this only to validate concrete top-output SEC behavior.  Scanning
-  // exact frontiers keeps the same bounded semantics as one prefix query while
-  // letting the base solver localize wide multi-output ASIC cones.
-  for (size_t depth = 0; depth <= maxK; ++depth) {
-    if (auto witness = SEC::findBaseCounterexampleAtFrontier(
-            problem, solverType, depth);
-        witness.has_value()) {
-      if (canReportPdrValidationCounterexample(problem, *witness)) {
-        return witness;
-      }
-    } // LCOV_EXCL_LINE
-  }
-  return std::nullopt;
-}
-
-bool isUnknownBootstrapRailPair( // LCOV_EXCL_LINE
-    const DualRailSymbolPair& rails,
-    const std::unordered_map<size_t, bool>& bootstrapValueBySymbol) {
-  const auto oneIt = bootstrapValueBySymbol.find(rails.mayBeOne); // LCOV_EXCL_LINE
-  const auto zeroIt = bootstrapValueBySymbol.find(rails.mayBeZero); // LCOV_EXCL_LINE
-  return oneIt != bootstrapValueBySymbol.end() && // LCOV_EXCL_LINE
-         zeroIt != bootstrapValueBySymbol.end() && // LCOV_EXCL_LINE
-         oneIt->second && // LCOV_EXCL_LINE
-         zeroIt->second; // LCOV_EXCL_LINE
-}
-
-bool dualRailBadDependsOnUnknownBootstrapState( // LCOV_EXCL_LINE
-    const KInductionProblem& problem) {
-  if (!problem.usesDualRailStateEncoding || // LCOV_EXCL_LINE
-      problem.resetBootstrapCycles == 0 || // LCOV_EXCL_LINE
-      problem.bad == nullptr || // LCOV_EXCL_LINE
-      problem.bootstrapStateAssignments.empty()) { // LCOV_EXCL_LINE
-    return false; // LCOV_EXCL_LINE
-  }
-
-  const std::set<size_t> support = problem.bad->getSupportVars(); // LCOV_EXCL_LINE
-  if (support.empty()) { // LCOV_EXCL_LINE
-    return false; // LCOV_EXCL_LINE
-  }
-
-  std::unordered_map<size_t, bool> bootstrapValueBySymbol; // LCOV_EXCL_LINE
-  bootstrapValueBySymbol.reserve(problem.bootstrapStateAssignments.size()); // LCOV_EXCL_LINE
-  for (const auto& [symbol, value] : problem.bootstrapStateAssignments) { // LCOV_EXCL_LINE
-    bootstrapValueBySymbol.emplace(symbol, value); // LCOV_EXCL_LINE
-  }
-
-  for (const auto& rails : problem.dualRailStatePairs) { // LCOV_EXCL_LINE
-    if (!isUnknownBootstrapRailPair(rails, bootstrapValueBySymbol)) { // LCOV_EXCL_LINE
-      continue; // LCOV_EXCL_LINE
-    }
-    if (support.find(rails.mayBeOne) != support.end() || // LCOV_EXCL_LINE
-        support.find(rails.mayBeZero) != support.end()) { // LCOV_EXCL_LINE
-      return true; // LCOV_EXCL_LINE
-    }
-  }
-  return false; // LCOV_EXCL_LINE
-} // LCOV_EXCL_LINE
-
-bool canReportPdrValidationCounterexample(
-    const KInductionProblem& problem,
-    const KInductionResult::CounterexampleWitness& witness) {
-  if (!problem.usesDualRailStateEncoding ||
-      problem.canReportSteadyFrontierMismatchAsCounterexample()) {
-    return true;
-  }
-  if (witness.badFrame != 0) { // LCOV_EXCL_LINE
-    return true; // LCOV_EXCL_LINE
-  }
-  // A frame-0 dual-rail mismatch that depends on X-valued reset-bootstrap
-  // state can be only a rail-overapproximation artifact. Keep it as proof
-  // feedback for PDR, but do not expose it as a concrete SEC counterexample.
-  return !dualRailBadDependsOnUnknownBootstrapState(problem); // LCOV_EXCL_LINE
-}
-
-std::optional<KInductionResult::CounterexampleWitness>
-findPdrPerOutputValidationCounterexample(
-    const KInductionProblem& problem,
-    KEPLER_FORMAL::Config::SolverType solverType,
-    size_t maxK) {
-  // Exact single-output frontiers avoid the wide all-output bad-state OR while
-  // still proving/reporting only concrete top-output SEC behavior.
-  for (size_t outputIndex = 0;
-       outputIndex < problem.observedOutputExprs0.size();
-       ++outputIndex) {
-    const KInductionProblem singleOutputProblem =
-        makeOutputSubsetProblem(problem, {outputIndex});
-    for (size_t depth = 0; depth <= maxK; ++depth) {
-      if (auto witness = SEC::findBaseCounterexampleAtFrontier(
-              singleOutputProblem, solverType, depth);
-          witness.has_value()) {
-        if (canReportPdrValidationCounterexample(
-                singleOutputProblem, *witness)) {
-          return witness;
-        }
-      } // LCOV_EXCL_LINE
-    }
-  }
-  return std::nullopt;
-}
-
-struct PdrConcreteValidationCheck {
-  std::optional<KInductionResult::CounterexampleWitness> witness;
-  std::vector<size_t> unknownOutputIndices;
-};
-
-PdrConcreteValidationCheck checkPdrConcreteValidation(
-    const KInductionProblem& problem,
-    KEPLER_FORMAL::Config::SolverType solverType,
-    size_t maxK) {
-  PdrConcreteValidationCheck check;
-  for (size_t outputIndex = 0;
-       outputIndex < problem.observedOutputExprs0.size();
-       ++outputIndex) {
-    const KInductionProblem singleOutputProblem =
-        makeOutputSubsetProblem(problem, {outputIndex});
-    bool outputValidationUnknown = false;
-    for (size_t depth = 0; depth <= maxK; ++depth) {
-      const SEC::BaseCounterexampleCheckResult baseCheck =
-          SEC::checkBaseCounterexampleWithFastValidation(
-              singleOutputProblem, solverType, depth);
-      if (baseCheck.status ==
-          SEC::BaseCounterexampleCheckStatus::Counterexample) {
-        check.witness = baseCheck.witness;  // LCOV_EXCL_LINE
-        return check;  // LCOV_EXCL_LINE
-      }
-      if (baseCheck.status == SEC::BaseCounterexampleCheckStatus::Unknown) {
-        outputValidationUnknown = true; // LCOV_EXCL_LINE
-        break; // LCOV_EXCL_LINE
-      }
-    }
-    if (outputValidationUnknown) {
-      check.unknownOutputIndices.push_back(outputIndex); // LCOV_EXCL_LINE
-    } // LCOV_EXCL_LINE
-  }
-  return check;
 }
 
 OutputBatchingLimits dualRailPdrOutputBatchingLimits(
@@ -2367,40 +2072,6 @@ OutputBatchingLimits dualRailPdrOutputBatchingLimits(
       "KEPLER_SEC_DUAL_RAIL_OUTPUT_BATCH_SUPPORT_LIMIT",
       defaultLimits.outputBatchSupportLimit);
   return defaultLimits;
-}
-
-void emitPdrStrategyStageStats(
-    bool enabled,
-    size_t batchIndex,
-    size_t firstOutput,
-    size_t endOutput,
-    const char* stage,
-    size_t transitionClosureLimit,
-    size_t predecessorProjectionLimit,
-    size_t badCubeLimit,
-    const KInductionProblem& batch) {
-  if (!enabled) {
-    return;
-  }
-
-  // These stage markers are intentionally coarse: when a large SEC/PDR run is
-  // sampled, they identify which CEGAR retry owns the following predecessor SAT
-  // traffic without flooding the log with every query.
-  emitSecDiag(  // LCOV_EXCL_LINE
-      "SEC PDR stats: strategy batch=", batchIndex,
-      " outputs=[", firstOutput, ",", endOutput, ")",
-      " stage=", stage,
-      " closure_limit=", transitionClosureLimit,
-      " projection_limit=", predecessorProjectionLimit,
-      " bad_cube_limit=", badCubeLimit,
-      " transitions=", batch.transitions0.size() + batch.transitions1.size(),  // LCOV_EXCL_LINE
-      " init_assignments=", batch.initialStateAssignments.size(),  // LCOV_EXCL_LINE
-      " bootstrap_assignments=", batch.bootstrapStateAssignments.size(),  // LCOV_EXCL_LINE
-      " observed_outputs=", batch.observedOutputExprs0.size(),
-      " direct_support=", directObservedOutputSupportSize(batch),
-      " output_names=[",
-      formatStringList(batch.observedOutputNames, 8),
-      "]");  // LCOV_EXCL_LINE
 }
 
 void appendAbstractedSequentialBoundaries(
@@ -2473,14 +2144,9 @@ void appendExtractedBoundaryReports(
 
 SequentialDesignModel extractSecDesign(naja::NL::SNLDesign* top,
                                        const char* extractedMessage,
-                                       bool secDiagEnabled,
-                                       bool deferCombinationalObservedOutputs) {
+                                       bool secDiagEnabled) {
   // LCOV_DISABLED_START
-  SequentialDesignModel model = SequentialDesignModel::extract(
-      top,
-      SequentialDesignExtractOptions{
-          .deferCombinationalObservedOutputs =
-              deferCombinationalObservedOutputs});
+  SequentialDesignModel model = SequentialDesignModel::extract(top);
   // LCOV_DISABLED_STOP
   logSecDiagLine(secDiagEnabled, extractedMessage);
   return model;
@@ -2530,919 +2196,6 @@ AlignedSecInterface alignSecInterface(const SequentialDesignModel& model0,
   return aligned;
 }
 
-AlignedSignals sliceAlignedSignals(const AlignedSignals& signals,
-                                   size_t first,
-                                   size_t end) {
-  AlignedSignals slice;
-  if (first > end || end > signals.names.size()) {
-    throw std::runtime_error("Invalid SEC output batch slice");  // LCOV_EXCL_LINE
-  }
-  slice.names.insert(
-      slice.names.end(), signals.names.begin() + first, signals.names.begin() + end);
-  slice.keys0.insert(
-      slice.keys0.end(), signals.keys0.begin() + first, signals.keys0.begin() + end);
-  slice.keys1.insert(
-      slice.keys1.end(), signals.keys1.begin() + first, signals.keys1.begin() + end);
-  return slice;
-}
-
-OutputCoverageSelection makeOutputCoverageForBatch(
-    const OutputCoverageSelection& baseCoverage,
-    const AlignedSignals& batchOutputs) {
-  OutputCoverageSelection coverage = baseCoverage;
-  coverage.checkedOutputs = batchOutputs;
-  return coverage;
-}
-
-size_t lazyPdrOutputBatchSize() {
-  constexpr size_t kDefaultLazyPdrOutputBatchSize = 128;
-  return secStrategySizeLimitFromEnv(
-      "KEPLER_SEC_PDR_LAZY_OUTPUT_BATCH_SIZE",
-      kDefaultLazyPdrOutputBatchSize);
-}
-
-std::string describeLazyMaterializationSkip(
-    const KEPLER_FORMAL::BuildPrimaryOutputClauses::SkippedOutputInfo& info) {
-  std::ostringstream oss;
-  oss << "builder skipped output";
-  if (!info.detail.empty()) {
-    oss << ": " << info.detail;
-  }
-  return oss.str();
-}
-
-std::vector<naja::DNL::DNLID> resolveDeferredInputTermsByLocalVar(
-    const SequentialDesignModel& model,
-    naja::DNL::DNLFull* dnl) {
-  size_t maxInputVar = 1;
-  for (const auto& [_, localVar] : model.inputVarByKey) {
-    if (localVar >= 2) {
-      maxInputVar = std::max(maxInputVar, localVar);
-    }
-  }
-  std::vector<naja::DNL::DNLID> inputTerms;
-  if (maxInputVar < 2) {
-    return inputTerms;
-  }
-  inputTerms.assign(maxInputVar - 1, naja::DNL::DNLID_MAX);
-  for (const auto& [key, localVar] : model.inputVarByKey) {
-    if (localVar < 2) {
-      continue;  // LCOV_EXCL_LINE
-    }
-    const auto termID = findTermByKey(dnl, key);
-    if (!termID.has_value()) {
-      throw std::runtime_error(
-          "Could not resolve deferred SEC input `" +
-          describeSecSignalKey(model, key) + "` back into the DNL");
-    }
-    inputTerms[localVar - 2] = *termID;
-  }
-  for (const auto termID : inputTerms) {
-    if (termID == naja::DNL::DNLID_MAX) {
-      throw std::runtime_error(
-          "Deferred SEC input variables are not contiguous");  // LCOV_EXCL_LINE
-    }
-  }
-  return inputTerms;
-}
-
-std::vector<naja::DNL::DNLID> resolveOutputTermsForBatch(
-    const SequentialDesignModel& model,
-    naja::DNL::DNLFull* dnl,
-    const std::vector<SignalKey>& outputKeys) {
-  std::vector<naja::DNL::DNLID> outputTerms;
-  outputTerms.reserve(outputKeys.size());
-  for (const auto& key : outputKeys) {
-    const auto termID = findTermByKey(dnl, key);
-    if (!termID.has_value()) {
-      throw std::runtime_error(
-          "Could not resolve deferred SEC output `" +
-          describeSecSignalKey(model, key) + "` back into the DNL");
-    }
-    outputTerms.push_back(*termID);
-  }
-  return outputTerms;
-}
-
-constexpr size_t kLazyStructuralInvalidFlatTermID =
-    std::numeric_limits<size_t>::max();
-constexpr uint32_t kLazyStructuralMaxDnfInputs = 16;
-
-struct LazyStructuralModelInputLayout {
-  bool isMux2 = false;
-  bool isTableSelect = false;
-  bool isAssign = false;
-  std::vector<size_t> nonOutputTermFlatIDs;
-  std::unordered_map<naja::NL::NLID::Bit, size_t> muxInputAFlatIDs;
-  std::unordered_map<naja::NL::NLID::Bit, size_t> muxInputBFlatIDs;
-  size_t muxSelectFlatID = kLazyStructuralInvalidFlatTermID;
-};
-
-struct LazyStructuralTruthTableKey {
-  const naja::NL::SNLDesign* design = nullptr;
-  size_t flatTermID = 0;
-
-  bool operator==(const LazyStructuralTruthTableKey& other) const {
-    return design == other.design && flatTermID == other.flatTermID;
-  }
-};
-
-struct LazyStructuralTruthTableKeyHash {
-  size_t operator()(const LazyStructuralTruthTableKey& key) const {
-    size_t seed = std::hash<const naja::NL::SNLDesign*>{}(key.design);
-    seed ^= std::hash<size_t>{}(key.flatTermID) + 0x9e3779b9 +
-            (seed << 6) + (seed >> 2);
-    return seed;
-  }
-};
-
-struct LazyStructuralMaterializerStats {
-  size_t terms = 0;
-  size_t termCacheHits = 0;
-  size_t inputHits = 0;
-  size_t isoHits = 0;
-  size_t truthTables = 0;
-};
-
-struct LazyStructuralConeMaterializerCache {
-  std::vector<naja::DNL::DNLID> inputSignature;
-  std::unordered_map<naja::DNL::DNLID, BoolExpr*> termMemo;
-  std::unordered_map<naja::DNL::DNLID, BoolExpr*> isoExprMemo;
-  std::unordered_map<const naja::NL::SNLDesign*, LazyStructuralModelInputLayout>
-      layoutCache;
-  std::unordered_map<LazyStructuralTruthTableKey,
-                     naja::NL::SNLTruthTable,
-                     LazyStructuralTruthTableKeyHash>
-      truthTableCache;
-};
-
-BoolExpr* foldLazyStructuralAnd(const std::vector<BoolExpr*>& inputs) {
-  if (inputs.empty()) {
-    return BoolExpr::createTrue();
-  }
-  BoolExpr* expr = inputs.front();
-  for (size_t i = 1; i < inputs.size(); ++i) {
-    expr = BoolExpr::And(expr, inputs[i]);
-  }
-  return expr;
-}
-
-BoolExpr* foldLazyStructuralOr(const std::vector<BoolExpr*>& inputs) {
-  if (inputs.empty()) {
-    return BoolExpr::createFalse();
-  }
-  BoolExpr* expr = inputs.front();
-  for (size_t i = 1; i < inputs.size(); ++i) {
-    expr = BoolExpr::Or(expr, inputs[i]);
-  }
-  return expr;
-}
-
-BoolExpr* foldLazyStructuralXor(const std::vector<BoolExpr*>& inputs) {
-  if (inputs.empty()) {
-    return BoolExpr::createFalse();
-  }
-  BoolExpr* expr = inputs.front();
-  for (size_t i = 1; i < inputs.size(); ++i) {
-    expr = BoolExpr::Xor(expr, inputs[i]);
-  }
-  return expr;
-}
-
-BoolExpr* buildLazyStructuralTableSelectExpr(
-    const naja::NL::SNLTruthTable& table,
-    const std::vector<BoolExpr*>& inputs) {
-  const uint32_t addressSize = table.getTableSelectAddressSize();
-  const uint32_t depth = table.getTableSelectDepth();
-  if (inputs.size() != static_cast<size_t>(addressSize) + depth) {
-    throw std::runtime_error("TABLE_SELECT truth table arity mismatch");
-  }
-
-  std::function<BoolExpr*(uint32_t, uint64_t)> build =
-      [&](uint32_t addressIndex, uint64_t prefix) -> BoolExpr* {
-    const uint32_t remaining = addressSize - addressIndex;
-    if (remaining < 63) {
-      if ((prefix << remaining) >= depth) {
-        return BoolExpr::createFalse();
-      }
-    } else if (prefix != 0) {
-      return BoolExpr::createFalse();
-    }
-
-    if (addressIndex == addressSize) {
-      return inputs[addressSize + static_cast<uint32_t>(prefix)];
-    }
-
-    BoolExpr* low = build(addressIndex + 1, prefix << 1);
-    BoolExpr* high = build(addressIndex + 1, (prefix << 1) | 1);
-    if (low == high) {
-      return low;
-    }
-    BoolExpr* addressBit = inputs[addressIndex];
-    return BoolExpr::Or(
-        BoolExpr::And(BoolExpr::Not(addressBit), low),
-        BoolExpr::And(addressBit, high));
-  };
-  return build(0, 0);
-}
-
-BoolExpr* buildLazyStructuralGenericTruthTableExpr(
-    const naja::NL::SNLTruthTable& table,
-    const std::vector<BoolExpr*>& inputs) {
-  using GenericType = naja::NL::SNLTruthTable::GenericType;
-  switch (table.getGenericType()) {
-    case GenericType::AND:
-      return foldLazyStructuralAnd(inputs);
-    case GenericType::NAND:
-      return BoolExpr::Not(foldLazyStructuralAnd(inputs));
-    case GenericType::OR:
-      return foldLazyStructuralOr(inputs);
-    case GenericType::NOR:
-      return BoolExpr::Not(foldLazyStructuralOr(inputs));
-    case GenericType::XOR:
-      return foldLazyStructuralXor(inputs);
-    case GenericType::XNOR:
-      return BoolExpr::Not(foldLazyStructuralXor(inputs));
-    case GenericType::TABLE_SELECT:
-      return buildLazyStructuralTableSelectExpr(table, inputs);
-    case GenericType::NONE:
-      break;
-  }
-  throw std::runtime_error("Unsupported generic truth table type");
-}
-
-BoolExpr* buildLazyStructuralDnfTruthTableExpr(
-    const naja::NL::SNLTruthTable& table,
-    const std::vector<BoolExpr*>& inputs) {
-  const uint32_t inputCount = table.size();
-  if (inputCount != inputs.size()) {
-    throw std::runtime_error("truth table arity mismatch");
-  }
-  if (inputCount > kLazyStructuralMaxDnfInputs) {
-    throw std::runtime_error(
-        "non-generic truth table is too wide for lazy structural DNF");
-  }
-
-  const uint64_t rows = uint64_t{1} << inputCount;
-  std::vector<bool> relevant(inputCount, false);
-  for (uint32_t inputIndex = 0; inputIndex < inputCount; ++inputIndex) {
-    for (uint64_t row = 0; row < rows; ++row) {
-      const bool low = table.bits().bit(row);
-      const bool high = table.bits().bit(row ^ (uint64_t{1} << inputIndex));
-      if (low != high) {
-        relevant[inputIndex] = true;
-        break;
-      }
-    }
-  }
-
-  BoolExpr* expr = BoolExpr::createFalse();
-  for (uint64_t row = 0; row < rows; ++row) {
-    if (!table.bits().bit(row)) {
-      continue;
-    }
-    BoolExpr* term = nullptr;
-    for (uint32_t inputIndex = 0; inputIndex < inputCount; ++inputIndex) {
-      if (!relevant[inputIndex]) {
-        continue;
-      }
-      const bool inputIsOne = ((row >> inputIndex) & 1) != 0;
-      BoolExpr* literal =
-          inputIsOne ? inputs[inputIndex] : BoolExpr::Not(inputs[inputIndex]);
-      term = term == nullptr ? literal : BoolExpr::And(term, literal);
-    }
-    expr = BoolExpr::Or(expr, term == nullptr ? BoolExpr::createTrue() : term);
-  }
-  return expr;
-}
-
-BoolExpr* buildLazyStructuralTruthTableExpr(
-    const naja::NL::SNLTruthTable& table,
-    const std::vector<BoolExpr*>& inputs) {
-  if (!table.isInitialized()) {
-    throw std::runtime_error("truth table is not initialized");
-  }
-  if (table.all0()) {
-    return BoolExpr::createFalse();
-  }
-  if (table.all1()) {
-    return BoolExpr::createTrue();
-  }
-  if (table.isGeneric()) {
-    return buildLazyStructuralGenericTruthTableExpr(table, inputs);
-  }
-  return buildLazyStructuralDnfTruthTableExpr(table, inputs);
-}
-
-class LazyStructuralConeMaterializer {
- public:
-  LazyStructuralConeMaterializer(
-      const SequentialDesignModel& model,
-      naja::DNL::DNLFull* dnl,
-      const std::vector<naja::DNL::DNLID>& inputTerms,
-      LazyStructuralConeMaterializerCache& cache)
-      : dnl_(dnl), cache_(cache) {
-    (void)model;
-    if (dnl_ == nullptr) {
-      throw std::runtime_error("DNL is not available");
-    }
-    if (cache_.inputSignature != inputTerms) {
-      cache_.inputSignature = inputTerms;
-      cache_.termMemo.clear();
-      cache_.isoExprMemo.clear();
-    }
-    for (size_t inputIndex = 0; inputIndex < inputTerms.size(); ++inputIndex) {
-      const auto termID = inputTerms[inputIndex];
-      if (termID == naja::DNL::DNLID_MAX) {
-        throw std::runtime_error("deferred input term is invalid");
-      }
-      const size_t variable = inputIndex + 2;
-      inputVarByTerm_.emplace(termID, variable);
-      cache_.termMemo.emplace(termID, BoolExpr::Var(variable));
-      const auto& term = dnl_->getDNLTerminalFromID(termID);
-      if (!term.isNull() && term.getIsoID() != naja::DNL::DNLID_MAX) {
-        inputVarByIso_.emplace(term.getIsoID(), variable);
-        cache_.isoExprMemo.emplace(term.getIsoID(), BoolExpr::Var(variable));
-      }
-    }
-  }
-
-  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> materialize(
-      const std::vector<SignalKey>& outputKeys,
-      const std::vector<naja::DNL::DNLID>& outputTerms) {
-    if (outputKeys.size() != outputTerms.size()) {
-      throw std::runtime_error("output key/term count mismatch");
-    }
-    std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> exprByKey;
-    exprByKey.reserve(outputKeys.size());
-    for (size_t i = 0; i < outputKeys.size(); ++i) {
-      BoolExpr* expr = materializeTerm(outputTerms[i]);
-      if (expr == nullptr || !expr->isValid()) {
-        throw std::runtime_error(
-            "lazy structural materializer returned an invalid expression");
-      }
-      exprByKey.emplace(outputKeys[i], expr);
-    }
-    return exprByKey;
-  }
-
-  const LazyStructuralMaterializerStats& stats() const { return stats_; }
-
- private:
-  const LazyStructuralModelInputLayout& layoutFor(
-      const naja::NL::SNLDesign* design) {
-    auto it = cache_.layoutCache.find(design);
-    if (it != cache_.layoutCache.end()) {
-      return it->second;
-    }
-
-    LazyStructuralModelInputLayout layout;
-    if (design != nullptr) {
-      layout.isMux2 = naja::NL::NLDB0::isMux2(design);
-      layout.isTableSelect = naja::NL::NLDB0::isTableSelect(design);
-      layout.isAssign = naja::NL::NLDB0::isAssign(design);
-      for (const auto* term : design->getBitTerms()) {
-        if (term->getDirection() != naja::NL::SNLBitTerm::Direction::Output) {
-          layout.nonOutputTermFlatIDs.push_back(term->getOrderID());
-        }
-      }
-      if (layout.isMux2) {
-        if (const auto* inputA = naja::NL::NLDB0::getMux2InputA(design)) {
-          for (const auto* bitTerm : inputA->getBusBits()) {
-            layout.muxInputAFlatIDs.emplace(
-                bitTerm->getBit(), bitTerm->getOrderID());
-          }
-        }
-        if (const auto* inputB = naja::NL::NLDB0::getMux2InputB(design)) {
-          for (const auto* bitTerm : inputB->getBusBits()) {
-            layout.muxInputBFlatIDs.emplace(
-                bitTerm->getBit(), bitTerm->getOrderID());
-          }
-        }
-        if (const auto* select = naja::NL::NLDB0::getMux2Select(design)) {
-          layout.muxSelectFlatID = select->getOrderID();
-        }
-      }
-    }
-
-    auto [insertedIt, _] = cache_.layoutCache.emplace(design, std::move(layout));
-    return insertedIt->second;
-  }
-
-  const naja::NL::SNLTruthTable& truthTableFor(
-      const naja::NL::SNLDesign* design,
-      size_t flatTermID) {
-    const LazyStructuralTruthTableKey key{design, flatTermID};
-    auto it = cache_.truthTableCache.find(key);
-    if (it != cache_.truthTableCache.end()) {
-      return it->second;
-    }
-    auto table = naja::NL::SNLDesignModeling::getTruthTable(
-        design, flatTermID);
-    auto [insertedIt, _] =
-        cache_.truthTableCache.emplace(key, std::move(table));
-    return insertedIt->second;
-  }
-
-  naja::DNL::DNLID resolveInstanceInputTerm(
-      const naja::DNL::DNLInstanceFull& inst,
-      size_t flatTermID,
-      naja::DNL::DNLID driver,
-      const char* role) const {
-    const auto& termIndexes = inst.getTermIndexes();
-    if (flatTermID == kLazyStructuralInvalidFlatTermID ||
-        termIndexes.first == naja::DNL::DNLID_MAX ||
-        termIndexes.second < termIndexes.first ||
-        flatTermID > termIndexes.second - termIndexes.first) {
-      std::ostringstream error;
-      error << "failed to map " << role << " flat_term_id=" << flatTermID
-            << " for driver " << driver;
-      throw std::runtime_error(error.str());
-    }
-    const auto termID = termIndexes.first + flatTermID;
-    const auto& term = dnl_->getDNLTerminalFromID(termID);
-    if (term.isNull() || term.getSnlBitTerm() == nullptr ||
-        term.getSnlBitTerm()->getOrderID() != flatTermID) {
-      std::ostringstream error;
-      error << "failed to resolve " << role << " flat_term_id=" << flatTermID
-            << " for driver " << driver;
-      throw std::runtime_error(error.str());
-    }
-    return termID;
-  }
-
-  std::vector<naja::DNL::DNLID> collectRelevantInputTerms(
-      naja::DNL::DNLID driver,
-      const naja::DNL::DNLTerminalFull& driverTerm,
-      const LazyStructuralModelInputLayout& layout,
-      const naja::NL::SNLTruthTable* table) {
-    const auto& inst = driverTerm.getDNLInstance();
-    std::vector<naja::DNL::DNLID> inputTerms;
-    if (layout.isTableSelect) {
-      if (table == nullptr) {
-        throw std::runtime_error("table-select dependency table is missing");
-      }
-      const auto deps =
-          naja::NL::NLBitDependencies::decodeBits(table->getDependencies());
-      inputTerms.reserve(deps.size());
-      for (const size_t flatTermID : deps) {
-        inputTerms.push_back(resolveInstanceInputTerm(
-            inst, flatTermID, driver, "table-select dependency"));
-      }
-      return inputTerms;
-    }
-
-    if (!layout.isMux2) {
-      inputTerms.reserve(layout.nonOutputTermFlatIDs.size());
-      for (const size_t flatTermID : layout.nonOutputTermFlatIDs) {
-        inputTerms.push_back(resolveInstanceInputTerm(
-            inst, flatTermID, driver, "instance dependency"));
-      }
-      return inputTerms;
-    }
-
-    if (layout.muxInputAFlatIDs.empty() || layout.muxInputBFlatIDs.empty() ||
-        layout.muxSelectFlatID == kLazyStructuralInvalidFlatTermID) {
-      throw std::runtime_error("failed to resolve wide mux inputs");
-    }
-    const auto driverBit =
-        static_cast<naja::NL::NLID::Bit>(driverTerm.getSnlBitTerm()->getBit());
-    auto resolveMuxBit =
-        [&](const std::unordered_map<naja::NL::NLID::Bit, size_t>& bits,
-            const char* role) {
-      const auto it = bits.find(driverBit);
-      if (it == bits.end()) {
-        std::ostringstream error;
-        error << "failed to resolve " << role << " bit " << driverBit;
-        throw std::runtime_error(error.str());
-      }
-      return it->second;
-    };
-
-    inputTerms.reserve(3);
-    inputTerms.push_back(resolveInstanceInputTerm(
-        inst, resolveMuxBit(layout.muxInputAFlatIDs, "wide mux input A"),
-        driver, "wide mux input A"));
-    inputTerms.push_back(resolveInstanceInputTerm(
-        inst, resolveMuxBit(layout.muxInputBFlatIDs, "wide mux input B"),
-        driver, "wide mux input B"));
-    inputTerms.push_back(resolveInstanceInputTerm(
-        inst, layout.muxSelectFlatID, driver, "wide mux select"));
-    return inputTerms;
-  }
-
-  BoolExpr* materializeIsoDriver(
-      naja::DNL::DNLID termID,
-      const naja::DNL::DNLIso& iso) {
-    if (iso.getDrivers().empty()) {
-      throw std::runtime_error("non-output term has no driver");
-    }
-
-    std::optional<naja::DNL::DNLID> driver;
-    for (const auto candidate : iso.getDrivers()) {
-      if (candidate == naja::DNL::DNLID_MAX) {
-        continue;
-      }
-      if (candidate == termID) {
-        continue;
-      }
-      if (driver.has_value() && *driver != candidate) {
-        throw std::runtime_error("non-output term has multiple drivers");
-      }
-      driver = candidate;
-    }
-
-    if (!driver.has_value()) {
-      throw std::runtime_error("unbound input is outside the deferred SEC input set");
-    }
-    return materializeTerm(*driver);
-  }
-
-  BoolExpr* materializeInstanceOutput(
-      naja::DNL::DNLID termID,
-      const naja::DNL::DNLTerminalFull& term) {
-    const auto& inst = term.getDNLInstance();
-    const auto* design = inst.getSNLModel();
-    if (design == nullptr) {
-      throw std::runtime_error("instance output has no model");
-    }
-    const auto& layout = layoutFor(design);
-    const size_t flatTermID = term.getSnlBitTerm()->getOrderID();
-
-    if (layout.isAssign) {
-      const auto inputTerms =
-          collectRelevantInputTerms(termID, term, layout, nullptr);
-      if (inputTerms.size() != 1) {
-        throw std::runtime_error("assign primitive is not single-input");
-      }
-      return materializeTerm(inputTerms.front());
-    }
-
-    const auto& table = truthTableFor(design, flatTermID);
-    if (!table.isInitialized()) {
-      throw std::runtime_error("instance output truth table is not initialized");
-    }
-
-    auto inputTerms = collectRelevantInputTerms(termID, term, layout, &table);
-    if (table.size() != inputTerms.size()) {
-      std::ostringstream error;
-      error << "truth table arity=" << table.size()
-            << " does not match dependency count=" << inputTerms.size();
-      throw std::runtime_error(error.str());
-    }
-
-    std::vector<BoolExpr*> inputs;
-    inputs.reserve(inputTerms.size());
-    for (const auto inputTerm : inputTerms) {
-      inputs.push_back(materializeTerm(inputTerm));
-    }
-    ++stats_.truthTables;
-    return buildLazyStructuralTruthTableExpr(table, inputs);
-  }
-
-  BoolExpr* materializeTerm(naja::DNL::DNLID termID) {
-    if (termID == naja::DNL::DNLID_MAX) {
-      throw std::runtime_error("invalid DNL term");
-    }
-    if (auto it = cache_.termMemo.find(termID); it != cache_.termMemo.end()) {
-      ++stats_.termCacheHits;
-      return it->second;
-    }
-    if (!visitingTerms_.insert(termID).second) {
-      throw std::runtime_error("logical loop detected in lazy structural cone");
-    }
-
-    BoolExpr* result = nullptr;
-    try {
-      result = materializeTermImpl(termID);
-    } catch (...) {
-      visitingTerms_.erase(termID);
-      throw;
-    }
-    visitingTerms_.erase(termID);
-    cache_.termMemo.emplace(termID, result);
-
-    const auto& term = dnl_->getDNLTerminalFromID(termID);
-    if (!term.isNull() && term.getIsoID() != naja::DNL::DNLID_MAX) {
-      cache_.isoExprMemo.emplace(term.getIsoID(), result);
-    }
-    ++stats_.terms;
-    return result;
-  }
-
-  BoolExpr* materializeTermImpl(naja::DNL::DNLID termID) {
-    if (auto it = inputVarByTerm_.find(termID); it != inputVarByTerm_.end()) {
-      ++stats_.inputHits;
-      return BoolExpr::Var(it->second);
-    }
-
-    const auto& term = dnl_->getDNLTerminalFromID(termID);
-    if (term.isNull() || term.getSnlBitTerm() == nullptr) {
-      throw std::runtime_error("DNL term is null");
-    }
-
-    const auto isoID = term.getIsoID();
-    if (isoID != naja::DNL::DNLID_MAX) {
-      const auto& iso = dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
-      if (iso.isConstant0()) {
-        return BoolExpr::createFalse();
-      }
-      if (iso.isConstant1()) {
-        return BoolExpr::createTrue();
-      }
-      if (auto inputIt = inputVarByIso_.find(isoID);
-          inputIt != inputVarByIso_.end()) {
-        ++stats_.inputHits;
-        return BoolExpr::Var(inputIt->second);
-      }
-      if (auto memoIt = cache_.isoExprMemo.find(isoID);
-          memoIt != cache_.isoExprMemo.end()) {
-        ++stats_.isoHits;
-        return memoIt->second;
-      }
-    }
-
-    const bool isInstanceOutput =
-        !term.getDNLInstance().isTop() &&
-        term.getSnlBitTerm()->getDirection() ==
-            naja::NL::SNLBitTerm::Direction::Output;
-    if (isInstanceOutput) {
-      return materializeInstanceOutput(termID, term);
-    }
-
-    if (isoID == naja::DNL::DNLID_MAX) {
-      throw std::runtime_error("non-output term has no iso driver");
-    }
-    const auto& iso = dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
-    return materializeIsoDriver(termID, iso);
-  }
-
-  naja::DNL::DNLFull* dnl_ = nullptr;
-  LazyStructuralConeMaterializerCache& cache_;
-  std::unordered_map<naja::DNL::DNLID, size_t> inputVarByTerm_;
-  std::unordered_map<naja::DNL::DNLID, size_t> inputVarByIso_;
-  std::unordered_set<naja::DNL::DNLID> visitingTerms_;
-  LazyStructuralMaterializerStats stats_;
-};
-
-bool lazyStructuralMaterializerDisabled() {
-  return std::getenv("KEPLER_SEC_DISABLE_STRUCTURAL_LAZY_MATERIALIZER") !=
-         nullptr;
-}
-
-std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>
-materializeDeferredObservedOutputBatchFromDnl(
-    const SequentialDesignModel& model,
-    naja::DNL::DNLFull* dnl,
-    const std::vector<naja::DNL::DNLID>& inputTerms,
-    const std::vector<SignalKey>& outputKeys,
-    const std::vector<naja::DNL::DNLID>& outputTerms,
-    bool secDiagEnabled,
-    const char* designLabel,
-    LazyStructuralConeMaterializerCache* structuralCache = nullptr) {
-  if (outputKeys.size() != outputTerms.size()) {
-    throw std::runtime_error(
-        "Deferred SEC output materialization got mismatched keys and terms");
-  }
-
-  if (!lazyStructuralMaterializerDisabled()) {
-    try {
-      LazyStructuralConeMaterializerCache localStructuralCache;
-      auto& cache =
-          structuralCache == nullptr ? localStructuralCache : *structuralCache;
-      LazyStructuralConeMaterializer structural(model, dnl, inputTerms, cache);
-      auto exprByKey = structural.materialize(outputKeys, outputTerms);
-      if (secDiagEnabled) {
-        const auto& stats = structural.stats();
-        fprintf(
-            stderr,
-            "SEC diag: lazy structural materialized %s outputs=%zu inputs=%zu terms=%zu term_hits=%zu truth_tables=%zu input_hits=%zu iso_hits=%zu cached_terms=%zu cached_truth_tables=%zu\n",
-            designLabel,
-            outputKeys.size(),
-            inputTerms.size(),
-            stats.terms,
-            stats.termCacheHits,
-            stats.truthTables,
-            stats.inputHits,
-            stats.isoHits,
-            cache.termMemo.size(),
-            cache.truthTableCache.size());
-        fflush(stderr);
-      }
-      return exprByKey;
-    } catch (const std::exception& e) {
-      if (secDiagEnabled) {
-        fprintf(
-            stderr,
-            "SEC diag: lazy structural materializer fallback %s: %s\n",
-            designLabel,
-            e.what());
-        fflush(stderr);
-      }
-    }
-  }
-
-  KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
-  builder.setRetainDnl(true);
-  builder.setInputs(inputTerms);
-  builder.setOutputs(outputTerms);
-  builder.build();
-
-  const auto& outputExprs = builder.getPOs();
-  if (outputExprs.size() != outputKeys.size()) {
-    throw std::runtime_error(
-        "Deferred SEC output materialization returned an unexpected output count");
-  }
-
-  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> exprByKey;
-  exprByKey.reserve(outputKeys.size());
-  for (size_t outputIndex = 0; outputIndex < outputKeys.size(); ++outputIndex) {
-    BoolExpr* expr = outputExprs[outputIndex];
-    if (expr == nullptr || !expr->isValid()) {
-      const auto termID = builder.getDNLIDforOutput(outputIndex);
-      const auto skippedIt = builder.getSkippedOutputs().find(termID);
-      const std::string reason =
-          skippedIt == builder.getSkippedOutputs().end()
-              ? "builder returned an invalid output expression"
-              : describeLazyMaterializationSkip(skippedIt->second);
-      throw std::runtime_error(
-          "Deferred SEC output materialization failed for `" +
-          describeSecSignalKey(model, outputKeys[outputIndex]) + "`: " + reason);
-    }
-    exprByKey.emplace(outputKeys[outputIndex], expr);
-  }
-
-  if (secDiagEnabled) {
-    fprintf(
-        stderr,
-        "SEC diag: lazy materialized %s outputs=%zu inputs=%zu\n",
-        designLabel,
-        outputKeys.size(),
-        builder.getInputs().size());
-    fflush(stderr);
-  }
-
-  return exprByKey;
-}
-
-std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>
-materializeDeferredObservedOutputsForDesign(
-    const SequentialDesignModel& model,
-    naja::NL::SNLDesign* top,
-    const std::vector<SignalKey>& outputKeys,
-    size_t batchSize,
-    bool secDiagEnabled,
-    const char* designLabel) {
-  ScopedDnlContext dnlContext(top);
-  auto* dnl = dnlContext.dnl();
-  const auto inputTerms = resolveDeferredInputTermsByLocalVar(model, dnl);
-
-  LazyStructuralConeMaterializerCache structuralCache;
-  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> exprByKey;
-  exprByKey.reserve(outputKeys.size());
-  for (size_t firstOutput = 0; firstOutput < outputKeys.size();
-       firstOutput += batchSize) {
-    const size_t endOutput =
-        std::min(outputKeys.size(), firstOutput + batchSize);
-    std::vector<SignalKey> batchOutputKeys(
-        outputKeys.begin() + static_cast<std::ptrdiff_t>(firstOutput),
-        outputKeys.begin() + static_cast<std::ptrdiff_t>(endOutput));
-    const auto outputTerms =
-        resolveOutputTermsForBatch(model, dnl, batchOutputKeys);
-    auto batchExprs = materializeDeferredObservedOutputBatchFromDnl(
-        model,
-        dnl,
-        inputTerms,
-        batchOutputKeys,
-        outputTerms,
-        secDiagEnabled,
-        designLabel,
-        &structuralCache);
-    for (auto& [key, expr] : batchExprs) {
-      exprByKey.emplace(std::move(key), expr);
-    }
-  }
-  return exprByKey;
-}
-
-std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>
-selectMaterializedOutputExprs(
-    const std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash>& exprByKey,
-    const std::vector<SignalKey>& outputKeys) {
-  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> selected;
-  selected.reserve(outputKeys.size());
-  for (const auto& key : outputKeys) {
-    const auto exprIt = exprByKey.find(key);
-    if (exprIt == exprByKey.end()) {
-      throw std::runtime_error("missing deferred SEC output expression");
-    }
-    selected.emplace(key, exprIt->second);
-  }
-  return selected;
-}
-
-SequentialDesignModel makeMaterializedOutputBatchModel(
-    SequentialDesignModel model,
-    const std::vector<SignalKey>& outputKeys,
-    std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> exprByKey) {
-  model.observedOutputs = outputKeys;
-  model.observedOutputExprByKey = std::move(exprByKey);
-  model.observedOutputExprsMaterialized = true;
-  return model;
-}
-
-SequentialDesignModel materializeDeferredOutputsForNormalSecPath(
-    const SequentialDesignModel& model,
-    naja::NL::SNLDesign* top,
-    const std::vector<SignalKey>& outputKeys,
-    bool secDiagEnabled,
-    const char* designLabel) {
-  if (model.observedOutputExprsMaterialized) {
-    return model;
-  }
-  if (top == nullptr) {
-    throw std::runtime_error(
-        "Deferred SEC output materialization requires the original top design");
-  }
-  auto materializedExprs = materializeDeferredObservedOutputsForDesign(
-      model,
-      top,
-      outputKeys,
-      std::max<size_t>(1, lazyPdrOutputBatchSize()),
-      secDiagEnabled,
-      designLabel);
-  return makeMaterializedOutputBatchModel(
-      model, outputKeys, std::move(materializedExprs));
-}
-
-AlignedSignals filterStructurallyProvedBatchOutputs(
-    const SequentialDesignModel& model0,
-    const SequentialDesignModel& model1,
-    const AlignedSignals& alignedInputs,
-    const AlignedSignals& batchOutputs,
-    bool secDiagEnabled) {
-  if (batchOutputs.names.empty()) {
-    return batchOutputs;
-  }
-
-  const auto [abstractInputMap0, abstractInputMap1] =
-      buildPublicInputAbstractMaps(model0, model1, alignedInputs);
-
-  AlignedSignals residualOutputs;
-  residualOutputs.names.reserve(batchOutputs.names.size());
-  residualOutputs.keys0.reserve(batchOutputs.keys0.size());
-  residualOutputs.keys1.reserve(batchOutputs.keys1.size());
-
-  size_t structurallyProved = 0;
-  PublicInputExprPairMemo structuralProofMemo;
-  for (size_t outputIndex = 0; outputIndex < batchOutputs.names.size();
-       ++outputIndex) {
-    const auto& key0 = batchOutputs.keys0[outputIndex];
-    const auto& key1 = batchOutputs.keys1[outputIndex];
-    const auto exprIt0 = model0.observedOutputExprByKey.find(key0);
-    const auto exprIt1 = model1.observedOutputExprByKey.find(key1);
-    if (exprIt0 != model0.observedOutputExprByKey.end() &&
-        exprIt1 != model1.observedOutputExprByKey.end() &&
-        areOutputExprsEquivalentUnderPublicInputs(
-            exprIt0->second,
-            exprIt1->second,
-            abstractInputMap0,
-            abstractInputMap1,
-            &structuralProofMemo)) {
-      ++structurallyProved;
-      continue;
-    }
-    residualOutputs.names.push_back(batchOutputs.names[outputIndex]);
-    residualOutputs.keys0.push_back(key0);
-    residualOutputs.keys1.push_back(key1);
-  }
-
-  if (secDiagEnabled || pdrStrategyStatsEnabled()) {
-    emitSecDiag(
-        "SEC diag: lazy PDR structural preproof proved=",
-        structurallyProved,
-        " residual=",
-        residualOutputs.names.size(),
-        " memo=",
-        structuralProofMemo.size());
-  }
-  return residualOutputs;
-}
-
-bool canUseLazyCombinationalPdr(
-    const SequentialDesignModel& model0,
-    const SequentialDesignModel& model1,
-    naja::NL::SNLDesign* top0,
-    naja::NL::SNLDesign* top1) {
-  return top0 != nullptr && top1 != nullptr &&
-         !model0.observedOutputExprsMaterialized &&
-         !model1.observedOutputExprsMaterialized &&
-         model0.stateBits.empty() &&
-         model1.stateBits.empty() &&
-         model0.nextStateExprByStateKey.empty() &&
-         model1.nextStateExprByStateKey.empty();
-}
-
 SharedSecSymbolSpace buildSharedSecSymbolSpace(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
@@ -3471,10 +2224,6 @@ SharedSecSymbolSpace buildSharedSecSymbolSpace(
     symbolSpace.inputSymbols1.emplace(alignedInputs.keys1[i], symbol);
     symbolSpace.problem.allSymbols.push_back(symbol);
     symbolSpace.problem.inputSymbols.push_back(symbol);
-    if (auto assertedValue = getResetAssertionValue(alignedInputs.names[i]);
-        assertedValue.has_value()) {
-      symbolSpace.problem.resetBootstrapInputs.emplace_back(symbol, *assertedValue);
-    }
   }
 
   for (const auto& key : model0.stateBits) {
@@ -3767,16 +2516,6 @@ std::optional<bool> lookupStateValue(
   return valueIt->second;
 }
 
-std::optional<bool> lookupBootstrapValue(
-    const std::unordered_map<SignalKey, bool, SignalKeyHash>& values,
-    const SignalKey& key) {
-  const auto valueIt = values.find(key);
-  if (valueIt == values.end()) {
-    return std::nullopt;
-  }
-  return valueIt->second;  // LCOV_EXCL_LINE
-}
-
 void addDualRailInitialAssignments(
     const SequentialDesignModel& model,
     const std::unordered_map<SignalKey, DualRailSymbolPair, SignalKeyHash>& railsByKey,
@@ -3786,22 +2525,6 @@ void addDualRailInitialAssignments(
     const auto value = lookupStateValue(model.initialStateValueByKey, key);
     addDualRailStateAssignment(problem.initialStateAssignments, rails, value);
     problem.initializedStateCount += 2;
-  }
-}
-
-void addDualRailBootstrapAssignments(
-    const SequentialDesignModel& model,
-    const std::unordered_map<SignalKey, bool, SignalKeyHash>& bootstrapValues,
-    const std::unordered_map<SignalKey, DualRailSymbolPair, SignalKeyHash>& railsByKey,
-    KInductionProblem& problem) {
-  if (problem.resetBootstrapInputs.empty() || problem.resetBootstrapCycles == 0) {
-    return;
-  }
-  for (const auto& key : model.stateBits) {
-    addDualRailStateAssignment(
-        problem.bootstrapStateAssignments,
-        railsByKey.at(key),
-        lookupBootstrapValue(bootstrapValues, key));
   }
 }
 
@@ -3903,6 +2626,111 @@ void attachLazyDualRailTransitions(
   problem.lazyTransitions = std::move(store);
 }
 
+BoolExpr* buildDualRailBinaryDefinedExpr(const DualRailBoolExpr& value) {
+  // In the paper's encoding, 01 and 10 are binary values while 11 is X.
+  // Legal-state constraints separately exclude the empty value 00.
+  return BoolExpr::simplify(
+      BoolExpr::Xor(value.mayBeOne, value.mayBeZero));
+}
+
+struct DualRailOutputProperties {
+  BoolExpr* guardedEquality = nullptr;
+  BoolExpr* strictEquality = nullptr;
+};
+
+DualRailOutputProperties buildDualRailOutputProperties(
+    const DualRailBoolExpr& value0,
+    const DualRailBoolExpr& value1) {
+  BoolExpr* bothValuesDefined = BoolExpr::simplify(BoolExpr::And(
+      buildDualRailBinaryDefinedExpr(value0),
+      buildDualRailBinaryDefinedExpr(value1)));
+  BoolExpr* strictEquality = BoolExpr::simplify(BoolExpr::And(
+      makeEqualityExpr(value0.mayBeOne, value1.mayBeOne),
+      makeEqualityExpr(value0.mayBeZero, value1.mayBeZero)));
+  // Steady-state dual-rail SEC ignores cycles where either value is X and
+  // rejects only opposite binary values. Strict rail equality remains metadata
+  // for shared exact query surfaces.
+  BoolExpr* binaryMismatch = BoolExpr::And(
+      bothValuesDefined,
+      BoolExpr::Xor(value0.mayBeOne, value1.mayBeOne));
+  return {
+      BoolExpr::simplify(BoolExpr::Not(binaryMismatch)),
+      strictEquality};
+}
+
+const char* pdrStatusName(PDRStatus status) {
+  switch (status) {
+    case PDRStatus::Equivalent:
+      return "equivalent";
+    case PDRStatus::Different:
+      return "different";
+    case PDRStatus::Inconclusive:
+    default:
+      return "inconclusive";
+  }
+}
+
+constexpr PDRQueryLimits kDualRailPdrBatchProbeLimits{
+    /*predecessorConflictLimit=*/10 * 1000,
+    /*predecessorDecisionLimit=*/150 * 1000,
+    /*blockingConflictLimit=*/10 * 1000,
+    /*blockingDecisionLimit=*/150 * 1000,
+    /*predecessorEncodingNodeLimit=*/5 * 1000 * 1000,
+    /*predecessorNodeHintTargetLimit=*/512};
+
+// Per-call limits alone still allow one hard output to issue thousands of
+// expensive CaDiCaL queries. Four full predecessor allowances give a singleton
+// room to block several hard obligations while bounding its cumulative work.
+constexpr size_t kDefaultDualRailPdrSingletonConflictBudget =
+    1000 * 1000;
+constexpr size_t kDefaultDualRailPdrSingletonDecisionBudget =
+    40 * 1000 * 1000;
+// CaDiCaL ticks count clause-cache-line work, bounding propagation-heavy
+// queries that can do little visible decision or conflict work.
+constexpr size_t kDefaultDualRailPdrSingletonTickBudget =
+    100 * 1000 * 1000;
+
+PDRResult runPdrOutputBatch(const PDREngine& engine,
+                            size_t maxFrames,
+                            BoolExpr* property,
+                            size_t outputCount,
+                            bool boundSingletonCadicalWork) {
+  if (outputCount != 1) {
+    // A broad UNKNOWN only schedules exact child properties. Full per-query
+    // limits are reserved for singleton leaves, so failed probes cannot
+    // dominate them.
+    return engine.run(maxFrames, property, kDualRailPdrBatchProbeLimits);
+  }
+  if (!boundSingletonCadicalWork) {
+    return engine.run(maxFrames, property);
+  }
+
+  SATSolverWrapper::CadicalWorkBudget budget(
+      secStrategySizeLimitFromEnv(
+          "KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_CONFLICT_BUDGET",
+          kDefaultDualRailPdrSingletonConflictBudget),
+      secStrategySizeLimitFromEnv(
+          "KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_DECISION_BUDGET",
+          kDefaultDualRailPdrSingletonDecisionBudget),
+      secStrategySizeLimitFromEnv(
+          "KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_TICK_BUDGET",
+          kDefaultDualRailPdrSingletonTickBudget));
+  PDRResult result;
+  {
+    SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
+    result = engine.run(maxFrames, property);
+  }
+  if (pdrStrategyStatsEnabled()) {
+    emitSecDiag(
+        "SEC PDR stats: singleton CaDiCaL cumulative budget ",
+        "conflicts=", budget.conflictsUsed(), "/", budget.conflictLimit(),
+        " decisions=", budget.decisionsUsed(), "/", budget.decisionLimit(),
+        " ticks=", budget.ticksUsed(), "/", budget.tickLimit(),
+        " exhausted=", budget.exhausted() ? 1 : 0);
+  }
+  return result;
+}
+
 void applyInitialStateAssignments(
     const std::unordered_map<SignalKey, bool, SignalKeyHash>& initialValues,
     const std::unordered_map<SignalKey, size_t, SignalKeyHash>& stateSymbols,
@@ -3925,13 +2753,12 @@ void applyInitialStateAssignments(
   }
 }
 
-ReachableStateInvariant integrateReachableStateInvariant(
+void integrateInitialState(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
     const std::unordered_map<SignalKey, size_t, SignalKeyHash>& state0Symbols,
     const std::unordered_map<SignalKey, size_t, SignalKeyHash>& state1Symbols,
-    KInductionProblem& problem,
-    bool deriveResetBootstrapStrengthening) {
+    KInductionProblem& problem) {
   BoolExpr* initialCondition = BoolExpr::createTrue();
   applyInitialStateAssignments(
       model0.initialStateValueByKey, state0Symbols, initialCondition, problem);
@@ -3942,44 +2769,7 @@ ReachableStateInvariant integrateReachableStateInvariant(
   if (problem.hasExplicitInitialState()) {
     problem.initialCondition = BoolExpr::simplify(initialCondition);
   }
-  const ReachableStateInvariant reachableInvariant = buildReachableStateInvariant(
-      model0,
-      model1,
-      deriveResetBootstrapStrengthening);
-
-  for (const auto& [key, value] : reachableInvariant.bootstrapValues0) {
-    if (state0Symbols.find(key) != state0Symbols.end()) {
-      problem.bootstrapStateAssignments.emplace_back(state0Symbols.at(key), value);
-    }
-  }
-  // LCOV_DISABLED_START
-  for (const auto& [key, value] : reachableInvariant.bootstrapValues1) {
-  // LCOV_DISABLED_STOP
-    if (state1Symbols.find(key) != state1Symbols.end()) {
-      problem.bootstrapStateAssignments.emplace_back(state1Symbols.at(key), value);
-    // LCOV_DISABLED_START
-    }
-    // LCOV_DISABLED_STOP
-  }
-
-// LCOV_DISABLED_START
-
-  problem.resetBootstrapCycles = reachableInvariant.bootstrapCycles;
-  if (problem.resetBootstrapInputs.empty()) {
-  // LCOV_DISABLED_STOP
-    // The reachable-state pass works on each extracted model and can recognize
-    // reset-looking local inputs before the final shared SEC symbol space is
-    // assembled. PDR/KI/IMC can only run a reset-bootstrap proof when that
-    // reset also exists as an aligned environment input with one shared symbol.
-    // If no such symbol was created, keep the proof in normal initial-frontier
-    // mode so design-local initial facts remain active instead of being
-    // replaced by an unconstrained "bootstrap" frontier.
-    problem.resetBootstrapCycles = 0;
-    problem.bootstrapStateAssignments.clear();
-  }
-  return reachableInvariant;
 }
-// LCOV_DISABLED_STOP
 
 void buildSecPropertiesAndTransitions(
     const SequentialDesignModel& model0,
@@ -4038,15 +2828,11 @@ void buildSecPropertiesAndTransitions(
     printf(
     // LCOV_DISABLED_STOP
         "SEC summary: property_is_true=%d induction_property_is_true=%d "
-        "bad_is_false=%d induction_bad_is_false=%d reset_bootstrap_inputs=%zu "
-        "bootstrap_cycles=%zu bootstrap_assignments=%zu\n",
+        "bad_is_false=%d induction_bad_is_false=%d\n",
         problem.property == BoolExpr::createTrue(),
         problem.inductionProperty == BoolExpr::createTrue(),
         problem.bad == BoolExpr::createFalse(),
-        problem.inductionBad == BoolExpr::createFalse(),
-        problem.resetBootstrapInputs.size(),
-        problem.resetBootstrapCycles,
-        problem.bootstrapStateAssignments.size());
+        problem.inductionBad == BoolExpr::createFalse());
     fflush(stdout);
   }
 }
@@ -4057,7 +2843,6 @@ KInductionProblem buildDualRailSecProblem(
     // LCOV_DISABLED_START
     const AlignedSignals& alignedInputs,
     const AlignedSignals& alignedOutputs,
-    const ReachableStateInvariant& reachableInvariant,
     SharedSecSymbolSpace& symbolSpace,
     // LCOV_DISABLED_STOP
     bool useLazyTransitionRemapping,
@@ -4066,8 +2851,6 @@ KInductionProblem buildDualRailSecProblem(
   problem.environmentInputs = alignedInputs.keys0;
   problem.environmentInputNames = symbolSpace.problem.environmentInputNames;
   problem.inputSymbols = symbolSpace.problem.inputSymbols;
-  problem.resetBootstrapCycles = symbolSpace.problem.resetBootstrapCycles;
-  problem.resetBootstrapInputs = symbolSpace.problem.resetBootstrapInputs;
   problem.allSymbols = symbolSpace.problem.inputSymbols;
   problem.usesDualRailStateEncoding = true;
 
@@ -4086,16 +2869,11 @@ KInductionProblem buildDualRailSecProblem(
   addDualRailInitialAssignments(model0, railMaps.state0ByKey, problem);
   addDualRailInitialAssignments(model1, railMaps.state1ByKey, problem);
   // LCOV_DISABLED_STOP
-  // The rail-valued boot frontier is already represented as structured unit
+  // The rail-valued initial predicate is represented as structured unit
   // facts in initialStateAssignments.  Keep initialCondition non-null so the
   // existing base-case encoders enter their structured-init path without
   // materializing a huge duplicate conjunction over every rail.
   problem.initialCondition = BoolExpr::createTrue();
-
-  addDualRailBootstrapAssignments(
-      model0, reachableInvariant.bootstrapValues0, railMaps.state0ByKey, problem);
-  addDualRailBootstrapAssignments(
-      model1, reachableInvariant.bootstrapValues1, railMaps.state1ByKey, problem);
 
 // LCOV_DISABLED_START
 
@@ -4123,6 +2901,9 @@ KInductionProblem buildDualRailSecProblem(
 
   BoolExpr* property = BoolExpr::createTrue();
   // LCOV_DISABLED_STOP
+  problem.dualRailOutputStrictEqualityExprs.clear();
+  problem.dualRailOutputStrictEqualityExprs.reserve(
+      alignedOutputs.names.size());
   problem.dualRailOutputSkipReasons.clear();
   problem.dualRailOutputSkipReasons.reserve(alignedOutputs.names.size());
   for (size_t i = 0; i < alignedOutputs.names.size(); ++i) {
@@ -4135,9 +2916,8 @@ KInductionProblem buildDualRailSecProblem(
         mapper1,
         memo1);
 
-    BoolExpr* outputRailEquality = BoolExpr::And(
-        makeEqualityExpr(out0.mayBeOne, out1.mayBeOne),
-        makeEqualityExpr(out0.mayBeZero, out1.mayBeZero));
+    const auto outputProperties =
+        buildDualRailOutputProperties(out0, out1);
     // LCOV_DISABLED_START
     // Keep batching/reporting aligned to real top outputs.  The rail pair is a
     // single ternary output value, so its may-one and may-zero equalities are
@@ -4145,8 +2925,10 @@ KInductionProblem buildDualRailSecProblem(
     // one SEC obligation rather than two independent output bits.
     problem.observedOutputNames.push_back(alignedOutputs.names[i]);
     // LCOV_DISABLED_START
-    problem.observedOutputExprs0.push_back(outputRailEquality);
+    problem.observedOutputExprs0.push_back(outputProperties.guardedEquality);
     problem.observedOutputExprs1.push_back(BoolExpr::createTrue());
+    problem.dualRailOutputStrictEqualityExprs.push_back(
+        outputProperties.strictEquality);
     // LCOV_DISABLED_STOP
     // Dual-rail strategy construction only builds obligations.  The selected
     // engine must prove each top output; no side implication query can mark it
@@ -4159,7 +2941,7 @@ KInductionProblem buildDualRailSecProblem(
       fflush(stderr);
     }
     problem.dualRailOutputSkipReasons.emplace_back();
-    property = BoolExpr::And(property, outputRailEquality);
+    property = BoolExpr::And(property, outputProperties.guardedEquality);
   // LCOV_DISABLED_START
   }
   // LCOV_DISABLED_STOP
@@ -4204,14 +2986,10 @@ KInductionProblem buildDualRailSecProblem(
   if (secDiagEnabled || secSummaryStatsEnabled()) {
     printf(
         "SEC summary: encoding=dual_rail_steady rail_state_bits=%zu "
-        "rail_outputs=%zu reset_bootstrap_inputs=%zu bootstrap_cycles=%zu "
-        "bootstrap_assignments=%zu "
+        "rail_outputs=%zu "
         "dual_rail_state_relation_pairs=%zu\n",
         problem.totalStateCount,
         problem.observedOutputExprs0.size(),
-        problem.resetBootstrapInputs.size(),
-        problem.resetBootstrapCycles,
-        problem.bootstrapStateAssignments.size(),
         problem.sameFrameStateEqualityPairs0.size() +
             problem.sameFrameStateEqualityPairs1.size());
     fflush(stdout);
@@ -4260,6 +3038,26 @@ void setSecEngineProofProgress(
       provenOutputCount);
 }
 
+void setExactSecEngineProofProgress(
+    SequentialEquivalenceResult& result,
+    const KInductionProblem& problem,
+    const std::string& engineLabel,
+    const std::vector<bool>& coveredOutputs) {
+  SequentialEquivalenceProofProgress progress;
+  progress.engineLabel = engineLabel;
+  progress.totalOutputs = coveredOutputs.size();
+  progress.provenOutputs = static_cast<size_t>(
+      std::count(coveredOutputs.begin(), coveredOutputs.end(), true));
+  for (size_t outputIndex = 0; outputIndex < coveredOutputs.size();
+       ++outputIndex) {
+    if (!coveredOutputs[outputIndex]) {
+      progress.unprovenOutputs.push_back(
+          {outputIndex, outputNameForProblemIndex(problem, outputIndex)});
+    }
+  }
+  result.proofProgress = std::move(progress);
+}
+
 SequentialEquivalenceResult runPdrSecEngine(
     // LCOV_DISABLED_START
     const KInductionProblem& problem,
@@ -4274,68 +3072,6 @@ SequentialEquivalenceResult runPdrSecEngine(
     // LCOV_DISABLED_START
     const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
-  // PDR still needs the cheap frame-0 mismatch check before growing frames, but
-  // it should not invoke the full k-induction top engine with max_k=0.  A
-  // LCOV_DISABLED_STOP
-  // bounded engine run at k=0 is necessarily inconclusive for sequential
-  // LCOV_DISABLED_START
-  // problems, which made the output-batching fallback split every output and
-  // repeat the same BMC setup hundreds of times before PDR even started.
-  // Keep this optional validation local in dual-rail SEC.  Small probe cases
-  // still need exact frame-0 localization for counterexamples, but huge
-  // rail-state SoC surfaces should enter PDR directly instead of materializing
-  // a pre-PDR dual-rail transition relation.
-  bool broadBasePrecheckDone = false;
-  if (problem.usesDualRailStateEncoding) {
-    if (!shouldDeferWideDualRailPdrValidation(problem)) {
-      // Validate small dual-rail frame-0 SEC predicates one output at a time so
-      // PDR can safely seed the batch property into F0.  Medium/wide batches use
-      // the selected PDR engine directly and split on abstract traces.
-      if (auto witness =
-              findPdrPerOutputValidationCounterexample(problem, solverType, 0);
-          witness.has_value()) {
-        const KInductionResult witnessResult{  // LCOV_EXCL_LINE
-            KInductionStatus::Different,
-            witness->badFrame,  // LCOV_EXCL_LINE
-            std::move(witness)};  // LCOV_EXCL_LINE
-        return makeSecResult(  // LCOV_EXCL_LINE
-            SequentialEquivalenceStatus::Different,
-            witnessResult.bound,  // LCOV_EXCL_LINE
-            formatCounterexampleWitness(witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-            outputCoverage,  // LCOV_EXCL_LINE
-            abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-            extractedBoundaryReports);  // LCOV_EXCL_LINE
-      }
-      broadBasePrecheckDone = true;
-    } else if (pdrStrategyStatsEnabled()) {
-      emitSecDiag(  // LCOV_EXCL_LINE
-          "SEC PDR stats: skipped dual-rail frame-0 validation ",
-          "outputs=", problem.observedOutputExprs0.size(),
-          " output_limit=",
-          detail::kMaxPdrDualRailFrameZeroValidationOutputs,
-          " state_symbols=", pdrCertificateStateSymbolCount(problem),
-          " state_limit=",
-          detail::kMaxPdrDualRailFrameZeroValidationStateSymbols);
-    }
-  } else {
-    broadBasePrecheckDone = true;
-    // This is the same exact frame-0 SEC query as the broad base checker, but it
-    // lets the base solver localize multi-output frontiers.  Wide ASIC outputs can
-    // make one monolithic bad-output OR dominate PDR before the engine starts.
-    if (auto witness = findPdrValidationCounterexample(problem, solverType, 0);
-        witness.has_value()) {
-      const KInductionResult witnessResult{  // LCOV_EXCL_LINE
-          KInductionStatus::Different, witness->badFrame, std::move(witness)};  // LCOV_EXCL_LINE
-      return makeSecResult(  // LCOV_EXCL_LINE
-          SequentialEquivalenceStatus::Different,
-          witnessResult.bound,  // LCOV_EXCL_LINE
-          formatCounterexampleWitness(witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-          outputCoverage,  // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-          extractedBoundaryReports);  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-  }
-
   if (problem.combinedStateSymbols().empty()) {
     return makeSecResult(
     // LCOV_DISABLED_STOP
@@ -4347,7 +3083,6 @@ SequentialEquivalenceResult runPdrSecEngine(
         abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
-
 
 // LCOV_DISABLED_STOP
   const std::vector<size_t> dualRailEngineOutputIndices =
@@ -4381,268 +3116,14 @@ SequentialEquivalenceResult runPdrSecEngine(
         extractedBoundaryReports); // LCOV_EXCL_LINE
   } // LCOV_EXCL_LINE
 
-  // LCOV_DISABLED_START
-  auto filterPairsToSupport =
-  // LCOV_DISABLED_STOP
-      [](const std::vector<std::pair<size_t, size_t>>& source,
-         std::vector<std::pair<size_t, size_t>>& target,
-         const std::unordered_set<size_t>& support) {
-        target.clear();
-        for (const auto& pair : source) {
-          if (support.find(pair.first) != support.end() ||  // LCOV_EXCL_LINE
-              support.find(pair.second) != support.end()) {  // LCOV_EXCL_LINE
-            target.push_back(pair);  // LCOV_EXCL_LINE
-          }  // LCOV_EXCL_LINE
-        }
-      };
-
-  // LCOV_DISABLED_START
-  auto filterAssignmentsToSupport =
-  // LCOV_DISABLED_STOP
-      [](const std::vector<std::pair<size_t, bool>>& source,
-         std::vector<std::pair<size_t, bool>>& target,
-         const std::unordered_set<size_t>& support) {
-        target.clear();
-        for (const auto& assignment : source) {
-          // LCOV_DISABLED_START
-          if (support.find(assignment.first) != support.end()) {  // LCOV_EXCL_LINE
-          // LCOV_DISABLED_STOP
-            target.push_back(assignment);  // LCOV_EXCL_LINE
-          }  // LCOV_EXCL_LINE
-        }
-      };
-
-// LCOV_DISABLED_START
-
-  auto rebuildPdrBatchStrengthening = [](KInductionProblem& batch) {
-    BoolExpr* inductionProperty = BoolExpr::createTrue();
-    for (size_t i = 0; i < batch.observedOutputExprs0.size(); ++i) {
-      inductionProperty = BoolExpr::And(
-          inductionProperty,
-          makeEqualityExpr(
-              batch.observedOutputExprs0[i], batch.observedOutputExprs1[i]));
-    // LCOV_DISABLED_START
-    }
-    // PDR consumes this only as a candidate frame-strengthening lemma. The
-    // engine validates both Init => lemma and lemma /\ T => lemma' before the
-    // formula can constrain any bad-cube or predecessor query.
-    batch.inductionProperty = BoolExpr::simplify(inductionProperty);
-    // LCOV_DISABLED_STOP
-    batch.inductionBad = BoolExpr::simplify(BoolExpr::Not(batch.inductionProperty));
-  };
-
-  // LCOV_DISABLED_START
-  TransitionExprResolver pdrBatchTransitionByState(problem);
-  // LCOV_DISABLED_STOP
-  const auto& pdrBatchPrimaryByComplement =
-      // LCOV_DISABLED_START
-      pdrBatchTransitionByState.primaryByComplement();
-      // LCOV_DISABLED_STOP
-
-  struct PdrBatchSupportClosure {
-    std::unordered_set<size_t> support;
-    bool complete = true;
-  };
-
-  auto computePdrBatchSupportClosure = [&](const KInductionProblem& batch,
-                                           size_t transitionClosureLimit)
-      -> PdrBatchSupportClosure {
-    // LCOV_DISABLED_START
-    if (batch.property == nullptr) {
-    // LCOV_DISABLED_STOP
-      return PdrBatchSupportClosure{};  // LCOV_EXCL_LINE
-    }
-    const auto propertySupport = batch.property->getSupportVars();
-    // LCOV_DISABLED_START
-    std::unordered_set<size_t> support(propertySupport.begin(), propertySupport.end());
-    std::unordered_set<size_t> expandedTransitionStates;
-    std::vector<size_t> worklist;
-
-    auto enqueueTransitionState = [&](size_t symbol) {
-    // LCOV_DISABLED_STOP
-      if (!pdrBatchTransitionByState.contains(symbol)) {
-        if (const auto primaryIt = pdrBatchPrimaryByComplement.find(symbol);  // LCOV_EXCL_LINE
-            // LCOV_DISABLED_START
-            primaryIt != pdrBatchPrimaryByComplement.end()) {  // LCOV_EXCL_LINE
-          symbol = primaryIt->second;  // LCOV_EXCL_LINE
-        } else {  // LCOV_EXCL_LINE
-        // LCOV_DISABLED_STOP
-          return;  // LCOV_EXCL_LINE
-        // LCOV_DISABLED_START
-        }
-      }  // LCOV_EXCL_LINE
-      // LCOV_DISABLED_STOP
-      support.insert(symbol);
-      if (expandedTransitionStates.insert(symbol).second) {
-        worklist.push_back(symbol);
-      }
-    };
-
-// LCOV_DISABLED_START
-
-    for (const auto propertySymbol : propertySupport) {
-    // LCOV_DISABLED_STOP
-      enqueueTransitionState(propertySymbol);
-    // LCOV_DISABLED_START
-    }
-    for (size_t cursor = 0; cursor < worklist.size(); ++cursor) {
-      if (transitionClosureLimit != 0 &&
-          support.size() >= transitionClosureLimit) {
-        return PdrBatchSupportClosure{std::move(support), false};
-      }
-      for (const auto dependency : pdrBatchTransitionByState.support(worklist[cursor])) {
-        if (support.insert(dependency).second) {
-          enqueueTransitionState(dependency);  // LCOV_EXCL_LINE
-        }  // LCOV_EXCL_LINE
-      }
-    }
-    return PdrBatchSupportClosure{std::move(support), true};
-    // LCOV_DISABLED_STOP
-  };
-
-  auto prunePdrBatchStrengthening = [&](KInductionProblem& batch,
-                                        size_t transitionClosureLimit) -> bool {
-    // LCOV_DISABLED_START
-    auto closure =
-        computePdrBatchSupportClosure(batch, transitionClosureLimit);
-    if (!closure.complete) {
-      if (pdrStrategyStatsEnabled()) {
-        emitSecDiag(
-            "SEC PDR stats: exact transition cone exceeded closure limit; ",
-            "using full batch relation limit=", transitionClosureLimit,
-            " partial_support=", closure.support.size());
-      }
-      return false;
-    }
-    auto& support = closure.support;
-
-    // A PDR output slice may only inherit same-design rail relations and reset
-    // value facts; cross-design internal equalities have no representation.
-    filterPairsToSupport(
-        problem.sameFrameStateEqualityPairs0,
-        batch.sameFrameStateEqualityPairs0,
-        support);
-    filterPairsToSupport(
-        problem.sameFrameStateEqualityPairs1,
-        batch.sameFrameStateEqualityPairs1,
-        support);
-    filterAssignmentsToSupport(
-        // LCOV_DISABLED_START
-        problem.initialStateAssignments, batch.initialStateAssignments, support);
-        // LCOV_DISABLED_STOP
-    filterAssignmentsToSupport(
-        problem.bootstrapStateAssignments, batch.bootstrapStateAssignments, support);
-    for (const auto& pair : batch.sameFrameStateEqualityPairs0) {
-      support.insert(pair.first);  // LCOV_EXCL_LINE
-      support.insert(pair.second);  // LCOV_EXCL_LINE
-    }
-    for (const auto& pair : batch.sameFrameStateEqualityPairs1) {
-      support.insert(pair.first);  // LCOV_EXCL_LINE
-      support.insert(pair.second);  // LCOV_EXCL_LINE
-    }
-    // LCOV_DISABLED_START
-    for (const auto& assignment : batch.initialStateAssignments) {
-      support.insert(assignment.first);  // LCOV_EXCL_LINE
-      // LCOV_DISABLED_STOP
-    }
-    for (const auto& assignment : batch.bootstrapStateAssignments) {
-      support.insert(assignment.first);  // LCOV_EXCL_LINE
-    }
-    rebuildPdrBatchStrengthening(batch);
-
-// LCOV_DISABLED_START
-
-    if (batch.lazyTransitions != nullptr) {
-    // LCOV_DISABLED_STOP
-      auto& store = *batch.lazyTransitions;
-      // LCOV_DISABLED_START
-      batch.transitions0.clear();
-      batch.transitions1.clear();
-      constexpr size_t kMaxEagerRemappedPdrBatchTransitions = 1024;
-      // LCOV_DISABLED_STOP
-      if (support.size() > kMaxEagerRemappedPdrBatchTransitions) {
-        // LCOV_DISABLED_START
-        // Keep large ASIC batches lazy.  Sampling on BlackParrot showed that
-        // eagerly remapping a 12k-symbol support closure built more than a
-        // million transition DAG nodes before the first PDR SAT query.  The
-        // transition resolver still has the exact support closure above, and
-        // will remap only the transitions that PDR actually encodes.
-        return true;  // LCOV_EXCL_LINE
-      }
-      batch.transitions0.reserve(support.size());
-      batch.transitions1.reserve(support.size());
-      // LCOV_DISABLED_STOP
-      const TransitionExprResolver batchTransitionByState(batch);
-
-      // Sampling on BlackParrot showed the proof spending time lazily remapping
-      // next-state expressions inside predecessor queries. Once the batch cone
-      // is already pruned to the output support closure, remap those relevant
-      // LCOV_DISABLED_START
-      // transitions eagerly through the resolver so binary and dual-rail lazy
-      // transitions are materialized in the same symbol space used by COI.
-      for (const auto symbol : support) {
-      // LCOV_DISABLED_STOP
-        const auto sourceIt = store.sourceByStateSymbol.find(symbol);
-        // LCOV_DISABLED_START
-        if (sourceIt == store.sourceByStateSymbol.end()) {
-          continue;  // LCOV_EXCL_LINE
-        }
-        // LCOV_DISABLED_STOP
-
-        BoolExpr* remapped = batchTransitionByState.at(symbol);
-
-// LCOV_DISABLED_START
-
-        if (sourceIt->second.designIndex == 0) {
-        // LCOV_DISABLED_STOP
-          batch.transitions0.emplace_back(symbol, remapped);
-        // LCOV_DISABLED_START
-        } else {
-          batch.transitions1.emplace_back(symbol, remapped);
-        }
-      }
-    }
-    return true;
-    // LCOV_DISABLED_STOP
-  };
-
-// LCOV_DISABLED_START
-
-
-// LCOV_DISABLED_STOP
-  auto prunePdrBatchRelations = [&](KInductionProblem& batch,
-                                    // LCOV_DISABLED_START
-                                    size_t transitionClosureLimit) -> bool {
-    return prunePdrBatchStrengthening(batch, transitionClosureLimit);
-    // LCOV_DISABLED_STOP
-  };
-
-// LCOV_DISABLED_START
-
-  // PDR is still proving real PDR obligations, but wide ASIC SEC properties are
-  // better handled as output-cone slices. This keeps reset-bootstrap F[0]
-  // LCOV_DISABLED_STOP
-  // strengthening and blocking queries local to a small property instead of
-  // LCOV_DISABLED_START
-  // materializing every observed output in one frame.
+  // Split wide SEC conjunctions into exact output obligations. Each PDR run
+  // still uses the complete transition system and exact F[0].
   // LCOV_DISABLED_STOP
   //
-  // Keep each PDR batch bounded, but do not prove one output per engine run.
-  // BlackParrot sampling showed the one-output mode repeating the same
-  // reset-frontier and PDR blocking work hundreds of times.  A moderate batch
-  // still proves a real conjunction slice. If projected PDR finds a
-  // LCOV_DISABLED_START
-  // counterexample on a multi-output slice, escalate PDR precision first and
-  // avoid broad concrete-BMC validation until the final exact retry.
+  // Keep PDR batches bounded. A resource-limited dual-rail batch is split
+  // recursively, and only singleton leaves receive the full query budget.
   constexpr size_t kMinOutputsForBatchedPdrProof = 129;
   constexpr OutputBatchingLimits kPdrOutputBatchingLimits{32, 1024};
-  // Dual-rail residuals often need the shared all-output reset frontier as an
-  // LCOV_DISABLED_STOP
-  // F0 strengthening fact. Ibex in particular proves completely when the 100
-  // LCOV_DISABLED_START
-  // residual rail outputs are handled together, while small slices lose that
-  // LCOV_DISABLED_STOP
-  // context and only cover the first few control outputs.
   constexpr OutputBatchingLimits kDualRailPdrOutputBatchingLimits{128, 8192};
   const OutputBatchingLimits pdrOutputBatchingLimits =
       // LCOV_DISABLED_START
@@ -4652,37 +3133,10 @@ SequentialEquivalenceResult runPdrSecEngine(
                                         // LCOV_DISABLED_START
                                         : kPdrOutputBatchingLimits;
                                         // LCOV_DISABLED_STOP
-  constexpr size_t kPdrBatchTransitionClosureLimit = 12000;
-  constexpr size_t kRefinedPdrBatchTransitionClosureLimit = 60000;
-  constexpr size_t kDualRailPdrBatchTransitionClosureLimit = 2048;
-  constexpr size_t kDualRailRefinedPdrBatchTransitionClosureLimit = 8192;
-  constexpr size_t kConcretePdrPredecessorProjectionLimit = 0;
-  constexpr size_t kConcretePdrBadCubeStateLimit =
-      std::numeric_limits<size_t>::max();
-  const size_t pdrBatchTransitionClosureLimit =
-      problem.usesDualRailStateEncoding
-          ? secStrategySizeLimitFromEnv(
-                "KEPLER_SEC_PDR_DUAL_RAIL_BATCH_CLOSURE_LIMIT",
-                // LCOV_DISABLED_START
-                kDualRailPdrBatchTransitionClosureLimit)
-          : kPdrBatchTransitionClosureLimit;
-  const size_t refinedPdrBatchTransitionClosureLimit =
-      problem.usesDualRailStateEncoding
-      // LCOV_DISABLED_STOP
-          ? secStrategySizeLimitFromEnv(
-                "KEPLER_SEC_PDR_DUAL_RAIL_REFINED_CLOSURE_LIMIT",
-                // LCOV_DISABLED_START
-                kDualRailRefinedPdrBatchTransitionClosureLimit)
-          : kRefinedPdrBatchTransitionClosureLimit;
-  const bool dualRailPdrUsesResetFrontier =
-  // LCOV_DISABLED_STOP
-      problem.usesDualRailStateEncoding;
   // LCOV_DISABLED_START
   struct PdrOutputBatch {
     size_t firstOutput = 0;
     size_t endOutput = 0;
-    // LCOV_DISABLED_STOP
-    bool startAtFinalExact = false;
   // LCOV_DISABLED_START
   };
   std::vector<PdrOutputBatch> outputBatches;
@@ -4693,918 +3147,168 @@ SequentialEquivalenceResult runPdrSecEngine(
   // LCOV_DISABLED_START
   if (!useSupportBoundedPdrBatches) {
     // Batching protects very wide SEC/PDR properties from broad bad-state
-    // queries.  On medium designs, each tiny batch repeats the same
-    // reset/bootstrap invariant validation, so prove one conjunction slice and
-    // reserve batching for BlackParrot/AES-scale output counts.
-    outputBatches.push_back({0, problem.observedOutputExprs0.size(), false});  // LCOV_EXCL_LINE
+    // queries. On medium designs, each tiny batch repeats the same frame and
+    // transition setup, so prove one conjunction slice and reserve batching
+    // for BlackParrot/AES-scale output counts.
+    outputBatches.push_back({0, problem.observedOutputExprs0.size()});  // LCOV_EXCL_LINE
     // LCOV_DISABLED_STOP
   } else {  // LCOV_EXCL_LINE
     for (const auto& [firstOutput, endOutput] :
          buildSupportBoundedOutputBatches(problem, pdrOutputBatchingLimits)) {
-      outputBatches.push_back({firstOutput, endOutput, false});
+      outputBatches.push_back({firstOutput, endOutput});
     }
   }
-  KInductionProblem batchProblem = problem;
   std::vector<bool> pdrCoveredOutputs =
       makeInitialPdrCoveredOutputs(problem);
   std::unordered_map<size_t, std::string> pdrSkippedOutputReasons =
       presetDualRailSkipReasons;
   size_t provedBound = 0;
-  const bool emitPdrStageStats = pdrStrategyStatsEnabled();
-  struct FinalPdrStageOutcome {  // LCOV_EXCL_LINE
-    bool equivalent = false;  // LCOV_EXCL_LINE
-    bool shouldSplit = false;  // LCOV_EXCL_LINE
-    bool shouldSkipOutput = false;  // LCOV_EXCL_LINE
-    std::optional<SequentialEquivalenceResult> terminalResult;
-  };
-  auto runFinalExactPdrStage =
-      // LCOV_DISABLED_START
-      [&](size_t batchIndex,
-          size_t firstOutput,
-          // LCOV_DISABLED_STOP
-          size_t endOutput) -> FinalPdrStageOutcome {
-    // LCOV_DISABLED_START
-    constexpr size_t kMaxPdrConcreteValidationOutputs = 1;  // LCOV_EXCL_LINE
-    constexpr size_t kMaxDualRailFinalExactPdrOutputBatchSize = 8;  // LCOV_EXCL_LINE
-    const size_t kMaxFinalExactPdrOutputBatchSize =  // LCOV_EXCL_LINE
-        problem.usesDualRailStateEncoding
-            ? kMaxDualRailFinalExactPdrOutputBatchSize
-            : pdrOutputBatchingLimits.maxOutputBatchSize;  // LCOV_EXCL_LINE
-    // The final exact repair already carries exact frame clauses and validated
-    // bad-formula clauses. Keeping both predecessor and bad cubes bounded avoids
-    // LCOV_DISABLED_STOP
-    // large single-output loops from enumerating thousands of sibling cubes.
-    constexpr size_t kFinalExactPdrPredecessorProjectionLimit =
-        kConcretePdrPredecessorProjectionLimit;  // LCOV_EXCL_LINE
-    constexpr size_t kFinalExactPdrBadCubeStateLimit =
-        kConcretePdrBadCubeStateLimit;  // LCOV_EXCL_LINE
-    constexpr size_t kFinalExactPdrRootGeneralizationAttempts = 0;  // LCOV_EXCL_LINE
-    // Dual-rail final PDR validates projected roots exactly. Keep that exact
-    // CEGAR repair bounded, but leave enough queries for small ASIC leaves that
-    // need several reset-frontier blockers before the output proof converges.
-    // Multi-output slices still split quickly; isolated hard leaves are skipped
-    // as uncovered instead of consuming the whole workflow.
-    constexpr size_t kDualRailFinalExactPdrRootGeneralizationAttempts = 4;  // LCOV_EXCL_LINE
-    constexpr size_t kDualRailFinalExactPdrMultiOutputQueryBudget = 64;  // LCOV_EXCL_LINE
-    constexpr size_t kDualRailFinalExactPdrSingleOutputQueryBudget = 1024;  // LCOV_EXCL_LINE
-    constexpr size_t kLargeDualRailFinalExactPdrSingleOutputQueryBudget = 64;  // LCOV_EXCL_LINE
-    constexpr size_t kDualRailFinalExactPdrMultiOutputRepairBudget = 2;  // LCOV_EXCL_LINE
-    constexpr size_t kDualRailFinalExactPdrSingleOutputRepairBudget = 8;  // LCOV_EXCL_LINE
-    constexpr size_t kLargeDualRailFinalExactPdrSingleOutputRepairBudget = 2;  // LCOV_EXCL_LINE
-    constexpr size_t kMediumDualRailFinalExactPdrPredecessorProjectionLimit =
-        kConcretePdrPredecessorProjectionLimit;  // LCOV_EXCL_LINE
-    constexpr size_t kMediumDualRailFinalExactPdrMultiOutputRepairBudget = 4;  // LCOV_EXCL_LINE
-    constexpr size_t kMediumDualRailFinalExactPdrSingleOutputRepairBudget = 8;  // LCOV_EXCL_LINE
-    if (endOutput - firstOutput > kMaxFinalExactPdrOutputBatchSize) {  // LCOV_EXCL_LINE
-      if (emitPdrStageStats) {  // LCOV_EXCL_LINE
-        emitSecDiag(  // LCOV_EXCL_LINE
-            "SEC PDR stats: splitting before final exact repair ",
-            "outputs=[", firstOutput, ",", endOutput, ")",
-            " limit=", kMaxFinalExactPdrOutputBatchSize);
-      // LCOV_DISABLED_START
-      }  // LCOV_EXCL_LINE
-      // LCOV_DISABLED_STOP
-      FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-      outcome.shouldSplit = true;  // LCOV_EXCL_LINE
-      return outcome;  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-
-    KInductionProblem validationProblem = problem;  // LCOV_EXCL_LINE
-    configureOutputBatchProblem(  // LCOV_EXCL_LINE
-        validationProblem, problem, firstOutput, endOutput);  // LCOV_EXCL_LINE
-
-    KInductionProblem fullExactBatchProblem = problem;  // LCOV_EXCL_LINE
-    configureOutputBatchProblem(  // LCOV_EXCL_LINE
-        fullExactBatchProblem, problem, firstOutput, endOutput);  // LCOV_EXCL_LINE
-    // Keep the full transition relation for this output slice during the
-    // final exact retry, but do not reintroduce unrelated startup/induction
-    // facts from the rest of the SEC problem. Those global relations are
-    // useful for broad proofs, yet they can dominate SAT encoding once this
-    // last retry is focused on a bounded slice.
-    prunePdrBatchStrengthening(  // LCOV_EXCL_LINE
-        fullExactBatchProblem, refinedPdrBatchTransitionClosureLimit);  // LCOV_EXCL_LINE
-    // Dual-rail PDR proves the property over the rail-encoded transition
-    // system.  Re-running a full bounded SEC check after an Equivalent leaf is
-    // only a sanity check, and Swerv-size cones materialize gigabytes of BMC
-    // clauses there.  Keep concrete validation for binary PDR; dual-rail
-    // abstract differences still split/skip unless PDR repairs them internally.
-    const bool finalBatchCanValidateConcrete =  // LCOV_EXCL_LINE
-        !problem.usesDualRailStateEncoding &&  // LCOV_EXCL_LINE
-        endOutput - firstOutput <= kMaxPdrConcreteValidationOutputs;  // LCOV_EXCL_LINE
-    const bool finalBatchCanRefineProjectedCounterexamples = true;  // LCOV_EXCL_LINE
-    const size_t originalOutputCount =  // LCOV_EXCL_LINE
-        problem.originalObservedOutputCount == 0  // LCOV_EXCL_LINE
-            ? problem.observedOutputExprs0.size()  // LCOV_EXCL_LINE
-            : problem.originalObservedOutputCount;  // LCOV_EXCL_LINE
-    const bool mediumDualRailOutputSurface =  // LCOV_EXCL_LINE
-        problem.usesDualRailStateEncoding &&  // LCOV_EXCL_LINE
-        originalOutputCount <=
-            kMaxDualRailFinalResetFrontierOriginalOutputs;  // LCOV_EXCL_LINE
-    const bool largeDualRailOutputSurface =  // LCOV_EXCL_LINE
-        problem.usesDualRailStateEncoding && !mediumDualRailOutputSurface;  // LCOV_EXCL_LINE
-    // The bad-formula repair opens exact reset-frontier queries. Keep it away
-    // from broad dual-rail batches. Also keep already-split one-output leaves
-    // behind the original-output surface guard: BP-scale SoC probes otherwise
-    // repeat this local-looking repair hundreds of times over the same huge
-    // reset-specialized frontier.
-    const bool finalSliceUsesBadFormulaValidation =  // LCOV_EXCL_LINE
-        (!problem.usesDualRailStateEncoding ||  // LCOV_EXCL_LINE
-         (endOutput - firstOutput == 1 && mediumDualRailOutputSurface)) &&  // LCOV_EXCL_LINE
-        endOutput - firstOutput <=  // LCOV_EXCL_LINE
-            pdrOutputBatchingLimits.maxOutputBatchSize;  // LCOV_EXCL_LINE
-    // Exact reset-frontier checks repair reset-bootstrap dual-rail slices, but
-    // the final stage may split a wide original SEC surface into one-output
-    // leaves.  Keep the original output width in the decision so a wide design
-    // does not re-enter the same reset-frontier wall one leaf at a time.
-    // Medium CPU-style residual buses need exact reset-frontier repair even after
-    // batching splits them. Larger SoC-scale surfaces remain guarded in PDREngine
-    // by the rail-state and transition-source limits.
-    const bool finalSliceUsesResetFrontier =  // LCOV_EXCL_LINE
-        !problem.usesDualRailStateEncoding ||
-        originalOutputCount <=
-            kMaxDualRailFinalResetFrontierOriginalOutputs;  // LCOV_EXCL_LINE
-    const size_t finalPdrPredecessorProjectionLimit =  // LCOV_EXCL_LINE
-        mediumDualRailOutputSurface  // LCOV_EXCL_LINE
-            ? kMediumDualRailFinalExactPdrPredecessorProjectionLimit
-            : kFinalExactPdrPredecessorProjectionLimit;
-    const size_t finalPdrBadCubeStateLimit =  // LCOV_EXCL_LINE
-        kFinalExactPdrBadCubeStateLimit;
-    // These are per-leaf repair budgets. Keep them modest: wide SoC surfaces
-    // can leave many final single-output dual-rail slices, while smaller
-    // isolated memory-handshake leaves may need the ordinary PDR loop to run to
-    // frame/max-K convergence after deterministic reset-conflict repairs.
-    const size_t defaultFinalDualRailPredecessorQueryBudget =  // LCOV_EXCL_LINE
-        endOutput - firstOutput == 1
-            ? (largeDualRailOutputSurface  // LCOV_EXCL_LINE
-                   ? kLargeDualRailFinalExactPdrSingleOutputQueryBudget
-                   : kDualRailFinalExactPdrSingleOutputQueryBudget)
-            : kDualRailFinalExactPdrMultiOutputQueryBudget;
-    const size_t finalDualRailPredecessorQueryBudget =  // LCOV_EXCL_LINE
-        secStrategySizeLimitFromEnv(  // LCOV_EXCL_LINE
-            "KEPLER_SEC_PDR_DUAL_RAIL_FINAL_QUERY_BUDGET",
-            defaultFinalDualRailPredecessorQueryBudget);
-    emitPdrStrategyStageStats(  // LCOV_EXCL_LINE
-        // LCOV_DISABLED_START
-        emitPdrStageStats,  // LCOV_EXCL_LINE
-        batchIndex,  // LCOV_EXCL_LINE
-        // LCOV_DISABLED_STOP
-        firstOutput,  // LCOV_EXCL_LINE
-        endOutput,  // LCOV_EXCL_LINE
-        "full_exact_strengthening_pruned",
-        // LCOV_DISABLED_START
-        refinedPdrBatchTransitionClosureLimit,  // LCOV_EXCL_LINE
-        // LCOV_DISABLED_STOP
-        finalPdrPredecessorProjectionLimit,
-        finalPdrBadCubeStateLimit,
-        fullExactBatchProblem);
-    // LCOV_DISABLED_START
-    PDREngine fullExactPdrEngine(  // LCOV_EXCL_LINE
-        fullExactBatchProblem,
-        solverType,  // LCOV_EXCL_LINE
-        finalPdrPredecessorProjectionLimit,
-        finalPdrBadCubeStateLimit,
-        // LCOV_DISABLED_STOP
-        /*useExactFrameClauses=*/true,
-        // LCOV_DISABLED_START
-        /*maxPredecessorQueries=*/
-        // LCOV_DISABLED_STOP
-            problem.usesDualRailStateEncoding  // LCOV_EXCL_LINE
-                // LCOV_DISABLED_START
-                ? finalDualRailPredecessorQueryBudget  // LCOV_EXCL_LINE
-                : 0,
-        /*refineProjectedCounterexamples=*/
-            finalBatchCanRefineProjectedCounterexamples,
-        /*maxBoundedRootGeneralizationAttempts=*/
-        // LCOV_DISABLED_STOP
-            problem.usesDualRailStateEncoding  // LCOV_EXCL_LINE
-                ? kDualRailFinalExactPdrRootGeneralizationAttempts
-                : kFinalExactPdrRootGeneralizationAttempts,
-        /*learnValidatedBadFormulaClauses=*/finalSliceUsesBadFormulaValidation,  // LCOV_EXCL_LINE
-        /*useExactResetFrontierChecks=*/finalSliceUsesResetFrontier,
-        /*maxProjectedCounterexampleRefinements=*/
-            problem.usesDualRailStateEncoding  // LCOV_EXCL_LINE
-                ? (endOutput - firstOutput > 1  // LCOV_EXCL_LINE
-                       ? (mediumDualRailOutputSurface  // LCOV_EXCL_LINE
-                              ? kMediumDualRailFinalExactPdrMultiOutputRepairBudget
-                              : kDualRailFinalExactPdrMultiOutputRepairBudget)
-                       : (largeDualRailOutputSurface  // LCOV_EXCL_LINE
-                              ? kLargeDualRailFinalExactPdrSingleOutputRepairBudget
-                              : (mediumDualRailOutputSurface  // LCOV_EXCL_LINE
-                                     ? kMediumDualRailFinalExactPdrSingleOutputRepairBudget
-                                     : kDualRailFinalExactPdrSingleOutputRepairBudget)))
-                : 0);
-    // Dual-rail properties are intentionally batched before the reset
-    // bootstrap proof, otherwise the frame-0 precheck materializes the entire
-    // wide rail-encoded SEC property. Binary SEC kept the historical broad
-    // precheck above, so those batches may still reuse it.
-    const auto fullExactPdrResult =
-        fullExactPdrEngine.run(maxK, broadBasePrecheckDone);  // LCOV_EXCL_LINE
-    if (fullExactPdrResult.status == PDRStatus::Equivalent) {  // LCOV_EXCL_LINE
-      if (finalBatchCanValidateConcrete) {  // LCOV_EXCL_LINE
-        if (auto fullExactWitness = findPdrValidationCounterexample(  // LCOV_EXCL_LINE
-                validationProblem, solverType, maxK);  // LCOV_EXCL_LINE
-            fullExactWitness.has_value()) {  // LCOV_EXCL_LINE
-          const KInductionResult witnessResult{  // LCOV_EXCL_LINE
-              KInductionStatus::Different,
-              fullExactWitness->badFrame,  // LCOV_EXCL_LINE
-              std::move(fullExactWitness)};  // LCOV_EXCL_LINE
-          FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-          outcome.terminalResult = makeSecResult(  // LCOV_EXCL_LINE
-              SequentialEquivalenceStatus::Different,
-              witnessResult.bound,  // LCOV_EXCL_LINE
-              formatCounterexampleWitness(  // LCOV_EXCL_LINE
-                  witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-              outputCoverage,  // LCOV_EXCL_LINE
-              abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-              extractedBoundaryReports);  // LCOV_EXCL_LINE
-          return outcome;  // LCOV_EXCL_LINE
-        }  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      provedBound = std::max(provedBound, fullExactPdrResult.bound);  // LCOV_EXCL_LINE
-      markDualRailPdrOutputRangeCovered(  // LCOV_EXCL_LINE
-          pdrCoveredOutputs,  // LCOV_EXCL_LINE
-          pdrSkippedOutputReasons,  // LCOV_EXCL_LINE
-          firstOutput,  // LCOV_EXCL_LINE
-          endOutput);  // LCOV_EXCL_LINE
-      FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-      outcome.equivalent = true;  // LCOV_EXCL_LINE
-      return outcome;  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-    if (fullExactPdrResult.status == PDRStatus::Different) {  // LCOV_EXCL_LINE
-      // LCOV_DISABLED_START
-      std::optional<KInductionResult::CounterexampleWitness>
-          fullExactWitness;  // LCOV_EXCL_LINE
-          // LCOV_DISABLED_STOP
-      if (finalBatchCanValidateConcrete) {  // LCOV_EXCL_LINE
-        fullExactWitness = SEC::findBaseCounterexampleAtFrontier(  // LCOV_EXCL_LINE
-            validationProblem, solverType, fullExactPdrResult.bound);  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      // LCOV_DISABLED_START
-      if (fullExactWitness.has_value()) {  // LCOV_EXCL_LINE
-      // LCOV_DISABLED_STOP
-        const KInductionResult witnessResult{  // LCOV_EXCL_LINE
-            KInductionStatus::Different,
-            fullExactPdrResult.bound,  // LCOV_EXCL_LINE
-            // LCOV_DISABLED_START
-            std::move(fullExactWitness)};  // LCOV_EXCL_LINE
-        FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-        outcome.terminalResult = makeSecResult(  // LCOV_EXCL_LINE
-            SequentialEquivalenceStatus::Different,
-            fullExactPdrResult.bound,  // LCOV_EXCL_LINE
-            // LCOV_DISABLED_STOP
-            formatCounterexampleWitness(  // LCOV_EXCL_LINE
-                // LCOV_DISABLED_START
-                witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-                // LCOV_DISABLED_STOP
-            outputCoverage,  // LCOV_EXCL_LINE
-            // LCOV_DISABLED_START
-            abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-            extractedBoundaryReports);  // LCOV_EXCL_LINE
-        return outcome;  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-    // LCOV_DISABLED_STOP
-    if (endOutput - firstOutput > 1) {  // LCOV_EXCL_LINE
-      FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-      outcome.shouldSplit = true;  // LCOV_EXCL_LINE
-      return outcome;  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-    if (problem.usesDualRailStateEncoding) {  // LCOV_EXCL_LINE
-      FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-      outcome.shouldSkipOutput = true;  // LCOV_EXCL_LINE
-      return outcome;  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-    const std::string outputName =
-        firstOutput < problem.observedOutputNames.size()  // LCOV_EXCL_LINE
-            ? problem.observedOutputNames[firstOutput]  // LCOV_EXCL_LINE
-            : std::to_string(firstOutput);  // LCOV_EXCL_LINE
-    FinalPdrStageOutcome outcome;  // LCOV_EXCL_LINE
-    outcome.terminalResult = makeSecResult(  // LCOV_EXCL_LINE
-        SequentialEquivalenceStatus::Inconclusive,
-        fullExactPdrResult.bound,  // LCOV_EXCL_LINE
-        "PDR reached an abstract counterexample that concrete BMC did not "
-        "validate for output `" +  // LCOV_EXCL_LINE
-            outputName + "` at k = " +  // LCOV_EXCL_LINE
-            std::to_string(fullExactPdrResult.bound),  // LCOV_EXCL_LINE
-        outputCoverage,  // LCOV_EXCL_LINE
-        abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-        extractedBoundaryReports);  // LCOV_EXCL_LINE
-    return outcome;  // LCOV_EXCL_LINE
-  };  // LCOV_EXCL_LINE
-
-  auto splitPdrBatchAtFinalStage =
-      [&](size_t batchIndex, size_t firstOutput, size_t endOutput) {  // LCOV_EXCL_LINE
-    const size_t midOutput = firstOutput + (endOutput - firstOutput) / 2;  // LCOV_EXCL_LINE
-    outputBatches.insert(  // LCOV_EXCL_LINE
-        outputBatches.begin() + static_cast<std::ptrdiff_t>(batchIndex + 1),  // LCOV_EXCL_LINE
-        {PdrOutputBatch{firstOutput, midOutput, true},  // LCOV_EXCL_LINE
-         PdrOutputBatch{midOutput, endOutput, true}});  // LCOV_EXCL_LINE
-  };  // LCOV_EXCL_LINE
-
+  bool stopAfterInconclusiveBatch = false;
+  std::shared_ptr<PDRExactInitCache> exactInitCache;
+  if (problem.usesDualRailStateEncoding) {
+    exactInitCache =
+        std::make_shared<PDRExactInitCache>(problem, solverType);
+  }
+  KInductionProblem exactBatchProblem = problem;
   for (size_t batchIndex = 0; batchIndex < outputBatches.size(); ++batchIndex) {
-    const auto [firstOutput, endOutput, startAtFinalExact] =
-        outputBatches[batchIndex];
-    if (startAtFinalExact) {
-      const FinalPdrStageOutcome finalOutcome =
-          runFinalExactPdrStage(batchIndex, firstOutput, endOutput);  // LCOV_EXCL_LINE
-      if (finalOutcome.terminalResult.has_value()) {  // LCOV_EXCL_LINE
-        return *finalOutcome.terminalResult;  // LCOV_EXCL_LINE
-      }
-      if (finalOutcome.shouldSkipOutput) {  // LCOV_EXCL_LINE
-        if (!markDualRailPdrOutputSkipped(  // LCOV_EXCL_LINE
-                problem,  // LCOV_EXCL_LINE
-                pdrCoveredOutputs,
-                pdrSkippedOutputReasons,
-                firstOutput)) {  // LCOV_EXCL_LINE
-          return makeSecResult(  // LCOV_EXCL_LINE
-              SequentialEquivalenceStatus::Inconclusive,
-              provedBound,  // LCOV_EXCL_LINE
-              "Dual-rail PDR repair was inconclusive for the only checked output",  // LCOV_EXCL_LINE
-              outputCoverage,  // LCOV_EXCL_LINE
-              abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-              extractedBoundaryReports);  // LCOV_EXCL_LINE
-        }
-        continue;  // LCOV_EXCL_LINE
-      }
-      if (finalOutcome.shouldSplit) {  // LCOV_EXCL_LINE
-        splitPdrBatchAtFinalStage(batchIndex, firstOutput, endOutput);  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-    configureOutputBatchProblem(batchProblem, problem, firstOutput, endOutput);
-    prunePdrBatchRelations(batchProblem, pdrBatchTransitionClosureLimit);
-    // ASIC SEC runs need smaller carried predecessor obligations than the
-    // standalone PDR engine default.  This does not change the PDR proof rule:
-    // every learned clause is still justified by an UNSAT predecessor query,
-    // and every reported counterexample is still checked by concrete BMC.
-    constexpr size_t kSecPdrPredecessorProjectionLimit =
-        kConcretePdrPredecessorProjectionLimit;
-    constexpr size_t kSecPdrBadCubeStateLimit =
-        kConcretePdrBadCubeStateLimit;
-    constexpr size_t kProjectedPdrPredecessorQueryBudget = 5000;
-    constexpr size_t kDualRailProjectedPdrPredecessorQueryBudget = 5000;
-    const size_t projectedPdrPredecessorQueryBudget =
-        problem.usesDualRailStateEncoding
-            ? secStrategySizeLimitFromEnv(
-                  "KEPLER_SEC_PDR_DUAL_RAIL_PROJECTED_QUERY_BUDGET",
-                  kDualRailProjectedPdrPredecessorQueryBudget)
-            : kProjectedPdrPredecessorQueryBudget;
-    emitPdrStrategyStageStats(
-        emitPdrStageStats,
-        batchIndex,
-        firstOutput,
-        endOutput,
-        "initial",
-        pdrBatchTransitionClosureLimit,
-        kSecPdrPredecessorProjectionLimit,
-        kSecPdrBadCubeStateLimit,
-        batchProblem);
-    PDREngine pdrEngine(
-        batchProblem,
-        solverType,
-        kSecPdrPredecessorProjectionLimit,
-        kSecPdrBadCubeStateLimit,
-        /*useExactFrameClauses=*/true,
-        /*maxPredecessorQueries=*/0,
-        /*refineProjectedCounterexamples=*/true,
-        PDREngine::kDefaultBoundedRootGeneralizationAttempts,
-        /*learnValidatedBadFormulaClauses=*/false,
-        /*useExactResetFrontierChecks=*/true);
-    const auto pdrResult = pdrEngine.run(maxK, broadBasePrecheckDone);
+    const auto [firstOutput, endOutput] = outputBatches[batchIndex];
+    configureOutputBatchProblem(
+        exactBatchProblem, problem, firstOutput, endOutput);
+    if (isSecDiagEnabled()) {
+      // Output batches may split after an inconclusive result. Record the live
+      // range so one fully diagnostic performance run identifies the slow PDR
+      // slice without changing batching or proof order.
+      emitSecDiag(
+          "SEC diag: PDR steady-state check begin index=",
+          batchIndex,
+          " pending_batches=",
+          outputBatches.size(),
+          " output_range=",
+          firstOutput,
+          "..",
+          endOutput);
+    }
+    PDRResult pdrResult;
+    {
+      PDREngine pdrEngine(
+          exactBatchProblem, solverType, 0, exactInitCache);
+      pdrResult = runPdrOutputBatch(
+          pdrEngine, maxK, exactBatchProblem.property,
+          endOutput - firstOutput,
+          problem.usesDualRailStateEncoding);
+    }
+    releasePdrBatchAllocatorPages();
+    if (isSecDiagEnabled()) {
+      emitSecDiag(
+          "SEC diag: PDR steady-state check end index=",
+          batchIndex,
+          " output_range=",
+          firstOutput,
+          "..",
+          endOutput,
+          " status=",
+          pdrStatusName(pdrResult.status),
+          " bound=",
+          pdrResult.bound);
+    }
     switch (pdrResult.status) {
       case PDRStatus::Equivalent:
-        // Projected PDR frames are proof accelerators. Before marking a batch
-        // covered, validate the actual top-output SEC base predicate through
-        // the proved bound so no abstraction is trusted as a result.
-        if (!problem.usesDualRailStateEncoding) {
-          const PdrConcreteValidationCheck validationCheck =
-              checkPdrConcreteValidation(
-                  batchProblem, solverType, pdrResult.bound);
-          if (validationCheck.witness.has_value()) {  // LCOV_EXCL_LINE
-            const KInductionResult witnessResult{  // LCOV_EXCL_LINE
-                KInductionStatus::Different,
-                validationCheck.witness->badFrame,  // LCOV_EXCL_LINE
-                validationCheck.witness};  // LCOV_EXCL_LINE
-            return makeSecResult(  // LCOV_EXCL_LINE
-                SequentialEquivalenceStatus::Different,
-                witnessResult.bound,  // LCOV_EXCL_LINE
-                formatCounterexampleWitness(witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-                outputCoverage,  // LCOV_EXCL_LINE
-                abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-                extractedBoundaryReports);  // LCOV_EXCL_LINE
-          }  // LCOV_EXCL_LINE
-          markDualRailPdrOutputRangeCovered(
-              pdrCoveredOutputs,
-              pdrSkippedOutputReasons,
-              firstOutput,
-              endOutput);
-          markPdrValidationUnknownOutputs(
-              pdrCoveredOutputs,
-              pdrSkippedOutputReasons,
-              firstOutput,
-              validationCheck.unknownOutputIndices);
-          provedBound = std::max(provedBound, pdrResult.bound);
-          break;
-        } else if (!shouldDeferWideDualRailPdrValidation(batchProblem)) {
-          if (auto concreteWitness = findPdrValidationCounterexample(
-                  batchProblem, solverType, pdrResult.bound);
-              concreteWitness.has_value()) {
-            const KInductionResult witnessResult{  // LCOV_EXCL_LINE
-                KInductionStatus::Different,
-                concreteWitness->badFrame,  // LCOV_EXCL_LINE
-                std::move(concreteWitness)};  // LCOV_EXCL_LINE
-            return makeSecResult(  // LCOV_EXCL_LINE
-                SequentialEquivalenceStatus::Different,
-                witnessResult.bound,  // LCOV_EXCL_LINE
-                formatCounterexampleWitness(witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-                outputCoverage,  // LCOV_EXCL_LINE
-                abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-                extractedBoundaryReports);  // LCOV_EXCL_LINE
-          }  // LCOV_EXCL_LINE
-        } else if (emitPdrStageStats) {  // LCOV_EXCL_LINE
-          // The PDR batch itself closed.  On very wide dual-rail SoC surfaces,
-          // rebuilding a full concrete BMC checker here materializes the same
-          // million-symbol transition relation that batching was avoiding.
-          emitSecDiag(  // LCOV_EXCL_LINE
-              "SEC PDR stats: deferred wide dual-rail equivalent ",
-              "validation outputs=",  // LCOV_EXCL_LINE
-              batchProblem.originalObservedOutputCount);
-        }  // LCOV_EXCL_LINE
         provedBound = std::max(provedBound, pdrResult.bound);
-        markDualRailPdrOutputRangeCovered(
+        markPdrOutputRangeCovered(
             pdrCoveredOutputs,
             pdrSkippedOutputReasons,
             firstOutput,
             endOutput);
         break;
-      case PDRStatus::Different: {
-        {
-          std::optional<KInductionResult::CounterexampleWitness>
-              concreteWitness;
-          if (!shouldDeferWideDualRailPdrValidation(batchProblem)) {
-            concreteWitness = findPdrValidationCounterexample(
-                batchProblem, solverType, pdrResult.bound);
-          } else if (emitPdrStageStats) {  // LCOV_EXCL_LINE
-            emitSecDiag(  // LCOV_EXCL_LINE
-                "SEC PDR stats: deferred wide dual-rail projected ",
-                "counterexample validation outputs=",  // LCOV_EXCL_LINE
-                batchProblem.originalObservedOutputCount); // LCOV_EXCL_LINE
-          } // LCOV_EXCL_LINE
-          if (concreteWitness.has_value()) {
-            const KInductionResult witnessResult{ // LCOV_EXCL_LINE
-                KInductionStatus::Different,
-                concreteWitness->badFrame, // LCOV_EXCL_LINE
-                std::move(concreteWitness)}; // LCOV_EXCL_LINE
-            return makeSecResult( // LCOV_EXCL_LINE
-                SequentialEquivalenceStatus::Different,
-                witnessResult.bound, // LCOV_EXCL_LINE
-                formatCounterexampleWitness(witnessResult, model0, model1, top0, top1), // LCOV_EXCL_LINE
-                outputCoverage, // LCOV_EXCL_LINE
-                abstractedSequentialBoundaries, // LCOV_EXCL_LINE
-                extractedBoundaryReports); // LCOV_EXCL_LINE
-          } // LCOV_EXCL_LINE
-          // ASIC cones can still produce an abstract trace when the local
-          // relation slice is too small. Retry the same output batch with more
-          // relation / predecessor context before concrete validation. This
-          // keeps the proof as real PDR over the conjunction slice while
-          // avoiding the measured 598-pass one-output loop on BlackParrot. Any
-          // reported difference is still accepted only after concrete BMC
-          // validation below.
-          // The initial 4-literal projection can be too abstract on a widened
-          // ASIC relation, but BlackParrot measurements showed that jumping
-          // straight to 64 literals creates a large level-1 blocked-predecessor
-          // enumeration loop. Use an intermediate precision step before the
-          // later exact retries.
-          constexpr size_t kModeratePdrPredecessorProjectionLimit =
-              kConcretePdrPredecessorProjectionLimit;
-          constexpr size_t kModeratePdrBadCubeStateLimit =
-              kConcretePdrBadCubeStateLimit;  // LCOV_EXCL_LINE
-          // Exact-frame retries need more predecessor context than the
-          // moderate projection to avoid abstract counterexamples, but fully
-          // unbounded predecessor cubes were measured to enumerate thousands of
-          // adjacent SAT models on BlackParrot. Use this bounded midpoint for
-          // exact-frame passes.
-          constexpr size_t kExactFramePdrPredecessorProjectionLimit =
-              kConcretePdrPredecessorProjectionLimit;
-          constexpr size_t kExactFramePdrBadCubeStateLimit =
-              kConcretePdrBadCubeStateLimit;  // LCOV_EXCL_LINE
-          // Projected CEGAR stages are allowed to be inconclusive. If they
-          // keep finding abstract SAT predecessors without strengthening the
-          // frames, stop that stage and move to the stronger exact-frame PDR
-          // retry instead of enumerating the same projected space for minutes.
-          KInductionProblem refinedBatchProblem = problem;  // LCOV_EXCL_LINE
-          configureOutputBatchProblem(  // LCOV_EXCL_LINE
-              refinedBatchProblem, problem, firstOutput, endOutput);  // LCOV_EXCL_LINE
-          prunePdrBatchRelations(  // LCOV_EXCL_LINE
-              refinedBatchProblem, refinedPdrBatchTransitionClosureLimit);  // LCOV_EXCL_LINE
-
-          // If concrete BMC rejects the first projected trace, first widen the
-          // relation slice while keeping predecessor cubes small. Sampling on
-          // BlackParrot showed that widening predecessor cubes before the
-          // relation makes PDR enumerate thousands of exact level-1
-          // predecessors. A wider relation can remove the abstraction that
-          // produced the trace without abandoning the compact PDR obligation
-          // shape that keeps ASIC proofs tractable.
-          emitPdrStrategyStageStats(  // LCOV_EXCL_LINE
-              emitPdrStageStats,  // LCOV_EXCL_LINE
-              batchIndex,  // LCOV_EXCL_LINE
-              firstOutput,  // LCOV_EXCL_LINE
-              endOutput,  // LCOV_EXCL_LINE
-              "widened_relation",
-              refinedPdrBatchTransitionClosureLimit,  // LCOV_EXCL_LINE
-              kSecPdrPredecessorProjectionLimit,
-              kSecPdrBadCubeStateLimit,
-              refinedBatchProblem);
-          PDREngine refinedPdrEngine(  // LCOV_EXCL_LINE
-              refinedBatchProblem,
-              solverType,  // LCOV_EXCL_LINE
-              kSecPdrPredecessorProjectionLimit,
-              kSecPdrBadCubeStateLimit,
-              /*useExactFrameClauses=*/true,
-              /*maxPredecessorQueries=*/0,
-              /*refineProjectedCounterexamples=*/true,
-              PDREngine::kDefaultBoundedRootGeneralizationAttempts,
-              /*learnValidatedBadFormulaClauses=*/false,
-              /*useExactResetFrontierChecks=*/true);  // LCOV_EXCL_LINE
-          const auto refinedPdrResult = refinedPdrEngine.run(maxK, true);  // LCOV_EXCL_LINE
-          if (refinedPdrResult.status == PDRStatus::Equivalent) {  // LCOV_EXCL_LINE
-            provedBound = std::max(provedBound, refinedPdrResult.bound);  // LCOV_EXCL_LINE
-            markDualRailPdrOutputRangeCovered(  // LCOV_EXCL_LINE
-                pdrCoveredOutputs,  // LCOV_EXCL_LINE
-                pdrSkippedOutputReasons,  // LCOV_EXCL_LINE
-                firstOutput,  // LCOV_EXCL_LINE
-                endOutput);  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }
-          // If the wider relation still finds only an abstract trace, grow the
-          // predecessor projection moderately on that same relation.  This is
-          // a precision refinement, not a proof shortcut; any reported
-          // difference is still validated by concrete BMC below.
-          KInductionProblem widenedBatchProblem = refinedBatchProblem;  // LCOV_EXCL_LINE
-          emitPdrStrategyStageStats(  // LCOV_EXCL_LINE
-              emitPdrStageStats,  // LCOV_EXCL_LINE
-              batchIndex,  // LCOV_EXCL_LINE
-              firstOutput,  // LCOV_EXCL_LINE
-              endOutput,  // LCOV_EXCL_LINE
-              "widened_relation_moderate_projection",
-              refinedPdrBatchTransitionClosureLimit,  // LCOV_EXCL_LINE
-              kModeratePdrPredecessorProjectionLimit,
-              kModeratePdrBadCubeStateLimit,
-              widenedBatchProblem);
-          PDREngine widenedPdrEngine(  // LCOV_EXCL_LINE
-              widenedBatchProblem,
-              solverType,  // LCOV_EXCL_LINE
-              kModeratePdrPredecessorProjectionLimit,
-              kModeratePdrBadCubeStateLimit,
-              /*useExactFrameClauses=*/true,
-              // LCOV_DISABLED_START
-              /*maxPredecessorQueries=*/0,
-              /*refineProjectedCounterexamples=*/true,
-              // LCOV_DISABLED_STOP
-              PDREngine::kDefaultBoundedRootGeneralizationAttempts,
-              /*learnValidatedBadFormulaClauses=*/false,
-              // LCOV_DISABLED_START
-              /*useExactResetFrontierChecks=*/true);  // LCOV_EXCL_LINE
-              // LCOV_DISABLED_STOP
-          const auto widenedPdrResult = widenedPdrEngine.run(maxK, true);  // LCOV_EXCL_LINE
-          // LCOV_DISABLED_START
-          if (widenedPdrResult.status == PDRStatus::Equivalent) {  // LCOV_EXCL_LINE
-            provedBound = std::max(provedBound, widenedPdrResult.bound);  // LCOV_EXCL_LINE
-            // LCOV_DISABLED_STOP
-            markDualRailPdrOutputRangeCovered(  // LCOV_EXCL_LINE
-                pdrCoveredOutputs,  // LCOV_EXCL_LINE
-                pdrSkippedOutputReasons,  // LCOV_EXCL_LINE
-                firstOutput,  // LCOV_EXCL_LINE
-                endOutput);  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }
-          if (problem.usesDualRailStateEncoding) {  // LCOV_EXCL_LINE
-            // Dual-rail PDR keeps hard rail predicates local by going directly
-            // to the final isolated retry. The intermediate exact-frame stage
-            // can enumerate thousands of sibling predecessors before reaching
-            // the same proof/split/skip decision.
-            const FinalPdrStageOutcome finalOutcome =
-                runFinalExactPdrStage(batchIndex, firstOutput, endOutput);  // LCOV_EXCL_LINE
-            if (finalOutcome.terminalResult.has_value()) {  // LCOV_EXCL_LINE
-              return *finalOutcome.terminalResult;  // LCOV_EXCL_LINE
-            }
-            if (finalOutcome.shouldSkipOutput) {  // LCOV_EXCL_LINE
-              if (!markDualRailPdrOutputSkipped(  // LCOV_EXCL_LINE
-                      problem,  // LCOV_EXCL_LINE
-                      pdrCoveredOutputs,
-                      pdrSkippedOutputReasons,
-                      firstOutput)) {  // LCOV_EXCL_LINE
-                return makeSecResult(  // LCOV_EXCL_LINE
-                    SequentialEquivalenceStatus::Inconclusive,
-                    provedBound,  // LCOV_EXCL_LINE
-                    "Dual-rail PDR repair was inconclusive for the only checked output",  // LCOV_EXCL_LINE
-                    outputCoverage,  // LCOV_EXCL_LINE
-                    abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-                    extractedBoundaryReports);  // LCOV_EXCL_LINE
-              }
-              break;  // LCOV_EXCL_LINE
-            }
-            if (finalOutcome.equivalent) {  // LCOV_EXCL_LINE
-              break;  // LCOV_EXCL_LINE
-            }
-            if (finalOutcome.shouldSplit) {  // LCOV_EXCL_LINE
-              splitPdrBatchAtFinalStage(batchIndex, firstOutput, endOutput);  // LCOV_EXCL_LINE
-              break;  // LCOV_EXCL_LINE
-            }
-          }  // LCOV_EXCL_LINE
-          // Last retry on the widened relation slice: keep the complete
-          // learned frame, but keep carried predecessor cubes bounded. Sampling
-          // on BlackParrot showed that unbounded predecessor cubes made exact
-          // PDR enumerate thousands of adjacent full SAT models; exact frame
-          // clauses are the part that removes stale abstract predecessors.
-          emitPdrStrategyStageStats(  // LCOV_EXCL_LINE
-              emitPdrStageStats,  // LCOV_EXCL_LINE
-              batchIndex,  // LCOV_EXCL_LINE
-              firstOutput,  // LCOV_EXCL_LINE
-              endOutput,  // LCOV_EXCL_LINE
-              "widened_relation_exact",
-              refinedPdrBatchTransitionClosureLimit,  // LCOV_EXCL_LINE
-              kExactFramePdrPredecessorProjectionLimit,
-              kExactFramePdrBadCubeStateLimit,
-              widenedBatchProblem);
-          PDREngine exactPdrEngine(  // LCOV_EXCL_LINE
-              widenedBatchProblem,
-              solverType,  // LCOV_EXCL_LINE
-              kExactFramePdrPredecessorProjectionLimit,
-              kExactFramePdrBadCubeStateLimit,
-              /*useExactFrameClauses=*/true,
-              /*maxPredecessorQueries=*/0,
-              /*refineProjectedCounterexamples=*/true,
-              PDREngine::kDefaultBoundedRootGeneralizationAttempts,
-              /*learnValidatedBadFormulaClauses=*/false,
-              /*useExactResetFrontierChecks=*/true);
-          const auto exactPdrResult = exactPdrEngine.run(maxK, true);  // LCOV_EXCL_LINE
-          if (exactPdrResult.status == PDRStatus::Equivalent) {  // LCOV_EXCL_LINE
-            provedBound = std::max(provedBound, exactPdrResult.bound);  // LCOV_EXCL_LINE
-            markDualRailPdrOutputRangeCovered(  // LCOV_EXCL_LINE
-                pdrCoveredOutputs,  // LCOV_EXCL_LINE
-                pdrSkippedOutputReasons,  // LCOV_EXCL_LINE
-                firstOutput,  // LCOV_EXCL_LINE
-                endOutput);  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }
-          const FinalPdrStageOutcome finalOutcome =
-              runFinalExactPdrStage(batchIndex, firstOutput, endOutput);  // LCOV_EXCL_LINE
-          if (finalOutcome.terminalResult.has_value()) {  // LCOV_EXCL_LINE
-            return *finalOutcome.terminalResult;  // LCOV_EXCL_LINE
-          }
-          if (finalOutcome.shouldSkipOutput) {  // LCOV_EXCL_LINE
-            if (!markDualRailPdrOutputSkipped(  // LCOV_EXCL_LINE
-                    problem,  // LCOV_EXCL_LINE
-                    pdrCoveredOutputs,
-                    pdrSkippedOutputReasons,
-                    firstOutput)) {  // LCOV_EXCL_LINE
-              return makeSecResult(  // LCOV_EXCL_LINE
-                  SequentialEquivalenceStatus::Inconclusive,
-                  provedBound,  // LCOV_EXCL_LINE
-                  "Dual-rail PDR repair was inconclusive for the only checked output",  // LCOV_EXCL_LINE
-                  outputCoverage,  // LCOV_EXCL_LINE
-                  abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-                  extractedBoundaryReports);  // LCOV_EXCL_LINE
-            }
-            break;  // LCOV_EXCL_LINE
-          }
-          if (finalOutcome.equivalent) {  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }
-          if (finalOutcome.shouldSplit) {  // LCOV_EXCL_LINE
-            splitPdrBatchAtFinalStage(batchIndex, firstOutput, endOutput);  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }
-        }
-        break; // LCOV_EXCL_LINE
-      }
+      case PDRStatus::Different:
+        return makeSecResult(
+            SequentialEquivalenceStatus::Different,
+            pdrResult.bound,
+            "Exact PDR found a defined-value counterexample at k = " +
+                std::to_string(pdrResult.bound),
+            outputCoverage,
+            abstractedSequentialBoundaries,
+            extractedBoundaryReports);
       case PDRStatus::Inconclusive:
       default:
-        if (problem.usesDualRailStateEncoding) {  // LCOV_EXCL_LINE
-          if (endOutput - firstOutput > 1) {  // LCOV_EXCL_LINE
+        provedBound = std::max(provedBound, pdrResult.bound);
+        if (problem.usesDualRailStateEncoding) {
+          if (endOutput - firstOutput > 1) {
             const size_t midOutput =
-                firstOutput + (endOutput - firstOutput) / 2;  // LCOV_EXCL_LINE
-            // Once projected dual-rail PDR has asked to split, retry the
-            // children in the final exact path. Re-running the same projected
-            // stage on each child was the measured RISC-V runtime wall.
-            outputBatches.insert(  // LCOV_EXCL_LINE
+                firstOutput + (endOutput - firstOutput) / 2;
+            outputBatches.insert(
                 outputBatches.begin() +
-                    static_cast<std::ptrdiff_t>(batchIndex + 1),  // LCOV_EXCL_LINE
-                {PdrOutputBatch{firstOutput, midOutput, true},  // LCOV_EXCL_LINE
-                 PdrOutputBatch{midOutput, endOutput, true}});  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }  // LCOV_EXCL_LINE
-          if (markDualRailPdrOutputSkipped(  // LCOV_EXCL_LINE
-                  problem,
-                  pdrCoveredOutputs,
-                  pdrSkippedOutputReasons,
-                  firstOutput)) {
-            break;  // LCOV_EXCL_LINE
+                    static_cast<std::ptrdiff_t>(batchIndex + 1),
+                {PdrOutputBatch{firstOutput, midOutput},
+                 PdrOutputBatch{midOutput, endOutput}});
+            break;
           }
-        }  // LCOV_EXCL_LINE
-        return makeSecResult(  // LCOV_EXCL_LINE
-            SequentialEquivalenceStatus::Inconclusive,
-            pdrResult.bound,  // LCOV_EXCL_LINE
-            "Reached max_k without a proof or counterexample",  // LCOV_EXCL_LINE
-            outputCoverage,  // LCOV_EXCL_LINE
-            abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-            extractedBoundaryReports);  // LCOV_EXCL_LINE
+          markPdrOutputRangeSkipped(
+              pdrCoveredOutputs,
+              pdrSkippedOutputReasons,
+              firstOutput,
+              endOutput,
+              "dual-rail PDR steady-state proof was inconclusive");
+          break;
+        }
+        for (size_t outputIndex = 0;
+             outputIndex < pdrCoveredOutputs.size();
+             ++outputIndex) {
+          if (!pdrCoveredOutputs[outputIndex]) {
+            pdrSkippedOutputReasons.emplace(
+                outputIndex, "exact PDR proof was inconclusive");
+          }
+        }
+        stopAfterInconclusiveBatch = true;
+        break;
+    }
+    if (stopAfterInconclusiveBatch) {
+      break;
     }
   }
 
-  const OutputCoverageSelection finalCoverage =
-      buildCoverageWithDualRailOutputSkips(
-          outputCoverage, problem, pdrCoveredOutputs, pdrSkippedOutputReasons);
-  if (problem.usesDualRailStateEncoding &&
-      finalCoverage.checkedOutputs.names.size() <
-          outputCoverage.checkedOutputs.names.size()) {
-    std::vector<size_t> skippedOutputIndices;
-    skippedOutputIndices.reserve(pdrCoveredOutputs.size());
-    for (size_t outputIndex = 0; outputIndex < pdrCoveredOutputs.size();
-         ++outputIndex) {
-      if (!pdrCoveredOutputs[outputIndex]) {
-        skippedOutputIndices.push_back(outputIndex);
-      }
+  {
+    const OutputCoverageSelection finalCoverage =
+        buildCoverageWithDualRailOutputSkips(
+            outputCoverage, problem, pdrCoveredOutputs, pdrSkippedOutputReasons);
+    const size_t coveredOutputCount = static_cast<size_t>(
+        std::count(pdrCoveredOutputs.begin(), pdrCoveredOutputs.end(), true));
+    if (finalCoverage.checkedOutputs.names.empty()) {
+      const OutputCoverageSelection& noProofCoverage =
+          problem.usesDualRailStateEncoding ? finalCoverage : outputCoverage;
+      return makeSecResult(
+          SequentialEquivalenceStatus::Inconclusive,
+          provedBound,
+          problem.usesDualRailStateEncoding
+              ? "Exact dual-rail PDR did not prove any observed output"
+              : "Exact PDR did not prove any observed output",
+          noProofCoverage,
+          abstractedSequentialBoundaries,
+          extractedBoundaryReports);
     }
-    if (auto witness = findInputOnlyFrameZeroResidualCounterexample(
-            problem, skippedOutputIndices, solverType);
-        witness.has_value()) {
-      KInductionResult witnessResult{  // LCOV_EXCL_LINE
-          KInductionStatus::Different,
-          witness->badFrame,  // LCOV_EXCL_LINE
-          std::move(witness)};  // LCOV_EXCL_LINE
-      return makeSecResult(  // LCOV_EXCL_LINE
-          SequentialEquivalenceStatus::Different,
-          witnessResult.bound,  // LCOV_EXCL_LINE
-          formatCounterexampleWitness(witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
-          outputCoverage,  // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
-          extractedBoundaryReports);  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-  }
-  const bool pdrProvedNoOutputs = finalCoverage.checkedOutputs.names.empty();
-  if (pdrProvedNoOutputs) {
+    if (coveredOutputCount != pdrCoveredOutputs.size()) {
+      return makeSecResult(
+          SequentialEquivalenceStatus::PartiallyProved,
+          provedBound,
+          std::string("Exact ") +
+              (problem.usesDualRailStateEncoding ? "dual-rail " : "") +
+              "PDR proved " +
+              std::to_string(coveredOutputCount) + " of " +
+              std::to_string(pdrCoveredOutputs.size()) +
+              " observed outputs; remaining outputs are inconclusive",
+          finalCoverage,
+          abstractedSequentialBoundaries,
+          extractedBoundaryReports);
+    }
     return makeSecResult(
-        SequentialEquivalenceStatus::Inconclusive,
+        SequentialEquivalenceStatus::Equivalent,
         provedBound,
-        problem.usesDualRailStateEncoding
-            ? "Dual-rail PDR exhausted repair/projection before proving any observed output"
-            : "PDR did not prove any observed output",
+        "",
         finalCoverage,
         abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
-  return makeSecResult(
-      SequentialEquivalenceStatus::Equivalent,
-      provedBound,
-      "",
-      finalCoverage,
-      abstractedSequentialBoundaries,
-      extractedBoundaryReports);
-}
 
-SequentialEquivalenceResult runLazyCombinationalPdrSecEngine(
-    const SequentialDesignModel& model0,
-    const SequentialDesignModel& model1,
-    naja::NL::SNLDesign* top0,
-    naja::NL::SNLDesign* top1,
-    const AlignedSecInterface& aligned,
-    size_t maxK,
-    KEPLER_FORMAL::Config::SolverType solverType,
-    SecEncoding encoding,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
-    const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports,
-    bool secDiagEnabled) {
-  const size_t outputCount = aligned.outputs.names.size();
-  const size_t batchSize = std::max<size_t>(1, lazyPdrOutputBatchSize());
-  size_t provedBound = 0;
-
-  if (secDiagEnabled || pdrStrategyStatsEnabled()) {
-    emitSecDiag(
-        "SEC diag: lazy combinational PDR materialization outputs=",
-        outputCount,
-        " batch_size=",
-        batchSize);
-  }
-
-  const auto materializedExprs0 = materializeDeferredObservedOutputsForDesign(
-      model0,
-      top0,
-      aligned.outputs.keys0,
-      batchSize,
-      secDiagEnabled,
-      "design0");
-  const auto materializedExprs1 = materializeDeferredObservedOutputsForDesign(
-      model1,
-      top1,
-      aligned.outputs.keys1,
-      batchSize,
-      secDiagEnabled,
-      "design1");
-
-  for (size_t firstOutput = 0; firstOutput < outputCount;
-       firstOutput += batchSize) {
-    const size_t endOutput =
-        std::min(outputCount, firstOutput + batchSize);
-    const AlignedSignals batchOutputs =
-        sliceAlignedSignals(aligned.outputs, firstOutput, endOutput);
-
-    if (secDiagEnabled || pdrStrategyStatsEnabled()) {
-      emitSecDiag(
-          "SEC diag: lazy PDR output batch [",
-          firstOutput,
-          ",",
-          endOutput,
-          ")");
-    }
-
-    const auto exprs0 =
-        selectMaterializedOutputExprs(materializedExprs0, batchOutputs.keys0);
-    const auto exprs1 =
-        selectMaterializedOutputExprs(materializedExprs1, batchOutputs.keys1);
-    const SequentialDesignModel batchModel0 =
-        makeMaterializedOutputBatchModel(model0, batchOutputs.keys0, exprs0);
-    const SequentialDesignModel batchModel1 =
-        makeMaterializedOutputBatchModel(model1, batchOutputs.keys1, exprs1);
-    const AlignedSignals residualBatchOutputs =
-        filterStructurallyProvedBatchOutputs(
-            batchModel0,
-            batchModel1,
-            aligned.inputs,
-            batchOutputs,
-            secDiagEnabled);
-    if (residualBatchOutputs.names.empty()) {
-      continue;
-    }
-
-    SharedSecSymbolSpace symbolSpace = buildSharedSecSymbolSpace(
-        batchModel0, batchModel1, aligned.inputs, residualBatchOutputs);
-    const ReachableStateInvariant reachableInvariant;
-    KInductionProblem proofProblem;
-    if (encoding == SecEncoding::DualRailSteady) {
-      proofProblem = buildDualRailSecProblem(
-          batchModel0,
-          batchModel1,
-          aligned.inputs,
-          residualBatchOutputs,
-          reachableInvariant,
-          symbolSpace,
-          /*useLazyTransitionRemapping=*/true,
-          secDiagEnabled);
-    } else {
-      const auto remapped = remapSecExpressions(
-          batchModel0,
-          batchModel1,
-          residualBatchOutputs,
-          symbolSpace,
-          symbolSpace.problem,
-          /*remapTransitions=*/false,
-          secDiagEnabled);
-      buildSecPropertiesAndTransitions(
-          batchModel0,
-          batchModel1,
-          residualBatchOutputs,
-          symbolSpace.state0Symbols,
-          symbolSpace.state1Symbols,
-          remapped,
-          symbolSpace.problem,
-          secDiagEnabled);
-      proofProblem = symbolSpace.problem;
-    }
-
-    const OutputCoverageSelection batchCoverage =
-        makeOutputCoverageForBatch(aligned.outputCoverage, residualBatchOutputs);
-    SequentialEquivalenceResult batchResult = runPdrSecEngine(
-        proofProblem,
-        maxK,
-        solverType,
-        batchModel0,
-        batchModel1,
-        top0,
-        top1,
-        batchCoverage,
-        abstractedSequentialBoundaries,
-        extractedBoundaryReports);
-    provedBound = std::max(provedBound, batchResult.bound);
-    if (batchResult.status != SequentialEquivalenceStatus::Equivalent) {
-      return batchResult;
-    }
-  }
-
-  SequentialEquivalenceResult result = makeSecResult(
-      SequentialEquivalenceStatus::Equivalent,
-      provedBound,
-      "",
-      aligned.outputCoverage,
-      abstractedSequentialBoundaries,
-      extractedBoundaryReports);
-  result.proofProgress = detail::buildSecEngineProofProgress(
-      "PDR",
-      aligned.outputs.names,
-      aligned.outputs.names.size(),
-      aligned.outputs.names.size());
-  return result;
 }
 
 SequentialEquivalenceResult runKInductionSecEngine(
@@ -5670,6 +3374,84 @@ SequentialEquivalenceResult runKInductionSecEngine(
   }
 }
 
+SequentialEquivalenceResult finishDualRailImcProof(
+    const KInductionProblem& problem,
+    const IMCResult& guardedResult,
+    const OutputCoverageSelection& outputCoverage,
+    const std::vector<std::string>& abstractedSequentialBoundaries,
+    const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
+  DualRailResidualProofState proofState;
+  proofState.coveredOutputs.assign(
+      problem.observedOutputExprs0.size(), false);
+  proofState.provedBound = guardedResult.bound;
+
+  size_t guardedProvedPrefix = 0;
+  if (guardedResult.status == IMCStatus::Equivalent) {
+    guardedProvedPrefix = problem.observedOutputExprs0.size();
+  } else if (guardedResult.firstUnprovenOutput.has_value()) {
+    guardedProvedPrefix = std::min(
+        *guardedResult.firstUnprovenOutput,
+        problem.observedOutputExprs0.size());
+  }
+
+  std::vector<size_t> provedOutputIndices;
+  provedOutputIndices.reserve(guardedProvedPrefix);
+  for (size_t outputIndex = 0;
+       outputIndex < problem.observedOutputExprs0.size();
+       ++outputIndex) {
+    if (problem.dualRailOutputSkipReasons.size() ==
+            problem.observedOutputExprs0.size() &&
+        !problem.dualRailOutputSkipReasons[outputIndex].empty()) {
+      proofState.skipReasons.emplace(
+          outputIndex, problem.dualRailOutputSkipReasons[outputIndex]);
+      continue;
+    }
+    if (outputIndex < guardedProvedPrefix) {
+      provedOutputIndices.push_back(outputIndex);
+    } else {
+      proofState.skipReasons.emplace(
+          outputIndex,
+          "dual-rail IMC steady-state proof was inconclusive");
+    }
+  }
+
+  markDualRailResidualOutputsCovered(provedOutputIndices, proofState);
+
+  const size_t coveredCount = static_cast<size_t>(std::count(
+      proofState.coveredOutputs.begin(),
+      proofState.coveredOutputs.end(),
+      true));
+  const OutputCoverageSelection finalCoverage =
+      buildCoverageWithDualRailOutputSkips(
+          outputCoverage,
+          problem,
+          proofState.coveredOutputs,
+          proofState.skipReasons);
+  SequentialEquivalenceStatus status = SequentialEquivalenceStatus::Equivalent;
+  std::string reason;
+  if (coveredCount == 0) {
+    status = SequentialEquivalenceStatus::Inconclusive;
+    reason = "Dual-rail IMC did not prove any observed output";
+  } else if (coveredCount != proofState.coveredOutputs.size()) {
+    status = SequentialEquivalenceStatus::PartiallyProved;
+    reason =
+        "Dual-rail IMC proved " + std::to_string(coveredCount) + " of " +
+        std::to_string(proofState.coveredOutputs.size()) +
+        " observed outputs; remaining outputs are inconclusive";
+  }
+
+  SequentialEquivalenceResult secResult = makeSecResult(
+      status,
+      proofState.provedBound,
+      std::move(reason),
+      finalCoverage,
+      abstractedSequentialBoundaries,
+      extractedBoundaryReports);
+  setExactSecEngineProofProgress(
+      secResult, problem, "IMC", proofState.coveredOutputs);
+  return secResult;
+}
+
 SequentialEquivalenceResult runImcSecEngine(
     const KInductionProblem& problem,
     size_t maxK,
@@ -5685,6 +3467,15 @@ SequentialEquivalenceResult runImcSecEngine(
   // residuals through the KI residual helper before the IMC engine runs.
   IMCEngine engine(problem, solverType);
   const auto result = engine.run(maxK);
+  if (problem.usesDualRailStateEncoding &&
+      result.status != IMCStatus::Different) {
+    return finishDualRailImcProof(
+        problem,
+        result,
+        outputCoverage,
+        abstractedSequentialBoundaries,
+        extractedBoundaryReports);
+  }
   switch (result.status) {
     case IMCStatus::Equivalent: {
       emitSecEngineProofProgress(
@@ -5722,8 +3513,14 @@ SequentialEquivalenceResult runImcSecEngine(
         emitSecEngineProofProgress(  // LCOV_EXCL_LINE
             problem, "IMC", *result.firstUnprovenOutput);  // LCOV_EXCL_LINE
       }  // LCOV_EXCL_LINE
+      const size_t provenOutputCount =  // LCOV_EXCL_LINE
+          result.firstUnprovenOutput.value_or(0);  // LCOV_EXCL_LINE
+      const SequentialEquivalenceStatus status =  // LCOV_EXCL_LINE
+          provenOutputCount > 0  // LCOV_EXCL_LINE
+              ? SequentialEquivalenceStatus::PartiallyProved  // LCOV_EXCL_LINE
+              : SequentialEquivalenceStatus::Inconclusive;  // LCOV_EXCL_LINE
       SequentialEquivalenceResult secResult = makeSecResult(  // LCOV_EXCL_LINE
-          SequentialEquivalenceStatus::Inconclusive,
+          status,
           result.bound,  // LCOV_EXCL_LINE
           "Reached max_k without a proof or counterexample",  // LCOV_EXCL_LINE
           outputCoverage,  // LCOV_EXCL_LINE
@@ -5912,13 +3709,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   // Phase 1: extract both designs into the normalized SEC model used by every
   // downstream engine. If either side cannot be modeled soundly, stop before we
   // spend time aligning interfaces or building proof problems.
-  const bool deferCombinationalObservedOutputs = secEngine_ == SecEngine::Pdr;
   const auto model0 =
-      extractSecDesign(
-          top0_,
-          "SEC diag: extracted design0",
-          secDiagEnabled,
-          deferCombinationalObservedOutputs);
+      extractSecDesign(top0_, "SEC diag: extracted design0", secDiagEnabled);
   if (model0.hasUnsupportedFeatures()) {
     std::vector<std::string> abstractedSequentialBoundaries;
     std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
@@ -5935,11 +3727,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   }
 
   const auto model1 =
-      extractSecDesign(
-          top1_,
-          "SEC diag: extracted design1",
-          secDiagEnabled,
-          deferCombinationalObservedOutputs);
+      extractSecDesign(top1_, "SEC diag: extracted design1", secDiagEnabled);
   return runExtractedModels(model0, model1, maxK);
 }
 
@@ -6010,63 +3798,24 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     fflush(stdout);
   }
 
-  if (secEngine_ == SecEngine::Pdr &&
-      canUseLazyCombinationalPdr(model0, model1, top0_, top1_)) {
-    return runLazyCombinationalPdrSecEngine(
-        model0,
-        model1,
-        top0_,
-        top1_,
-        aligned,
-        maxK,
-        solverType_,
-        encoding_,
-        abstractedSequentialBoundaries,
-        extractedBoundaryReports,
-        secDiagEnabled);
-  }
-
-  const SequentialDesignModel proofModel0 =
-      materializeDeferredOutputsForNormalSecPath(
-          model0,
-          top0_,
-          aligned.outputs.keys0,
-          secDiagEnabled,
-          "design0");
-  const SequentialDesignModel proofModel1 =
-      materializeDeferredOutputsForNormalSecPath(
-          model1,
-          top1_,
-          aligned.outputs.keys1,
-          secDiagEnabled,
-          "design1");
-
-  // Phase 3: rewrite both designs into one shared symbol space, strengthen the
-  // startup frontier with reset/bootstrap facts, and build the final SEC
-  // property plus the induction-friendly variant that some engines consume.
+  // Phase 3: rewrite both designs into one shared symbol space and preserve the
+  // exact extracted initial predicate as IC3/PDR's F[0].
   SharedSecSymbolSpace symbolSpace = buildSharedSecSymbolSpace(
-      proofModel0, proofModel1, aligned.inputs, aligned.outputs);
-  // KI / IMC consume explicit post-reset state values directly. SEC/PDR keeps
-  // the reset cycle/input model and validates startup candidates with concrete
-  // BMC / reset-frontier checks, so it can avoid the sampled full-design sweep
-  // that tries to constant-evaluate every state bit before the first PDR query.
-  const bool deriveResetBootstrapStrengthening = secEngine_ != SecEngine::Pdr;
-  // Reset bootstrap is allowed to add concrete values inside each design, but
-  // it must not add any cross-design internal state relation.
-  const auto reachableInvariant = integrateReachableStateInvariant(
-      proofModel0,
-      proofModel1,
+      model0, model1, aligned.inputs, aligned.outputs);
+  integrateInitialState(
+      model0,
+      model1,
       symbolSpace.state0Symbols,
       symbolSpace.state1Symbols,
-      symbolSpace.problem,
-      deriveResetBootstrapStrengthening);
+      symbolSpace.problem);
   if (encoding_ == SecEncoding::Binary) {
-    filterOutputsRequiringUnanchoredResetState(
-        proofModel0,
-        proofModel1,
-        reachableInvariant,
-        !symbolSpace.problem.resetBootstrapInputs.empty() &&
-            symbolSpace.problem.resetBootstrapCycles != 0,
+    const bool hasIncompleteInitialState =
+        model0.initialStateValueByKey.size() != model0.stateBits.size() ||
+        model1.initialStateValueByKey.size() != model1.stateBits.size();
+    filterOutputsRequiringUninitializedState(
+        model0,
+        model1,
+        hasIncompleteInitialState,
         aligned,
         secDiagEnabled);
   } else {
@@ -6090,25 +3839,24 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   // problem. Keep next-state formulas in their extracted-model symbol space
   // until the proof engine actually asks for a transition; otherwise PDR
   // materializes the full ASIC transition relation before output batching can
-  // prune it. Output remapping happens after the reset-frontier coverage filter
-  // so skipped top outputs never allocate SAT symbols or proof obligations.
+  // use it. Output remapping happens after the startup coverage filter so
+  // skipped top outputs never allocate SAT symbols or proof obligations.
   const bool useLazyTransitionRemapping =
       secEngine_ == SecEngine::KInduction || secEngine_ == SecEngine::Pdr;
   KInductionProblem proofProblem;
   if (encoding_ == SecEncoding::DualRailSteady) {
     proofProblem = buildDualRailSecProblem(
-        proofModel0,
-        proofModel1,
+        model0,
+        model1,
         aligned.inputs,
         aligned.outputs,
-        reachableInvariant,
         symbolSpace,
         useLazyTransitionRemapping,
         secDiagEnabled);
   } else {
     const auto remapped = remapSecExpressions(
-        proofModel0,
-        proofModel1,
+        model0,
+        model1,
         aligned.outputs,
         symbolSpace,
         symbolSpace.problem,
@@ -6116,8 +3864,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         secDiagEnabled);
     if (useLazyTransitionRemapping) {
       attachLazyTransitions(
-          proofModel0,
-          proofModel1,
+          model0,
+          model1,
           symbolSpace.state0Symbols,
           symbolSpace.state1Symbols,
           std::move(symbolSpace.localToCombined0),
@@ -6125,8 +3873,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
           symbolSpace.problem);
     }
     buildSecPropertiesAndTransitions(
-        proofModel0,
-        proofModel1,
+        model0,
+        model1,
         aligned.outputs,
         symbolSpace.state0Symbols,
         symbolSpace.state1Symbols,
@@ -6149,8 +3897,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       proofProblem,
       maxK,
       solverType_,
-      proofModel0,
-      proofModel1,
+      model0,
+      model1,
       top0_,
       top1_,
       aligned.outputCoverage,

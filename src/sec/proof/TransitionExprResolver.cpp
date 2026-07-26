@@ -160,6 +160,45 @@ std::set<size_t> identitySupport(BoolExpr* formula) {
       formula, [](size_t symbol) { return symbol; });
 }
 
+struct EncodingPostorderVisit {
+  BoolExpr* node = nullptr;
+  bool childrenVisited = false;
+};
+
+std::vector<BoolExpr*> buildEncodingPostorder(BoolExpr* formula) {
+  std::vector<BoolExpr*> postorder;
+  if (formula == nullptr) {
+    return postorder; // LCOV_EXCL_LINE
+  }
+
+  // Match FrameFormulaEncoder's left-before-right iterative DFS exactly. The
+  // resulting recipe stores node order only; solver literals and clauses stay
+  // private to each fresh SAT query.
+  std::unordered_set<BoolExpr*> encoded;
+  std::vector<EncodingPostorderVisit> stack;
+  stack.push_back({formula, false});
+  while (!stack.empty()) {
+    const EncodingPostorderVisit visit = stack.back();
+    stack.pop_back();
+    if (encoded.find(visit.node) != encoded.end()) {
+      continue;
+    }
+    if (!visit.childrenVisited && visit.node->getOp() != Op::VAR) {
+      stack.push_back({visit.node, true});
+      if (visit.node->getRight() != nullptr) {
+        stack.push_back({visit.node->getRight(), false});
+      }
+      if (visit.node->getLeft() != nullptr) {
+        stack.push_back({visit.node->getLeft(), false});
+      }
+      continue;
+    }
+    encoded.insert(visit.node);
+    postorder.push_back(visit.node);
+  }
+  return postorder;
+}
+
 size_t mapLazyTransitionSymbol(
     size_t designIndex,
     size_t localSymbol,
@@ -269,11 +308,15 @@ BoolExpr* materializeLazyDualRailTransition(
 TransitionExprResolver::TransitionExprResolver(const KInductionProblem& problem)
     : problem_(problem) {
   eagerByStateSymbol_.reserve(
-      problem.transitions0.size() + problem.transitions1.size());
+      problem.transitions0.size() + problem.transitions1.size() +
+      problem.auxiliaryTransitions.size());
   for (const auto& [stateSymbol, expr] : problem.transitions0) {
     eagerByStateSymbol_.emplace(stateSymbol, expr);
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    eagerByStateSymbol_.emplace(stateSymbol, expr);
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     eagerByStateSymbol_.emplace(stateSymbol, expr);
   }
 }
@@ -441,6 +484,18 @@ const std::set<size_t>& TransitionExprResolver::support(size_t stateSymbol) cons
           sourceIt->second.localExpr,
           sourceIt->second.designIndex,
           store.localToCombinedByDesign[sourceIt->second.designIndex]));
+  return insertedIt->second;
+}
+
+const std::vector<BoolExpr*>&
+TransitionExprResolver::encodingPostorder(size_t stateSymbol) const {
+  const TransitionExprView view = expressionView(stateSymbol);
+  if (const auto cachedIt = encodingPostorderByExpr_.find(view.expr);
+      cachedIt != encodingPostorderByExpr_.end()) {
+    return cachedIt->second;
+  }
+  auto [insertedIt, _] = encodingPostorderByExpr_.emplace(
+      view.expr, buildEncodingPostorder(view.expr));
   return insertedIt->second;
 }
 
@@ -633,9 +688,13 @@ const std::unordered_set<size_t>& TransitionExprResolver::stateSymbols() const {
   // combined state space. Build that lookup once per proof instead of
   // allocating the same set for every obligation.
   stateSymbols_.reserve(
-      problem_.state0Symbols.size() + problem_.state1Symbols.size());
+      problem_.state0Symbols.size() + problem_.state1Symbols.size() +
+      problem_.auxiliaryStateSymbols.size());
   stateSymbols_.insert(problem_.state0Symbols.begin(), problem_.state0Symbols.end());
   stateSymbols_.insert(problem_.state1Symbols.begin(), problem_.state1Symbols.end());
+  stateSymbols_.insert(
+      problem_.auxiliaryStateSymbols.begin(),
+      problem_.auxiliaryStateSymbols.end());
   stateSymbolsInitialized_ = true;
   return stateSymbols_;
 }

@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////////////////
-// Fri Jul 17 00:15:50 2026
+// Fri Jul 17 00:15:51 2026
 // Verilog file for RocketTile
 // naja version: 0.7.15
 // Git hash: e1a649e
@@ -206124,7 +206124,7 @@ module RocketTile(input clock, input reset, input auto_intsink_in_sync_0, input 
  input [1:0] auto_tl_master_xing_out_d_bits_param, input [3:0] auto_tl_master_xing_out_d_bits_size,
  input auto_tl_master_xing_out_d_bits_source, input auto_tl_master_xing_out_d_bits_sink,
  input auto_tl_master_xing_out_d_bits_denied, input [31:0] auto_tl_master_xing_out_d_bits_data,
- input auto_tl_master_xing_out_d_bits_corrupt);
+ input auto_tl_master_xing_out_d_bits_corrupt, output sec_edit_probe_o);
 wire _0000_;
 wire _0001_;
 wire _0002_;
@@ -212998,6 +212998,8 @@ wire \tlMasterXbar._T_221_0 ;
 (* hdlname="tlMasterXbar _T_221_1" *)
 (* src="/home/xtof/WORK/OpenROAD-flow-scripts/flow/designs/src/tinyRocket/freechips.rocketchip.system.TinyConfig.v:129124.8-129124.16" *)
 wire \tlMasterXbar._T_221_1 ;
+
+assign sec_edit_probe_o = edit;
 
 BUF_X1 _2148_ (
   .A(reset),

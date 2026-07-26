@@ -27,6 +27,7 @@ This project is supported and funded by NLNet through the [NGI0 Entrust](https:/
 | Gate-level LEC | Post-synthesis or implementation netlists plus Liberty libraries | `lec` |
 | Gate-level SEC | Sequential gate-level netlists plus Liberty libraries | `sec` |
 | RTL-level SEC | RTL Verilog/SystemVerilog sources or SystemVerilog flists | `sec` |
+| RTL to Gate SEC | SystemVerilog design 1 and Verilog design 2, plus Liberty libraries | `sec` |
 
 LEC is the default verification mode. SEC is selected with
 `verification: sec` in YAML or `-v sec` / `--verification sec` on the command
@@ -126,6 +127,18 @@ Bazel build notes, dependency details, release flow, and the BCR publication roa
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
 
+### SEC Result Codes
+
+| Result | Exit code | Meaning |
+| --- | ---: | --- |
+| Proved | `0` | All checked outputs were proved equivalent. |
+| Partially proved | `1` | Some outputs were proved; all remaining outputs are inconclusive. |
+| Inconclusive | `2` | SEC produced neither a proof nor a counterexample. |
+| Counterexample found | `3` | A definitive mismatch was found. |
+
+These codes describe completed SEC verdicts. Configuration, input, or runtime
+errors are execution failures rather than SEC verdicts.
+
 ### Binary Flags
 
 ```bash
@@ -148,6 +161,7 @@ build/src/bin/kepler-formal -sv -v sec \
 | --- | --- |
 | `--help`, `-h` | Print usage. |
 | `--config <file>`, `-c <file>` | Load a YAML config. If present, the YAML file takes precedence over the rest of the CLI. |
+| `--verification <lec\|sec>`, `-v <lec\|sec>` | Select combinational LEC or sequential SEC. Defaults to `lec`. |
 | `-verilog` | Parse both designs as Verilog. |
 | `-naja_if` | Parse both designs as Naja IF. |
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
@@ -172,6 +186,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. Defaults to `verilog` if omitted. |
+| `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |

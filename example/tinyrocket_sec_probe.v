@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////////////////
-// Fri Jul 17 00:15:50 2026
+// Fri Jul 17 00:15:51 2026
 // Verilog file for RocketTile
 // naja version: 0.7.15
 // Git hash: e1a649e
@@ -206124,7 +206124,7 @@ module RocketTile(input clock, input reset, input auto_intsink_in_sync_0, input 
  input [1:0] auto_tl_master_xing_out_d_bits_param, input [3:0] auto_tl_master_xing_out_d_bits_size,
  input auto_tl_master_xing_out_d_bits_source, input auto_tl_master_xing_out_d_bits_sink,
  input auto_tl_master_xing_out_d_bits_denied, input [31:0] auto_tl_master_xing_out_d_bits_data,
- input auto_tl_master_xing_out_d_bits_corrupt);
+ input auto_tl_master_xing_out_d_bits_corrupt, output sec_edit_probe_o);
 wire _0000_;
 wire _0001_;
 wire _0002_;
@@ -208991,7 +208991,6 @@ wire _2145_;
 (* src="/home/xtof/WORK/OpenROAD-flow-scripts/flow/platforms/nangate45/cells_adders.v:8.29-8.30" *)
 wire _2146_;
 wire _2147_;
-wire edit;
 (* hdlname="buffer Queue _T_1" *)
 (* src="/home/xtof/WORK/OpenROAD-flow-scripts/flow/designs/src/tinyRocket/freechips.rocketchip.system.TinyConfig.v:138642.8-138642.12" *)
 wire \buffer.Queue._T_1 ;
@@ -212998,6 +212997,8 @@ wire \tlMasterXbar._T_221_0 ;
 (* hdlname="tlMasterXbar _T_221_1" *)
 (* src="/home/xtof/WORK/OpenROAD-flow-scripts/flow/designs/src/tinyRocket/freechips.rocketchip.system.TinyConfig.v:129124.8-129124.16" *)
 wire \tlMasterXbar._T_221_1 ;
+
+assign sec_edit_probe_o = auto_intsink_in_sync_0;
 
 BUF_X1 _2148_ (
   .A(reset),
@@ -229769,7 +229770,7 @@ DFF_X1 \intsink.SynchronizerShiftReg_w1_d3.sync_1$_DFF_P_  (
 
 (* src="/home/xtof/WORK/OpenROAD-flow-scripts/flow/designs/src/tinyRocket/freechips.rocketchip.system.TinyConfig.v:140185.3-140189.6" *)
 DFF_X1 \intsink.SynchronizerShiftReg_w1_d3.sync_2$_DFF_P_  (
-  .D(edit),
+  .D(auto_intsink_in_sync_0),
   .CK(clock),
   .Q(\intsink.SynchronizerShiftReg_w1_d3.sync_2 ),
   .QN(_1456_)
@@ -229885,9 +229886,5 @@ DFF_X1 \tlMasterXbar._T_221_1$_SDFF_PP0_  (
   .CK(clock),
   .Q(\tlMasterXbar._T_221_1 ),
   .QN(_0014_)
-);
-
-LOGIC0_X1 logic_1_inst (
-  .Z(edit)
 );
 endmodule //RocketTile

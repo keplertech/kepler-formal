@@ -141,11 +141,15 @@ std::unordered_map<size_t, BoolExpr*> buildTransitionExprByStateSymbol(
     const KInductionProblem& problem) {
   std::unordered_map<size_t, BoolExpr*> transitionExprByStateSymbol;
   transitionExprByStateSymbol.reserve(
-      problem.transitions0.size() + problem.transitions1.size());
+      problem.transitions0.size() + problem.transitions1.size() +
+      problem.auxiliaryTransitions.size());
   for (const auto& [stateSymbol, expr] : problem.transitions0) {
     transitionExprByStateSymbol.emplace(stateSymbol, expr);
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    transitionExprByStateSymbol.emplace(stateSymbol, expr);
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     transitionExprByStateSymbol.emplace(stateSymbol, expr);
   }
   return transitionExprByStateSymbol;
@@ -171,9 +175,14 @@ std::unordered_map<size_t, size_t> buildComplementPrimaryByStateSymbol(
 std::unordered_set<size_t> buildCombinedStateSymbolSet(
     const KInductionProblem& problem) {
   std::unordered_set<size_t> stateSymbols;
-  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  stateSymbols.reserve(
+      problem.state0Symbols.size() + problem.state1Symbols.size() +
+      problem.auxiliaryStateSymbols.size());
   stateSymbols.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   stateSymbols.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  stateSymbols.insert(
+      problem.auxiliaryStateSymbols.begin(),
+      problem.auxiliaryStateSymbols.end());
   return stateSymbols;
 }
 
@@ -379,6 +388,11 @@ BoolExpr* buildOneStepTransitionFormula(
         makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    transition = BoolExpr::And(
+        transition,
+        makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     transition = BoolExpr::And(
         transition,
         makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));

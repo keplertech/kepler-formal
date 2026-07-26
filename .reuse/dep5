@@ -7,7 +7,7 @@ Files: src/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
 
-Files: example/* .github/workflows/* .gitmodules README.md docs/*
+Files: example/* .github/workflows/* .github/consumer-test/* .gitmodules README.md docs/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 

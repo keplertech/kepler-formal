@@ -149,7 +149,7 @@ jobs:
           regress/tinyrocket_verilog/config.yaml
 
     - name: Install najaeda
-      run: pip install najaeda
+      run: pip install najaeda==0.7.15
 
     - name: Execute edit.py
       working-directory: ${{github.workspace}}/example

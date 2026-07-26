@@ -309,31 +309,34 @@ static std::string configureMainLogger(const std::string& logLevel,
   return chosenLogFile;
 }
 
+static bool parseNonNegativeSizeToken(const std::string& token,
+                                      const char* optionName,
+                                      size_t& value,
+                                      std::string& error) {
+  if (token.empty()) {
+    error = std::string(optionName) + " must not be empty";
+    return false;
+  }
+  if (token.find_first_not_of("0123456789") != std::string::npos) {
+    error = std::string(optionName) + " must be a non-negative integer";
+    return false;
+  }
+  try {
+    value = static_cast<size_t>(std::stoull(token));
+  } catch (const std::exception&) {
+    error = std::string(optionName) + " is out of range";
+    return false;
+  }
+  return true;
+}
+
 // LCOV_EXCL_START
 static bool parseMaxKToken(const std::string& token,
 // LCOV_EXCL_STOP
                            size_t& maxK,
                            std::string& error) {
   // LCOV_EXCL_START
-  if (token.empty()) {
-    error = "max_k must not be empty";
-    return false;
-    // LCOV_EXCL_STOP
-  }
-  // LCOV_EXCL_START
-  if (!std::all_of(token.begin(), token.end(), [](unsigned char ch) { return std::isdigit(ch); })) {
-    error = "max_k must be a non-negative integer";
-    return false;
-    // LCOV_EXCL_STOP
-  }
-  try {
-    // LCOV_EXCL_START
-    maxK = static_cast<size_t>(std::stoull(token));
-  } catch (const std::exception&) {
-    error = "max_k is out of range";
-    return false;
-  }
-  return true;
+  return parseNonNegativeSizeToken(token, "max_k", maxK, error);
 }
 // LCOV_EXCL_STOP
 
@@ -2531,6 +2534,12 @@ int KeplerFormalMain(int argc, char** argv) {
 
   auto emitSecResult =
       [&](const KEPLER_FORMAL::SEC::SequentialEquivalenceResult& result) {
+        // Naja creates its logger lazily and may replace spdlog's default
+        // logger while loading SystemVerilog. Restore the run logger before
+        // reporting the result so the requested SEC log remains complete.
+        if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
+          spdlog::set_default_logger(mainLogger);
+        }
         if (result.totalOutputs != 0) {
           SPDLOG_INFO(
               "SEC checked-output coverage: {:.2f}% ({}/{} covered/existing outputs).",
@@ -2602,10 +2611,37 @@ int KeplerFormalMain(int argc, char** argv) {
         // LCOV_EXCL_STOP
         switch (result.status) {
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Equivalent:
+            if (secEncoding ==
+                KEPLER_FORMAL::SEC::SecEncoding::DualRailSteady) {
+              SPDLOG_INFO(
+                  "No binary-defined difference was found. SEC proved "
+                  "equivalence under the dual-rail steady-state abstraction "
+                  "at k = {}.",
+                  result.bound);
+            } else {
+              SPDLOG_INFO(
+                  "No difference was found. SEC proved equivalence at k = {}.",
+                  result.bound);
+            }
+            return kSecProvedExitCode;
+          case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::PartiallyProved: {
+            const size_t provedOutputs = result.proofProgress.has_value()
+                                             ? result.proofProgress->provenOutputs
+                                             : result.coveredOutputs;
+            const size_t totalOutputs = result.totalOutputs;
             SPDLOG_INFO(
-                "No difference was found. SEC proved equivalence at k = {}.",
-                result.bound);
-            return EXIT_SUCCESS;
+                "SEC partially proved equivalence at k = {}: {}/{} outputs "
+                "proved; remaining outputs are inconclusive.",
+                result.bound,
+                provedOutputs,
+                totalOutputs);
+            SPDLOG_WARN(
+                "SEC verification did not prove all observed outputs.");
+            if (!result.reason.empty()) {
+              SPDLOG_INFO("SEC partial-proof details: {}", result.reason);
+            }
+            return kSecPartiallyProvedExitCode;
+          }
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Different:
             // LCOV_EXCL_START
             SPDLOG_INFO(
@@ -2616,22 +2652,24 @@ int KeplerFormalMain(int argc, char** argv) {
             if (!result.reason.empty()) {
               SPDLOG_INFO("SEC counterexample details:\n{}", result.reason);
             }
-            return EXIT_SUCCESS;
+            return kSecCounterexampleExitCode;
             // LCOV_EXCL_STOP
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Inconclusive:
             // LCOV_EXCL_START
             if (secInconclusiveStoppedBeforeMaxK(result.reason)) {
-              SPDLOG_CRITICAL(
+              SPDLOG_INFO(
                   "SEC was inconclusive before completing max_k = {}: {}",
                   secMaxK,
                   result.reason);
             } else {
-              SPDLOG_CRITICAL(
+              SPDLOG_INFO(
                   "SEC was inconclusive up to max_k = {}: {}",
                   secMaxK,
                   result.reason);
             }
-            return EXIT_FAILURE;
+            SPDLOG_WARN(
+                "SEC verification did not produce a proof or counterexample.");
+            return kSecInconclusiveExitCode;
             // LCOV_EXCL_STOP
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Unsupported:
           // LCOV_DISABLED_STOP
@@ -2641,7 +2679,7 @@ int KeplerFormalMain(int argc, char** argv) {
             // LCOV_EXCL_STOP
                 "SEC cannot run on this design pair: {}", result.reason);
             // LCOV_EXCL_START
-            return EXIT_FAILURE;
+            return kSecInconclusiveExitCode;
             // LCOV_EXCL_STOP
         }
       };
@@ -2972,7 +3010,11 @@ int KeplerFormalMain(int argc, char** argv) {
               "identical design 2 input");
           // LCOV_EXCL_START
           KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-              nullptr, nullptr, solverType, secEngine, secEncoding);
+              nullptr,
+              nullptr,
+              solverType,
+              secEngine,
+              secEncoding);
           return emitSecResult(
               strategy.runExtractedModels(model0, model0, secMaxK));
               // LCOV_EXCL_STOP
@@ -2988,7 +3030,11 @@ int KeplerFormalMain(int argc, char** argv) {
             "design 2");
 
         KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-            nullptr, nullptr, solverType, secEngine, secEncoding);
+            nullptr,
+            nullptr,
+            solverType,
+            secEngine,
+            secEncoding);
         return emitSecResult(
             strategy.runExtractedModels(model0, model1, secMaxK));
       // LCOV_EXCL_START
@@ -3236,7 +3282,11 @@ int KeplerFormalMain(int argc, char** argv) {
     try {
       // LCOV_EXCL_START
       KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-          top0, top1, solverType, secEngine, secEncoding);
+          top0,
+          top1,
+          solverType,
+          secEngine,
+          secEncoding);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP
     // LCOV_EXCL_START

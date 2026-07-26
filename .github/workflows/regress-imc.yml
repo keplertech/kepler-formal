@@ -238,7 +238,7 @@ jobs:
           sec-encoding=${{ env.SEC_ENCODING }}
 
     - name: Install najaeda
-      run: pip install najaeda
+      run: pip install najaeda==0.7.15
 
     - name: Generate TinyRocket edited and CSRFile SEC examples
       working-directory: ${{github.workspace}}/example

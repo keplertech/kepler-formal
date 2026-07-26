@@ -6,7 +6,7 @@ Status:
 
 - supported for RTL-level and gate-level SEC
 - supported through direct source lists or flists with explicit tops
-- LEC and non-SEC SystemVerilog coverage may still evolve with the frontend
+- SystemVerilog and `sv2v` input modes require SEC verification
 
 ## Current scope
 
@@ -29,16 +29,19 @@ Current entry points include:
 
 ```bash
 # Classic (single file per design)
-build/src/bin/kepler-formal <-systemverilog/-sv> [--verilog_preprocessing] <netlist1> <netlist2> [<library-file>...]
+build/src/bin/kepler-formal <-systemverilog/-sv> -v sec [--verilog_preprocessing] \
+  <netlist1> <netlist2> [<library-file>...]
 
 # Multi-file SystemVerilog designs
-build/src/bin/kepler-formal <-systemverilog/-sv> [--verilog_preprocessing] --design1 <file...> --design2 <file...> \
+build/src/bin/kepler-formal <-systemverilog/-sv> -v sec [--verilog_preprocessing] \
+  --design1 <file...> --design2 <file...> \
   [--liberty <library-file>...]
 
 # slang flists with explicit tops
-build/src/bin/kepler-formal -systemverilog \
+build/src/bin/kepler-formal -systemverilog -v sec \
   --sv_design1_flist <file> --sv_design1_top <name> \
-  --sv_design2_flist <file> --sv_design2_top <name>
+  --sv_design2_flist <file> --sv_design2_top <name> \
+  [--liberty <library-file>...]
 
 # RTL SystemVerilog vs gate-level Verilog for SEC
 build/src/bin/kepler-formal -sv2v -v sec \
@@ -51,7 +54,7 @@ build/src/bin/kepler-formal -sv2v -v sec \
   [--liberty <library-file>...]
 ```
 
-`--verilog_preprocessing` is also accepted as `--verilog-preprocessing`.
+The preprocessing flag is spelled `--verilog_preprocessing`.
 
 ## Flist mode
 
@@ -89,11 +92,15 @@ Multi-file SystemVerilog example:
 ```yaml
 format: systemverilog
 verification: sec
+max_k: 32
+sec_engine: pdr
+sec_encoding: dual_rail_steady
 input_paths:
   - [design0_pkg.sv, design0_top.sv]
   - [design1_pkg.sv, design1_top.sv]
 liberty_files:
   - stdcells.lib.gz
+py_tech_files:
   - primitives.py
 ```
 
@@ -102,6 +109,9 @@ Flist example:
 ```yaml
 format: systemverilog
 verification: sec
+max_k: 32
+sec_engine: pdr
+sec_encoding: dual_rail_steady
 sv_design1_flist: /path/to/design1.f
 sv_design1_top: top1
 sv_design2_flist: /path/to/design2.f
@@ -115,6 +125,7 @@ SV2V SEC example:
 ```yaml
 format: sv2v
 verification: sec
+max_k: 32
 sec_engine: pdr
 sec_encoding: dual_rail_steady
 input_paths:

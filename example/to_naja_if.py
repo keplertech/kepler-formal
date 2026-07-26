@@ -21,4 +21,4 @@ liberty_files = list(map(lambda p: path.join(benchmarks, p), liberty_files))
 
 netlist.load_liberty(liberty_files)
 top = netlist.load_verilog("tinyrocket.v")
-netlist.dump_naja_if("tinyrocket.if")
+netlist.dump_naja_if("tinyrocket_naja.if")

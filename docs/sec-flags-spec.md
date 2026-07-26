@@ -20,6 +20,7 @@ Supported SEC flows:
 | --- | --- |
 | Gate-level SEC | Sequential gate-level Verilog/SystemVerilog netlists with Liberty/Python primitive libraries as needed. |
 | RTL-level SEC | RTL Verilog/SystemVerilog sources, including SystemVerilog flists with explicit tops. |
+| SystemVerilog-to-Verilog SEC (`sv2v`) | SystemVerilog design 1 and Verilog design 2 for RTL-vs-gate comparison. |
 
 ## CLI Shape
 
@@ -66,8 +67,10 @@ kepler-formal -sv2v \
   --design1 rtl_pkg.sv rtl_top.sv \
   --design2 gate_top.v \
   -v sec \
+  -k 32 \
   --sec-engine pdr \
-  --sec-encoding dual_rail_steady
+  --sec-encoding dual_rail_steady \
+  --liberty stdcells.lib
 ```
 
 ## YAML Shape
@@ -97,8 +100,8 @@ liberty_files:
 
 | CLI flag | YAML key | Default | Values | Effect |
 | --- | --- | --- | --- | --- |
-| `-v sec`, `--verification sec` | `verification: sec` | `lec` | `lec`, `sec` | Selects SEC instead of combinational LEC. Values are lowercase. |
-| `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the maximum SEC proof/search bound used by the selected engine. `0` is valid and only permits zero-bound checks. |
+| `-v <lec\|sec>`, `--verification <lec\|sec>` | `verification: <lec\|sec>` | `lec` | `lec`, `sec` | Selects combinational LEC or sequential SEC. Values are lowercase. |
+| `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the SEC proof/search bound. |
 | `--sec-engine <engine>` | `sec_engine: <engine>` | `pdr` | `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
 | `--sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: true` | `true` | boolean | Abstracts unsupported sequential instances as SEC boundaries instead of failing immediately. |
@@ -132,7 +135,7 @@ flows that require stable behavior should always spell out either `binary` or
 | --- | --- |
 | `k_induction` | Explicit classic k-induction flow: bounded base-case search followed by induction-step proof over the extracted SEC transition system. |
 | `imc` | Interpolation-Based Model Checking flow over the same extracted SEC problem. It uses the shared base-case search and exact interpolant strengthening where applicable. |
-| `pdr` | Property Directed Reachability flow over the extracted SEC transition system. It first accepts immediate zero-bound k-induction results, then runs PDR frames up to `max_k`. |
+| `pdr` | Property Directed Reachability flow over the extracted SEC transition system. |
 
 All engines use the same extracted SEC model: aligned environment inputs,
 state bits, observed outputs, next-state formulas, initial-state information,
@@ -148,14 +151,22 @@ heuristics.
 
 `max_k` is parsed as a non-negative integer.
 
+In `dual_rail_steady`, `01` represents binary zero, `10` represents binary one,
+and `11` represents X. All three engines prove the same steady-state property:
+a bad state exists only when both designs' outputs are binary-defined and
+opposite. Cycles where either output is X are outside this property. A proof in
+this encoding therefore establishes equivalence under the steady-state
+abstraction; it does not establish that either output becomes binary-defined.
+
 SEC result handling is currently:
 
 | Result | Exit code | Meaning |
 | --- | --- | --- |
-| Equivalent | `0` | SEC proved equivalence at the reported bound. |
-| Different | `0` | SEC found a concrete counterexample at the reported bound. |
-| Inconclusive | non-zero | The selected engine reached `max_k` without a proof or counterexample. |
-| Unsupported | non-zero | The extracted model was incomplete or unsupported for SEC. |
+| Proved | `0` | All checked outputs were proved equivalent. |
+| Partially proved | `1` | Some outputs were proved; all remaining outputs are inconclusive. |
+| Inconclusive | `2` | SEC produced neither a proof nor a counterexample. |
+| Counterexample found | `3` | SEC found a definitive mismatch. |
+| Unsupported | `2` | The extracted model was incomplete or unsupported for SEC. |
 
 The log always prints:
 
@@ -238,7 +249,7 @@ SEC still depends on the normal front-end and library flags:
 | `--sv_design1_top`, `--sv_design2_top` | Per-design SystemVerilog top names. In `sv2v` mode, only `--sv_design1_top` is accepted. |
 | `--liberty`, `--lib`, `liberty_files` | Liberty primitives, including structured memory information used during SEC extraction. |
 | `py_tech_files` | Python primitive loaders. Must be provided through YAML, not through `--liberty`. |
-| `solver: kissat|glucose` | SAT solver used by the selected SEC engine. |
+| `solver: kissat|glucose|cadical` | SAT solver used by the selected SEC engine. This selector is YAML-only. |
 | `log_file` | Run log path. SEC defaults to `miter_log_<n>.txt` when no path is provided. |
 
 ## Known Construction Notes

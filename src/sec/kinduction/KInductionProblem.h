@@ -196,6 +196,10 @@ struct KInductionProblem {
   std::vector<std::pair<size_t, bool>> bootstrapStateAssignments;
   std::vector<size_t> state0Symbols;
   std::vector<size_t> state1Symbols;
+  // Verifier-owned monitor state is part of the proof transition system but
+  // belongs to neither design.  Keeping it separate prevents accidental
+  // cross-design state matching by name or position.
+  std::vector<size_t> auxiliaryStateSymbols;
   std::vector<size_t> allSymbols;
   std::vector<std::pair<size_t, size_t>> complementedStatePairs0;
   std::vector<std::pair<size_t, size_t>> complementedStatePairs1;
@@ -207,9 +211,13 @@ struct KInductionProblem {
   std::vector<DualRailSymbolPair> dualRailStatePairs;
   std::vector<BoolExpr*> observedOutputExprs0;
   std::vector<BoolExpr*> observedOutputExprs1;
+  // Exact rail equality is retained for shared SAT query surfaces. It is not
+  // an equivalence criterion because matching 11 rails are still X.
+  std::vector<BoolExpr*> dualRailOutputStrictEqualityExprs;
   std::vector<std::string> dualRailOutputSkipReasons;
   std::vector<std::pair<size_t, BoolExpr*>> transitions0;
   std::vector<std::pair<size_t, BoolExpr*>> transitions1;
+  std::vector<std::pair<size_t, BoolExpr*>> auxiliaryTransitions;
   std::shared_ptr<LazyTransitionStore> lazyTransitions;
   BoolExpr* initialCondition = nullptr;
   size_t initializedStateCount = 0;
@@ -222,6 +230,9 @@ struct KInductionProblem {
   // the normal reset-bootstrap prefix so reset controls are driven exactly as
   // they are in the binary SEC flow.
   bool usesDualRailStateEncoding = false;
+  // The second dual-rail SEC round proves strict equality of both rails. Its
+  // recursive output splits use path-local incremental PDR solver contexts.
+  bool usesStrictDualRailEqualityProperty = false;
   // Output-batched dual-rail KI proves each output slice independently.  When
   // this flag is set, the slice skips local base checks because the caller will
   // validate the shared full-output base prefix once after all slices prove.
@@ -235,7 +246,8 @@ struct KInductionProblem {
   std::string description;
 
   bool hasSequentialState() const {
-    return !state0Symbols.empty() || !state1Symbols.empty();
+    return !state0Symbols.empty() || !state1Symbols.empty() ||
+           !auxiliaryStateSymbols.empty();
   }
 
   bool hasExplicitInitialState() const {
@@ -252,7 +264,8 @@ struct KInductionProblem {
 
   size_t effectiveTotalStateCount() const {
     return totalStateCount != 0 ? totalStateCount
-                                : state0Symbols.size() + state1Symbols.size(); // LCOV_EXCL_LINE
+                                : state0Symbols.size() + state1Symbols.size() +
+                                      auxiliaryStateSymbols.size(); // LCOV_EXCL_LINE
   }
 
   bool hasCompleteBootstrapStateAssignments() const {
@@ -283,6 +296,10 @@ struct KInductionProblem {
   std::vector<size_t> combinedStateSymbols() const {
     std::vector<size_t> combined = state0Symbols;
     combined.insert(combined.end(), state1Symbols.begin(), state1Symbols.end());
+    combined.insert(
+        combined.end(),
+        auxiliaryStateSymbols.begin(),
+        auxiliaryStateSymbols.end());
     return combined;
   }
 };

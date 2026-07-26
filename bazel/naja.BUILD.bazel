@@ -3,6 +3,10 @@ load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 NAJA_CMAKE_CACHE_ENTRIES = {
     "CMAKE_CXX_STANDARD": "20",
+    # Match the producer identity embedded by the 0.7.15 PyPI wheels. Naja's
+    # default Git %h is repository-size dependent and is not stable across
+    # shallow and full-history checkouts.
+    "NAJA_GIT_HASH": "e1a649e",
     "BUILD_NAJA_PYTHON": "OFF",
     "BUILD_ONLY_DOC": "OFF",
     "BUILD_BENCHMARKS": "OFF",

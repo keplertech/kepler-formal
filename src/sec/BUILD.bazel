@@ -36,7 +36,6 @@ cc_library(
         "proof/DualRailEncoding.cpp",
         "proof/ProofEngineShared.cpp",
         "proof/TransitionExprResolver.cpp",
-        "strategy/ReachableStateInvariant.cpp",
         "strategy/SequentialEquivalenceStrategy.cpp",
     ],
     hdrs = [
@@ -60,7 +59,6 @@ cc_library(
         "proof/DualRailEncoding.h",
         "proof/ProofEngineShared.h",
         "proof/TransitionExprResolver.h",
-        "strategy/ReachableStateInvariant.h",
         "strategy/SequentialEquivalenceStrategy.h",
     ],
     includes = [

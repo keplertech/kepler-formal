@@ -4,7 +4,9 @@
 #include "common/ProofProblemDebug.h"
 
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "BoolExpr.h"
 #include "proof/ProofEngineShared.h"
@@ -40,54 +42,95 @@ const char* formatBoolOpForDebug(KEPLER_FORMAL::Op op) {
   }
 }
 
-void appendBoolExprForDebug(std::ostringstream& oss, const BoolExpr* expr) {
-  if (expr == nullptr) {
-    oss << "<null>";
-    return;
+class BoolExprDebugFormatter {
+ public:
+  void append(std::ostringstream& oss, const BoolExpr* root) const {
+    // Extracted ASIC formulas can be hundreds of thousands of nodes deep.
+    // Keep debug formatting off the C++ call stack so enabling PDR trace never
+    // changes whether the proof process survives.
+    std::vector<Action> pending;
+    pending.push_back(Action::expression(root));
+    while (!pending.empty()) {
+      const Action action = pending.back();
+      pending.pop_back();
+      if (action.kind == ActionKind::Text) {
+        oss << action.text;
+        continue;
+      }
+      appendExpression(oss, action.expr, pending);
+    }
   }
 
-  switch (expr->getOp()) {
-    case KEPLER_FORMAL::Op::VAR:
-      oss << expr->getName();
-      return;
-    case KEPLER_FORMAL::Op::NOT:
-      oss << "~";
-      if (expr->getLeft()->getOp() != KEPLER_FORMAL::Op::VAR) {
-        oss << "(";
-      }
-      appendBoolExprForDebug(oss, expr->getLeft());
-      if (expr->getLeft()->getOp() != KEPLER_FORMAL::Op::VAR) {
-        oss << ")";
-      }
-      return;
-    case KEPLER_FORMAL::Op::AND:
-    case KEPLER_FORMAL::Op::OR:
-    case KEPLER_FORMAL::Op::XOR:
-      if (expr->getLeft()->getOp() != KEPLER_FORMAL::Op::VAR) {
-        oss << "(";
-      }
-      appendBoolExprForDebug(oss, expr->getLeft());
-      if (expr->getLeft()->getOp() != KEPLER_FORMAL::Op::VAR) {
-        oss << ")";
-      }
-      oss << " " << formatBoolOpForDebug(expr->getOp()) << " ";
-      if (expr->getRight()->getOp() != KEPLER_FORMAL::Op::VAR) {
-        oss << "(";
-      }
-      appendBoolExprForDebug(oss, expr->getRight());
-      if (expr->getRight()->getOp() != KEPLER_FORMAL::Op::VAR) {
-        oss << ")";
-      }
-      return;
-    default:
-      oss << "<invalid>";  // LCOV_EXCL_LINE
-      return;  // LCOV_EXCL_LINE
+ private:
+  enum class ActionKind { Expression, Text };
+
+  struct Action {
+    ActionKind kind = ActionKind::Expression;
+    const BoolExpr* expr = nullptr;
+    std::string_view text;
+
+    static Action expression(const BoolExpr* expr) {
+      return {ActionKind::Expression, expr, {}};
+    }
+
+    static Action textToken(std::string_view text) {
+      return {ActionKind::Text, nullptr, text};
+    }
+  };
+
+  static bool needsParentheses(const BoolExpr* expr) {
+    return expr != nullptr && expr->getOp() != KEPLER_FORMAL::Op::VAR;
   }
-}
+
+  static void appendParenthesizedExpression(
+      std::vector<Action>& pending,
+      const BoolExpr* expr) {
+    const bool parenthesized = needsParentheses(expr);
+    if (parenthesized) {
+      pending.push_back(Action::textToken(")"));
+    }
+    pending.push_back(Action::expression(expr));
+    if (parenthesized) {
+      pending.push_back(Action::textToken("("));
+    }
+  }
+
+  static void appendExpression(
+      std::ostringstream& oss,
+      const BoolExpr* expr,
+      std::vector<Action>& pending) {
+    if (expr == nullptr) {
+      oss << "<null>";
+      return;
+    }
+
+    switch (expr->getOp()) {
+      case KEPLER_FORMAL::Op::VAR:
+        oss << expr->getName();
+        return;
+      case KEPLER_FORMAL::Op::NOT:
+        appendParenthesizedExpression(pending, expr->getLeft());
+        pending.push_back(Action::textToken("~"));
+        return;
+      case KEPLER_FORMAL::Op::AND:
+      case KEPLER_FORMAL::Op::OR:
+      case KEPLER_FORMAL::Op::XOR:
+        appendParenthesizedExpression(pending, expr->getRight());
+        pending.push_back(Action::textToken(" "));
+        pending.push_back(Action::textToken(formatBoolOpForDebug(expr->getOp())));
+        pending.push_back(Action::textToken(" "));
+        appendParenthesizedExpression(pending, expr->getLeft());
+        return;
+      default:
+        oss << "<invalid>";  // LCOV_EXCL_LINE
+        return;  // LCOV_EXCL_LINE
+    }
+  }
+};
 
 std::string formatBoolExprForDebug(BoolExpr* expr) {
   std::ostringstream oss;
-  appendBoolExprForDebug(oss, expr);
+  BoolExprDebugFormatter().append(oss, expr);
   return oss.str();
 }
 
