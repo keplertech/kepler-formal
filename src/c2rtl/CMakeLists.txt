@@ -149,7 +149,6 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/ir/value_utils.cc
   ${KEPLER_XLS_ROOT}/xls/ir/verifier.cc
   ${KEPLER_XLS_ROOT}/xls/ir/verify_node.cc
-  ${KEPLER_XLS_ROOT}/xls/passes/array_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/basic_simplification_pass.cc
   ${KEPLER_XLS_ROOT}/xls/passes/bdd_query_engine.cc
   ${KEPLER_XLS_ROOT}/xls/passes/constant_folding_pass.cc

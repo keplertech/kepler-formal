@@ -11,7 +11,6 @@
 #include <stack>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 
@@ -567,8 +566,41 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
   std::vector<AncestorFrame, tbb::tbb_allocator<AncestorFrame>>
       pendingAncestors;
   pendingAncestors.reserve(16);
-  std::unordered_set<uint32_t> visitedAncestors;
-  visitedAncestors.reserve(16);
+  thread_local std::vector<bool> visitedAncestors;
+  if (visitedAncestors.size() < nodes_.size()) {
+    visitedAncestors.resize(nodes_.size(), false);
+  }
+  std::vector<size_t, tbb::tbb_allocator<size_t>> touchedAncestors;
+  touchedAncestors.reserve(16);
+  struct VisitedAncestorCleanup {
+    std::vector<bool>& visited;
+    std::vector<size_t, tbb::tbb_allocator<size_t>>& touched;
+    ~VisitedAncestorCleanup() {
+      for (size_t idx : touched) {
+        if (idx < visited.size()) {
+          visited[idx] = false;
+        }
+      }
+    }
+  } visitedAncestorCleanup{visitedAncestors, touchedAncestors};
+
+  auto isVisitedAncestor = [&](uint32_t id) {
+    if (id == kInvalidId || id < kIdOffset) {
+      return false;
+    }
+    const size_t idx = static_cast<size_t>(id - kIdOffset);
+    return idx < visitedAncestors.size() && visitedAncestors[idx];
+  };
+  auto markVisitedAncestor = [&](uint32_t id) {
+    if (id == kInvalidId || id < kIdOffset) {
+      return;
+    }
+    const size_t idx = static_cast<size_t>(id - kIdOffset);
+    if (idx < visitedAncestors.size() && !visitedAncestors[idx]) {
+      visitedAncestors[idx] = true;
+      touchedAncestors.push_back(idx);
+    }
+  };
 
   const auto* branchNode = getNode(nodeId);
   // LCOV_EXCL_START
@@ -578,7 +610,7 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
     // LCOV_DISABLED_STOP
   }
   // LCOV_EXCL_STOP
-  visitedAncestors.insert(nodeId);
+  markVisitedAncestor(nodeId);
   pendingAncestors.push_back({nodeId, 0});
   while (!pendingAncestors.empty()) {
     auto& frame = pendingAncestors.back();
@@ -611,11 +643,11 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
     }
     const auto* parent = getNode(parentId);
     if (parent == nullptr ||
-        visitedAncestors.find(parentId) != visitedAncestors.end()) {
+        isVisitedAncestor(parentId)) {
       nodePath.pop_back();
       continue;
     }
-    visitedAncestors.insert(parentId);
+    markVisitedAncestor(parentId);
     pendingAncestors.push_back({parentId, 0});
   }
 

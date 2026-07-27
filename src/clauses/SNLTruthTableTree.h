@@ -13,7 +13,6 @@
 #include <atomic>
 #include <unordered_map>
 #include <tbb/tbb_allocator.h>
-#include <unordered_set>
 #include "DNL.h"
 #include "SNLDesignModeling.h"
 

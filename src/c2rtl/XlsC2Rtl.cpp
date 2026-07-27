@@ -27,7 +27,6 @@
 #include "xls/ir/op.h"
 #include "xls/ir/package.h"
 #include "xls/ir/proc.h"
-#include "xls/passes/array_simplification_pass.h"
 #include "xls/passes/basic_simplification_pass.h"
 #include "xls/passes/constant_folding_pass.h"
 #include "xls/passes/cse_pass.h"
@@ -137,22 +136,16 @@ absl::Status RunPreCodegenPasses(xls::Package* package) {
   xls::PassResults pass_results;
   xls::OptimizationContext pass_context;
 
-  bool changed = true;
-  int64_t iteration = 0;
-  while (changed && iteration < 20) {
-    changed = false;
-    ++iteration;
+  XLS_ASSIGN_OR_RETURN(bool pass_changed,
+                       RunOptimizationPass<xls::InliningPass>(
+                           package, pass_options, &pass_results,
+                           &pass_context));
+  (void)pass_changed;
 
-    XLS_ASSIGN_OR_RETURN(bool pass_changed,
-                         RunOptimizationPass<xls::InliningPass>(
-                             package, pass_options, &pass_results,
-                             &pass_context));
-    changed |= pass_changed;
-    XLS_ASSIGN_OR_RETURN(pass_changed,
-                         RunOptimizationPass<xls::ArraySimplificationPass>(
-                             package, pass_options, &pass_results,
-                             &pass_context));
-    changed |= pass_changed;
+  bool changed = true;
+  for (int64_t iteration = 0; changed && iteration < 4; ++iteration) {
+    changed = false;
+
     XLS_ASSIGN_OR_RETURN(pass_changed,
                          RunOptimizationPass<xls::ConstantFoldingPass>(
                              package, pass_options, &pass_results,
@@ -175,10 +168,6 @@ absl::Status RunPreCodegenPasses(xls::Package* package) {
     changed |= pass_changed;
   }
 
-  if (changed) {
-    return absl::InternalError(
-        "XLS C2RTL pre-codegen optimization did not converge");
-  }
   return absl::OkStatus();
 }
 
