@@ -31,6 +31,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
 | `--sec-uncomputable-seq-boundary` | Abstract unsupported sequential instances as SEC boundaries. This is the default. |
 | `--no-sec-uncomputable-seq-boundary` | Fail SEC when an unsupported sequential instance is encountered. |
+| `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
 | `-verilog` | Use Verilog Format. |
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
@@ -56,6 +57,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
 | `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
 | `sec_uncomputable_seq_as_boundary` | bool | Abstract unsupported sequential instances as SEC boundaries. Defaults to `true`. |
+| `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |

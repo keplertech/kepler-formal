@@ -77,7 +77,7 @@ class MiterStrategy {
   std::string dumpCnfPath_;
   bool dumpPoCnf_ = false;
   std::string dumpPoCnfPath_;
-  bool allowBoundaryMismatch_ = true;
+  bool allowBoundaryMismatch_ = false;
 };
 
 }  // namespace KEPLER_FORMAL

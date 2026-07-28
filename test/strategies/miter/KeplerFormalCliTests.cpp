@@ -3212,7 +3212,7 @@ TEST_F(KeplerFormalCliTests, CliExplicitLecVerificationAcceptedBeforeFormat) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, LecBoundaryCheckRequiresExplicitEnable) {
+TEST_F(KeplerFormalCliTests, LecBoundaryCheckEnabledByDefault) {
   const auto fixture =
       createEquivalentSequentialNajaIfFixture("state_a", "state_b");
 
@@ -3221,7 +3221,7 @@ TEST_F(KeplerFormalCliTests, LecBoundaryCheckRequiresExplicitEnable) {
                    "-naja_if",
                    fixture.design0IfPath.string(),
                    fixture.design1IfPath.string()}),
-      EXIT_SUCCESS);
+      EXIT_FAILURE);
 
   EXPECT_EQ(
       runWithArgs({"kepler-formal",
@@ -3233,11 +3233,11 @@ TEST_F(KeplerFormalCliTests, LecBoundaryCheckRequiresExplicitEnable) {
 
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
-      "allow-boundary-mismatch: false\n"
+      "allow-boundary-mismatch: true\n"
       "input_paths:\n"
       "  - " + fixture.design0IfPath.string() + "\n"
       "  - " + fixture.design1IfPath.string() + "\n");
-  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
 
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);

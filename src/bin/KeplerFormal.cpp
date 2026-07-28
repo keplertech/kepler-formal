@@ -1131,7 +1131,7 @@ int KeplerFormalMain(int argc, char** argv) {
   bool dumpCnf = false;
   bool dumpPoCnf = false;
   bool compactMode = false;
-  bool allowBoundaryMismatch = true;
+  bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
   bool verilogPreprocessing = false;
   std::string dumpCnfPath;
