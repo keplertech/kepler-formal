@@ -720,6 +720,19 @@ void BuildPrimaryOutputClauses::collect() {
   POs_.resize(outputs_.size());
 }
 
+std::vector<BuildPrimaryOutputClauses::PathKey>
+BuildPrimaryOutputClauses::getLecBoundaryInputs() const {
+  std::vector<PathKey> boundaries;
+  for (const auto& [path, input] : inputsMap_) {
+    const auto& term = get()->getDNLTerminalFromID(input);
+    if (term.isTopPort() ||
+        !SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm()).empty()) {
+      boundaries.emplace_back(path);
+    }
+  }
+  return boundaries;
+}
+
 void BuildPrimaryOutputClauses::initVarNames() {
   termDNLID2varID_.resize(naja::DNL::get()->getDNLTerms().size(), (size_t)-1);
   for (size_t i = 0; i < inputs_.size(); ++i) {

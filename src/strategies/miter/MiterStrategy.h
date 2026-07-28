@@ -21,6 +21,7 @@ class MiterStrategy {
  public:
   struct CompactSnapshot {
     std::vector<BuildPrimaryOutputClauses::PathKey> inputs;
+    std::vector<BuildPrimaryOutputClauses::PathKey> boundaryInputs;
     std::vector<BuildPrimaryOutputClauses::PathKey> outputs;
     tbb::concurrent_vector<BoolExpr*> POs;
   };
@@ -35,6 +36,7 @@ class MiterStrategy {
 
   void setCnfDump(bool enabled, const std::string& path = "");
   void setPoCnfDump(bool enabled, const std::string& path = "");
+  void setAllowBoundaryMismatch(bool allow) { allowBoundaryMismatch_ = allow; }
 
   size_t normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
@@ -75,6 +77,7 @@ class MiterStrategy {
   std::string dumpCnfPath_;
   bool dumpPoCnf_ = false;
   std::string dumpPoCnfPath_;
+  bool allowBoundaryMismatch_ = true;
 };
 
 }  // namespace KEPLER_FORMAL

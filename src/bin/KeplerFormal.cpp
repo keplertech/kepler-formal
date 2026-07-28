@@ -11,6 +11,7 @@
 #include <cctype>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -65,12 +66,12 @@ static void print_usage(const char* prog) {
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
       "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
-      "[--no-sec-uncomputable-seq-boundary] [--compact] "
+      "[--no-sec-uncomputable-seq-boundary] [--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--design1 <file...>] [--design2 <file...>] "
-      "[--no-sec-uncomputable-seq-boundary] [--compact] "
+      "[--no-sec-uncomputable-seq-boundary] [--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos]",
       prog);
 // LCOV_EXCL_START
@@ -336,6 +337,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "sec_engine",
       "sec_encoding",
       "sec_uncomputable_seq_as_boundary",
+      "allow-boundary-mismatch",
       "input_paths",
       "liberty_files",
       "py_tech_files",
@@ -1052,9 +1054,11 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
 // LCOV_EXCL_START
 static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 // LCOV_EXCL_STOP
-    const KEPLER_FORMAL::BuildPrimaryOutputClauses& builder) {
+    const KEPLER_FORMAL::BuildPrimaryOutputClauses& builder,
+    std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> boundaryInputs) {
   // LCOV_EXCL_START
   KEPLER_FORMAL::MiterStrategy::CompactSnapshot snapshot;
+  snapshot.boundaryInputs = std::move(boundaryInputs);
   snapshot.inputs.reserve(builder.getInputs().size());
   for (const auto input : builder.getInputs()) {
     snapshot.inputs.emplace_back(builder.getInputs2InputsIDs().at(input));
@@ -1127,6 +1131,7 @@ int KeplerFormalMain(int argc, char** argv) {
   bool dumpCnf = false;
   bool dumpPoCnf = false;
   bool compactMode = false;
+  bool allowBoundaryMismatch = true;
   bool reportSkippedPOs = false;
   bool verilogPreprocessing = false;
   std::string dumpCnfPath;
@@ -1338,6 +1343,11 @@ int KeplerFormalMain(int argc, char** argv) {
           compactMode = cfg["compact_mode"].as<bool>();
         }
 
+        if (cfg["allow-boundary-mismatch"] &&
+            cfg["allow-boundary-mismatch"].IsScalar()) {
+          allowBoundaryMismatch = cfg["allow-boundary-mismatch"].as<bool>();
+        }
+
         // report_skipped_pos
         if (cfg["report_skipped_pos"] && cfg["report_skipped_pos"].IsScalar()) {
           // LCOV_EXCL_START
@@ -1494,6 +1504,11 @@ int KeplerFormalMain(int argc, char** argv) {
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--allow-boundary-mismatch") {
+        allowBoundaryMismatch = true;
+        ++parseStart;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "-naja_if") {
         inputFormatType = FormatType::NAJA_IF;
@@ -1621,6 +1636,10 @@ int KeplerFormalMain(int argc, char** argv) {
         secTreatUncomputableSeqAsBoundary = false;
         continue;
         // LCOV_EXCL_STOP
+      }
+      if (arg == "--allow-boundary-mismatch") {
+        allowBoundaryMismatch = true;
+        continue;
       }
       // LCOV_EXCL_START
       if (arg == "--design1") {
@@ -2260,12 +2279,17 @@ int KeplerFormalMain(int argc, char** argv) {
           builder.collect();
           SPDLOG_INFO("Collected {} PIs for {}", builder.getInputs().size(), designLabel);
           SPDLOG_INFO("Collected {} POs for {}", builder.getOutputs().size(), designLabel);
+          std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey>
+              boundaryInputs;
+          if (!allowBoundaryMismatch) {
+            boundaryInputs = builder.getLecBoundaryInputs();
+          }
           auto inputs = builder.getInputs();
           auto outputs = builder.getOutputs();
           builder.setInputs(inputs);
           builder.setOutputs(outputs);
           builder.build();
-          return captureCompactSnapshot(builder);
+          return captureCompactSnapshot(builder, std::move(boundaryInputs));
         };
         // LCOV_EXCL_STOP
 
@@ -2293,6 +2317,7 @@ int KeplerFormalMain(int argc, char** argv) {
       try {
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterS(nullptr, nullptr, logFileName);
+        MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
         if (dumpCnf) {
           const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
           MiterS.setCnfDump(true, outPath);
@@ -2682,6 +2707,7 @@ int KeplerFormalMain(int argc, char** argv) {
   // LCOV_EXCL_START
   } else if (inputFormatType == FormatType::NAJA_IF && useScopes) {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
+    MiterS.setAllowBoundaryMismatch(true);
     MiterS.init(false);
     ScopeExtraction extractor(top0, top1);
     extractor.collectVerificationScopes();
@@ -2697,6 +2723,7 @@ int KeplerFormalMain(int argc, char** argv) {
       try {
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterScope(scopes.first, scopes.second, logFileName);
+        MiterScope.setAllowBoundaryMismatch(allowBoundaryMismatch);
         if (dumpCnf) {
           std::string scopeName = sanitizeFileToken(scopes.first->getName().getString());
           std::string outPath = dumpCnfPath.empty()
@@ -2746,6 +2773,7 @@ int KeplerFormalMain(int argc, char** argv) {
     try {
       // LCOV_EXCL_START
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
+      MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
         MiterS.setCnfDump(true, outPath);
