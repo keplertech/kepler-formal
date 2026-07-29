@@ -158,6 +158,7 @@ build/src/bin/kepler-formal -sv -v sec \
 | `--help`, `-h` | Print usage. |
 | `--config <file>`, `-c <file>` | Load a YAML config. If present, the YAML file takes precedence over the rest of the CLI. |
 | `--verification <lec\|sec>`, `-v <lec\|sec>` | Select combinational LEC or sequential SEC. Defaults to `lec`. |
+| `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. By default, such a mismatch stops the run before SAT solving. |
 | `-verilog` | Parse both designs as Verilog. |
 | `-naja_if` | Parse both designs as Naja IF. |
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
@@ -167,6 +168,13 @@ build/src/bin/kepler-formal -sv -v sec \
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
+
+To intentionally compare designs with different LEC boundaries:
+
+```bash
+build/src/bin/kepler-formal -verilog --allow-boundary-mismatch \
+  design1.v design2.v cells.lib
+```
 
 ### YAML Configuration File
 
@@ -179,6 +187,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | --- | --- | --- |
 | `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
+| `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
