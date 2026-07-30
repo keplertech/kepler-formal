@@ -274,7 +274,7 @@ jobs:
       env:
         CASE_GENERATOR: ${{ matrix.case.generator }}
       run: |
-        pip install najaeda==0.7.15
+        pip install najaeda==0.7.18
         case "${CASE_GENERATOR}" in
           csrfile)
             python extract_tinyrocket_csrfile_sec.py
@@ -646,7 +646,7 @@ jobs:
         set -euo pipefail
         export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
 
-        pip install najaeda==0.7.15
+        pip install najaeda==0.7.18
 
         cleanup_negative_edit() {
           (
