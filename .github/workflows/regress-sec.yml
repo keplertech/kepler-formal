@@ -51,8 +51,10 @@ jobs:
     - name: Build najaeda wheel from the local Naja checkout
       run: |
         mkdir -p "${{github.workspace}}/stage/najaeda"
+        python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
         CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
           python3 -m pip wheel \
+            --no-build-isolation \
             --no-deps \
             --wheel-dir "${{github.workspace}}/stage/najaeda" \
             "${{github.workspace}}/thirdparty/naja"
