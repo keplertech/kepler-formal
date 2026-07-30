@@ -43,6 +43,8 @@ jobs:
     - name: Generate Naja IF test inputs with the local Naja checkout
       working-directory: ${{github.workspace}}/example
       run: |
+        python3 -m venv "${RUNNER_TEMP}/najaeda-venv"
+        source "${RUNNER_TEMP}/najaeda-venv/bin/activate"
         CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
           python3 -m pip install "${{github.workspace}}/thirdparty/naja"
         python3 to_naja_if.py

@@ -15507,9 +15507,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLLibertyConstructor constructor(primitives);
-  constructor.construct(
-      repoRootForSecTests() / "thirdparty" / "naja" / "test" / "nl" /
-      "formats" / "liberty" / "benchmarks" / "tests" / "FF_scan.lib");
+  const char* bazelLibertyPath = std::getenv("NAJA_FF_SCAN_LIB");
+  constructor.construct(bazelLibertyPath != nullptr
+                            ? std::filesystem::path(bazelLibertyPath)
+                            : repoRootForSecTests() / "thirdparty" / "naja" /
+                                  "test" / "nl" / "formats" / "liberty" /
+                                  "benchmarks" / "tests" / "FF_scan.lib");
   auto* primitive = primitives->getSNLDesign(NLName("FFSCAN"));
   ASSERT_NE(primitive, nullptr);
 
