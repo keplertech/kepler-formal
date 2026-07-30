@@ -35,6 +35,17 @@ jobs:
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
 
+    - name: Build and install najaeda from the local Naja checkout
+      run: |
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip install "${{github.workspace}}/thirdparty/naja"
+
+    - name: Generate TinyRocket Naja IF inputs
+      working-directory: ${{github.workspace}}/example
+      run: |
+        python3 to_naja_if.py
+        python3 edit.py
+
     - name: Test
       working-directory: ${{github.workspace}}/build
       env:
@@ -150,13 +161,6 @@ jobs:
           "${{github.workspace}}" \
           "${{github.workspace}}/build/src/bin/kepler-formal" \
           regress/tinyrocket_verilog/config.yaml
-
-    - name: Install najaeda
-      run: pip install najaeda==0.7.18
-
-    - name: Execute edit.py
-      working-directory: ${{github.workspace}}/example
-      run: python edit.py
 
     - name: Run on naja if edited
       working-directory: ${{github.workspace}}

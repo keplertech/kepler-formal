@@ -50,6 +50,18 @@ jobs:
         CC:   clang
         CXX:  clang++
 
+    - name: Generate Naja IF test inputs with the local Naja checkout
+      working-directory: ${{github.workspace}}/example
+      env:
+        GIT_CONFIG_COUNT: "1"
+        GIT_CONFIG_KEY_0: core.abbrev
+        GIT_CONFIG_VALUE_0: "7"
+      run: |
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip install "${{github.workspace}}/thirdparty/naja"
+        python3 to_naja_if.py
+        python3 edit.py
+
     - name: Test
       working-directory: ${{github.workspace}}/build
       env:
