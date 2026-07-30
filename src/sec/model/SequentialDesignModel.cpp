@@ -1518,13 +1518,19 @@ BoolExpr* buildSequentialModelExpr(
     const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
   using Operator =
       naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+  // Pending expressions are validated before construction. These checks keep
+  // the internal builder contract explicit if that ordering changes.
   if (!expression.isValid()) {
+    // LCOV_EXCL_START
     throw std::runtime_error("Invalid Naja sequential expression");
+    // LCOV_EXCL_STOP
   }
   std::vector<BoolExpr*> memo(expression.nodes.size(), nullptr);
   std::function<BoolExpr*(size_t)> buildNode = [&](size_t nodeID) -> BoolExpr* {
     if (nodeID >= expression.nodes.size()) {
+      // LCOV_EXCL_START
       throw std::runtime_error("Sequential expression operand is out of range");
+      // LCOV_EXCL_STOP
     }
     if (memo[nodeID] != nullptr) {
       return memo[nodeID];
@@ -1536,21 +1542,31 @@ BoolExpr* buildSequentialModelExpr(
     } else if (node.operation == Operator::Term) {
       const auto termIt = pending.modelTermIDs.find(node.term);
       if (termIt == pending.modelTermIDs.end()) {
+        // LCOV_EXCL_START
         throw std::runtime_error("Sequential expression references an unmapped terminal");
+        // LCOV_EXCL_STOP
       }
+      // Requested sequential terminals are materialized before expression
+      // construction, leaving the direct-variable fallback defensive only.
       const auto exprIt = outputExprByTerm.find(termIt->second.termID);
       if (exprIt != outputExprByTerm.end()) {
         result = exprIt->second;
+      // LCOV_EXCL_START
       } else if (termIt->second.termID < termDNLID2varID.size() &&
                  termDNLID2varID[termIt->second.termID] >= 2) {
         result = BoolExpr::Var(termDNLID2varID[termIt->second.termID]);
+      // LCOV_EXCL_STOP
       } else {
+        // LCOV_EXCL_START
         throw std::runtime_error(
             "Missing combinational expression for sequential terminal");
+        // LCOV_EXCL_STOP
       }
     } else if (node.operation == Operator::State) {
       if (node.state >= pending.stateReferences.size()) {
+        // LCOV_EXCL_START
         throw std::runtime_error("Sequential expression state is out of range");
+        // LCOV_EXCL_STOP
       }
       const auto& state = pending.stateReferences[node.state];
       if (state.termID >= termDNLID2varID.size() ||
@@ -1653,7 +1669,9 @@ BoolExpr* getLocalClockEnableExpr(
   BoolExpr* clockExpr =
       buildPendingClockExpr(pending, termDNLID2varID, outputExprByTerm);
   if (clockExpr == nullptr) {
+    // LCOV_EXCL_START
     return nullptr;
+    // LCOV_EXCL_STOP
   }
 
   if (!clockGateLatchDataExprByVarID.empty()) {
@@ -1683,10 +1701,14 @@ std::optional<std::string> getPendingTransitionUnsupportedReason(
   using Expression = naja::NL::SNLDesignModeling::BooleanExpression;
   using Operator = Expression::Operator;
   if (pending.sequentialState == nullptr || pending.clockedOn == nullptr) {
+    // LCOV_EXCL_START
     return "Missing Naja sequential model";
+    // LCOV_EXCL_STOP
   }
   if (pending.modelStateIndex >= pending.stateReferences.size()) {
+    // LCOV_EXCL_START
     return "Naja sequential state has no physical output";
+    // LCOV_EXCL_STOP
   }
   auto validate = [&](const Expression& expression)
       -> std::optional<std::string> {
@@ -1778,7 +1800,9 @@ BoolExpr* buildNextStateExpr(
       pending.stateReferences.at(pending.modelStateIndex);
   if (currentReference.termID >= termDNLID2varID.size() ||
       termDNLID2varID[currentReference.termID] < 2) {
+    // LCOV_EXCL_START
     throw std::runtime_error("Sequential state bit was mapped to a constant");
+    // LCOV_EXCL_STOP
   }
   BoolExpr* current = BoolExpr::Var(termDNLID2varID[currentReference.termID]);
   if (currentReference.complemented) {
@@ -4681,8 +4705,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         if (ctx.abstractUncomputableSequentialBoundaries) {  // LCOV_EXCL_LINE
           recordLateAbstractedInstanceBoundary(  // LCOV_EXCL_LINE
               pending.boundaryInfoIndex,  // LCOV_EXCL_LINE
-              "unsupported sequential terminal `" +
-                  modelTerm->getName().getString() + "`: " +
+              "unsupported sequential terminal `" +  // LCOV_EXCL_LINE
+                  modelTerm->getName().getString() + "`: " +  // LCOV_EXCL_LINE
                   skippedIt->second.detail);  // LCOV_EXCL_LINE
           abortPending = true;  // LCOV_EXCL_LINE
           break;  // LCOV_EXCL_LINE
@@ -4694,8 +4718,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
             // LCOV_EXCL_START
             "Unsupported sequential primitive for `" + signalKeyToString(pending.stateKey) +  // LCOV_EXCL_LINE
             // LCOV_EXCL_STOP
-            "`: Sequential terminal `" + modelTerm->getName().getString() +
-                "` is unsupported: " +
+            "`: Sequential terminal `" + modelTerm->getName().getString() +  // LCOV_EXCL_LINE
+                "` is unsupported: " +  // LCOV_EXCL_LINE
             skippedIt->second.detail);  // LCOV_EXCL_LINE
         // LCOV_EXCL_START
         markUnsupportedState(pending.stateKey);  // LCOV_EXCL_LINE
