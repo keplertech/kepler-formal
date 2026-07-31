@@ -6,8 +6,10 @@ cc_test(
     srcs = ["SequentialEquivalenceStrategyTests.cpp"],
     data = [
         "//example:testdata",
+        "@naja//:ff_scan_lib",
     ],
     env = {
+        "NAJA_FF_SCAN_LIB": "$(rootpath @naja//:ff_scan_lib)",
         "TEST_DATA_PREFIX": "",
     },
     size = "large",
