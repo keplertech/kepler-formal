@@ -81,6 +81,7 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   getInputsMap() const {
     return inputsMap_;
   }
+  std::vector<PathKey> getLecBoundaryInputs() const;
   const std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash>&
   getOutputsMap() const {
     return outputsMap_;

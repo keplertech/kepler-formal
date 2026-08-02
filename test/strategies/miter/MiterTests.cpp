@@ -1504,6 +1504,7 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWr
 
   MiterStrategy::CompactSnapshot snapshot0;
   snapshot0.inputs = {a, b, only0};
+  snapshot0.boundaryInputs = {a, b, only0};
   snapshot0.outputs = {logicOut, constOut, drop0};
   auto shared0 = BoolExpr::And(BoolExpr::Var(2), BoolExpr::Var(3));
   snapshot0.POs.emplace_back(
@@ -1514,6 +1515,7 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWr
 
   MiterStrategy::CompactSnapshot snapshot1;
   snapshot1.inputs = {b, a, only1};
+  snapshot1.boundaryInputs = {b, a, only1};
   snapshot1.outputs = {constOut, logicOut, drop1};
   auto shared1 = BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(2));
   snapshot1.POs.emplace_back(BoolExpr::createTrue());
@@ -1530,6 +1532,11 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWr
 
   MiterStrategy strategy(nullptr, nullptr,
                          (tmpDir / "compact_snapshot.log").string());
+  strategy.setAllowBoundaryMismatch(false);
+  EXPECT_THROW(strategy.runCompactSnapshots(snapshot0, snapshot1),
+               std::runtime_error);
+  snapshot0.boundaryInputs = {a, b};
+  snapshot1.boundaryInputs = {b, a};
   strategy.setCnfDump(true, cnfPath.string());
   strategy.setPoCnfDump(true, poCnfDir.string());
 

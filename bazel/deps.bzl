@@ -118,9 +118,9 @@ _FLEX_VERSION = "2.6.4"
 _CADICAL_COMMIT = "7b99c07f0bcab5824a5a3ce62c7066554017f641"
 _GLUCOSE_COMMIT = "7f887abba7cf13636a5ac2d28653668a20a91b25"
 _KISSAT_COMMIT = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
-_NAJA_COMMIT = "e1a649e2fce182d8b7ca5c5c80ab5d04aad3ffa3"
-_NAJA_VERILOG_COMMIT = "8a13b5986c765035548775808273d61defcaf738"
-_NAJA_IF_COMMIT = "8719bf93fdcd65534c75eb7a8a1f69393f74a75a"
+_NAJA_COMMIT = "740f931a250812e72e60d09618f46ab046b81031"
+_NAJA_VERILOG_COMMIT = "5da040bb34f0e4e5bb8d67223b999a0132fb401f"
+_NAJA_IF_COMMIT = "318b8faa01aedd990058854b4de4ee2d779d8237"
 _CPPTRACE_COMMIT = "3db8da80111171c219ab5839905771386bee06b3"
 _CPPITERTOOLS_COMMIT = "5a7f4aa357ed9b0ad59823e3d2acd57217d5beaf"
 _SLANG_COMMIT = "512c327c209d3043aa98ecfd02d06a1b73fcd5fb"
@@ -193,14 +193,14 @@ def _deps_impl(_module_ctx):
 
     naja_repo(
         name = "naja",
-        naja_url = "https://github.com/najaeda/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
-        naja_sha256 = "bedbb745eb5110278c3de9da9538b3e5ef025a736e4862d491bc8209626d3f45",
+        naja_url = "https://github.com/nanocoh/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
+        naja_sha256 = "2db192a35ee9a758122fc91d9f8cd2b9dfd14a5aae93f87f9bb778ac87f649bd",
         naja_strip_prefix = "naja-{}".format(_NAJA_COMMIT),
         naja_verilog_url = "https://github.com/najaeda/naja-verilog/archive/{}.tar.gz".format(_NAJA_VERILOG_COMMIT),
-        naja_verilog_sha256 = "e5caf041d7c8867bb0805b8a182cc4330afc40d0dde74760f4ee42d10b70c9cb",
+        naja_verilog_sha256 = "8a0513378c419afc462ffd59c35c7d0362fee7787ab40ef23b2f0a360df0a9df",
         naja_verilog_strip_prefix = "naja-verilog-{}".format(_NAJA_VERILOG_COMMIT),
         naja_if_url = "https://github.com/najaeda/naja-if/archive/{}.tar.gz".format(_NAJA_IF_COMMIT),
-        naja_if_sha256 = "d9ac71c5021b38bde4c5c1e66462e7e52df9f0ffe8739c8f64f8dfbe2cd0b0ea",
+        naja_if_sha256 = "fd59554a923f785d461903b12a2cbf2050a6a5b2749ed269aa0c0b9f8ce93d87",
         naja_if_strip_prefix = "naja-if-{}".format(_NAJA_IF_COMMIT),
         cpptrace_url = "https://github.com/jeremy-rifkin/cpptrace/archive/{}.tar.gz".format(_CPPTRACE_COMMIT),
         cpptrace_sha256 = "77d689fd7956ff80351a079d83e86a03865dbbe2433b4559cc6cea50bed77390",

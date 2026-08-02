@@ -224,6 +224,19 @@ jobs:
             sec-encoding=${{ env.SEC_ENCODING }}
         fi
 
+    - name: Build and install najaeda from the local Naja checkout
+      run: |
+        python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip install --no-build-isolation "${{github.workspace}}/thirdparty/naja"
+
+    - name: Generate TinyRocket SEC inputs
+      working-directory: ${{github.workspace}}/example
+      run: |
+        python3 to_naja_if.py
+        python3 edit.py
+        python3 extract_tinyrocket_csrfile_sec.py
+
     - name: Run TinyRocket SEC regressions
       working-directory: ${{github.workspace}}
       run: |
@@ -245,15 +258,6 @@ jobs:
           compact \
           engine=${{ env.SEC_ENGINE }} \
           sec-encoding=${{ env.SEC_ENCODING }}
-
-    - name: Install najaeda
-      run: pip install najaeda==0.7.15
-
-    - name: Generate TinyRocket edited and CSRFile SEC examples
-      working-directory: ${{github.workspace}}/example
-      run: |
-        python edit.py
-        python extract_tinyrocket_csrfile_sec.py
 
     - name: Run TinyRocket SEC self-check
       working-directory: ${{github.workspace}}

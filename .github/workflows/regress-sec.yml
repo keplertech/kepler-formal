@@ -47,6 +47,25 @@ jobs:
     - name: Build kepler-formal and unit tests
       run: cmake --build ${{github.workspace}}/build-sec-regress --config Release
 
+    - name: Build najaeda wheel from the local Naja checkout
+      run: |
+        mkdir -p "${{github.workspace}}/stage/najaeda"
+        python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip wheel \
+            --no-build-isolation \
+            --no-deps \
+            --wheel-dir "${{github.workspace}}/stage/najaeda" \
+            "${{github.workspace}}/thirdparty/naja"
+
+    - name: Generate Naja IF unit-test inputs
+      working-directory: ${{github.workspace}}/example
+      run: |
+        python3 -m pip install \
+          "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
+        python3 to_naja_if.py
+        python3 edit.py
+
     - name: Run unit tests
       run: |
         ctest --test-dir ${{github.workspace}}/build-sec-regress \
@@ -197,6 +216,7 @@ jobs:
           case_dir: .
           config: regress/tinyrocket_naja_if/config.yaml
           expectation: positive
+          generator: naja_if
         - name: tinyrocket_verilog
           source: local
           case_dir: .
@@ -264,18 +284,22 @@ jobs:
         esac
 
     - name: Generate local regression inputs
-      if: ${{ matrix.case.generator == 'csrfile' || matrix.case.generator == 'edit' }}
+      if: ${{ matrix.case.generator == 'naja_if' || matrix.case.generator == 'csrfile' || matrix.case.generator == 'edit' }}
       working-directory: ${{github.workspace}}/example
       env:
         CASE_GENERATOR: ${{ matrix.case.generator }}
       run: |
-        pip install najaeda==0.7.15
+        python3 -m pip install \
+          "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
         case "${CASE_GENERATOR}" in
+          naja_if)
+            python3 to_naja_if.py
+            ;;
           csrfile)
-            python extract_tinyrocket_csrfile_sec.py
+            python3 extract_tinyrocket_csrfile_sec.py
             ;;
           edit)
-            python edit.py
+            python3 edit.py
             ;;
           *)
             echo "Unknown SEC regression generator: ${CASE_GENERATOR}" >&2
@@ -633,7 +657,8 @@ jobs:
         set -euo pipefail
         export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
 
-        pip install najaeda==0.7.15
+        python3 -m pip install \
+          "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
 
         cleanup_negative_edit() {
           (
