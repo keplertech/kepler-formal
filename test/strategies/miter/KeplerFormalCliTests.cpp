@@ -1742,6 +1742,30 @@ TEST_F(KeplerFormalCliTests, CliSystemVerilogOptionsRejectedForVerilogFormat) {
   EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
 }
 
+TEST_F(KeplerFormalCliTests, CliVerilogTopOptionsRejectedForSystemVerilogFormat) {
+  EXPECT_NE(runWithArgs({"kepler-formal",
+                         "-systemverilog",
+                         "--verilog_design1_top",
+                         "top",
+                         "design0.sv",
+                         "design1.sv",
+                         "-v",
+                         "sec"}),
+            EXIT_SUCCESS);
+}
+
+TEST_F(KeplerFormalCliTests, CliSv2vRejectsFirstVerilogTopOption) {
+  EXPECT_NE(runWithArgs({"kepler-formal",
+                         "-sv2v",
+                         "--verilog_design1_top",
+                         "top",
+                         "design0.sv",
+                         "design1.v",
+                         "-v",
+                         "sec"}),
+            EXIT_SUCCESS);
+}
+
 TEST_F(KeplerFormalCliTests, CliVerilogExplicitTopSelectsDummyModules) {
   const auto testData = repoRoot() / "test/strategies/miter/testdata";
   const auto design1 = testData / "verilog_top_design1.v";
