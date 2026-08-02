@@ -119,6 +119,20 @@ cmake(
         "libyosys_liberty.a",
     ],
     build_args = ["-j2"],
+    # Build only the libraries consumed by kepler-formal. Naja's default
+    # target also builds its internal test executables.
+    targets = NAJA_SHARED_LIB_NAMES + [
+        "naja_core",
+        "naja_snl_visual",
+        "naja_snl_verilog",
+        "naja_snl_systemverilog",
+        "svlang",
+        "naja_snl_liberty",
+        "naja_lefdef",
+        "naja_nl_dump",
+        "naja_verilog",
+        "yosys_liberty",
+    ],
     cache_entries = select({
         "@platforms//os:macos": NAJA_MACOS_CMAKE_CACHE_ENTRIES,
         "@kepler-formal//bazel:hermetic_runtime": NAJA_CMAKE_CACHE_ENTRIES |

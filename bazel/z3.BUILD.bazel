@@ -1,4 +1,4 @@
-load("@com_google_xls//dependency_support/z3:build_defs.bzl", "GEN_HDRS", "GEN_SRCS", "gen_srcs")
+load("@xls_c2rtl_src//:dependency_support/z3/build_defs.bzl", "GEN_HDRS", "GEN_SRCS", "gen_srcs")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 licenses(["notice"])

@@ -10,9 +10,6 @@ def _z3_extension_impl(_module_ctx):
         name = "z3",
         build_file = Label("//bazel:z3.BUILD.bazel"),
         integrity = "sha256-gaAsLGTGTWw98jP1kYa5VieZCtoMTC/JAcnCWnByZyo=",
-        repo_mapping = {
-            "@com_google_xls": "@xls_c2rtl_src",
-        },
         strip_prefix = "z3-z3-4.14.1",
         urls = ["https://github.com/Z3Prover/z3/archive/z3-4.14.1.tar.gz"],
     )
