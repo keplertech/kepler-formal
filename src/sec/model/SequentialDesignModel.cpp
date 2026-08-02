@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory_resource>
@@ -45,29 +46,33 @@ struct PendingPinTerm {
   naja::NL::NLID::Bit bit = 0;
 };
 
-using PendingPinMap =
-    std::unordered_map<std::string, std::vector<PendingPinTerm>>;
+using PendingTermMap =
+    std::unordered_map<const naja::NL::SNLBitTerm*, PendingPinTerm>;
 
 struct StateOutputTerm {
   naja::DNL::DNLID termID = naja::DNL::DNLID_MAX;
-  std::string pinName;
   naja::NL::NLID::Bit bit = 0;
-  bool intrinsicClockIsInverted = false;
-  std::vector<PendingPinTerm> clockTermIDs;
+  size_t stateIndex = 0;
+  bool complemented = false;
+};
+
+struct PendingStateReference {
+  naja::DNL::DNLID termID = naja::DNL::DNLID_MAX;
+  bool complemented = false;
 };
 
 struct PendingTransition {  // LCOV_EXCL_LINE
   SignalKey stateKey;
   naja::DNL::DNLID stateTermID = naja::DNL::DNLID_MAX;
-  std::string statePinName;
   bool stateOutputIsComplemented = false;
-  naja::NL::NLID::Bit stateBit = 0;
-  size_t independentStateOutputCount = 0;
+  size_t modelStateIndex = 0;
   size_t boundaryInfoIndex = std::numeric_limits<size_t>::max();
   std::vector<SignalKey> complementedStateKeys;
-  PendingPinMap pinTermIDs;
+  PendingTermMap modelTermIDs;
+  std::vector<PendingStateReference> stateReferences;
+  const naja::NL::SNLDesignModeling::SequentialState* sequentialState = nullptr;
+  const naja::NL::SNLDesignModeling::BooleanExpression* clockedOn = nullptr;
   std::vector<PendingPinTerm> clockTermIDs;
-  bool intrinsicClockIsInverted = false;
 };
 
 struct PendingMemoryReadPort {
@@ -122,8 +127,10 @@ struct InstanceBoundaryInfo {
 };
 
 struct SequentialInstanceScan {
-  PendingPinMap pinTermIDs;
+  PendingTermMap modelTermIDs;
   std::vector<StateOutputTerm> stateOutputs;
+  const naja::NL::SNLDesignModeling::SequentialModel* model = nullptr;
+  std::string unsupportedReason;
   InstanceBoundaryInfo boundaryInfo;
 };
 
@@ -1232,102 +1239,24 @@ bool hasSuffix(const std::string& value, const std::string& suffix) {
          value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-std::string stripComplementSuffix(const std::string& pinName) {
-  if (hasSuffix(pinName, "_N") || hasSuffix(pinName, "_B")) {
-    // LCOV_EXCL_START
-    return pinName.substr(0, pinName.size() - 2);  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-  if (hasSuffix(pinName, "N") || hasSuffix(pinName, "B")) {
-    return pinName.substr(0, pinName.size() - 1);
-  }
-  return pinName;
-}
-
-bool isIntrinsicComplementedStateOutput(const std::string& pinName) {
-  const std::string normalized = normalizePinName(pinName);
-  return normalized == "QN" || normalized == "QB" ||
-         normalized == "Q_N" || normalized == "Q_B";
-}
-
-bool isComplementedStateOutput(const std::string& primaryPinName,
-                               const std::string& candidatePinName) {
-  return candidatePinName != primaryPinName &&
-         stripComplementSuffix(candidatePinName) == primaryPinName;
-}
-
-const StateOutputTerm* findComplementedPrimaryStateOutput(
-    const StateOutputTerm& stateOutput,
-    const std::vector<StateOutputTerm>& stateOutputs) {
-  const std::string baseName = stripComplementSuffix(stateOutput.pinName);
-  if (baseName == stateOutput.pinName) {
-    return nullptr;
-  }
-
-  for (const auto& candidate : stateOutputs) {
-    if (candidate.termID == stateOutput.termID || candidate.bit != stateOutput.bit) {
-      continue;
-    }
-    if (candidate.pinName == baseName) {
-      return &candidate;
-    }
-  }
-  // LCOV_EXCL_START
-  return nullptr;  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
-}
-
-size_t countIndependentStateOutputs(
-    const std::vector<StateOutputTerm>& stateOutputs) {
-  size_t count = 0;
-  for (const auto& stateOutput : stateOutputs) {
-    if (findComplementedPrimaryStateOutput(stateOutput, stateOutputs) != nullptr) {
-      continue;
-    }
-    ++count;
-  }
-  return count;
-}
-
-std::optional<naja::DNL::DNLID> resolvePendingPinTermID(
-    const PendingTransition& pending,
-    const char* pinName) {
-  const auto pinIt = pending.pinTermIDs.find(pinName);
-  if (pinIt == pending.pinTermIDs.end()) {
+std::optional<std::pair<size_t, bool>> getStateOutputReference(
+    const naja::NL::SNLDesignModeling::BooleanExpression& expression) {
+  using Operator =
+      naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+  if (!expression.isValid()) {
     return std::nullopt;
   }
-
-  const auto& candidates = pinIt->second;
-  if (candidates.empty()) {
-    // LCOV_EXCL_START
-    return std::nullopt;  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
+  const auto* node = &expression.nodes[expression.root];
+  bool complemented = false;
+  if (node->operation == Operator::Not && node->operands.size() == 1 &&
+      node->operands.front() < expression.nodes.size()) {
+    complemented = true;
+    node = &expression.nodes[node->operands.front()];
   }
-
-  // Multi-bit sequential primitives must resolve update pins against the same
-  // bit index as the current state output. This keeps vector flops aligned per
-  // state term instead of collapsing the whole instance down to one pin map.
-  if (candidates.size() > 1) {
-    for (const auto& candidate : candidates) {
-      if (candidate.bit == pending.stateBit) {
-        return candidate.termID;
-      }
-    }
-    // LCOV_EXCL_START
-    throw std::runtime_error(  // LCOV_EXCL_LINE
-        "Missing bit-matched sequential pin `" + std::string(pinName) +  // LCOV_EXCL_LINE
-        "` for output `" + pending.statePinName + "[" +  // LCOV_EXCL_LINE
-        std::to_string(pending.stateBit) + "]`");  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
+  if (node->operation != Operator::State) {
+    return std::nullopt;
   }
-
-  const bool isDataPin = std::string(pinName) == "D";
-  if (isDataPin && pending.independentStateOutputCount > 1) {
-    throw std::runtime_error( // LCOV_EXCL_LINE
-        "Shared scalar D input cannot define multiple independent state outputs");
-  }
-
-  return candidates.front().termID;
+  return std::pair<size_t, bool>{node->state, complemented};
 }
 
 bool isSequentialStateOutput(const naja::DNL::DNLTerminalFull& term) {
@@ -1348,29 +1277,6 @@ bool isSequentialNextStateInput(const naja::DNL::DNLTerminalFull& term) {
   return !naja::NL::SNLDesignModeling::getInputRelatedClocks(
               term.getSnlBitTerm())
               .empty();
-}
-
-bool isNegativeClockPinName(const std::string& pinName) {
-  const std::string normalized = normalizePinName(pinName);
-  return normalized == "CKN" || normalized == "CLKN" ||
-         normalized == "CLK_N" || normalized == "CLK_B" ||
-         normalized == "CK_N" || normalized == "CK_B" ||
-         normalized == "CLOCK_N" || normalized == "CLOCK_B";
-}
-
-bool isIntrinsicNegativeEdgeClock(
-    const naja::DNL::DNLInstanceFull& instance,
-    const naja::NL::SNLBitTerm* clockBitTerm) {
-  const auto* model = instance.getSNLModel();
-  if (naja::NL::NLDB0::isDFFN(model)) {
-    return true;
-  }
-  if (clockBitTerm == nullptr) {
-    // LCOV_EXCL_START
-    return false;  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-  return isNegativeClockPinName(clockBitTerm->getName().getString());
 }
 
 bool isConstantInternalOutputTerm(const naja::DNL::DNLTerminalFull& term) {
@@ -1401,79 +1307,6 @@ bool isConstantInternalOutputTerm(const naja::DNL::DNLTerminalFull& term) {
          (modelName.find("CONB") != std::string::npos ||  // LCOV_EXCL_LINE
           modelName.find("TIE") != std::string::npos);  // LCOV_EXCL_LINE
           // LCOV_EXCL_STOP
-}
-
-bool isOptionalSequentialControlPin(const std::string& pinName) {
-  return pinName == "E" || pinName == "DE" || pinName == "R" ||
-         pinName == "RN" || pinName == "RESET_B" ||
-         pinName == "RESET_N" || pinName == "RESETN" ||
-         pinName == "RST_B" || pinName == "RST_N" ||
-         pinName == "RSTN" || pinName == "S" ||
-         pinName == "SET_B" || pinName == "SET_N" ||
-         pinName == "SETN";
-}
-
-bool isSupportedSequentialUpdatePin(const std::string& pinName) {
-  return pinName == "D" || isOptionalSequentialControlPin(pinName);
-}
-
-std::optional<naja::DNL::DNLID> resolvePendingPinRoleTermID(
-    const PendingTransition& pending,
-    const char* roleName) {
-  auto resolvedTermID = resolvePendingPinTermID(pending, roleName);
-  if (resolvedTermID.has_value()) {
-    return resolvedTermID;
-  }
-
-  const std::string role(roleName);
-  if (role == "E") {
-    // sky130 spells an enabled flop's data enable as DE while the generic SEC
-    // transition builder uses E for hold semantics.
-    return resolvePendingPinTermID(pending, "DE");
-  }
-  if (role == "RN") {
-    // Active-low reset pins appear under several Liberty naming conventions.
-    // Treat them as the same control role, without introducing any equality
-    // assumptions between internal state bits.
-    for (const char* alias : {"RESET_B", "RESET_N", "RESETN", "RST_B",
-                              "RST_N", "RSTN"}) {
-      resolvedTermID = resolvePendingPinTermID(pending, alias);
-      if (resolvedTermID.has_value()) {
-        // LCOV_EXCL_START
-        return resolvedTermID;  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      }
-    }
-  }
-  if (role == "SN") {
-    for (const char* alias : {"SET_B", "SET_N", "SETN"}) {
-      resolvedTermID = resolvePendingPinTermID(pending, alias);
-      if (resolvedTermID.has_value()) {
-        // LCOV_EXCL_START
-        return resolvedTermID;  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      }
-    }
-  }
-  return std::nullopt;
-}
-
-BoolExpr* getRequiredOutputExpr(
-    const PendingTransition& pending,
-    const char* pinName,
-    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
-  auto resolvedTermID = resolvePendingPinRoleTermID(pending, pinName);
-  if (!resolvedTermID.has_value()) {
-    return nullptr;
-  }
-  auto exprIt = outputExprByTerm.find(*resolvedTermID);
-  if (exprIt == outputExprByTerm.end()) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("Missing combinational expression for sequential pin `" +  // LCOV_EXCL_LINE
-                             std::string(pinName) + "`");  // LCOV_EXCL_LINE
-                             // LCOV_EXCL_STOP
-  }
-  return exprIt->second;
 }
 
 BoolExpr* stripClockCarrierFromClockEnable(
@@ -1678,6 +1511,118 @@ BoolExpr* substituteClockGateLatchVarsInExpr(
       expr, substituteClockGateLatchVars(expr, latchDataExprByVarID, memo));
 }
 
+BoolExpr* buildSequentialModelExpr(
+    const naja::NL::SNLDesignModeling::BooleanExpression& expression,
+    const PendingTransition& pending,
+    const std::vector<size_t>& termDNLID2varID,
+    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
+  using Operator =
+      naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+  // Pending expressions are validated before construction. These checks keep
+  // the internal builder contract explicit if that ordering changes.
+  if (!expression.isValid()) {
+    // LCOV_EXCL_START
+    throw std::runtime_error("Invalid Naja sequential expression");
+    // LCOV_EXCL_STOP
+  }
+  std::vector<BoolExpr*> memo(expression.nodes.size(), nullptr);
+  std::function<BoolExpr*(size_t)> buildNode = [&](size_t nodeID) -> BoolExpr* {
+    if (nodeID >= expression.nodes.size()) {
+      // LCOV_EXCL_START
+      throw std::runtime_error("Sequential expression operand is out of range");
+      // LCOV_EXCL_STOP
+    }
+    if (memo[nodeID] != nullptr) {
+      return memo[nodeID];
+    }
+    const auto& node = expression.nodes[nodeID];
+    BoolExpr* result = nullptr;
+    if (node.operation == Operator::Constant) {
+      result = node.constant ? BoolExpr::createTrue() : BoolExpr::createFalse();
+    } else if (node.operation == Operator::Term) {
+      const auto termIt = pending.modelTermIDs.find(node.term);
+      if (termIt == pending.modelTermIDs.end()) {
+        // LCOV_EXCL_START
+        throw std::runtime_error("Sequential expression references an unmapped terminal");
+        // LCOV_EXCL_STOP
+      }
+      // Requested sequential terminals are materialized before expression
+      // construction, leaving the direct-variable fallback defensive only.
+      const auto exprIt = outputExprByTerm.find(termIt->second.termID);
+      if (exprIt != outputExprByTerm.end()) {
+        result = exprIt->second;
+      // LCOV_EXCL_START
+      } else if (termIt->second.termID < termDNLID2varID.size() &&
+                 termDNLID2varID[termIt->second.termID] >= 2) {
+        result = BoolExpr::Var(termDNLID2varID[termIt->second.termID]);
+      // LCOV_EXCL_STOP
+      } else {
+        // LCOV_EXCL_START
+        throw std::runtime_error(
+            "Missing combinational expression for sequential terminal");
+        // LCOV_EXCL_STOP
+      }
+    } else if (node.operation == Operator::State) {
+      if (node.state >= pending.stateReferences.size()) {
+        // LCOV_EXCL_START
+        throw std::runtime_error("Sequential expression state is out of range");
+        // LCOV_EXCL_STOP
+      }
+      const auto& state = pending.stateReferences[node.state];
+      if (state.termID >= termDNLID2varID.size() ||
+          termDNLID2varID[state.termID] < 2) {
+        throw std::runtime_error("Sequential state bit was mapped to a constant");
+      }
+      result = BoolExpr::Var(termDNLID2varID[state.termID]);
+      if (state.complemented) {
+        result = BoolExpr::Not(result);
+      }
+    } else {
+      std::vector<BoolExpr*> operands;
+      operands.reserve(node.operands.size());
+      for (const auto operand : node.operands) {
+        operands.push_back(buildNode(operand));
+      }
+      if (node.operation == Operator::Not) {
+        if (operands.size() != 1) {
+          throw std::runtime_error("Sequential NOT expression has invalid arity");
+        }
+        result = BoolExpr::Not(operands.front());
+      } else {
+        if (operands.empty()) {
+          throw std::runtime_error("Sequential expression has no operands");
+        }
+        result = operands.front();
+        for (size_t index = 1; index < operands.size(); ++index) {
+          if (node.operation == Operator::And) {
+            result = BoolExpr::And(result, operands[index]);
+          } else if (node.operation == Operator::Or) {
+            result = BoolExpr::Or(result, operands[index]);
+          } else if (node.operation == Operator::Xor) {
+            result = BoolExpr::Xor(result, operands[index]);
+          } else {
+            throw std::runtime_error("Unsupported sequential expression operator");
+          }
+        }
+      }
+    }
+    memo[nodeID] = result;
+    return result;
+  };
+  return buildNode(expression.root);
+}
+
+BoolExpr* buildPendingClockExpr(
+    const PendingTransition& pending,
+    const std::vector<size_t>& termDNLID2varID,
+    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
+  if (pending.clockedOn == nullptr) {
+    return nullptr;
+  }
+  return buildSequentialModelExpr(
+      *pending.clockedOn, pending, termDNLID2varID, outputExprByTerm);
+}
+
 bool pendingClockTermsArePureCarriers(
     const PendingTransition& pending,
     const std::unordered_set<naja::DNL::DNLID>& pureClockCarrierTermIDs) {
@@ -1697,6 +1642,7 @@ bool pendingClockTermsArePureCarriers(
 
 BoolExpr* getLocalClockEnableExpr(
     const PendingTransition& pending,
+    const std::vector<size_t>& termDNLID2varID,
     const std::unordered_set<naja::DNL::DNLID>& pureClockCarrierTermIDs,
     const std::unordered_set<size_t>& topClockCarrierVarIDs,
     const std::unordered_map<size_t, ClockEvent>& clockEventByCarrierVarID,
@@ -1720,25 +1666,13 @@ BoolExpr* getLocalClockEnableExpr(
     // LCOV_EXCL_STOP
   }
 
-  std::vector<BoolExpr*> clockExprs;
-  clockExprs.reserve(pending.clockTermIDs.size());
-  for (const auto& clockTerm : pending.clockTermIDs) {
-    const auto exprIt = outputExprByTerm.find(clockTerm.termID);
-    if (exprIt == outputExprByTerm.end()) {
-      // LCOV_EXCL_START
-      throw std::runtime_error(  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-          "Missing combinational expression for sequential clock pin");  // LCOV_EXCL_LINE
-    }
-    clockExprs.push_back(exprIt->second);
-  }
-
-  BoolExpr* clockExpr = clockExprs.front();
-  for (size_t index = 1; index < clockExprs.size(); ++index) {
+  BoolExpr* clockExpr =
+      buildPendingClockExpr(pending, termDNLID2varID, outputExprByTerm);
+  if (clockExpr == nullptr) {
     // LCOV_EXCL_START
-    clockExpr = BoolExpr::And(clockExpr, clockExprs[index]);  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
+    return nullptr;
+    // LCOV_EXCL_STOP
+  }
 
   if (!clockGateLatchDataExprByVarID.empty()) {
     clockExpr = substituteClockGateLatchVarsInExpr(
@@ -1764,40 +1698,93 @@ BoolExpr* getLocalClockEnableExpr(
 
 std::optional<std::string> getPendingTransitionUnsupportedReason(
     const PendingTransition& pending) {
-  const auto dIt = pending.pinTermIDs.find("D");
-  if (dIt == pending.pinTermIDs.end() || dIt->second.empty()) {
-    return "Unsupported sequential primitive without D input";
+  using Expression = naja::NL::SNLDesignModeling::BooleanExpression;
+  using Operator = Expression::Operator;
+  if (pending.sequentialState == nullptr || pending.clockedOn == nullptr) {
+    // LCOV_EXCL_START
+    return "Missing Naja sequential model";
+    // LCOV_EXCL_STOP
   }
-
-  if (dIt->second.size() == 1 && pending.independentStateOutputCount > 1) {
-    return "Shared scalar D input cannot define multiple independent state outputs";
+  if (pending.modelStateIndex >= pending.stateReferences.size()) {
+    // LCOV_EXCL_START
+    return "Naja sequential state has no physical output";
+    // LCOV_EXCL_STOP
   }
-
-  if (dIt->second.size() > 1) {
-    bool hasBitMatchedDataPin = false;
-    for (const auto& candidate : dIt->second) {
-      if (candidate.bit == pending.stateBit) {
-        hasBitMatchedDataPin = true;
-        break;
+  auto validate = [&](const Expression& expression)
+      -> std::optional<std::string> {
+    if (!expression.isValid()) {
+      return "Invalid Naja sequential expression";
+    }
+    for (const auto& node : expression.nodes) {
+      if (node.operation == Operator::Term &&
+          pending.modelTermIDs.find(node.term) == pending.modelTermIDs.end()) {
+        return "Naja sequential expression references an unmapped terminal";
+      }
+      if (node.operation == Operator::State &&
+          node.state >= pending.stateReferences.size()) {
+        return "Naja sequential expression references an unmapped state";
+      }
+      for (const auto operand : node.operands) {
+        if (operand >= expression.nodes.size()) {
+          return "Naja sequential expression operand is out of range";
+        }
+      }
+      if (node.operation == Operator::Not && node.operands.size() != 1) {
+        return "Naja sequential NOT expression has invalid arity";
       }
     }
-    if (!hasBitMatchedDataPin) {
-      return "Missing bit-matched sequential pin `D` for output `" + // LCOV_EXCL_LINE
-             pending.statePinName + "[" + std::to_string(pending.stateBit) + // LCOV_EXCL_LINE
-             "]`";
+    return std::nullopt;
+  };
+  if (auto reason = validate(pending.sequentialState->nextState)) {
+    return reason;
+  }
+  if (pending.sequentialState->clear.has_value()) {
+    if (auto reason = validate(*pending.sequentialState->clear)) {
+      return reason;
     }
   }
-
-  for (const auto& [pinName, _] : pending.pinTermIDs) {
-    if (!isSupportedSequentialUpdatePin(pinName)) {
-      return "Unsupported sequential primitive with update pin `" + pinName + "`";
+  if (pending.sequentialState->preset.has_value()) {
+    if (auto reason = validate(*pending.sequentialState->preset)) {
+      return reason;
     }
   }
-
-  // Reset/set combinations are common in mapped cells.  They must be modeled
-  // as state transitions instead of abstracted as internal SEC boundary terms,
-  // because SEC may only align top-level terminals by name.
+  if (auto reason = validate(*pending.clockedOn)) {
+    return reason;
+  }
+  if (pending.sequentialState->clear.has_value() &&
+      pending.sequentialState->preset.has_value() &&
+      pending.sequentialState->clearPresetValue ==
+          naja::NL::SNLDesignModeling::SequentialState::ClearPresetValue::Unknown) {
+    return "Unsupported unknown simultaneous clear/preset value";
+  }
   return std::nullopt;
+}
+
+std::vector<std::pair<const naja::NL::SNLBitTerm*, PendingPinTerm>>
+getPendingUpdateTerms(const PendingTransition& pending) {
+  std::vector<std::pair<const naja::NL::SNLBitTerm*, PendingPinTerm>> terms;
+  std::unordered_set<const naja::NL::SNLBitTerm*> seen;
+  auto append = [&](const naja::NL::SNLDesignModeling::BooleanExpression& expression) {
+    using Operator =
+        naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+    for (const auto& node : expression.nodes) {
+      if (node.operation != Operator::Term || !seen.insert(node.term).second) {
+        continue;
+      }
+      const auto termIt = pending.modelTermIDs.find(node.term);
+      if (termIt != pending.modelTermIDs.end()) {
+        terms.emplace_back(node.term, termIt->second);
+      }
+    }
+  };
+  append(pending.sequentialState->nextState);
+  if (pending.sequentialState->clear.has_value()) {
+    append(*pending.sequentialState->clear);
+  }
+  if (pending.sequentialState->preset.has_value()) {
+    append(*pending.sequentialState->preset);
+  }
+  return terms;
 }
 
 BoolExpr* buildNextStateExpr(
@@ -1809,44 +1796,28 @@ BoolExpr* buildNextStateExpr(
     const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID,
     const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
     std::unordered_map<BoolExpr*, BoolExpr*>& clockCarrierStripMemo) {
-  if (pending.stateTermID >= termDNLID2varID.size()) {
+  const auto& currentReference =
+      pending.stateReferences.at(pending.modelStateIndex);
+  if (currentReference.termID >= termDNLID2varID.size() ||
+      termDNLID2varID[currentReference.termID] < 2) {
     // LCOV_EXCL_START
-    throw std::runtime_error("Sequential state term is out of range");  // LCOV_EXCL_LINE
+    throw std::runtime_error("Sequential state bit was mapped to a constant");
     // LCOV_EXCL_STOP
   }
-
-  const size_t stateVarID = termDNLID2varID[pending.stateTermID];
-  if (stateVarID < 2) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("Sequential state bit was mapped to a constant");  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
+  BoolExpr* current = BoolExpr::Var(termDNLID2varID[currentReference.termID]);
+  if (currentReference.complemented) {
+    current = BoolExpr::Not(current);
   }
-
-  BoolExpr* data = getRequiredOutputExpr(pending, "D", outputExprByTerm);
-  if (data == nullptr) {
-    // LCOV_EXCL_START
-    throw std::runtime_error("Unsupported sequential primitive without D input");  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-  if (pending.stateOutputIsComplemented) {
-    // LCOV_EXCL_START
-    data = BoolExpr::Not(data);  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
-
-  BoolExpr* current = BoolExpr::Var(stateVarID);
-  BoolExpr* next = data;
-
-  // Supported hold semantics: Q' = E ? D : Q.
-  if (BoolExpr* enable = getRequiredOutputExpr(pending, "E", outputExprByTerm)) {
-    next = BoolExpr::Or(
-        BoolExpr::And(enable, data),
-        BoolExpr::And(BoolExpr::Not(enable), current));
-  }
+  BoolExpr* next = buildSequentialModelExpr(
+      pending.sequentialState->nextState,
+      pending,
+      termDNLID2varID,
+      outputExprByTerm);
 
   if (BoolExpr* clockEnable =
           getLocalClockEnableExpr(
               pending,
+              termDNLID2varID,
               pureClockCarrierTermIDs,
               topClockCarrierVarIDs,
               clockEventByCarrierVarID,
@@ -1858,38 +1829,51 @@ BoolExpr* buildNextStateExpr(
         BoolExpr::And(BoolExpr::Not(clockEnable), current));
   }
 
-  BoolExpr* resetHigh = getRequiredOutputExpr(pending, "R", outputExprByTerm);
-  BoolExpr* resetLow = getRequiredOutputExpr(pending, "RN", outputExprByTerm);
-  BoolExpr* setHigh = getRequiredOutputExpr(pending, "S", outputExprByTerm);
-  BoolExpr* setLow = getRequiredOutputExpr(pending, "SN", outputExprByTerm);
-
-  auto applyForcedValue = [&](BoolExpr* asserted, bool value) {
+  auto makeIteExpr = [](BoolExpr* condition,
+                        BoolExpr* whenTrue,
+                        BoolExpr* whenFalse) {
     return BoolExpr::Or(
-        BoolExpr::And(asserted,
-                      value ? BoolExpr::createTrue() : BoolExpr::createFalse()),
-        BoolExpr::And(BoolExpr::Not(asserted), next));
+        BoolExpr::And(condition, whenTrue),
+        BoolExpr::And(BoolExpr::Not(condition), whenFalse));
   };
+  BoolExpr* clear = pending.sequentialState->clear.has_value()
+      ? buildSequentialModelExpr(
+            *pending.sequentialState->clear,
+            pending,
+            termDNLID2varID,
+            outputExprByTerm)
+      : nullptr;
+  BoolExpr* preset = pending.sequentialState->preset.has_value()
+      ? buildSequentialModelExpr(
+            *pending.sequentialState->preset,
+            pending,
+            termDNLID2varID,
+            outputExprByTerm)
+      : nullptr;
+  if (clear != nullptr && preset != nullptr) {
+    BoolExpr* simultaneous = nullptr;
+    using Value = naja::NL::SNLDesignModeling::SequentialState::ClearPresetValue;
+    switch (pending.sequentialState->clearPresetValue) {
+      case Value::Zero: simultaneous = BoolExpr::createFalse(); break;
+      case Value::One: simultaneous = BoolExpr::createTrue(); break;
+      case Value::Hold: simultaneous = current; break;
+      case Value::Toggle: simultaneous = BoolExpr::Not(current); break;
+      case Value::Unknown:
+        throw std::runtime_error("Unknown simultaneous clear/preset value");
+    }
+    next = makeIteExpr(
+        clear,
+        makeIteExpr(preset, simultaneous, BoolExpr::createFalse()),
+        makeIteExpr(preset, BoolExpr::createTrue(), next));
+  } else if (clear != nullptr) {
+    next = makeIteExpr(clear, BoolExpr::createFalse(), next);
+  } else if (preset != nullptr) {
+    next = makeIteExpr(preset, BoolExpr::createTrue(), next);
+  }
 
-  const bool resetValue = pending.stateOutputIsComplemented;
-  const bool setValue = !pending.stateOutputIsComplemented;
-
-  // Apply reset before set so set/clear-style controls have the final say when
-  // both are asserted.  This matches ASAP7 reset+set flops whose Liberty views
-  // define the simultaneous clear/preset case as low on the exposed state pin.
-  if (resetHigh) {
-    next = applyForcedValue(resetHigh, resetValue);
+  if (pending.stateOutputIsComplemented) {
+    next = BoolExpr::Not(next);
   }
-  if (resetLow) {
-    next = applyForcedValue(BoolExpr::Not(resetLow), resetValue);
-  }
-  if (setHigh) {
-    next = applyForcedValue(setHigh, setValue);
-  }
-  if (setLow) {
-    // LCOV_EXCL_START
-    next = applyForcedValue(BoolExpr::Not(setLow), setValue);  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
 
   return stripClockCarriersFromSequentialUpdate(
       next, topClockCarrierVarIDs, clockCarrierStripMemo);
@@ -2188,44 +2172,6 @@ void seedTopClockCarrierEvents(
 
 
 // LCOV_EXCL_STOP
-ClockEvent applyIntrinsicClockPolarity(ClockEvent event, bool inverted) {
-  // LCOV_EXCL_START
-  if (inverted) {
-  // LCOV_EXCL_STOP
-    event.phase = invertClockPhase(event.phase);
-  }
-  return event;
-}
-
-BoolExpr* buildPendingClockExpr(
-    const PendingTransition& pending,
-    const std::vector<size_t>& termDNLID2varID,
-    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
-  if (pending.clockTermIDs.empty()) {
-    return nullptr;  // LCOV_EXCL_LINE
-  }
-
-  BoolExpr* clockExpr = nullptr;
-  // LCOV_EXCL_START
-  for (const auto& clockTerm : pending.clockTermIDs) {
-  // LCOV_EXCL_STOP
-    BoolExpr* termExpr = nullptr;
-    const auto exprIt = outputExprByTerm.find(clockTerm.termID);
-    if (exprIt != outputExprByTerm.end()) {
-      termExpr = exprIt->second;
-    // LCOV_EXCL_START
-    } else if (clockTerm.termID < termDNLID2varID.size() &&
-    // LCOV_EXCL_STOP
-               termDNLID2varID[clockTerm.termID] >= 2) {  // LCOV_EXCL_LINE
-      termExpr = BoolExpr::Var(termDNLID2varID[clockTerm.termID]);  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-    if (termExpr == nullptr) {
-      continue;  // LCOV_EXCL_LINE
-    }
-    clockExpr = clockExpr == nullptr ? termExpr : BoolExpr::And(clockExpr, termExpr);
-  }
-  return clockExpr;
-}
 
 std::optional<ClockEvent> classifyPendingClockEvent(
     const PendingTransition& pending,
@@ -2237,12 +2183,7 @@ std::optional<ClockEvent> classifyPendingClockEvent(
   if (clockExpr == nullptr) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
-  auto event =
-      classifyClockEventExpression(clockExpr, clockEventByCarrierVarID);
-  if (!event.has_value()) {
-    return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  return applyIntrinsicClockPolarity(*event, pending.intrinsicClockIsInverted);
+  return classifyClockEventExpression(clockExpr, clockEventByCarrierVarID);
 }
 
 std::vector<ClockCarrierClass> buildClockCarrierClasses(
@@ -2981,48 +2922,100 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
        termID <= instance.getTermIndexes().second;
        ++termID) {
     const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
-    const std::string normalizedPinName =
-        normalizePinName(term.getSnlBitTerm()->getName().getString());
-    if (isSequentialStateOutput(term) &&
-        term.getSnlBitTerm()->getDirection() !=
-            naja::NL::SNLBitTerm::Direction::Input) {
-      std::vector<PendingPinTerm> clockTermIDs;
-      bool intrinsicClockIsInverted = false;
-      for (auto* clockBitTerm :
-           naja::NL::SNLDesignModeling::getOutputRelatedClocks(
-               term.getSnlBitTerm())) {
-        if (clockBitTerm == nullptr) {
-          continue;  // LCOV_EXCL_LINE
-        }
-        const auto& clockTerm = instance.getTerminalFromBitTerm(clockBitTerm);
-        if (clockTerm.isNull() ||
-            clockTerm.getSnlBitTerm()->getDirection() ==
-                naja::NL::SNLBitTerm::Direction::Output) {
-          continue;  // LCOV_EXCL_LINE
-        }
-        intrinsicClockIsInverted =
-            intrinsicClockIsInverted ||
-            isIntrinsicNegativeEdgeClock(instance, clockBitTerm);
-        clockTermIDs.push_back(
-            {clockTerm.getID(), clockTerm.getSnlBitTerm()->getBit()});
-      }
-      scan.stateOutputs.push_back(
-          {termID,
-           normalizedPinName,
-           term.getSnlBitTerm()->getBit(),
-           intrinsicClockIsInverted,
-           std::move(clockTermIDs)});
+    if (!term.isNull()) {
+      scan.modelTermIDs.emplace(
+          term.getSnlBitTerm(),
+          PendingPinTerm{termID, term.getSnlBitTerm()->getBit()});
     }
-    // Some Liberty readers expose async set/reset pins as control timing arcs
-    // rather than data-to-clock arcs.  If the cell is sequential and the pin
-    // name is a supported control role, include it explicitly so reset
-    // semantics are modeled instead of leaving the flop unconstrained.
-    if ((isSequentialNextStateInput(term) ||
-         isOptionalSequentialControlPin(normalizedPinName)) &&
-        term.getSnlBitTerm()->getDirection() !=
-            naja::NL::SNLBitTerm::Direction::Output) {
-      scan.pinTermIDs[normalizedPinName].push_back(
-          {termID, term.getSnlBitTerm()->getBit()});
+  }
+
+  const auto* primitive = instance.getSNLModel();
+  if (naja::NL::SNLDesignModeling::hasSequentialModel(primitive)) {
+    scan.model = &naja::NL::SNLDesignModeling::getSequentialModel(primitive);
+    for (const auto& output : scan.model->outputs) {
+      const auto termIt = scan.modelTermIDs.find(output.term);
+      if (termIt == scan.modelTermIDs.end()) {
+        scan.unsupportedReason =
+            "Naja sequential output is not present on the instance";
+        continue;
+      }
+      const auto stateReference = getStateOutputReference(output.function);
+      if (!stateReference.has_value() ||
+          stateReference->first >= scan.model->states.size()) {
+        scan.unsupportedReason =
+            "Unsupported Naja sequential output function";
+        scan.stateOutputs.push_back({
+            termIt->second.termID, termIt->second.bit, 0, false});
+        continue;
+      }
+      scan.stateOutputs.push_back({
+          termIt->second.termID,
+          termIt->second.bit,
+          stateReference->first,
+          stateReference->second});
+    }
+
+    using Operator =
+        naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+    std::unordered_set<const naja::NL::SNLBitTerm*> modeledUpdateTerms;
+    auto collectTerms = [&](
+        const naja::NL::SNLDesignModeling::BooleanExpression& expression) {
+      for (const auto& node : expression.nodes) {
+        if (node.operation == Operator::Term) {
+          modeledUpdateTerms.insert(node.term);
+        }
+      }
+    };
+    for (const auto& state : scan.model->states) {
+      collectTerms(state.nextState);
+      if (state.clear.has_value()) collectTerms(*state.clear);
+      if (state.preset.has_value()) collectTerms(*state.preset);
+    }
+    for (const auto& [modelTerm, _] : scan.modelTermIDs) {
+      if (isSequentialNextStateInput(
+              instance.getTerminalFromBitTerm(
+                  const_cast<naja::NL::SNLBitTerm*>(modelTerm))) &&
+          modeledUpdateTerms.find(modelTerm) == modeledUpdateTerms.end()) {
+        scan.unsupportedReason =
+            "Unsupported sequential primitive with update pin `" +
+            modelTerm->getName().getString() + "`";
+        break;
+      }
+    }
+
+    const naja::NL::SNLBitTerm* sharedDataTerm = nullptr;
+    bool hasSharedScalarData = scan.model->states.size() > 1;
+    for (const auto& state : scan.model->states) {
+      if (!state.nextState.isValid()) {
+        hasSharedScalarData = false;
+        break;
+      }
+      const auto& root = state.nextState.nodes[state.nextState.root];
+      if (root.operation != Operator::Term ||
+          (sharedDataTerm != nullptr && root.term != sharedDataTerm)) {
+        hasSharedScalarData = false;
+        break;
+      }
+      sharedDataTerm = root.term;
+    }
+    if (hasSharedScalarData) {
+      scan.unsupportedReason =
+          "Shared scalar data input cannot define multiple independent state outputs";
+    }
+  } else {
+    scan.unsupportedReason = "Missing Naja sequential model";
+    size_t stateIndex = 0;
+    for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
+         termID != naja::DNL::DNLID_MAX &&
+         termID <= instance.getTermIndexes().second;
+         ++termID) {
+      const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
+      if (isSequentialStateOutput(term) &&
+          term.getSnlBitTerm()->getDirection() !=
+              naja::NL::SNLBitTerm::Direction::Input) {
+        scan.stateOutputs.push_back(
+            {termID, term.getSnlBitTerm()->getBit(), stateIndex++, false});
+      }
     }
   }
 
@@ -3395,43 +3388,88 @@ void appendPendingTransitionsForInstance(
     }
   };
 
-  const size_t independentStateOutputCount =
-      countIndependentStateOutputs(scan.stateOutputs);
   const size_t pendingStart = ctx.pendingTransitions.size();
   const size_t complementedStart = model.complementedStateRelations.size();
   bool unsupportedInstance = false;
   bool abstractedUnsupportedInstance = false;
   std::string abstractedUnsupportedReason;
 
-  // Track sequential behavior per state output bit. This keeps vector flops and
-  // other multi-output sequential cells from being collapsed into a single
-  // instance-wide transition record.
-  for (const auto& stateOutput : scan.stateOutputs) {
-    if (findComplementedPrimaryStateOutput(stateOutput, scan.stateOutputs) != nullptr) {
+  if (!scan.unsupportedReason.empty() || scan.model == nullptr) {
+    const std::string reason = scan.unsupportedReason.empty()
+        ? "Missing Naja sequential model"
+        : scan.unsupportedReason;
+    if (ctx.abstractUncomputableSequentialBoundaries) {
+      abstractUnsupportedInstanceAsBoundary(reason);
+    } else {
+      markUnsupportedInstanceStateOutputs();
+      model.unsupportedReasons.push_back(
+          "Unsupported sequential primitive for `" +
+          scan.boundaryInfo.instancePath + "`: " + reason);
+    }
+    return;
+  }
+
+  std::vector<const StateOutputTerm*> primaryOutputs(scan.model->states.size(), nullptr);
+  for (const auto& output : scan.stateOutputs) {
+    auto*& primary = primaryOutputs.at(output.stateIndex);
+    if (primary == nullptr || (primary->complemented && !output.complemented)) {
+      primary = &output;
+    }
+  }
+  if (std::any_of(primaryOutputs.begin(), primaryOutputs.end(),
+                  [](const auto* output) { return output == nullptr; })) {
+    const std::string reason = "Naja sequential state has no physical output";
+    if (ctx.abstractUncomputableSequentialBoundaries) {
+      abstractUnsupportedInstanceAsBoundary(reason);
+    } else {
+      markUnsupportedInstanceStateOutputs();
+      model.unsupportedReasons.push_back(
+          "Unsupported sequential primitive for `" +
+          scan.boundaryInfo.instancePath + "`: " + reason);
+    }
+    return;
+  }
+
+  std::vector<PendingStateReference> stateReferences;
+  stateReferences.reserve(primaryOutputs.size());
+  for (const auto* output : primaryOutputs) {
+    stateReferences.push_back({output->termID, output->complemented});
+  }
+  std::vector<PendingPinTerm> clockTermIDs;
+  std::unordered_set<naja::DNL::DNLID> seenClockTerms;
+  using Operator =
+      naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+  for (const auto& node : scan.model->clockedOn.nodes) {
+    if (node.operation != Operator::Term) {
       continue;
     }
+    const auto termIt = scan.modelTermIDs.find(node.term);
+    if (termIt != scan.modelTermIDs.end() &&
+        seenClockTerms.insert(termIt->second.termID).second) {
+      clockTermIDs.push_back(termIt->second);
+    }
+  }
+
+  for (size_t stateIndex = 0; stateIndex < primaryOutputs.size(); ++stateIndex) {
+    const auto& stateOutput = *primaryOutputs[stateIndex];
 
     PendingTransition pending;
     pending.stateTermID = stateOutput.termID;
     pending.stateKey = ctx.inputKeyByTerm.at(pending.stateTermID);
-    pending.statePinName = stateOutput.pinName;
-    pending.stateOutputIsComplemented =
-        isIntrinsicComplementedStateOutput(stateOutput.pinName);
-    pending.stateBit = stateOutput.bit;
-    pending.independentStateOutputCount = independentStateOutputCount;
+    pending.stateOutputIsComplemented = stateOutput.complemented;
+    pending.modelStateIndex = stateIndex;
     pending.boundaryInfoIndex = boundaryInfoIndex;
-    pending.pinTermIDs = scan.pinTermIDs;
-    pending.clockTermIDs = stateOutput.clockTermIDs;
-    pending.intrinsicClockIsInverted = stateOutput.intrinsicClockIsInverted;
+    pending.modelTermIDs = scan.modelTermIDs;
+    pending.stateReferences = stateReferences;
+    pending.sequentialState = &scan.model->states[stateIndex];
+    pending.clockedOn = &scan.model->clockedOn;
+    pending.clockTermIDs = clockTermIDs;
 
     std::vector<ComplementedStateRelation> complementedRelations;
     for (const auto& candidate : scan.stateOutputs) {
-      if (candidate.termID == stateOutput.termID || candidate.bit != stateOutput.bit) {
-        continue;
-      // LCOV_EXCL_START
-      }
-      // LCOV_EXCL_STOP
-      if (!isComplementedStateOutput(stateOutput.pinName, candidate.pinName)) {
+      if (candidate.termID == stateOutput.termID ||
+          candidate.stateIndex != stateIndex ||
+          candidate.complemented == stateOutput.complemented) {
         continue;
       }
       const SignalKey complementedKey = ctx.inputKeyByTerm.at(candidate.termID);
@@ -4589,12 +4627,10 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         artifacts.requiredStateKeys.insert(complementedKey);
       }
 
-      for (const auto& [_, candidates] : pending.pinTermIDs) {
-        for (const auto& candidate : candidates) {
-          if (materializedOutputTerms.insert(candidate.termID).second &&
-              batchOutputTermSet.insert(candidate.termID).second) {
-            batchOutputTerms.push_back(candidate.termID);
-          }
+      for (const auto& [_, term] : getPendingUpdateTerms(pending)) {
+        if (materializedOutputTerms.insert(term.termID).second &&
+            batchOutputTermSet.insert(term.termID).second) {
+          batchOutputTerms.push_back(term.termID);
         }
       }
       for (const auto& clockTerm : pending.clockTermIDs) {
@@ -4645,12 +4681,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       std::optional<ConnectivitySkipInfo> skippedPinInfo;
       // LCOV_EXCL_START
       bool abortPending = false;
-      for (const auto& [pinName, _] : pending.pinTermIDs) {
-        const auto resolvedPinTermID = resolvePendingPinTermID(pending, pinName.c_str());
-        if (!resolvedPinTermID.has_value()) {
-          continue;  // LCOV_EXCL_LINE
-        }
-        auto skippedIt = skippedOutputsByTerm.find(*resolvedPinTermID);
+      for (const auto& [modelTerm, term] : getPendingUpdateTerms(pending)) {
+        auto skippedIt = skippedOutputsByTerm.find(term.termID);
         // LCOV_EXCL_STOP
         if (skippedIt == skippedOutputsByTerm.end()) {
           continue;
@@ -4659,16 +4691,12 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
 
         if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second);
             skipInfo.has_value()) {
-          if (skipInfo->origin == ConnectivitySkipOrigin::NoDriver &&
-              isOptionalSequentialControlPin(pinName)) {
-            continue;  // LCOV_EXCL_LINE
-            // LCOV_EXCL_STOP
-          }
           // LCOV_EXCL_START
           skippedPinInfo = {
               skipInfo->origin,
               // LCOV_EXCL_STOP
-              "Sequential pin `" + pinName + "` was skipped because " +
+              "Sequential terminal `" + modelTerm->getName().getString() +
+                  "` was skipped because " +
                   skippedIt->second.detail,
           };
           break;
@@ -4677,8 +4705,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         if (ctx.abstractUncomputableSequentialBoundaries) {  // LCOV_EXCL_LINE
           recordLateAbstractedInstanceBoundary(  // LCOV_EXCL_LINE
               pending.boundaryInfoIndex,  // LCOV_EXCL_LINE
-              // LCOV_EXCL_START
-              "unsupported sequential pin `" + pinName + "`: " +  // LCOV_EXCL_LINE
+              "unsupported sequential terminal `" +  // LCOV_EXCL_LINE
+                  modelTerm->getName().getString() + "`: " +  // LCOV_EXCL_LINE
                   skippedIt->second.detail);  // LCOV_EXCL_LINE
           abortPending = true;  // LCOV_EXCL_LINE
           break;  // LCOV_EXCL_LINE
@@ -4690,7 +4718,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
             // LCOV_EXCL_START
             "Unsupported sequential primitive for `" + signalKeyToString(pending.stateKey) +  // LCOV_EXCL_LINE
             // LCOV_EXCL_STOP
-            "`: Sequential pin `" + pinName + "` is unsupported: " +  // LCOV_EXCL_LINE
+            "`: Sequential terminal `" + modelTerm->getName().getString() +  // LCOV_EXCL_LINE
+                "` is unsupported: " +  // LCOV_EXCL_LINE
             skippedIt->second.detail);  // LCOV_EXCL_LINE
         // LCOV_EXCL_START
         markUnsupportedState(pending.stateKey);  // LCOV_EXCL_LINE

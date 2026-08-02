@@ -1122,8 +1122,21 @@ std::string formatConeTracebackForTest(
 
 namespace {
 
+enum class MalformedSequentialExpression {
+  InvalidRoot,
+  UnmappedTerminal,
+  UnmappedState,
+  OutOfRangeOperand,
+};
+
 class SequentialEquivalenceStrategyTests : public ::testing::Test {
  protected:
+  void expectMalformedSequentialExpressionUnsupported(
+      MalformedSequentialExpression fault,
+      const char* expectedReason);
+
+  void expectMissingSequentialStateOutputHandled(bool boundaryAbstraction);
+
   void TearDown() override {
     naja::DNL::destroy();
     if (auto* universe = NLUniverse::get()) {
@@ -3087,6 +3100,54 @@ SNLDesign* createBootstrapPipelineTopWithStages(
   return top;
 }
 
+SNLDesignModeling::BooleanExpression makeSequentialTermExpression(
+    SNLBitTerm* term) {
+  SNLDesignModeling::BooleanExpression expression;
+  expression.root = expression.addTerm(term);
+  return expression;
+}
+
+SNLDesignModeling::BooleanExpression makeSequentialStateExpression(
+    size_t stateIndex,
+    bool complemented = false) {
+  using Operator = SNLDesignModeling::BooleanExpression::Operator;
+  SNLDesignModeling::BooleanExpression expression;
+  auto root = expression.addState(stateIndex);
+  if (complemented) {
+    root = expression.addOperation(Operator::Not, {root});
+  }
+  expression.root = root;
+  return expression;
+}
+
+void setSingleStateSequentialModel(
+    SNLDesign* design,
+    SNLBitTerm* clock,
+    SNLBitTerm* data,
+    const std::vector<std::pair<SNLBitTerm*, bool>>& outputs,
+    SNLBitTerm* clear = nullptr,
+    SNLBitTerm* preset = nullptr,
+    SNLDesignModeling::SequentialState::ClearPresetValue clearPresetValue =
+        SNLDesignModeling::SequentialState::ClearPresetValue::One) {
+  SNLDesignModeling::SequentialModel model;
+  model.clockedOn = makeSequentialTermExpression(clock);
+  SNLDesignModeling::SequentialState state;
+  state.nextState = makeSequentialTermExpression(data);
+  if (clear != nullptr) {
+    state.clear = makeSequentialTermExpression(clear);
+  }
+  if (preset != nullptr) {
+    state.preset = makeSequentialTermExpression(preset);
+  }
+  state.clearPresetValue = clearPresetValue;
+  model.states.push_back(std::move(state));
+  for (const auto& [output, complemented] : outputs) {
+    model.outputs.push_back(
+        {output, makeSequentialStateExpression(0, complemented)});
+  }
+  SNLDesignModeling::setSequentialModel(design, model);
+}
+
 
 SNLDesign* createNamedComplementSequentialModel(
     NLLibrary* library,
@@ -3105,6 +3166,24 @@ SNLDesign* createNamedComplementSequentialModel(
       model, SNLTerm::Direction::Output, NLName(complementPinName));
   SNLDesignModeling::addInputsToClockArcs({data}, clock);
   SNLDesignModeling::addClockToOutputsArcs(clock, {primary, complement});
+  const bool isComplement = complementPinName == primaryPinName + "N";
+  if (isComplement) {
+    setSingleStateSequentialModel(
+        model, clock, data, {{primary, false}, {complement, true}});
+  } else {
+    SNLDesignModeling::SequentialModel sequentialModel;
+    sequentialModel.clockedOn = makeSequentialTermExpression(clock);
+    for (size_t stateIndex = 0; stateIndex < 2; ++stateIndex) {
+      SNLDesignModeling::SequentialState state;
+      state.nextState = makeSequentialTermExpression(data);
+      sequentialModel.states.push_back(std::move(state));
+    }
+    sequentialModel.outputs.push_back(
+        {primary, makeSequentialStateExpression(0)});
+    sequentialModel.outputs.push_back(
+        {complement, makeSequentialStateExpression(1)});
+    SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  }
   return model;
 }
 
@@ -3125,6 +3204,8 @@ SNLDesign* createComplementFirstSequentialModel(
       model, SNLTerm::Direction::Output, NLName(primaryPinName));
   SNLDesignModeling::addInputsToClockArcs({data}, clock);
   SNLDesignModeling::addClockToOutputsArcs(clock, {primary, complement});
+  setSingleStateSequentialModel(
+      model, clock, data, {{primary, false}, {complement, true}});
   return model;
 }
 
@@ -3142,6 +3223,7 @@ SNLDesign* createSetOnlySequentialModel(NLLibrary* library,
       SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
   SNLDesignModeling::addInputsToClockArcs({data, set}, clock);
   SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+  setSingleStateSequentialModel(model, clock, data, {{output, false}}, nullptr, set);
   return model;
 }
 
@@ -3157,6 +3239,21 @@ SNLDesign* createBusSequentialModel(NLLibrary* library,
       model, SNLTerm::Direction::Output, 1, 0, NLName("Q"));
   SNLDesignModeling::addInputsToClockArcs(collectBitTerms(data), clock);
   SNLDesignModeling::addClockToOutputsArcs(clock, collectBitTerms(output));
+  SNLDesignModeling::SequentialModel sequentialModel;
+  sequentialModel.clockedOn = makeSequentialTermExpression(clock);
+  const auto dataBits = collectBitTerms(data);
+  const auto outputBits = collectBitTerms(output);
+  auto dataIt = dataBits.begin();
+  auto outputIt = outputBits.begin();
+  size_t stateIndex = 0;
+  for (; dataIt != dataBits.end(); ++dataIt, ++outputIt, ++stateIndex) {
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(*dataIt);
+    sequentialModel.states.push_back(std::move(state));
+    sequentialModel.outputs.push_back(
+        {*outputIt, makeSequentialStateExpression(stateIndex)});
+  }
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
   return model;
 }
 
@@ -3186,11 +3283,15 @@ SNLDesign* createExtraUpdatePinSequentialModel(NLLibrary* library,
       SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
   SNLDesignModeling::addInputsToClockArcs({data, address}, clock);
   SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+  setSingleStateSequentialModel(model, clock, data, {{output, false}});
   return model;
 }
 
-SNLDesign* createResetSetSequentialModel(NLLibrary* library,
-                                         const std::string& name) {
+SNLDesign* createResetSetSequentialModel(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesignModeling::SequentialState::ClearPresetValue clearPresetValue =
+        SNLDesignModeling::SequentialState::ClearPresetValue::One) {
   auto* model =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(name));
   auto* data =
@@ -3205,7 +3306,81 @@ SNLDesign* createResetSetSequentialModel(NLLibrary* library,
       SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
   SNLDesignModeling::addInputsToClockArcs({data, reset, set}, clock);
   SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+  setSingleStateSequentialModel(
+      model, clock, data, {{output, false}}, reset, set, clearPresetValue);
   return model;
+}
+
+SNLDesign* createScanMuxSequentialModel(NLLibrary* library,
+                                        const std::string& name) {
+  using Operator = SNLDesignModeling::BooleanExpression::Operator;
+  auto* model =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(name));
+  auto* data = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("DATA_INPUT"));
+  auto* scanEnable = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("SCAN_MODE"));
+  auto* scanInput = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("SERIAL_INPUT"));
+  auto* clock = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("CLOCK_PIN"));
+  auto* output = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Output, NLName("RESULT_N"));
+  SNLDesignModeling::addInputsToClockArcs(
+      {data, scanEnable, scanInput}, clock);
+  SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+
+  SNLDesignModeling::SequentialModel sequentialModel;
+  sequentialModel.clockedOn = makeSequentialTermExpression(clock);
+  SNLDesignModeling::SequentialState state;
+  auto dataNode = state.nextState.addTerm(data);
+  auto scanEnableNode = state.nextState.addTerm(scanEnable);
+  auto scanInputNode = state.nextState.addTerm(scanInput);
+  auto notScanEnable = state.nextState.addOperation(
+      Operator::Not, {scanEnableNode});
+  auto functionalData = state.nextState.addOperation(
+      Operator::And, {notScanEnable, dataNode});
+  auto scanData = state.nextState.addOperation(
+      Operator::And, {scanEnableNode, scanInputNode});
+  state.nextState.root = state.nextState.addOperation(
+      Operator::Or, {functionalData, scanData});
+  sequentialModel.states.push_back(std::move(state));
+  sequentialModel.outputs.push_back(
+      {output, makeSequentialStateExpression(0, true)});
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  return model;
+}
+
+SNLDesign* createScanMuxSequentialTop(NLLibrary* library,
+                                      const std::string& name,
+                                      SNLDesign* model) {
+  auto* top = SNLDesign::create(
+      library, SNLDesign::Type::Standard, NLName(name));
+  auto* data = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("data"));
+  auto* scanEnable = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("scan_enable"));
+  auto* scanInput = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("scan_input"));
+  auto* clock = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* output = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Output, NLName("out"));
+  auto* instance = SNLInstance::create(top, model, NLName("ff0"));
+
+  for (const auto& [topTerm, modelTermName] :
+       std::vector<std::pair<SNLScalarTerm*, const char*>>{
+           {data, "DATA_INPUT"},
+           {scanEnable, "SCAN_MODE"},
+           {scanInput, "SERIAL_INPUT"},
+           {clock, "CLOCK_PIN"},
+           {output, "RESULT_N"}}) {
+    auto* net = SNLScalarNet::create(
+        top, NLName(std::string("net_") + modelTermName));
+    topTerm->setNet(net);
+    instance->getInstTerm(model->getScalarTerm(NLName(modelTermName)))->setNet(net);
+  }
+  return top;
 }
 
 
@@ -3655,6 +3830,105 @@ SNLDesign* createResetSetSequentialTop(
   seq->getInstTerm(sequentialModel->getScalarTerm(NLName("Q")))->setNet(netOut);
 
   return top;
+}
+
+void SequentialEquivalenceStrategyTests::
+    expectMalformedSequentialExpressionUnsupported(
+        MalformedSequentialExpression fault,
+        const char* expectedReason) {
+  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNamedComplementSequentialModel(
+      primitives, "DFF_STATE_STATEN", "STATE", "STATEN");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+
+  using Expression = SNLDesignModeling::BooleanExpression;
+  using Operator = Expression::Operator;
+  Expression expression;
+  const auto dataNode =
+      expression.addTerm(model->getScalarTerm(NLName("D")));
+  switch (fault) {
+    case MalformedSequentialExpression::InvalidRoot:
+      break;
+    case MalformedSequentialExpression::UnmappedTerminal: {
+      auto* foreignModel = SNLDesign::create(
+          primitives, SNLDesign::Type::Primitive, NLName("FOREIGN"));
+      auto* foreignTerm = SNLScalarTerm::create(
+          foreignModel, SNLTerm::Direction::Input, NLName("A"));
+      const auto foreignNode = expression.addTerm(foreignTerm);
+      expression.root =
+          expression.addOperation(Operator::And, {dataNode, foreignNode});
+      break;
+    }
+    case MalformedSequentialExpression::UnmappedState: {
+      const auto stateNode = expression.addState(1);
+      expression.root =
+          expression.addOperation(Operator::And, {dataNode, stateNode});
+      break;
+    }
+    case MalformedSequentialExpression::OutOfRangeOperand:
+      expression.root =
+          expression.addOperation(Operator::And, {dataNode, 1000});
+      break;
+  }
+  sequentialModel.states.front().nextState = std::move(expression);
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createSequentialOutputPairTop(
+      library, "top", model, "STATE", "STATEN");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
+  ASSERT_FALSE(extracted.unsupportedReasons.empty());
+  EXPECT_NE(
+      extracted.unsupportedReasons.front().find(expectedReason),
+      std::string::npos);
+}
+
+void SequentialEquivalenceStrategyTests::
+    expectMissingSequentialStateOutputHandled(bool boundaryAbstraction) {
+  ScopedSecBoundaryAbstraction boundaryMode(boundaryAbstraction);
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNamedComplementSequentialModel(
+      primitives, "DFF_STATE_STATEN", "STATE", "STATEN");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+  SNLDesignModeling::SequentialState hiddenState;
+  const auto dataNode =
+      hiddenState.nextState.addTerm(model->getScalarTerm(NLName("D")));
+  hiddenState.nextState.root = hiddenState.nextState.addOperation(
+      SNLDesignModeling::BooleanExpression::Operator::Not, {dataNode});
+  sequentialModel.states.push_back(std::move(hiddenState));
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createSequentialOutputPairTop(
+      library, "top", model, "STATE", "STATEN");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  if (boundaryAbstraction) {
+    EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+    ASSERT_FALSE(extracted.abstractedSequentialBoundaries.empty());
+    EXPECT_NE(
+        extracted.abstractedSequentialBoundaries.front().find(
+            "state has no physical output"),
+        std::string::npos);
+  } else {
+    EXPECT_TRUE(extracted.hasUnsupportedFeatures());
+    ASSERT_FALSE(extracted.unsupportedReasons.empty());
+    EXPECT_NE(
+        extracted.unsupportedReasons.front().find(
+            "state has no physical output"),
+        std::string::npos);
+  }
 }
 
 SNLDesign* createDffreTop(
@@ -15309,6 +15583,95 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractUsesStructuredScanMuxEquation) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* primitive = createScanMuxSequentialModel(primitives, "SCAN_FF");
+  auto* top = createScanMuxSequentialTop(library, "top", primitive);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  ASSERT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.stateBits.size(), 1u);
+  auto* next = extracted.nextStateExprByStateKey.at(extracted.stateBits.front());
+  const auto data = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "data[0]"));
+  const auto scanEnable = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "scan_enable[0]"));
+  const auto scanInput = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "scan_input[0]"));
+  EXPECT_FALSE(next->evaluate(
+      {{data, true}, {scanEnable, false}, {scanInput, false}}));
+  EXPECT_TRUE(next->evaluate(
+      {{data, false}, {scanEnable, false}, {scanInput, true}}));
+  EXPECT_FALSE(next->evaluate(
+      {{data, false}, {scanEnable, true}, {scanInput, true}}));
+  EXPECT_TRUE(next->evaluate(
+      {{data, true}, {scanEnable, true}, {scanInput, false}}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractUsesLibertyScanModelForQnOnlyCell) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  SNLLibertyConstructor constructor(primitives);
+  const char* bazelLibertyPath = std::getenv("NAJA_FF_SCAN_LIB");
+  constructor.construct(bazelLibertyPath != nullptr
+                            ? std::filesystem::path(bazelLibertyPath)
+                            : repoRootForSecTests() / "thirdparty" / "naja" /
+                                  "test" / "nl" / "formats" / "liberty" /
+                                  "benchmarks" / "tests" / "FF_scan.lib");
+  auto* primitive = primitives->getSNLDesign(NLName("FFSCAN"));
+  ASSERT_NE(primitive, nullptr);
+
+  auto* top = SNLDesign::create(
+      library, SNLDesign::Type::Standard, NLName("top"));
+  auto* instance = SNLInstance::create(top, primitive, NLName("ff0"));
+  for (const auto* pinName : {"D", "SE", "SI", "CK", "QN"}) {
+    auto* primitiveTerm = primitive->getScalarTerm(NLName(pinName));
+    const auto direction = primitiveTerm->getDirection();
+    auto* topTerm = SNLScalarTerm::create(top, direction, NLName(pinName));
+    auto* net = SNLScalarNet::create(top, NLName(std::string("net_") + pinName));
+    topTerm->setNet(net);
+    instance->getInstTerm(primitiveTerm)->setNet(net);
+  }
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  ASSERT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.stateBits.size(), 1u);
+  const auto stateKey = findKeyByDisplayName(extracted, "ff0.QN[0]");
+  EXPECT_EQ(extracted.stateBits.front(), stateKey);
+  EXPECT_EQ(
+      std::find(extracted.environmentInputs.begin(),
+                extracted.environmentInputs.end(), stateKey),
+      extracted.environmentInputs.end());
+  auto* next = extracted.nextStateExprByStateKey.at(stateKey);
+  const auto data = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "D[0]"));
+  const auto scanEnable = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "SE[0]"));
+  const auto scanInput = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "SI[0]"));
+  EXPECT_FALSE(next->evaluate(
+      {{data, true}, {scanEnable, false}, {scanInput, false}}));
+  EXPECT_TRUE(next->evaluate(
+      {{data, false}, {scanEnable, false}, {scanInput, true}}));
+  EXPECT_FALSE(next->evaluate(
+      {{data, false}, {scanEnable, true}, {scanInput, true}}));
+  EXPECT_TRUE(next->evaluate(
+      {{data, true}, {scanEnable, true}, {scanInput, false}}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractTracksVectorStateBitsPerOutputTerm) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
@@ -16753,6 +17116,175 @@ TEST_F(SequentialEquivalenceStrategyTests,
       {{extracted.inputVarByKey.at(inKey), false},
        {extracted.inputVarByKey.at(rstKey), true},
        {extracted.inputVarByKey.at(setKey), true}}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractSupportsConstantAndTerminalStateNodes) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNamedComplementSequentialModel(
+      primitives, "DFF_STATE_STATEN", "STATE", "STATEN");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+
+  using Expression = SNLDesignModeling::BooleanExpression;
+  using Operator = Expression::Operator;
+  Expression nextState;
+  const auto dataNode =
+      nextState.addTerm(model->getScalarTerm(NLName("D")));
+  const auto stateNode =
+      nextState.addTerm(model->getScalarTerm(NLName("STATE")));
+  const auto falseNode = nextState.addConstant(false);
+  const auto toggled =
+      nextState.addOperation(Operator::Xor, {dataNode, stateNode});
+  nextState.root =
+      nextState.addOperation(Operator::Or, {toggled, falseNode});
+  sequentialModel.states.front().nextState = std::move(nextState);
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createSequentialOutputPairTop(
+      library, "top", model, "STATE", "STATEN");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  ASSERT_FALSE(extracted.hasUnsupportedFeatures());
+  const auto stateKey = findKeyByDisplayName(extracted, "ff0.STATE[0]");
+  const auto dataKey = findKeyByDisplayName(extracted, "in[0]");
+  const auto stateVar = extracted.inputVarByKey.at(stateKey);
+  const auto dataVar = extracted.inputVarByKey.at(dataKey);
+  auto* next = extracted.nextStateExprByStateKey.at(stateKey);
+  EXPECT_FALSE(next->evaluate({{dataVar, false}, {stateVar, false}}));
+  EXPECT_TRUE(next->evaluate({{dataVar, true}, {stateVar, false}}));
+  EXPECT_TRUE(next->evaluate({{dataVar, false}, {stateVar, true}}));
+  EXPECT_FALSE(next->evaluate({{dataVar, true}, {stateVar, true}}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractPreservesClearPresetZeroValue) {
+  using Value = SNLDesignModeling::SequentialState::ClearPresetValue;
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      createResetSetSequentialModel(primitives, "SEQ_RST_SET_ZERO", Value::Zero);
+  auto* top = createResetSetSequentialTop(library, "top", model);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  ASSERT_FALSE(extracted.hasUnsupportedFeatures());
+  const auto stateKey = extracted.stateBits.front();
+  const auto inKey = findKeyByDisplayName(extracted, "in[0]");
+  const auto rstKey = findKeyByDisplayName(extracted, "rst[0]");
+  const auto setKey = findKeyByDisplayName(extracted, "set[0]");
+  auto* expr = extracted.nextStateExprByStateKey.at(stateKey);
+  EXPECT_FALSE(expr->evaluate(
+      {{extracted.inputVarByKey.at(inKey), true},
+       {extracted.inputVarByKey.at(rstKey), true},
+       {extracted.inputVarByKey.at(setKey), true}}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsInvalidSequentialExpression) {
+  expectMalformedSequentialExpressionUnsupported(
+      MalformedSequentialExpression::InvalidRoot,
+      "Invalid Naja sequential expression");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsUnmappedSequentialTerminal) {
+  expectMalformedSequentialExpressionUnsupported(
+      MalformedSequentialExpression::UnmappedTerminal,
+      "references an unmapped terminal");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsUnmappedSequentialState) {
+  expectMalformedSequentialExpressionUnsupported(
+      MalformedSequentialExpression::UnmappedState,
+      "references an unmapped state");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsOutOfRangeSequentialOperand) {
+  expectMalformedSequentialExpressionUnsupported(
+      MalformedSequentialExpression::OutOfRangeOperand,
+      "operand is out of range");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsUnsupportedOutputFunction) {
+  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNamedComplementSequentialModel(
+      primitives, "DFF_STATE_STATEN", "STATE", "STATEN");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+  SNLDesignModeling::BooleanExpression outputFunction;
+  outputFunction.root = outputFunction.addConstant(false);
+  sequentialModel.outputs.front().function = std::move(outputFunction);
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createSequentialOutputPairTop(
+      library, "top", model, "STATE", "STATEN");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
+  ASSERT_FALSE(extracted.unsupportedReasons.empty());
+  EXPECT_NE(
+      extracted.unsupportedReasons.front().find(
+          "Unsupported Naja sequential output function"),
+      std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsOutputFromAnotherPrimitive) {
+  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNamedComplementSequentialModel(
+      primitives, "DFF_STATE_STATEN", "STATE", "STATEN");
+  auto* foreignModel = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("FOREIGN"));
+  auto* foreignOutput = SNLScalarTerm::create(
+      foreignModel, SNLTerm::Direction::Output, NLName("Q"));
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+  sequentialModel.outputs.push_back(
+      {foreignOutput, makeSequentialStateExpression(0)});
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createSequentialOutputPairTop(
+      library, "top", model, "STATE", "STATEN");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
+  ASSERT_FALSE(extracted.unsupportedReasons.empty());
+  EXPECT_NE(
+      extracted.unsupportedReasons.front().find(
+          "sequential output is not present on the instance"),
+      std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractAbstractsStateWithoutPhysicalOutput) {
+  expectMissingSequentialStateOutputHandled(true);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsStateWithoutPhysicalOutput) {
+  expectMissingSequentialStateOutputHandled(false);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
