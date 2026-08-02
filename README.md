@@ -74,13 +74,21 @@ and likewise for kissat) so no objects from the other compiler linger.
 
 ### Option B: system packages
 
-On Ubuntu:
+On Ubuntu 22.04, install the complete CMake dependency set with:
 
 ```bash
-sudo apt-get install g++ libboost-dev python3.9-dev capnproto libcapnp-dev libtbb-dev pkg-config bison flex doxygen libspdlog-dev libfmt-dev libboost-iostreams-dev zlib1g-dev
-# C2RTL CMake builds also need LLVM/Clang, Abseil, Protobuf, RE2, OpenSSL,
-# Z3, and OR-Tools graph headers. See .github/scripts/install-cmake-deps-ubuntu.sh.
+bash .github/scripts/install-cmake-deps-ubuntu.sh
 ```
+
+The installer uses `sudo` for system packages. It installs the C/C++ build
+tools, Ninja, Python development headers, Boost, Cap'n Proto, TBB, Flex,
+Bison, spdlog, fmt, OpenSSL, Z3, zlib, GoogleTest, and the LLVM/Clang 22
+compiler and development headers. It also builds and installs the C2RTL
+dependencies Abseil, Protobuf, and RE2, and installs the OR-Tools graph
+headers under `/usr/local`. The pinned versions are defined at the top of
+[`.github/scripts/install-cmake-deps-ubuntu.sh`](.github/scripts/install-cmake-deps-ubuntu.sh).
+Set `KEPLER_LLVM_VERSION` before running the script only when intentionally
+using a different LLVM release.
 
 On macOS, using [Homebrew](https://brew.sh/):
 

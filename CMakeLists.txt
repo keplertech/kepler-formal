@@ -143,6 +143,12 @@ if(CMAKE_BUILD_TYPE)
         string(PREPEND CADICAL_CXXFLAGS "${CMAKE_CXX_FLAGS_${KEPLER_BUILD_TYPE_UPPER}} ")
     endif()
 endif()
+# CaDiCaL's Makefile invokes the host `ar` directly. Keep its objects native so
+# a host LLVMgold plugin is not required to understand the compiler's bitcode.
+string(REGEX REPLACE "(^|[ \t])-flto(=[^ \t]+)?" "\\1"
+    CADICAL_CFLAGS "${CADICAL_CFLAGS}")
+string(REGEX REPLACE "(^|[ \t])-flto(=[^ \t]+)?" "\\1"
+    CADICAL_CXXFLAGS "${CADICAL_CXXFLAGS}")
 if(ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     string(APPEND CADICAL_CFLAGS " -fsanitize=address -fno-omit-frame-pointer")
     string(APPEND CADICAL_CXXFLAGS " -fsanitize=address -fno-omit-frame-pointer")
