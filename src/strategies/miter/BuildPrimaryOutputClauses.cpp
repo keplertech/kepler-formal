@@ -33,6 +33,7 @@ namespace {
 
 constexpr BuildPrimaryOutputClauses::PathComponentID kUnnamedPathComponentTag =
     BuildPrimaryOutputClauses::PathComponentID{1} << 63;
+constexpr int kMaxConcurrentOutputBuilds = 4;
 
 const char* getSnlDirectionName(SNLBitTerm::Direction direction) {
   switch (direction) {
@@ -771,7 +772,7 @@ void BuildPrimaryOutputClauses::build() {
   POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
   initVarNames();
   size_t processedOutputs = 0;
-  tbb::task_arena arena(20);
+  tbb::task_arena arena(kMaxConcurrentOutputBuilds);
   IsPIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
   for (auto pi : inputs_) {
     if (pi >= IsPIs_.size()) {
@@ -1006,15 +1007,17 @@ void BuildPrimaryOutputClauses::build() {
     size_t computed = (n >= 1000) ? (n / 1000) : 1; // never zero
     size_t grain = std::max<size_t>(computed, default_grain); // or clamp as you prefer
 
-    tbb::parallel_for(
-      tbb::blocked_range<DNLID>(0, n, grain),
-      [&](const tbb::blocked_range<DNLID>& r) {
-        for (DNLID i = r.begin(); i < r.end(); ++i) {
-          processOutput(representativeOutputs[i]);
-        }
-      },
-      tbb::static_partitioner()
-    );
+    arena.execute([&] {
+      tbb::parallel_for(
+        tbb::blocked_range<DNLID>(0, n, grain),
+        [&](const tbb::blocked_range<DNLID>& r) {
+          for (DNLID i = r.begin(); i < r.end(); ++i) {
+            processOutput(representativeOutputs[i]);
+          }
+        },
+        tbb::static_partitioner()
+      );
+    });
   }
   for (size_t i = 0; i < outputs_.size(); ++i) {
     const size_t representative = representativeForOutput[i];

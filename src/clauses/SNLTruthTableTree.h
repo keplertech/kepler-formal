@@ -66,6 +66,7 @@ public:
   } data;
 
   bool visited = false; // for traversals
+  uint32_t topologicalDepth = std::numeric_limits<uint32_t>::max();
 
   TruthTableStorage truthTable;
 
@@ -153,6 +154,7 @@ public:
 
 private:
   Node* rawNodeFromId(uint32_t id) const;
+  void raiseTopologicalDepth(Node& node, uint32_t minimumDepth);
   const Node& concatBody(size_t borderIndex,
                          naja::DNL::DNLID instid,
                          naja::DNL::DNLID termid);

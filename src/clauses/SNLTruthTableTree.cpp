@@ -324,6 +324,9 @@ void SNLTruthTableTree::Node::addChildId(uint32_t childId) {
 
   auto childSp = tree->nodeFromId(childId);
   if (childSp) {
+    if (topologicalDepth != std::numeric_limits<uint32_t>::max()) {
+      tree->raiseTopologicalDepth(*childSp, topologicalDepth + 1);
+    }
     childSp->parentIds.emplace_back(this->nodeID);
   }
 }
@@ -352,6 +355,43 @@ uint32_t SNLTruthTableTree::allocateNode(std::shared_ptr<Node>& np) {
     termid2nodeid_[np->data.termid] = id;
   }
   return id;
+}
+
+void SNLTruthTableTree::raiseTopologicalDepth(Node& node,
+                                              uint32_t minimumDepth) {
+  constexpr uint32_t kUnknownDepth = std::numeric_limits<uint32_t>::max();
+  if (minimumDepth == kUnknownDepth ||
+      (node.topologicalDepth != kUnknownDepth &&
+       node.topologicalDepth >= minimumDepth)) {
+    return;
+  }
+
+  std::vector<Node*, tbb::tbb_allocator<Node*>> pending;
+  pending.reserve(16);
+  node.topologicalDepth = minimumDepth;
+  pending.push_back(&node);
+  for (size_t i = 0; i < pending.size(); ++i) {
+    Node* const current = pending[i];
+    if (current->childrenIds.empty()) {
+      continue;
+    }
+    if (current->topologicalDepth == kUnknownDepth - 1) {
+      // LCOV_EXCL_START
+      throw std::overflow_error("truth-table topological depth overflow");
+      // LCOV_EXCL_STOP
+    }
+    const uint32_t childDepth = current->topologicalDepth + 1;
+    for (const uint32_t childId : current->childrenIds) {
+      Node* const child = rawNodeFromId(childId);
+      if (child == nullptr ||
+          (child->topologicalDepth != kUnknownDepth &&
+           child->topologicalDepth >= childDepth)) {
+        continue;
+      }
+      child->topologicalDepth = childDepth;
+      pending.push_back(child);
+    }
+  }
 }
 
 //----------------------------------------------------------------------
@@ -442,10 +482,12 @@ SNLTruthTableTree::SNLTruthTableTree(naja::DNL::DNLID instid,
   auto rootNode = std::make_shared<Node>(this, instid, termid, type);
   uint32_t id = allocateNode(rootNode);
   rootId_ = id;
+  rootNode->topologicalDepth = 0;
 
   if (type == Node::Type::P || type == Node::Type::Input) {
     auto inNode = std::make_shared<Node>(0u, this);
     uint32_t inId = allocateNode(inNode);
+    inNode->topologicalDepth = 1;
     rootNode->childrenIds.emplace_back(inId);
     inNode->parentIds.emplace_back(rootId_);
     assert(inNode->parentIds.size() == 1);
@@ -460,6 +502,7 @@ SNLTruthTableTree::SNLTruthTableTree(naja::DNL::DNLID instid,
   for (uint32_t i = 0; i < arity; ++i) {
     auto inNode = std::make_shared<Node>(i, this);
     uint32_t inId = allocateNode(inNode);
+    inNode->topologicalDepth = 1;
     rootNode->childrenIds.emplace_back(inId);
     inNode->parentIds.emplace_back(rootId_);
     assert(inNode->parentIds.size() == 1);
@@ -522,6 +565,17 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
     }
     return nodes_[idx].get();
   };
+
+  const Node* const startNode = getNode(startId);
+  const Node* const targetNode = getNode(targetId);
+  constexpr uint32_t kUnknownDepth = std::numeric_limits<uint32_t>::max();
+  if (startNode != nullptr && targetNode != nullptr &&
+      startNode != targetNode &&
+      startNode->topologicalDepth != kUnknownDepth &&
+      targetNode->topologicalDepth != kUnknownDepth &&
+      targetNode->topologicalDepth >= startNode->topologicalDepth) {
+    return false;
+  }
 
   std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> nodePath;
   nodePath.reserve(16);
@@ -713,6 +767,11 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
       // loop, so concatBody does not carry a hidden clone escape hatch.
       newNodeSp = nodeFromId(iter->second);
       assert(newNodeSp->type == Node::Type::Table);
+      if (parentSp->topologicalDepth !=
+          std::numeric_limits<uint32_t>::max()) {
+        raiseTopologicalDepth(
+            *newNodeSp, parentSp->topologicalDepth + 1);
+      }
       newNodeSp->parentIds.emplace_back(parentId);
       parentSp->childrenIds[leaf.childPos] = newNodeSp->nodeID;
       if (newNodeSp->childrenIds.size() == 0) {
@@ -750,6 +809,9 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
   }
 
   uint32_t newNodeId = allocateNode(newNodeSp);
+  if (parentSp->topologicalDepth != std::numeric_limits<uint32_t>::max()) {
+    raiseTopologicalDepth(*newNodeSp, parentSp->topologicalDepth + 1);
+  }
 
   // Connecting children, skipped if node already existed
   if (newNodeSp->type == Node::Type::Table && arity == 0) {
@@ -779,6 +841,11 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
     assert(oldChildSp->type == Node::Type::Input);
     assert(oldChildSp->parentIds.size() == 1);
     oldChildSp->parentIds[0] = (newNodeId);
+    if (newNodeSp->topologicalDepth !=
+        std::numeric_limits<uint32_t>::max()) {
+      raiseTopologicalDepth(
+          *oldChildSp, newNodeSp->topologicalDepth + 1);
+    }
     oldChildSp->data.inputIndex = numExternalInputs_;
     numExternalInputs_++;
     DEBUG_LOG("concating with inputIndex %zu\n", oldChildSp->data.inputIndex);
@@ -795,6 +862,10 @@ const SNLTruthTableTree::Node& SNLTruthTableTree::concatBody(
       auto inNode = std::make_shared<Node>(numExternalInputs_, this);
       numExternalInputs_++;
       uint32_t inId = allocateNode(inNode);
+      if (newNodeSp->topologicalDepth !=
+          std::numeric_limits<uint32_t>::max()) {
+        inNode->topologicalDepth = newNodeSp->topologicalDepth + 1;
+      }
       newNodeSp->childrenIds.emplace_back(inId);
       inNode->parentIds.emplace_back(newNodeId);
       assert(inNode->parentIds.size() == 1);

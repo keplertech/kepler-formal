@@ -3787,6 +3787,18 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         extractedBoundaryReports);
   }
 
+  // Compact self-comparison passes the same immutable extracted model twice.
+  // Its aligned outputs are identical without constructing a proof problem.
+  if (&model0 == &model1) {
+    return makeSecResult(
+        SequentialEquivalenceStatus::Equivalent,
+        0,
+        "",
+        aligned.outputCoverage,
+        abstractedSequentialBoundaries,
+        extractedBoundaryReports);
+  }
+
   if (secDiagEnabled) {
     printf(
         "SEC diag: aligned_inputs=%zu aligned_outputs=%zu "
