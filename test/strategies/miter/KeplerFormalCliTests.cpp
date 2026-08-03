@@ -3455,6 +3455,31 @@ TEST_F(KeplerFormalCliTests, CliNoSecBoundaryFlagAcceptedAfterFormat) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, CliSecPdrReportsCombinationalMismatchAtFrameZero) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input a, input b, output y);\n"
+      "  or (y, a, b);\n"
+      "endmodule\n",
+      "module top(input a, input b, output y);\n"
+      "  and (y, a, b);\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-v",
+                   "sec",
+                   "-k",
+                   "1",
+                   "--sec-engine",
+                   "pdr",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      kSecCounterexampleExitCode);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSecInconclusiveFails) {
   const auto fixture = createDesignFixture(
       "sv",
