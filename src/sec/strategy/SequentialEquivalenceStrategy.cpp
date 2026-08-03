@@ -3074,6 +3074,38 @@ SequentialEquivalenceResult runPdrSecEngine(
     const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
   if (problem.combinedStateSymbols().empty()) {
+    std::vector<size_t> nonIdenticalOutputIndices;
+    nonIdenticalOutputIndices.reserve(problem.observedOutputExprs0.size());
+    for (size_t outputIndex = 0;
+         outputIndex < problem.observedOutputExprs0.size();
+         ++outputIndex) {
+      if (problem.observedOutputExprs0[outputIndex] !=
+          problem.observedOutputExprs1[outputIndex]) {
+        nonIdenticalOutputIndices.push_back(outputIndex);
+      }
+    }
+
+    if (!nonIdenticalOutputIndices.empty()) {
+      const KInductionProblem statelessProblem =
+          makeOutputSubsetProblem(problem, nonIdenticalOutputIndices);
+      if (auto witness =
+              SEC::findBaseCounterexample(statelessProblem, solverType, 0);
+          witness.has_value()) {
+        KInductionResult witnessResult{
+            KInductionStatus::Different,
+            witness->badFrame,
+            std::move(witness)};
+        return makeSecResult(
+            SequentialEquivalenceStatus::Different,
+            witnessResult.bound,
+            formatCounterexampleWitness(
+                witnessResult, model0, model1, top0, top1),
+            outputCoverage,
+            abstractedSequentialBoundaries,
+            extractedBoundaryReports);
+      }
+    }
+
     return makeSecResult(
     // LCOV_DISABLED_STOP
         SequentialEquivalenceStatus::Equivalent,
