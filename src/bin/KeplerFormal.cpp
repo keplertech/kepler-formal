@@ -1147,7 +1147,7 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
   }
 
-  // Check for config mode (--config or -c). If present, YAML takes precedence.
+  // Config mode (--config or -c) is exclusive with other command-line options.
   bool usedConfig = false;
 
   std::string logFileName;
@@ -1174,6 +1174,11 @@ int KeplerFormalMain(int argc, char** argv) {
         SPDLOG_CRITICAL("Missing config file after {}", a);  // LCOV_EXCL_LINE
         return EXIT_FAILURE;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
+      }
+      if (argc != 3) {
+        SPDLOG_CRITICAL(
+            "Config mode cannot be combined with other command-line options");
+        return EXIT_FAILURE;
       }
       const std::string cfgPath = argv[i + 1];
       try {

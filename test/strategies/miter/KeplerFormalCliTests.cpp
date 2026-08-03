@@ -916,6 +916,33 @@ TEST_F(KeplerFormalCliTests, YamlMultiFileVerilogConfig) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigCannotBeCombinedWithCommandLineOptions) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "--config",
+                   cfgPath.string(),
+                   "--verilog_design1_top",
+                   "top",
+                   "--verilog_design2_top",
+                   "top"}),
+      EXIT_FAILURE);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, VerilogPreprocessingEnabledParsesDirectiveInput) {
   const auto fixture = createVerilogPreprocessingFixture(true);
   int rc = runWithConfigFile(fixture.cfgPath);
