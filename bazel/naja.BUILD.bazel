@@ -74,8 +74,6 @@ NAJA_SHARED_LIB_NAMES = [
     "naja_bne",
     "naja_opt",
     "naja_metrics",
-    "naja_python",
-    "naja_snl_pyloader",
 ]
 
 filegroup(

@@ -28,7 +28,6 @@
 #include "MiterStrategy.h"
 #include "SNLCapnP.h"
 #include "SNLLibertyConstructor.h"
-#include "SNLPyLoader.h"
 #include "SNLSVConstructor.h"
 #include "SNLVRLConstructor.h"
 #include "SNLVRLDumper.h"
@@ -2122,12 +2121,6 @@ int KeplerFormalMain(int argc, char** argv) {
         SPDLOG_INFO("Loading library file: {}", libraryFile);
         SNLLibertyConstructor constructor(primitivesLibrary);
         constructor.construct(libraryPath);
-      }
-      for (const auto& pythonFile : pythonFiles) {
-        // LCOV_EXCL_START
-        std::filesystem::path pythonPath(pythonFile);
-        SPDLOG_INFO("Loading python primitive file: {}", pythonFile);
-        SNLPyLoader::loadPrimitives(primitivesLibrary, pythonPath);
       }
       // LCOV_EXCL_STOP
       return true;
