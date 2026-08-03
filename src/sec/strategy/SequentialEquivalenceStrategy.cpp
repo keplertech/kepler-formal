@@ -2629,8 +2629,9 @@ void attachLazyDualRailTransitions(
 BoolExpr* buildDualRailBinaryDefinedExpr(const DualRailBoolExpr& value) {
   // In the paper's encoding, 01 and 10 are binary values while 11 is X.
   // Legal-state constraints separately exclude the empty value 00.
-  return BoolExpr::simplify(
-      BoolExpr::Xor(value.mayBeOne, value.mayBeZero));
+  // BoolExpr factories eagerly fold and hash-cons each node, so traversing the
+  // complete DAG here cannot simplify it further.
+  return BoolExpr::Xor(value.mayBeOne, value.mayBeZero);
 }
 
 struct DualRailOutputProperties {
@@ -2641,12 +2642,12 @@ struct DualRailOutputProperties {
 DualRailOutputProperties buildDualRailOutputProperties(
     const DualRailBoolExpr& value0,
     const DualRailBoolExpr& value1) {
-  BoolExpr* bothValuesDefined = BoolExpr::simplify(BoolExpr::And(
+  BoolExpr* bothValuesDefined = BoolExpr::And(
       buildDualRailBinaryDefinedExpr(value0),
-      buildDualRailBinaryDefinedExpr(value1)));
-  BoolExpr* strictEquality = BoolExpr::simplify(BoolExpr::And(
+      buildDualRailBinaryDefinedExpr(value1));
+  BoolExpr* strictEquality = BoolExpr::And(
       makeEqualityExpr(value0.mayBeOne, value1.mayBeOne),
-      makeEqualityExpr(value0.mayBeZero, value1.mayBeZero)));
+      makeEqualityExpr(value0.mayBeZero, value1.mayBeZero));
   // Steady-state dual-rail SEC ignores cycles where either value is X and
   // rejects only opposite binary values. Strict rail equality remains metadata
   // for shared exact query surfaces.
@@ -2654,7 +2655,7 @@ DualRailOutputProperties buildDualRailOutputProperties(
       bothValuesDefined,
       BoolExpr::Xor(value0.mayBeOne, value1.mayBeOne));
   return {
-      BoolExpr::simplify(BoolExpr::Not(binaryMismatch)),
+      BoolExpr::Not(binaryMismatch),
       strictEquality};
 }
 

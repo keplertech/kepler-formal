@@ -21,9 +21,16 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#elif defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
+#include <tbb/scalable_allocator.h>
+#include <tbb/task_arena.h>
 
 #include "DNL.h"
 #include "NLDB0.h"
@@ -663,18 +670,7 @@ void mergeMaterializedBuilderOutputs(  // LCOV_EXCL_LINE
 }  // LCOV_EXCL_LINE
 // LCOV_EXCL_STOP
 
-size_t secInitialOutputBatchSize() {
-  const char* env = std::getenv("KEPLER_SEC_INITIAL_OUTPUT_BATCH_SIZE");
-  if (env == nullptr || *env == '\0') {
-    return 0;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoull(env, &end, 10);
-  if (end == env) {
-    return 0;
-  }
-  return static_cast<size_t>(parsed);
-}
+constexpr size_t kSecInitialOutputBatchSize = 128;
 
 std::unordered_map<size_t, size_t> buildStableBuilderVarRemap(
     const std::vector<size_t>& sourceTermDNLID2varID,
@@ -2715,6 +2711,20 @@ struct ExtractContext {
   MaterializedBuilderOutputs initialMaterializedOutputs;
 };
 
+void releaseUnusedAllocatorPages() {
+  scalable_allocation_command(TBBMALLOC_CLEAN_ALL_BUFFERS, nullptr);
+#if defined(__APPLE__)
+  malloc_zone_pressure_relief(nullptr, 0);
+#elif defined(__GLIBC__)
+  malloc_trim(0);
+#endif
+}
+
+class ScopedAllocatorPageRelease {
+ public:
+  ~ScopedAllocatorPageRelease() { releaseUnusedAllocatorPages(); }
+};
+
 std::string describeSupportVarOrigins(  // LCOV_EXCL_LINE
     const ExtractContext& ctx,
     // LCOV_EXCL_STOP
@@ -2800,6 +2810,7 @@ void logUnpublishedTransitionSupport(
 void collectInitialBuilderBoundary(ExtractContext& ctx) {
   naja::DNL::destroy();
   ctx.universe->setTopDesign(ctx.top);
+  ctx.universe->mergeAssigns();
 
   // Reuse the existing miter frontend to discover the relevant boundary
   // signals before we ask it to build Boolean formulas.
@@ -2807,7 +2818,9 @@ void collectInitialBuilderBoundary(ExtractContext& ctx) {
     fprintf(stderr, "SEC diag: extract(%s) collect begin\n", ctx.topName.c_str());
     fflush(stderr);
   }
-  ctx.builder.collect();
+  releaseUnusedAllocatorPages();
+  tbb::task_arena dnlBuildArena(1);
+  dnlBuildArena.execute([&ctx]() { ctx.builder.collect(); });
   ctx.collectedSkippedOutputs = ctx.builder.getSkippedOutputs();
   if (ctx.secDiagEnabled) {
     fprintf(
@@ -3847,7 +3860,7 @@ void buildInitialObservedOutputClouds(ExtractContext& ctx, SequentialDesignModel
     fprintf(stderr, "SEC diag: extract(%s) build begin\n", ctx.topName.c_str());
     fflush(stderr);
   }
-  const size_t batchSize = secInitialOutputBatchSize();
+  const size_t batchSize = kSecInitialOutputBatchSize;
   if (batchSize != 0 && initialMaterializedOutputs.size() > batchSize) {
     ctx.initialMaterializedOutputs = materializeBuilderOutputsInBatches(
         initialMaterializedOutputs,
@@ -6080,6 +6093,7 @@ SequentialDesignModel SequentialDesignModel::extract(
     throw std::runtime_error("SequentialDesignModel::extract: NLUniverse not created");
   }
 
+  ScopedAllocatorPageRelease allocatorPageRelease;
   SequentialDesignModel model;
   ExtractContext ctx{
       // LCOV_EXCL_START

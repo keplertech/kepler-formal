@@ -1354,6 +1354,7 @@ void SNLLogicCloud::compute() {
   clearVisitedTermsPairsTL();
   size_t iter = 0;
   transparentLoopTargetCacheTL.clear();
+  bool allExpandedEdgesFollowInstanceOrder = true;
 
   while (!reachedPIs) {
     // Originally computation of reachedPIs have been handled in the end of the loop,
@@ -1547,6 +1548,16 @@ void SNLLogicCloud::compute() {
         if (merges[i].first == naja::DNL::DNLID_MAX) {
           continue;
         }
+        if (outputConeAcyclic_) {
+          continue;
+        }
+        const auto consumerInstanceID =
+            dnl_.getDNLTerminalFromID(currentInputs[i])
+                .getDNLInstance()
+                .getID();
+        if (merges[i].first >= consumerInstanceID) {
+          allExpandedEdgesFollowInstanceOrder = false;
+        }
         auto loopTargetTerm = merges[i].second;
         if (!table_.hasTableTerm(loopTargetTerm)) {
           const auto& mergeTerm = dnl_.getDNLTerminalFromID(loopTargetTerm);
@@ -1563,6 +1574,11 @@ void SNLLogicCloud::compute() {
         }
         auto& loopTerms = loopTermsScratchTL;
         loopTerms.clear();
+        // Strict driver-before-consumer ordering is a topological order, so a
+        // directed cycle is impossible until an edge violates that ordering.
+        if (allExpandedEdgesFollowInstanceOrder) {
+          continue;
+        }
         // Normal cloud expansion must stay conservative: if this merge would
         // reconnect to any transparent alias already above the border leaf, the
         // cone contains a combinational loop. SEC's structured-memory path can
