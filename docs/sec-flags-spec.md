@@ -247,6 +247,7 @@ SEC still depends on the normal front-end and library flags:
 | `--design1`, `--design2`, `input_paths` | Source lists for the two compared designs. |
 | `--sv_design1_flist`, `--sv_design2_flist` | Per-design SystemVerilog file lists. In `sv2v` mode, only `--sv_design1_flist` is accepted. |
 | `--sv_design1_top`, `--sv_design2_top` | Per-design SystemVerilog top names. In `sv2v` mode, only `--sv_design1_top` is accepted. |
+| `--verilog_design1_top`, `--verilog_design2_top` | Per-design Verilog top names. In `sv2v` mode, only `--verilog_design2_top` is accepted. |
 | `--liberty`, `--lib`, `liberty_files` | Liberty primitives, including structured memory information used during SEC extraction. |
 | `py_tech_files` | Python primitive loaders. Must be provided through YAML, not through `--liberty`. |
 | `solver: kissat|glucose|cadical` | SAT solver used by the selected SEC engine. This selector is YAML-only. |

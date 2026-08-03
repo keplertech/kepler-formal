@@ -44,6 +44,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
 | `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 
@@ -74,6 +75,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `verilog_design1_top`, `verilog_design2_top` | string | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
 | `solver` | string | SAT solver selection: `kissat`, `glucose`, or `cadical`. Defaults to `kissat`. |
 
 Example:
