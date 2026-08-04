@@ -96,11 +96,9 @@ cc_library(
         ":gen_slang_export",
     ] + glob([
         "include/**/*.h",
-        "include/**/*.hpp",
         "external/**/*.h",
         "external/**/*.hpp",
         "source/**/*.h",
-        "source/**/*.hpp",
     ]),
     copts = [
         "-std=c++20",
