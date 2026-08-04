@@ -1,0 +1,62 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+load("@slang_host_prefixes//:prefixes.bzl", "CMAKE_PREFIX_PATH")
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(["**"], exclude = [".git/**"]),
+)
+
+SLANG_CACHE_ENTRIES = {
+    "CCACHE_EXECUTABLE": "CCACHE_EXECUTABLE-NOTFOUND",
+    "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+    "CMAKE_PREFIX_PATH": CMAKE_PREFIX_PATH,
+    "SLANG_INCLUDE_DOCS": "OFF",
+    "SLANG_INCLUDE_PYLIB": "OFF",
+    "SLANG_INCLUDE_TESTS": "OFF",
+    "SLANG_INCLUDE_TOOLS": "OFF",
+    "SLANG_PIC_ON": "ON",
+    "SLANG_USE_MIMALLOC": "OFF",
+}
+
+cmake(
+    name = "slang_foreign",
+    cache_entries = select({
+        "@kepler-formal//bazel:hermetic_runtime": SLANG_CACHE_ENTRIES | {
+            "CMAKE_CXX_STANDARD_LIBRARIES": " ".join([
+                "$${EXT_BUILD_DEPS}/lib/liblibcxx.static.a",
+                "$${EXT_BUILD_DEPS}/lib/liblibcxxabi.static.a",
+                "$${EXT_BUILD_DEPS}/lib/liblibunwind.static.a",
+                "-lm",
+            ]),
+        },
+        "//conditions:default": SLANG_CACHE_ENTRIES,
+    }),
+    deps = select({
+        "@kepler-formal//bazel:hermetic_runtime": ["@kepler-formal//bazel:hermetic_cxx_runtime"],
+        "//conditions:default": [],
+    }),
+    env = {"CCACHE_DISABLE": "1"},
+    lib_source = ":all_srcs",
+    out_static_libs = ["libsvlang.a"],
+    tags = ["requires-network"],
+)
+
+cc_library(
+    name = "slang_boost_shims",
+    hdrs = [
+        "external/boost_concurrent.hpp",
+        "external/boost_unordered.hpp",
+    ],
+    includes = ["external"],
+)
+
+cc_library(
+    name = "slang",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":slang_boost_shims",
+        ":slang_foreign",
+        "@fmt//:fmt",
+        "@tomlplusplus//:tomlplusplus",
+    ],
+)

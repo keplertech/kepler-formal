@@ -1,0 +1,7 @@
+cc_library(
+    name = "tomlplusplus",
+    srcs = ["src/toml.cpp"],
+    hdrs = glob(["include/toml++/**"]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
