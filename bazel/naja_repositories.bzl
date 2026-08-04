@@ -131,22 +131,9 @@ python_repository = repository_rule(
 )
 
 def _host_prefixes_repository_impl(repository_ctx):
-    brew = repository_ctx.which("brew")
-    if not brew:
-        for path in ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]:
-            candidate = repository_ctx.path(path)
-            if candidate.exists:
-                brew = candidate
-                break
-    prefixes = []
-    if brew:
-        for package in ["fmt", "tomlplusplus", "boost"]:
-            result = repository_ctx.execute([brew, "--prefix", package])
-            if result.return_code == 0 and result.stdout.strip():
-                prefixes.append(result.stdout.strip())
     repository_ctx.file(
         "prefixes.bzl",
-        'CMAKE_PREFIX_PATH = "{}"\n'.format(";".join(prefixes)),
+        'CMAKE_PREFIX_PATH = ""\n',
     )
     repository_ctx.file("BUILD.bazel", "")
 
