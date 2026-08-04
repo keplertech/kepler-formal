@@ -134,6 +134,8 @@ def _deps_impl(_module_ctx):
         url = "https://github.com/najaeda/naja-verilog/archive/{}.tar.gz".format(_NAJA_VERILOG_COMMIT),
         sha256 = "8a0513378c419afc462ffd59c35c7d0362fee7787ab40ef23b2f0a360df0a9df",
         strip_prefix = "naja-verilog-{}".format(_NAJA_VERILOG_COMMIT),
+        patch_args = ["-p0", "-f"],
+        patches = [Label("//bazel:naja_verilog_bazel9.patch")],
     )
 
     http_archive(

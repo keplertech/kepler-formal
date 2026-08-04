@@ -62,11 +62,12 @@
  # Mirrors this directory's own CMakeLists.txt: builds the `naja_opt`
 --- src/nl/python/naja_wrapping/BUILD.bazel
 +++ src/nl/python/naja_wrapping/BUILD.bazel
-@@ -3,3 +3,5 @@
+@@ -3,3 +3,6 @@
  # SPDX-License-Identifier: Apache-2.0
 -
 +
 +load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 +
  # Mirrors this directory's own CMakeLists.txt: builds `naja_python` (the
 --- src/nl/python/pyloader/BUILD.bazel
@@ -114,3 +115,21 @@
 +load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
 +
  # Mirrors this directory's own CMakeLists.txt: builds the
+--- thirdparty/yosys-liberty/src/BUILD.bazel
++++ thirdparty/yosys-liberty/src/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt. YosysLibertyParser is a
+--- thirdparty/spdlog-1.17.0/BUILD.bazel
++++ thirdparty/spdlog-1.17.0/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
++
+ # Vendored directly in this repo (not a submodule). naja only ever uses

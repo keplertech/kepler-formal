@@ -4,6 +4,7 @@ exports_files([
     "export_deps.sh",
     "naja_cc_library.bzl",
     "naja_ff_scan.patch",
+    "naja_verilog_bazel9.patch",
 ])
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
