@@ -37,7 +37,6 @@ _NAJA_COMMIT = "740f931a250812e72e60d09618f46ab046b81031"
 _NAJA_VERILOG_COMMIT = "5da040bb34f0e4e5bb8d67223b999a0132fb401f"
 _NAJA_IF_COMMIT = "099677d9f52c0db11b12c08d03e32543eebc7888"
 _SLANG_COMMIT = "512c327c209d3043aa98ecfd02d06a1b73fcd5fb"
-_FMT_COMMIT = "1be298e1bd68957e4cd352e1f676f00e07dcfb57"
 _TOMLPLUSPLUS_COMMIT = "30172438cee64926dc41fdd9c11fb3ba5b2ba9de"
 
 def _deps_impl(_module_ctx):
@@ -136,14 +135,6 @@ def _deps_impl(_module_ctx):
         strip_prefix = "naja-verilog-{}".format(_NAJA_VERILOG_COMMIT),
         patch_args = ["-p0", "-f"],
         patches = [Label("//bazel:naja_verilog_bazel9.patch")],
-    )
-
-    http_archive(
-        name = "fmt",
-        url = "https://github.com/fmtlib/fmt/archive/{}.tar.gz".format(_FMT_COMMIT),
-        sha256 = "d041f836d9b2a3c1c0fe3cce81ffe6a4a257028faa2f4af0dd20d7e58b493766",
-        strip_prefix = "fmt-{}".format(_FMT_COMMIT),
-        build_file = Label("//bazel:fmt.BUILD.bazel"),
     )
 
     http_archive(
