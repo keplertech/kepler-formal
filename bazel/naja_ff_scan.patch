@@ -1,17 +1,11 @@
 --- test/nl/formats/liberty/BUILD.bazel
 +++ test/nl/formats/liberty/BUILD.bazel
-@@ -14,6 +14,10 @@
-     name = "benchmarks",
-     srcs = glob(["benchmarks/**"], exclude = ["benchmarks/__pycache__/**"]),
-     visibility = ["//test:__subpackages__"],
- )
--
+@@ -18,0 +19,5 @@
 +exports_files(
 +    ["benchmarks/tests/FF_scan.lib"],
 +    visibility = ["//visibility:public"],
 +)
 +
- cc_test(
 --- src/core/BUILD.bazel
 +++ src/core/BUILD.bazel
 @@ -3,3 +3,5 @@
