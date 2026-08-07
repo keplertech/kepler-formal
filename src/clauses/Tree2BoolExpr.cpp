@@ -291,7 +291,7 @@ SubtractExprs subtractBits(
     const BoolExprBits& lhs,
     const BoolExprBits& rhs) {
   if (lhs.size() != rhs.size()) {
-    throw std::runtime_error("DIVMOD subtract width mismatch");
+    throw std::runtime_error("DIVMOD subtract width mismatch");  // LCOV_EXCL_LINE
   }
 
   SubtractExprs result;
@@ -327,7 +327,7 @@ DivModExprs buildUnsignedDivMod(
     const BoolExprBits& dividend,
     const BoolExprBits& divisor) {
   if (dividend.empty() || dividend.size() != divisor.size()) {
-    throw std::runtime_error("DIVMOD operand width mismatch");
+    throw std::runtime_error("DIVMOD operand width mismatch");  // LCOV_EXCL_LINE
   }
 
   const size_t width = dividend.size();
@@ -386,7 +386,7 @@ BoolExpr* buildDivModTruthTableExpr(
     naja::DNL::DNLID isoID) {
   const uint32_t width = table.getDivModWidth();
   if (arity != width * 2 || node == nullptr) {
-    throw std::runtime_error("DIVMOD truth table metadata mismatch");
+    throw std::runtime_error("DIVMOD truth table metadata mismatch");  // LCOV_EXCL_LINE
   }
 
   std::lock_guard<std::mutex> lock(divModBuildMutex);
@@ -414,7 +414,7 @@ BoolExpr* buildDivModTruthTableExpr(
   const auto& instance = currentTerm.getDNLInstance();
   const auto* model = instance.getSNLModel();
   if (!NLDB0::isDivMod(model)) {
-    throw std::runtime_error("DIVMOD truth table used by a non-divmod model");
+    throw std::runtime_error("DIVMOD truth table used by a non-divmod model");  // LCOV_EXCL_LINE
   }
 
   const auto* quotientTerm = NLDB0::getDivModQuotient(model);
@@ -431,7 +431,7 @@ BoolExpr* buildDivModTruthTableExpr(
 
     const auto bit = static_cast<size_t>(bitTerm->getBit());
     if (bit >= width) {
-      throw std::runtime_error("DIVMOD output bit is out of range");
+      throw std::runtime_error("DIVMOD output bit is out of range");  // LCOV_EXCL_LINE
     }
     BoolExpr* expression = nullptr;
     if (bitTerm->getID() == quotientTerm->getID()) {
@@ -439,7 +439,7 @@ BoolExpr* buildDivModTruthTableExpr(
     } else if (bitTerm->getID() == remainderTerm->getID()) {
       expression = expressions.remainder[bit];
     } else {
-      continue;
+      continue;  // LCOV_EXCL_LINE
     }
 
     const auto outputIsoID = term.getIsoID();
