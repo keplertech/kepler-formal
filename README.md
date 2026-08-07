@@ -144,6 +144,7 @@ build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v> [option
 
 # Multi-file Verilog
 build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <file...> \
+  [--verilog_design1_top <top>] [--verilog_design2_top <top>] \
   [--liberty <library-file>...] [--compact] [--report-skipped-pos]
 
 # SystemVerilog SEC with flists
@@ -165,6 +166,7 @@ build/src/bin/kepler-formal -sv -v sec \
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
+| `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
@@ -189,6 +191,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
+| `verilog_design1_top`, `verilog_design2_top` | string | Select the top module for each Verilog design. In `sv2v` mode, only `verilog_design2_top` is valid. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |

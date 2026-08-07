@@ -1,0 +1,135 @@
+--- test/nl/formats/liberty/BUILD.bazel
++++ test/nl/formats/liberty/BUILD.bazel
+@@ -18,0 +19,5 @@
++exports_files(
++    ["benchmarks/tests/FF_scan.lib"],
++    visibility = ["//visibility:public"],
++)
++
+--- src/core/BUILD.bazel
++++ src/core/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_core`
+--- src/dnl/BUILD.bazel
++++ src/dnl/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_dnl`
+--- src/metrics/BUILD.bazel
++++ src/metrics/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_metrics`
+--- src/bne/BUILD.bazel
++++ src/bne/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_bne`
+--- src/nl/netlist/BUILD.bazel
++++ src/nl/netlist/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_nl`
+--- src/optimization/BUILD.bazel
++++ src/optimization/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_opt`
+--- src/nl/python/naja_wrapping/BUILD.bazel
++++ src/nl/python/naja_wrapping/BUILD.bazel
+@@ -3,3 +3,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
++
+ # Mirrors this directory's own CMakeLists.txt: builds `naja_python` (the
+--- src/nl/python/pyloader/BUILD.bazel
++++ src/nl/python/pyloader/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds `naja_snl_pyloader`.
+--- src/nl/netlist/serialization/capnp/BUILD.bazel
++++ src/nl/netlist/serialization/capnp/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_nl_dump`
+--- src/nl/formats/verilog/BUILD.bazel
++++ src/nl/formats/verilog/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the `naja_snl_verilog`
+--- src/nl/formats/liberty/BUILD.bazel
++++ src/nl/formats/liberty/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the
+--- src/nl/formats/systemverilog/BUILD.bazel
++++ src/nl/formats/systemverilog/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt: builds the
+--- thirdparty/yosys-liberty/src/BUILD.bazel
++++ thirdparty/yosys-liberty/src/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
++
+ # Mirrors this directory's own CMakeLists.txt. YosysLibertyParser is a
+--- thirdparty/spdlog-1.17.0/BUILD.bazel
++++ thirdparty/spdlog-1.17.0/BUILD.bazel
+@@ -3,3 +3,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+-
++
++load("@rules_cc//cc:cc_library.bzl", "cc_library")
++
+ # Vendored directly in this repo (not a submodule). naja only ever uses

@@ -3072,18 +3072,6 @@ SequentialEquivalenceResult runPdrSecEngine(
     // LCOV_DISABLED_START
     const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
-  if (problem.combinedStateSymbols().empty()) {
-    return makeSecResult(
-    // LCOV_DISABLED_STOP
-        SequentialEquivalenceStatus::Equivalent,
-        // LCOV_DISABLED_START
-        0,
-        "",
-        outputCoverage,
-        abstractedSequentialBoundaries,
-        extractedBoundaryReports);
-  }
-
 // LCOV_DISABLED_STOP
   const std::vector<size_t> dualRailEngineOutputIndices =
       // LCOV_DISABLED_START

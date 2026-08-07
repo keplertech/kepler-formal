@@ -7976,6 +7976,9 @@ PDRResult PDREngine::runWithQueryLimits(
   if (hasPdrBudgetExhaustion()) {
     return {PDRStatus::Inconclusive, 0};  // LCOV_EXCL_LINE
   }
+  if (runProblem->combinedStateSymbols().empty()) {
+    return {PDRStatus::Equivalent, 0};
+  }
 
   if (maxFrames == 0) {
     return {PDRStatus::Inconclusive, 0};
