@@ -72,8 +72,9 @@ std::filesystem::path copyNajaIfForCurrentBuild(
   return copy;
 }
 
-int runWithConfigFile(const std::filesystem::path& cfgPath) {
-  std::string argv0 = "kepler-formal";
+int runWithConfigFile(
+    const std::filesystem::path& cfgPath,
+    std::string argv0 = "kepler-formal") {
   std::string argv1 = "--config";
   std::string argv2 = cfgPath.string();
   char* argv[] = {argv0.data(), argv1.data(), argv2.data()};
@@ -1355,6 +1356,69 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
 
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(
+    KeplerFormalCliTests,
+    ConfigPythonPrimitivesUseAdjacentNajaModuleWithoutPythonPath) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_adjacent_naja");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto pyPrimitives = fixture.tmpDir / "primitives.py";
+  const auto cfgPath = fixture.tmpDir / "config.yaml";
+  {
+    std::ofstream py(pyPrimitives);
+    py << "import naja\n"
+          "\n"
+          "def constructPrimitives(lib):\n"
+          "  cell = naja.SNLDesign.createPrimitive(lib, 'BUF')\n"
+          "  naja.SNLScalarTerm.create(cell, naja.SNLTerm.Direction.Input, 'A')\n"
+          "  naja.SNLScalarTerm.create(cell, naja.SNLTerm.Direction.Output, 'Z')\n"
+          "  cell.setTruthTable(0b10)\n";
+  }
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input a, output y);\n"
+               "  BUF u_buf(.A(a), .Z(y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, output y);\n"
+               "  assign y = a;\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << fixture.design0Path.string() << "\n"
+        << "  - " << fixture.design1Path.string() << "\n"
+           "py_tech_files:\n"
+        << "  - " << pyPrimitives.string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  const std::filesystem::path keplerBinPath(keplerBin);
+  ASSERT_TRUE(std::filesystem::exists(keplerBinPath));
+  ASSERT_TRUE(std::filesystem::exists(keplerBinPath.parent_path() / "naja.so"));
+
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  unsetenv("PYTHONPATH");
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    EXPECT_EQ(runWithConfigFile(cfgPath, keplerBinPath.string()), EXIT_SUCCESS);
+  }
+  ASSERT_NE(std::getenv("PYTHONPATH"), nullptr);
+  EXPECT_EQ(
+      std::filesystem::path(std::getenv("PYTHONPATH")),
+      keplerBinPath.parent_path());
+
   std::filesystem::remove_all(fixture.tmpDir);
 }
 

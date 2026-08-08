@@ -20,4 +20,12 @@ target_link_libraries(kepler-formal
     ${SPDLOG_TARGET}
 )
 
+add_dependencies(kepler-formal naja)
+add_custom_command(TARGET kepler-formal POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:naja>
+    $<TARGET_FILE_DIR:kepler-formal>
+)
+
 install(TARGETS kepler-formal DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES $<TARGET_FILE:naja> DESTINATION ${CMAKE_INSTALL_BINDIR})
