@@ -282,8 +282,7 @@ bool hasBuildableCombinationalRoot(
     }
 
     const auto* bitTerm = currentTerm.getSnlBitTerm();
-    if (naja::NL::SNLDesignModeling::getTruthTableCount(model) <=
-        bitTerm->getOrderID()) {
+    if (naja::NL::SNLDesignModeling::getTruthTableCount(model) == 0) {
       return false;
     }
     const auto& truthTable = naja::NL::SNLDesignModeling::getTruthTable(

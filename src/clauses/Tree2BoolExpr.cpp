@@ -4,6 +4,8 @@
 #include "Tree2BoolExpr.h"
 #include "BoolExpr.h"
 #include "DNL.h"
+#include "NLDB0.h"
+#include "SNLBusTerm.h"
 #include "SNLTruthTable.h"
 #include "SNLTruthTableTree.h"
 #include <tbb/concurrent_vector.h>
@@ -11,6 +13,7 @@
 #include <tbb/tbb_allocator.h>
 #include <bitset>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -256,7 +259,216 @@ BoolExpr* buildTableSelectTruthTableExpr(const SNLTruthTable& tbl,
       addressSize, depth, 0, 0);
 }  // LCOV_EXCL_LINE
 
-BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+namespace {
+
+using BoolExprBits = std::vector<BoolExpr*>;
+
+struct DivModExprs {
+  BoolExprBits quotient;
+  BoolExprBits remainder;
+};
+
+struct SubtractExprs {
+  BoolExprBits difference;
+  BoolExpr* borrow = nullptr;
+};
+
+std::mutex divModBuildMutex;
+
+BoolExpr* makeIte(
+    BoolExpr* condition,
+    BoolExpr* whenTrue,
+    BoolExpr* whenFalse) {
+  if (whenTrue == whenFalse) {
+    return whenTrue;
+  }
+  return BoolExpr::Or(
+      BoolExpr::And(condition, whenTrue),
+      BoolExpr::And(BoolExpr::Not(condition), whenFalse));
+}
+
+SubtractExprs subtractBits(
+    const BoolExprBits& lhs,
+    const BoolExprBits& rhs) {
+  if (lhs.size() != rhs.size()) {
+    throw std::runtime_error("DIVMOD subtract width mismatch");  // LCOV_EXCL_LINE
+  }
+
+  SubtractExprs result;
+  result.difference.resize(lhs.size());
+  BoolExpr* borrow = BoolExpr::createFalse();
+  for (size_t bit = 0; bit < lhs.size(); ++bit) {
+    const auto lhsXorRhs = BoolExpr::Xor(lhs[bit], rhs[bit]);
+    result.difference[bit] = BoolExpr::Xor(lhsXorRhs, borrow);
+    borrow = BoolExpr::Or(
+        BoolExpr::And(
+            BoolExpr::Not(lhs[bit]),
+            BoolExpr::Or(rhs[bit], borrow)),
+        BoolExpr::And(rhs[bit], borrow));
+  }
+  result.borrow = borrow;
+  return result;
+}
+
+BoolExprBits conditionalNegate(
+    const BoolExprBits& bits,
+    BoolExpr* negate) {
+  BoolExprBits result(bits.size());
+  BoolExpr* carry = negate;
+  for (size_t bit = 0; bit < bits.size(); ++bit) {
+    BoolExpr* inverted = BoolExpr::Xor(bits[bit], negate);
+    result[bit] = BoolExpr::Xor(inverted, carry);
+    carry = BoolExpr::And(inverted, carry);
+  }
+  return result;
+}
+
+DivModExprs buildUnsignedDivMod(
+    const BoolExprBits& dividend,
+    const BoolExprBits& divisor) {
+  if (dividend.empty() || dividend.size() != divisor.size()) {
+    throw std::runtime_error("DIVMOD operand width mismatch");  // LCOV_EXCL_LINE
+  }
+
+  const size_t width = dividend.size();
+  DivModExprs result;
+  result.quotient.assign(width, BoolExpr::createFalse());
+
+  BoolExprBits remainder(width + 1, BoolExpr::createFalse());
+  BoolExprBits extendedDivisor = divisor;
+  extendedDivisor.push_back(BoolExpr::createFalse());
+
+  for (size_t dividendBit = width; dividendBit-- > 0;) {
+    BoolExprBits shifted(width + 1);
+    shifted[0] = dividend[dividendBit];
+    for (size_t bit = 1; bit <= width; ++bit) {
+      shifted[bit] = remainder[bit - 1];
+    }
+
+    const auto subtraction = subtractBits(shifted, extendedDivisor);
+    BoolExpr* takeDifference = BoolExpr::Not(subtraction.borrow);
+    result.quotient[dividendBit] = takeDifference;
+    for (size_t bit = 0; bit <= width; ++bit) {
+      remainder[bit] = makeIte(
+          takeDifference, subtraction.difference[bit], shifted[bit]);
+    }
+  }
+
+  result.remainder.assign(remainder.begin(), remainder.begin() + width);
+  return result;
+}
+
+DivModExprs buildDivMod(
+    const BoolExprBits& dividend,
+    const BoolExprBits& divisor,
+    bool isSigned) {
+  if (!isSigned) {
+    return buildUnsignedDivMod(dividend, divisor);
+  }
+
+  BoolExpr* dividendSign = dividend.back();
+  BoolExpr* divisorSign = divisor.back();
+  auto magnitudeResult = buildUnsignedDivMod(
+      conditionalNegate(dividend, dividendSign),
+      conditionalNegate(divisor, divisorSign));
+  magnitudeResult.quotient = conditionalNegate(
+      magnitudeResult.quotient,
+      BoolExpr::Xor(dividendSign, divisorSign));
+  magnitudeResult.remainder = conditionalNegate(
+      magnitudeResult.remainder, dividendSign);
+  return magnitudeResult;
+}
+
+BoolExpr* buildDivModTruthTableExpr(
+    const SNLTruthTable& table,
+    uint32_t arity,
+    const SNLTruthTableTree::Node* node,
+    naja::DNL::DNLID isoID) {
+  const uint32_t width = table.getDivModWidth();
+  if (arity != width * 2 || node == nullptr) {
+    throw std::runtime_error("DIVMOD truth table metadata mismatch");  // LCOV_EXCL_LINE
+  }
+
+  std::lock_guard<std::mutex> lock(divModBuildMutex);
+  if (isoID != naja::DNL::DNLID_MAX) {
+    const auto cached = Tree2BoolExpr::iso2boolExpr_.find(isoID);
+    if (cached != Tree2BoolExpr::iso2boolExpr_.end() &&
+        cached->second != nullptr && cached->second->isValid()) {
+      return cached->second;
+    }
+  }
+
+  // Naja's packed [WIDTH-1:0] operand terms are flattened MSB first.
+  // The divider helpers use conventional LSB-first vectors.
+  BoolExprBits dividend(width);
+  BoolExprBits divisor(width);
+  for (uint32_t bit = 0; bit < width; ++bit) {
+    dividend[bit] = getChildFETS(width - 1 - bit);
+    divisor[bit] = getChildFETS(width * 2 - 1 - bit);
+  }
+
+  const auto expressions =
+      buildDivMod(dividend, divisor, table.isDivModSigned());
+  const auto& currentTerm =
+      naja::DNL::get()->getDNLTerminalFromID(node->data.termid);
+  const auto& instance = currentTerm.getDNLInstance();
+  const auto* model = instance.getSNLModel();
+  if (!NLDB0::isDivMod(model)) {
+    throw std::runtime_error("DIVMOD truth table used by a non-divmod model");  // LCOV_EXCL_LINE
+  }
+
+  const auto* quotientTerm = NLDB0::getDivModQuotient(model);
+  const auto* remainderTerm = NLDB0::getDivModRemainder(model);
+  for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
+       termID != naja::DNL::DNLID_MAX &&
+       termID <= instance.getTermIndexes().second;
+       ++termID) {
+    const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
+    const auto* bitTerm = term.getSnlBitTerm();
+    if (bitTerm->getDirection() != SNLBitTerm::Direction::Output) {
+      continue;
+    }
+
+    const auto bit = static_cast<size_t>(bitTerm->getBit());
+    if (bit >= width) {
+      throw std::runtime_error("DIVMOD output bit is out of range");  // LCOV_EXCL_LINE
+    }
+    BoolExpr* expression = nullptr;
+    if (bitTerm->getID() == quotientTerm->getID()) {
+      expression = expressions.quotient[bit];
+    } else if (bitTerm->getID() == remainderTerm->getID()) {
+      expression = expressions.remainder[bit];
+    } else {
+      continue;  // LCOV_EXCL_LINE
+    }
+
+    const auto outputIsoID = term.getIsoID();
+    if (outputIsoID != naja::DNL::DNLID_MAX) {
+      Tree2BoolExpr::iso2boolExpr_.insert({outputIsoID, expression});
+    }
+  }
+
+  const auto outputBit = table.getDivModOutputBit();
+  BoolExpr* selected =
+      table.getDivModResult() == SNLTruthTable::DivModResult::QUOTIENT
+          ? expressions.quotient[outputBit]
+          : expressions.remainder[outputBit];
+  if (isoID != naja::DNL::DNLID_MAX) {
+    const auto cached = Tree2BoolExpr::iso2boolExpr_.find(isoID);
+    if (cached != Tree2BoolExpr::iso2boolExpr_.end()) {
+      selected = cached->second;
+    }
+  }
+  return selected;
+}
+
+}  // namespace
+
+BoolExpr* buildGenericTruthTableExpr(
+    const SNLTruthTable& tbl,
+    uint32_t k,
+    const SNLTruthTableTree::Node* node,
+    naja::DNL::DNLID isoID) {
   assert(k > 0);
 
   BoolExpr* expr = getChildFETS(0);
@@ -290,6 +502,8 @@ BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
       return expr;
     case SNLTruthTable::GenericType::TABLE_SELECT:
       return buildTableSelectTruthTableExpr(tbl, k);
+    case SNLTruthTable::GenericType::DIVMOD:
+      return buildDivModTruthTableExpr(tbl, k, node, isoID);
     case SNLTruthTable::GenericType::NONE:
       // LCOV_EXCL_START
       // LCOV_DISABLED_START
@@ -302,6 +516,11 @@ BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
   throw std::runtime_error("Unsupported generic truth table type");
   // LCOV_DISABLED_STOP
   // LCOV_EXCL_STOP
+}
+
+BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+  return buildGenericTruthTableExpr(
+      tbl, k, nullptr, naja::DNL::DNLID_MAX);
 }
 
 // Frame type used for explicit stack-based post-order traversal.
@@ -432,8 +651,7 @@ BoolExpr* Tree2BoolExpr::convert(
       const SNLTruthTable& tbl = node->getTruthTable();
       DEBUG_LOG("Processing node ID %zu with table:\n%s\n", id, tbl.toString().c_str());
       uint32_t k = tbl.size();
-      uint64_t rows = uint64_t{1} << k;
-      DEBUG_LOG("Node ID %zu has %u inputs and %llu rows\n", id, k, rows);
+      DEBUG_LOG("Node ID %zu has %u inputs\n", id, k);
 
       if (tbl.all0() || tbl.all1()) {
         BoolExpr* expr =
@@ -460,7 +678,7 @@ BoolExpr* Tree2BoolExpr::convert(
         }
 
         if (tbl.isGeneric()) {
-          BoolExpr* expr = buildGenericTruthTableExpr(tbl, k);
+          BoolExpr* expr = buildGenericTruthTableExpr(tbl, k, node, isoID);
           if (isoID != naja::DNL::DNLID_MAX) {
             // LCOV_EXCL_START
             // The duplicate insert path only happens through concurrent reuse of
@@ -476,6 +694,9 @@ BoolExpr* Tree2BoolExpr::convert(
           setMemoETS(id, expr);
           continue;
         }
+
+        const uint64_t rows = uint64_t{1} << k;
+        DEBUG_LOG("Node ID %zu has %llu rows\n", id, rows);
 
         // Determine which inputs actually matter for this truth table.
         // For each input j, check if flipping bit j changes the table output.
