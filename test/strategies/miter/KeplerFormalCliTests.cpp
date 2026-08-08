@@ -2595,6 +2595,105 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogSecVerificationAccepted) {
 }
 
 TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSharedDivModPrimitiveProvesEquivalent) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(\n"
+      "  input  [63:0] a,\n"
+      "  output [63:0] q,\n"
+      "  output [63:0] r\n"
+      ");\n"
+      "  assign q = {a[63:1], 1'h0} / 64'h8;\n"
+      "  assign r = {a[63:1], 1'h0} % 64'h8;\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "shared_divmod_self_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr",
+                     "-k",
+                     "4",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string()}),
+        kSecProvedExitCode);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(
+        contents.find(
+            "SEC checked-output coverage: 100.00% "
+            "(128/128 covered/existing outputs)."),
+        std::string::npos);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSharedDivModMatchesShiftAndMask) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module top(\n"
+      "  input  [63:0] a,\n"
+      "  output [63:0] q,\n"
+      "  output [63:0] r\n"
+      ");\n"
+      "  assign q = {a[63:1], 1'h0} / 64'h8;\n"
+      "  assign r = {a[63:1], 1'h0} % 64'h8;\n"
+      "endmodule\n",
+      "module top(\n"
+      "  input  [63:0] a,\n"
+      "  output [63:0] q,\n"
+      "  output [63:0] r\n"
+      ");\n"
+      "  wire [63:0] aligned = {a[63:1], 1'h0};\n"
+      "  assign q = aligned >> 3;\n"
+      "  assign r = aligned & 64'h7;\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "shared_divmod_semantics_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr",
+                     "-k",
+                     "4",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string()}),
+        kSecProvedExitCode);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(
+        contents.find(
+            "SEC checked-output coverage: 100.00% "
+            "(128/128 covered/existing outputs)."),
+        std::string::npos);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
        ConfigSystemVerilogSecPdrDualRailExplainsResetlessStateMismatch) {
   const auto fixture = createDesignFixture(
       "sv",
