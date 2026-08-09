@@ -48,11 +48,12 @@ jobs:
 
         # Copy the binary
         cp bazel-bin/src/bin/kepler-formal "${DIST}/bin/"
+        cp bazel-bin/src/bin/naja.so "${DIST}/bin/"
 
         # Ship the top-level docs users expect alongside a binary release.
         cp README.md LICENSE.rst "${DIST}/"
 
-        # Bundle naja shared libs (built by rules_foreign_cc cmake)
+        # Bundle the Naja shared runtime.
         find bazel-bin/ -name 'libnaja_*.so' -exec cp {} "${DIST}/lib/" \;
         if ! find "${DIST}/lib" -maxdepth 1 -name 'libnaja_*.so' | grep -q .; then
           echo "Expected bundled naja shared libraries were not found."

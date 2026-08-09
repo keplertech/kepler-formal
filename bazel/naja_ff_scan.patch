@@ -62,14 +62,21 @@
  # Mirrors this directory's own CMakeLists.txt: builds the `naja_opt`
 --- src/nl/python/naja_wrapping/BUILD.bazel
 +++ src/nl/python/naja_wrapping/BUILD.bazel
-@@ -3,3 +3,6 @@
- # SPDX-License-Identifier: Apache-2.0
--
-+
+@@ -7,1 +7,5 @@
+-# Mirrors this directory's own CMakeLists.txt: builds `naja_python` (the
 +load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++load("@kepler-formal//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 +load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 +
- # Mirrors this directory's own CMakeLists.txt: builds `naja_python` (the
++# Mirrors this directory's own CMakeLists.txt: builds `naja_python` (the
+@@ -122,6 +125,7 @@
+ cc_binary(
+     name = "naja.so",
+     srcs = ["PyNaja.cpp"],
++    copts = NAJA_HEADER_COPTS,
+     dynamic_deps = [":naja_runtime"],
+     linkopts = select({
+         # cc_binary's linkshared=True already implies -dynamiclib on
 --- src/nl/python/pyloader/BUILD.bazel
 +++ src/nl/python/pyloader/BUILD.bazel
 @@ -3,3 +3,5 @@

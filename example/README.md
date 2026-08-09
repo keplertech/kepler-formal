@@ -28,4 +28,23 @@
 ## SEC YAML example
 ../build/src/bin/kepler-formal --config test_config_verilog_tinyrocket_sec.yaml
 
+## Xilinx mapped SEC example using Python primitive models
+../build/src/bin/kepler-formal --config test_config_verilog_xilinx_sec.yaml
+
+## VexRiscv GenFull Xilinx self-LEC example
+../build/src/bin/kepler-formal \
+  --config test_config_verilog_vexriscv_genfull_xilinx_lec.yaml
+
+## VexRiscv GenFull Xilinx difference example
+../build/src/bin/kepler-formal \
+  --config test_config_verilog_vexriscv_genfull_xilinx_lec_different.yaml
+
 ```
+
+The Xilinx example provides exact combinational truth tables and sequential
+models for the primitives it uses, including instance-parameterized `LUT1`
+through `LUT6` cells.
+
+The VexRiscv self-LEC validates loading and boundary construction on a
+4,995-cell generated Xilinx netlist, including carry, DSP, distributed RAM,
+and block RAM macros.

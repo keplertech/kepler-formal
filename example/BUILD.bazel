@@ -3,6 +3,8 @@ filegroup(
     srcs = glob([
         "*.v",
         "*.lib",
+        "*.py",
+        "*.yaml",
         "*.if/**",
     ]),
     visibility = ["//visibility:public"],

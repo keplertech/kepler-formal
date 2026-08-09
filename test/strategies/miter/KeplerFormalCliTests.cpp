@@ -1422,6 +1422,94 @@ TEST_F(
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigXilinxPythonPrimitiveSecExample) {
+  const auto exampleDir = repoRoot() / "example";
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_sec");
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: sec\n"
+           "sec_engine: pdr\n"
+           "sec_encoding: dual_rail_steady\n"
+           "sec_uncomputable_seq_as_boundary: false\n"
+           "input_paths:\n"
+        << "  - " << (exampleDir / "xilinx_register_slice_mapped.v").string()
+        << "\n  - "
+        << (exampleDir / "xilinx_register_slice_compact.v").string()
+        << "\npy_tech_files:\n  - " << (exampleDir / "xilinx.py").string()
+        << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxLutInstanceParameters) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_luts");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto cfgPath = fixture.tmpDir / "config.yaml";
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input a, b, output xor_y, and_y);\n"
+               "  LUT2 #(.INIT(4'h6)) xor_lut(.I0(a), .I1(b), .O(xor_y));\n"
+               "  LUT2 #(.INIT(4'h8)) and_lut(.I0(a), .I1(b), .O(and_y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, b, output xor_y, and_y);\n"
+               "  XOR2 explicit_xor(.A(a), .B(b), .Y(xor_y));\n"
+               "  AND2 explicit_and(.A(a), .B(b), .Y(and_y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << fixture.design0Path.string() << "\n"
+        << "  - " << fixture.design1Path.string() << "\n"
+           "py_tech_files:\n"
+        << "  - " << (repoRoot() / "example" / "xilinx.py").string()
+        << "\nlog_file: " << (fixture.tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxVexRiscvGenFullLecExample) {
+  const auto exampleDir = repoRoot() / "example";
+  const auto netlist = exampleDir / "vexriscv_genfull_xilinx.v";
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_vexriscv_xilinx");
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << netlist.string() << "\n"
+        << "  - " << netlist.string() << "\n"
+           "verilog_design1_top: vexriscv.demo.GenFull\n"
+           "verilog_design2_top: vexriscv.demo.GenFull\n"
+           "py_tech_files:\n"
+        << "  - " << (exampleDir / "xilinx.py").string()
+        << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSv2vPythonPrimitivesBuildsComplexStubLibrary) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_py_prims");

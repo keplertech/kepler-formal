@@ -234,6 +234,23 @@ jobs:
           config: test_config_verilog_tinyrocket_csrfile_sec.yaml
           expectation: expect-different
           generator: csrfile
+        - name: xilinx_register_slice_sec
+          source: local
+          case_dir: example
+          config: test_config_verilog_xilinx_sec.yaml
+          expectation: positive
+        - name: vexriscv_genfull_xilinx_self_sec
+          source: local
+          case_dir: example
+          config: test_config_verilog_vexriscv_genfull_xilinx_lec.yaml
+          expectation: positive
+          max_k: 1
+        - name: vexriscv_genfull_xilinx_difference_sec
+          source: local
+          case_dir: example
+          config: test_config_verilog_vexriscv_genfull_xilinx_lec_different.yaml
+          expectation: expect-different
+          max_k: 1
         - name: tinyrocket_naja_if_edited_sec_probe
           source: local
           case_dir: .
