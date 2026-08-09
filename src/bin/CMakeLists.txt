@@ -28,4 +28,4 @@ add_custom_command(TARGET kepler-formal POST_BUILD
 )
 
 install(TARGETS kepler-formal DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES $<TARGET_FILE:naja> DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES $<TARGET_FILE:naja> TYPE BIN)
