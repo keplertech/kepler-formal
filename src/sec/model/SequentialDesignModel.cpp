@@ -2809,7 +2809,6 @@ void logUnpublishedTransitionSupport(
 void collectInitialBuilderBoundary(ExtractContext& ctx) {
   naja::DNL::destroy();
   ctx.universe->setTopDesign(ctx.top);
-  ctx.universe->mergeAssigns();
 
   // Reuse the existing miter frontend to discover the relevant boundary
   // signals before we ask it to build Boolean formulas.
