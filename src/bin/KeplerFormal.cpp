@@ -103,7 +103,7 @@ static void addNajaPythonPath(const char* argv0) {
 #else
   if (setenv("PYTHONPATH", pythonPath.c_str(), 1) != 0) {
 #endif
-    throw std::runtime_error("Cannot configure PYTHONPATH for Naja primitives");
+    throw std::runtime_error("Cannot configure PYTHONPATH for Naja primitives");  // LCOV_EXCL_LINE
   }
 }
 

@@ -1419,6 +1419,20 @@ TEST_F(
       std::filesystem::path(std::getenv("PYTHONPATH")),
       keplerBinPath.parent_path());
 
+  EnvVarGuard pathGuard("PATH");
+  pathGuard.set(keplerBinPath.parent_path().string());
+  pythonPathGuard.set(fixture.tmpDir.string());
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    EXPECT_EQ(
+        runWithConfigFile(cfgPath, keplerBinPath.filename().string()),
+        EXIT_SUCCESS);
+  }
+  EXPECT_EQ(
+      std::getenv("PYTHONPATH"),
+      keplerBinPath.parent_path().string() + ":" + fixture.tmpDir.string());
+
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
