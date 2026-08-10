@@ -916,6 +916,33 @@ TEST_F(KeplerFormalCliTests, YamlMultiFileVerilogConfig) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigCannotBeCombinedWithCommandLineOptions) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "--config",
+                   cfgPath.string(),
+                   "--verilog_design1_top",
+                   "top",
+                   "--verilog_design2_top",
+                   "top"}),
+      EXIT_FAILURE);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, VerilogPreprocessingEnabledParsesDirectiveInput) {
   const auto fixture = createVerilogPreprocessingFixture(true);
   int rc = runWithConfigFile(fixture.cfgPath);
@@ -1359,7 +1386,7 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogLecRejected) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigSv2vAccepted) {
+TEST_F(KeplerFormalCliTests, ConfigSv2vGateLevelVerilogTopAccepted) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v");
   fixture.design0Path = fixture.tmpDir / "design0.sv";
@@ -1375,12 +1402,16 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vAccepted) {
     design1 << "module top(input a, output y);\n";
     design1 << "  assign y = a;\n";
     design1 << "endmodule\n";
+    design1 << "module unused(input a, output y);\n";
+    design1 << "  assign y = a;\n";
+    design1 << "endmodule\n";
   }
   const auto cfgPath = writeTempConfig(
       "format: sv2v\n"
       "verification: sec\n"
       "sec_encoding: binary\n"
       "max_k: 4\n"
+      "verilog_design2_top: top\n"
       "input_paths:\n"
       "  - " + fixture.design0Path.string() + "\n"
       "  - " + fixture.design1Path.string() + "\n");
@@ -1836,6 +1867,92 @@ TEST_F(KeplerFormalCliTests, CliSystemVerilogOptionsRejectedForVerilogFormat) {
                   argv5.data()};
   int argc = 6;
   EXPECT_NE(KeplerFormalMain(argc, argv), EXIT_SUCCESS);
+}
+
+TEST_F(KeplerFormalCliTests, CliVerilogTopOptionsRejectedForSystemVerilogFormat) {
+  EXPECT_NE(runWithArgs({"kepler-formal",
+                         "-systemverilog",
+                         "--verilog_design1_top",
+                         "top",
+                         "design0.sv",
+                         "design1.sv",
+                         "-v",
+                         "sec"}),
+            EXIT_SUCCESS);
+}
+
+TEST_F(KeplerFormalCliTests, CliSv2vRejectsFirstVerilogTopOption) {
+  EXPECT_NE(runWithArgs({"kepler-formal",
+                         "-sv2v",
+                         "--verilog_design1_top",
+                         "top",
+                         "design0.sv",
+                         "design1.v",
+                         "-v",
+                         "sec"}),
+            EXIT_SUCCESS);
+}
+
+TEST_F(KeplerFormalCliTests, CliVerilogExplicitTopSelectsDummyModules) {
+  const auto testData = repoRoot() / "test/strategies/miter/testdata";
+  const auto design1 = testData / "verilog_top_design1.v";
+  const auto design2 = testData / "verilog_top_design2.v";
+  ASSERT_TRUE(std::filesystem::exists(design1));
+  ASSERT_TRUE(std::filesystem::exists(design2));
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal", "-verilog", design1.string(), design2.string()}),
+      EXIT_FAILURE);
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-verilog",
+                   "--verilog_design1_top",
+                   "design1_top",
+                   "--verilog_design2_top",
+                   "design2_top",
+                   design1.string(),
+                   design2.string()}),
+      EXIT_SUCCESS);
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-verilog",
+                   "--verilog_design1_top",
+                   "missing",
+                   "--verilog_design2_top",
+                   "design2_top",
+                   design1.string(),
+                   design2.string()}),
+      EXIT_FAILURE);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCompactSecVerilogDifferentTopsAreNotReused) {
+  const auto design =
+      repoRoot() / "test/strategies/miter/testdata/verilog_top_design1.v";
+  ASSERT_TRUE(std::filesystem::exists(design));
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_verilog_top_config");
+  const auto logPath = tmpDir / "different_tops.log";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "compact_mode: true\n"
+      "verilog_design1_top: design1_top\n"
+      "verilog_design2_top: design1_unused\n"
+      "input_paths:\n"
+      "  - " + design.string() + "\n"
+      "  - " + design.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  ASSERT_TRUE(std::filesystem::exists(logPath));
+  const auto contents = readFileContents(logPath);
+  EXPECT_EQ(contents.find("reusing extracted design 1 model"), std::string::npos);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, FirstVerilogDesignWithoutTopFails) {
@@ -2574,6 +2691,105 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogSecVerificationAccepted) {
       "  - " + fixture.design1Path.string() + "\n");
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSharedDivModPrimitiveProvesEquivalent) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(\n"
+      "  input  [63:0] a,\n"
+      "  output [63:0] q,\n"
+      "  output [63:0] r\n"
+      ");\n"
+      "  assign q = {a[63:1], 1'h0} / 64'h8;\n"
+      "  assign r = {a[63:1], 1'h0} % 64'h8;\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "shared_divmod_self_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr",
+                     "-k",
+                     "4",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string()}),
+        kSecProvedExitCode);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(
+        contents.find(
+            "SEC checked-output coverage: 100.00% "
+            "(128/128 covered/existing outputs)."),
+        std::string::npos);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSharedDivModMatchesShiftAndMask) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module top(\n"
+      "  input  [63:0] a,\n"
+      "  output [63:0] q,\n"
+      "  output [63:0] r\n"
+      ");\n"
+      "  assign q = {a[63:1], 1'h0} / 64'h8;\n"
+      "  assign r = {a[63:1], 1'h0} % 64'h8;\n"
+      "endmodule\n",
+      "module top(\n"
+      "  input  [63:0] a,\n"
+      "  output [63:0] q,\n"
+      "  output [63:0] r\n"
+      ");\n"
+      "  wire [63:0] aligned = {a[63:1], 1'h0};\n"
+      "  assign q = aligned >> 3;\n"
+      "  assign r = aligned & 64'h7;\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "shared_divmod_semantics_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr",
+                     "-k",
+                     "4",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string()}),
+        kSecProvedExitCode);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(
+        contents.find(
+            "SEC checked-output coverage: 100.00% "
+            "(128/128 covered/existing outputs)."),
+        std::string::npos);
+  }
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
@@ -3572,6 +3788,31 @@ TEST_F(KeplerFormalCliTests, CliNoSecBoundaryFlagAcceptedAfterFormat) {
                    fixture.design1IfPath.string()}),
       kSecProvedExitCode);
   EXPECT_FALSE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSecPdrReportsCombinationalMismatchAtFrameZero) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input a, input b, output y);\n"
+      "  or (y, a, b);\n"
+      "endmodule\n",
+      "module top(input a, input b, output y);\n"
+      "  and (y, a, b);\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-v",
+                   "sec",
+                   "-k",
+                   "1",
+                   "--sec-engine",
+                   "pdr",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      kSecCounterexampleExitCode);
   std::filesystem::remove_all(fixture.tmpDir);
 }
 

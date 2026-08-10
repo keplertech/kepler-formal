@@ -156,6 +156,7 @@ build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-cc/-cxx
 
 # Multi-file Verilog
 build/src/bin/kepler-formal -verilog [options] --design1 <file...> --design2 <file...> \
+  [--verilog_design1_top <top>] [--verilog_design2_top <top>] \
   [--liberty <library-file>...] [--compact] [--report-skipped-pos]
 
 # SystemVerilog SEC with flists
@@ -178,6 +179,7 @@ build/src/bin/kepler-formal -sv -v sec \
 | `-cc`, `-cxx` | Synthesize one C/C++ translation unit per design to SystemVerilog with XLS, then run SEC on the generated RTL. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
+| `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--cc_top <function>` | C/C++ top function for both designs. Use `--cc_design1_top` / `--cc_design2_top` when they differ. |
 | `--cc_include <dir>` | Add an include directory for XLS C/C++ synthesis. May be repeated. |
@@ -205,6 +207,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
+| `verilog_design1_top`, `verilog_design2_top` | string | Select the top module for each Verilog design. In `sv2v` mode, only `verilog_design2_top` is valid. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |

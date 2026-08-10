@@ -62,12 +62,12 @@ static const char* kSkippedMultiClockDomainPOReport =
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} [--config <file>] | "
-      "-verilog [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <gate1.v> <gate2.v> [<library-file>...] | "
-      "<-systemverilog/-sv> [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <rtl1.sv> <rtl2.sv> [<library-file>...] | "
-      "-sv2v [-v sec] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <rtl.sv> <gate.v> [<library-file>...] | "
-      "<-naja_if/-verilog> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
+      "<netlist1> <netlist2> [<library-file>...] | "
+      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--no-sec-uncomputable-seq-boundary] [--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos] | "
       "<-systemverilog/-sv> --design1 <rtl file...> --design2 "
@@ -374,6 +374,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
+      "verilog_design1_top",
+      "verilog_design2_top",
       "sv_design1_top",
       "sv_design2_top",
       "cc_top",
@@ -591,6 +593,11 @@ struct LoweredCcInputs {
   LoweredCcDesign design1;
 };
 
+struct VerilogTopOptions {
+  std::optional<std::string> design0;
+  std::optional<std::string> design1;
+};
+
 static bool parseConfigInputPaths(const YAML::Node& node,
                                   DesignInputs& out,
                                   std::string& error) {
@@ -767,20 +774,37 @@ static bool sameSystemVerilogDesignOptions(
 static bool sameCompactSecDesignSpec(
     bool isSystemVerilog,
     const DesignInputs& designInputs,
-    const SystemVerilogOptions& systemVerilogOptions) {
+    const SystemVerilogOptions& systemVerilogOptions,
+    const VerilogTopOptions& verilogTopOptions) {
   if (normalizeInputListForComparison(designInputs.design0) !=
       normalizeInputListForComparison(designInputs.design1)) {
     return false;
   }
   // LCOV_EXCL_START
   if (!isSystemVerilog) {
-    return true;
+    return verilogTopOptions.design0 == verilogTopOptions.design1;
     // LCOV_EXCL_STOP
   }
   // LCOV_EXCL_START
   return sameSystemVerilogDesignOptions(
       systemVerilogOptions.design0, systemVerilogOptions.design1);
       // LCOV_EXCL_STOP
+}
+
+static naja::NL::SNLDesign* selectTopDesign(
+    naja::NL::NLLibrary* library,
+    const std::optional<std::string>& requestedTop,
+    int designIndex) {
+  if (!requestedTop) {
+    return SNLUtils::findTop(library);
+  }
+  auto* top = library->getSNLDesign(NLName(*requestedTop));
+  if (!top) {
+    throw std::runtime_error(
+        "Top module `" + *requestedTop + "` was not found in design " +
+        std::to_string(designIndex + 1));
+  }
+  return top;
 }
 
 static bool applySystemVerilogConfigOption(const YAML::Node& cfg,
@@ -1492,6 +1516,7 @@ int KeplerFormalMain(int argc, char** argv) {
   DesignInputs designInputs;
   SystemVerilogOptions systemVerilogOptions;
   CcSynthesisOptions ccSynthesisOptions;
+  VerilogTopOptions verilogTopOptions;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
@@ -1513,7 +1538,7 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
   }
 
-  // Check for config mode (--config or -c). If present, YAML takes precedence.
+  // Config mode (--config or -c) is exclusive with other command-line options.
   bool usedConfig = false;
 
   std::string logFileName;
@@ -1540,6 +1565,11 @@ int KeplerFormalMain(int argc, char** argv) {
         SPDLOG_CRITICAL("Missing config file after {}", a);  // LCOV_EXCL_LINE
         return EXIT_FAILURE;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
+      }
+      if (argc != 3) {
+        SPDLOG_CRITICAL(
+            "Config mode cannot be combined with other command-line options");
+        return EXIT_FAILURE;
       }
       const std::string cfgPath = argv[i + 1];
       try {
@@ -1791,9 +1821,13 @@ int KeplerFormalMain(int argc, char** argv) {
             !applySystemVerilogConfigOption(
                 cfg, "sv_design1_top", systemVerilogOptions.design0.top, svConfigError) ||
             !applySystemVerilogConfigOption(
-                cfg, "sv_design2_top", systemVerilogOptions.design1.top, svConfigError)) {
+                cfg, "sv_design2_top", systemVerilogOptions.design1.top, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "verilog_design1_top", verilogTopOptions.design0, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "verilog_design2_top", verilogTopOptions.design1, svConfigError)) {
           // LCOV_EXCL_START
-          SPDLOG_CRITICAL("Invalid SystemVerilog config option: {}", svConfigError);
+          SPDLOG_CRITICAL("Invalid design config option: {}", svConfigError);
           return EXIT_FAILURE;
           // LCOV_EXCL_STOP
         }
@@ -2144,6 +2178,7 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
+          arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
           arg == "--sv_design1_top" || arg == "--sv_design2_top") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
@@ -2164,8 +2199,12 @@ int KeplerFormalMain(int argc, char** argv) {
           systemVerilogOptions.design1.flist = value;
         } else if (arg == "--sv_design1_top") {
           systemVerilogOptions.design0.top = value;
-        } else {
+        } else if (arg == "--sv_design2_top") {
           systemVerilogOptions.design1.top = value;
+        } else if (arg == "--verilog_design1_top") {
+          verilogTopOptions.design0 = value;
+        } else {
+          verilogTopOptions.design1 = value;
           // LCOV_EXCL_STOP
         }
         // LCOV_EXCL_START
@@ -2477,6 +2516,19 @@ int KeplerFormalMain(int argc, char** argv) {
     SPDLOG_CRITICAL(
         "sv2v format only accepts SystemVerilog options for design 1; "
         "design 2 is parsed as Verilog");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType != FormatType::VERILOG &&
+      inputFormatType != FormatType::SV2V &&
+      (verilogTopOptions.design0 || verilogTopOptions.design1)) {
+    SPDLOG_CRITICAL(
+        "Verilog top options are only valid with -verilog/-sv2v input");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType == FormatType::SV2V && verilogTopOptions.design0) {
+    SPDLOG_CRITICAL(
+        "sv2v format only accepts a Verilog top option for design 2; "
+        "design 1 is parsed as SystemVerilog");
     return EXIT_FAILURE;
   }
   std::string svValidationError;
@@ -2835,14 +2887,20 @@ int KeplerFormalMain(int argc, char** argv) {
           constructor.config_.preprocessEnabled_ = verilogPreprocessing;
           constructor.construct(toPathVector(designPaths));
         }
-	        auto top = SNLUtils::findTop(designLibrary);
-	        if (!top) {
+        auto top = useSystemVerilog
+                       ? SNLUtils::findTop(designLibrary)
+                       : selectTopDesign(
+                             designLibrary,
+                             designIndex == 0 ? verilogTopOptions.design0
+                                              : verilogTopOptions.design1,
+                             designIndex);
+        if (!top) {
             // LCOV_EXCL_START
-	          // LCOV_DISABLED_START
-	          throw std::runtime_error("No top design was found after parsing input");
-	          // LCOV_DISABLED_STOP
+          // LCOV_DISABLED_START
+          throw std::runtime_error("No top design was found after parsing input");
+          // LCOV_DISABLED_STOP
             // LCOV_EXCL_STOP
-	        }
+        }
         db->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
       } else {
@@ -3022,7 +3080,8 @@ int KeplerFormalMain(int argc, char** argv) {
             sameCompactSecDesignSpec(
                 inputFormatType == FormatType::SYSTEMVERILOG,
                 designInputs,
-                systemVerilogOptions)) {
+                systemVerilogOptions,
+                verilogTopOptions)) {
           // CVA6-style smoke runs often compare a design against itself. In
           // compact SEC, extracting that identical second side would require
           // holding the already extracted value model while elaborating the
@@ -3139,7 +3198,9 @@ int KeplerFormalMain(int argc, char** argv) {
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
         constructor.construct(design0Paths);
       }
-      auto top = SNLUtils::findTop(designLibrary);
+      auto top = design0UsesSystemVerilog
+                     ? SNLUtils::findTop(designLibrary)
+                     : selectTopDesign(designLibrary, verilogTopOptions.design0, 0);
       if (top) {
         db0->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
@@ -3248,7 +3309,9 @@ int KeplerFormalMain(int argc, char** argv) {
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
         constructor.construct(design1Paths);
       }
-      auto top = SNLUtils::findTop(designLibrary);
+      auto top = design1UsesSystemVerilog
+                     ? SNLUtils::findTop(designLibrary)
+                     : selectTopDesign(designLibrary, verilogTopOptions.design1, 1);
       if (top) {
         db1->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());

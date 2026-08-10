@@ -4,15 +4,17 @@ module(
 )
 
 # Infrastructure
-bazel_dep(name = "rules_cc", version = "0.2.18")
+bazel_dep(name = "rules_cc", version = "0.2.20")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
 # Direct dependencies from BCR
 bazel_dep(name = "yaml-cpp", version = "0.9.0")
-bazel_dep(name = "googletest", version = "1.17.0.bcr.2")
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+bazel_dep(name = "capnp-cpp", version = "1.4.0")
 bazel_dep(name = "zlib", version = "1.3.2")
+bazel_dep(name = "fmt", version = "12.2.0")
 bazel_dep(name = "spdlog", version = "1.17.0")
 bazel_dep(name = "abseil-cpp", version = "20260107.0")
 bazel_dep(name = "boringssl", version = "0.20250114.0")
@@ -41,10 +43,9 @@ use_repo(
     project_python_host = "python_{}_host".format(PYTHON_VERSION_NAME),
 )
 # TBB comes from the cmake-built @onetbb repo (bazel/deps.bzl), not the BCR
-# onetbb module (which is Bazel-8-compatible nowadays): naja's shared libs
-# and the kepler-formal binary must share a single libtbb.so.12 runtime,
-# and naja's find_package(TBB) needs TBBConfig.cmake — both of which only
-# a real cmake install tree provides.
+# onetbb module: Naja's native targets and the kepler-formal binary must
+# share a single libtbb.so.12 runtime. The same install tree is exported
+# for the plain CMake flow by //:deps.
 
 # Hermetic zero-sysroot LLVM toolchain (hermetic-llvm): statically linked
 # clang 22, libc++ linked statically by default, glibc 2.28 floor. No host
@@ -126,13 +127,26 @@ use_repo(z3_ext, "z3")
 deps = use_extension("//bazel:deps.bzl", "deps")
 use_repo(
     deps,
+    "bison_tool",
+    "boost",
     "boost_headers",
     "cadical",
     "capnproto",
     "cppitertools",
+    "flex_headers",
     "flex_src",
+    "flex_tool",
     "glucose",
     "kissat",
+    "m4_tool",
     "naja",
+    "naja-if",
+    "naja-verilog",
+    "naja_git_version",
     "onetbb",
+    "python",
+    "slang",
+    "slang_host_prefixes",
+    "tbb",
+    "tomlplusplus",
 )

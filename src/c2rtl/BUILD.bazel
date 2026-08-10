@@ -8,6 +8,7 @@ cc_library(
         "XlsPipelineScheduleShim.cpp",
     ],
     hdrs = ["KeplerXlsC2Rtl.h"],
+    includes = ["."],
     visibility = ["//visibility:public"],
     deps = [
         "@xls_c2rtl_src//:xls_c2rtl",

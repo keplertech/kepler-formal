@@ -91,6 +91,7 @@ cc_library(
         "xls/common/case_converters.cc",
         "xls/common/file/filesystem.cc",
         "xls/common/file/path.cc",
+        "xls/common/file/temp_file.cc",
         "xls/common/indent.cc",
         "xls/common/logging/log_lines.cc",
         "xls/common/math_util.cc",
