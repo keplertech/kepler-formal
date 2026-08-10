@@ -207,7 +207,9 @@ cc_library(
         "xls/solvers/z3_op_translator.cc",
         "xls/solvers/z3_utils.cc",
     ],
-    hdrs = glob([
+    hdrs = [
+        "gtest/gtest_prod.h",
+    ] + glob([
         "xls/**/*.h",
         "xls/**/*.inc",
         "xls/**/*.td",
@@ -252,7 +254,6 @@ cc_library(
         "@abseil-cpp//absl/types:span",
         "@boringssl//:crypto",
         "@cppitertools",
-        "@googletest//:gtest",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:frontend",

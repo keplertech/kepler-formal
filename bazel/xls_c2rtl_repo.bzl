@@ -3,6 +3,15 @@
 
 """Repository rule that overlays a flat BUILD file on the local XLS tree."""
 
+_GTEST_PROD_HEADER = """#ifndef GTEST_INCLUDE_GTEST_GTEST_PROD_H_
+#define GTEST_INCLUDE_GTEST_GTEST_PROD_H_
+
+#define FRIEND_TEST(test_case_name, test_name) \\
+  friend class test_case_name##_##test_name##_Test
+
+#endif  // GTEST_INCLUDE_GTEST_GTEST_PROD_H_
+"""
+
 def _xls_c2rtl_repository_impl(repo_ctx):
     src_root = repo_ctx.path(repo_ctx.attr.src_marker).dirname
     if repo_ctx.attr.src_subdir:
@@ -44,6 +53,8 @@ def _xls_c2rtl_repository_impl(repo_ctx):
     if clean_result.return_code != 0:
         fail("failed to clean XLS package markers: " + clean_result.stderr)
 
+    # XLS production headers only use FRIEND_TEST; avoid a non-dev GTest edge.
+    repo_ctx.file("gtest/gtest_prod.h", _GTEST_PROD_HEADER)
     repo_ctx.file("BUILD.bazel", repo_ctx.read(repo_ctx.attr.build_file))
 
 xls_c2rtl_repository = repository_rule(
