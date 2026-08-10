@@ -69,7 +69,16 @@
 +load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 +
 +# Mirrors this directory's own CMakeLists.txt: builds `naja_python` (the
-@@ -122,6 +125,7 @@
+@@ -110,5 +114,8 @@
+     exports_filter = [
+         "//src:__subpackages__",
+         "@fmt//:fmt",
++        "@kepler-formal//bazel:hermetic_libcxx",
++        "@kepler-formal//bazel:hermetic_libcxxabi",
++        "@kepler-formal//bazel:hermetic_libunwind",
+         "@zlib//:z",
+     ],
+@@ -122,6 +129,7 @@
  cc_binary(
      name = "naja.so",
      srcs = ["PyNaja.cpp"],
