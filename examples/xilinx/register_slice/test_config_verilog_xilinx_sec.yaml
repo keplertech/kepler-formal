@@ -1,0 +1,15 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+format: verilog
+verification: sec
+sec_engine: pdr
+sec_encoding: dual_rail_steady
+sec_uncomputable_seq_as_boundary: false
+input_paths:
+  - xilinx_register_slice_mapped.v
+  - xilinx_register_slice_compact.v
+py_tech_files:
+  - ../xilinx.py
+log_level: info
+solver: kissat

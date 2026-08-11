@@ -43,7 +43,7 @@ jobs:
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
 
     - name: Generate Naja IF test inputs with the local Naja checkout
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}/examples/tinyrocket
       run: |
         python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
         CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \

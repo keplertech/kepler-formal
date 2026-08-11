@@ -3210,12 +3210,12 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
 
   std::string pfx = get_test_data_prefix();
   int rc = run_kepler_cli_with_args({"-verilog",
-                                         pfx + "example/tinyrocket.v",
-                                         pfx + "example/tinyrocket_edited.v",
-                                         pfx + "example/NangateOpenCellLibrary_typical.lib",
-                                         pfx + "example/fakeram45_64x15.lib",
-                                         pfx + "example/fakeram45_64x32.lib",
-                                         pfx + "example/fakeram45_1024x32.lib"});
+                                         pfx + "examples/tinyrocket/tinyrocket.v",
+                                         pfx + "examples/tinyrocket/tinyrocket_edited.v",
+                                         pfx + "examples/tinyrocket/NangateOpenCellLibrary_typical.lib",
+                                         pfx + "examples/tinyrocket/fakeram45_64x15.lib",
+                                         pfx + "examples/tinyrocket/fakeram45_64x32.lib",
+                                         pfx + "examples/tinyrocket/fakeram45_1024x32.lib"});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
@@ -3230,10 +3230,10 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
   const auto design0 = tempDir / "tinyrocket_naja.if";
   const auto design1 = tempDir / "tinyrocket_naja_edited.if";
   std::filesystem::copy(
-      dataRoot / "example/tinyrocket_naja.if", design0,
+      dataRoot / "examples/tinyrocket/tinyrocket_naja.if", design0,
       std::filesystem::copy_options::recursive);
   std::filesystem::copy(
-      dataRoot / "example/tinyrocket_naja_edited.if", design1,
+      dataRoot / "examples/tinyrocket/tinyrocket_naja_edited.if", design1,
       std::filesystem::copy_options::recursive);
   // Keep the checked-in payloads while normalizing short-hash metadata to the
   // exact Naja revision linked into this test binary and CLI subprocess.
@@ -3249,11 +3249,11 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
       << "  - " << design1.string() << "\n"
       << "liberty_files:\n"
       << "  - "
-      << (dataRoot / "example/NangateOpenCellLibrary_typical.lib").string()
+      << (dataRoot / "examples/tinyrocket/NangateOpenCellLibrary_typical.lib").string()
       << "\n"
-      << "  - " << (dataRoot / "example/fakeram45_1024x32.lib").string()
+      << "  - " << (dataRoot / "examples/tinyrocket/fakeram45_1024x32.lib").string()
       << "\n"
-      << "  - " << (dataRoot / "example/fakeram45_64x32.lib").string()
+      << "  - " << (dataRoot / "examples/tinyrocket/fakeram45_64x32.lib").string()
       << "\n"
       << "log_level: info\n"
       << "use_scopes: true\n"
@@ -3299,13 +3299,13 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
     std::ofstream cfg(configPath);
     cfg << "format: verilog\n";
     cfg << "input_paths:\n";
-    cfg << "  - " << (root / "example/tinyrocket.v").string() << "\n";
-    cfg << "  - " << (root / "example/tinyrocket_edited.v").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/tinyrocket.v").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/tinyrocket_edited.v").string() << "\n";
     cfg << "liberty_files:\n";
-    cfg << "  - " << (root / "example/NangateOpenCellLibrary_typical.lib").string() << "\n";
-    cfg << "  - " << (root / "example/fakeram45_1024x32.lib").string() << "\n";
-    cfg << "  - " << (root / "example/fakeram45_64x32.lib").string() << "\n";
-    cfg << "  - " << (root / "example/fakeram45_64x15.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/NangateOpenCellLibrary_typical.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/fakeram45_1024x32.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/fakeram45_64x32.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/fakeram45_64x15.lib").string() << "\n";
     cfg << "log_file: " << logPath.string() << "\n";
   }
 

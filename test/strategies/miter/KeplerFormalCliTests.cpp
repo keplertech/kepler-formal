@@ -72,8 +72,9 @@ std::filesystem::path copyNajaIfForCurrentBuild(
   return copy;
 }
 
-int runWithConfigFile(const std::filesystem::path& cfgPath) {
-  std::string argv0 = "kepler-formal";
+int runWithConfigFile(
+    const std::filesystem::path& cfgPath,
+    std::string argv0 = "kepler-formal") {
   std::string argv1 = "--config";
   std::string argv2 = cfgPath.string();
   char* argv[] = {argv0.data(), argv1.data(), argv2.data()};
@@ -389,7 +390,7 @@ MultiFileVerilogFixture createMultiFileVerilogFixture() {
   const auto design1Top = fixture.tmpDir / "design1_top.v";
   fixture.cfgPath = fixture.tmpDir / "config.yaml";
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
   const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
   const auto lib2 = exampleDir / "fakeram45_64x32.lib";
@@ -476,7 +477,8 @@ SimpleCliFixture createEquivalentDesignFixture(const std::string& extension,
 
 std::filesystem::path copyExampleLibertyFile(const std::filesystem::path& directory,
                                              const std::string& filename) {
-  const auto source = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto source = repoRoot() / "examples" / "tinyrocket" /
+                      "NangateOpenCellLibrary_typical.lib";
   const auto destination = directory / filename;
   std::filesystem::copy_file(
       source, destination, std::filesystem::copy_options::overwrite_existing);
@@ -551,7 +553,8 @@ ScopedNajaIfFixture createEquivalentScopedNajaIfFixture() {
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_scope_if");
   fixture.design0IfPath = fixture.tmpDir / "design0.capnp";
   fixture.design1IfPath = fixture.tmpDir / "design1.capnp";
-  fixture.libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  fixture.libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                        "NangateOpenCellLibrary_typical.lib";
 
   const auto design0Child = fixture.tmpDir / "design0_child.v";
   const auto design0Top = fixture.tmpDir / "design0_top.v";
@@ -816,7 +819,7 @@ TEST_F(KeplerFormalCliTests, SecResultExitCodesAreStable) {
 
 TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = exampleDir / "tinyrocket.v";
   const auto design1 = exampleDir / "tinyrocket_edited.v";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -1326,7 +1329,8 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_prim");
   fixture.design0Path = fixture.tmpDir / "design0.sv";
   fixture.design1Path = fixture.tmpDir / "design1.v";
-  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
   ASSERT_TRUE(std::filesystem::exists(libertyPath));
 
   {
@@ -1356,6 +1360,174 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(
+    KeplerFormalCliTests,
+    ConfigPythonPrimitivesUseAdjacentNajaModuleWithoutPythonPath) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_adjacent_naja");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto pyPrimitives = fixture.tmpDir / "primitives.py";
+  const auto cfgPath = fixture.tmpDir / "config.yaml";
+  {
+    std::ofstream py(pyPrimitives);
+    py << "import naja\n"
+          "\n"
+          "def constructPrimitives(lib):\n"
+          "  cell = naja.SNLDesign.createPrimitive(lib, 'BUF')\n"
+          "  naja.SNLScalarTerm.create(cell, naja.SNLTerm.Direction.Input, 'A')\n"
+          "  naja.SNLScalarTerm.create(cell, naja.SNLTerm.Direction.Output, 'Z')\n"
+          "  cell.setTruthTable(0b10)\n";
+  }
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input a, output y);\n"
+               "  BUF u_buf(.A(a), .Z(y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, output y);\n"
+               "  assign y = a;\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << fixture.design0Path.string() << "\n"
+        << "  - " << fixture.design1Path.string() << "\n"
+           "py_tech_files:\n"
+        << "  - " << pyPrimitives.string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  const std::filesystem::path keplerBinPath(keplerBin);
+  ASSERT_TRUE(std::filesystem::exists(keplerBinPath));
+  ASSERT_TRUE(std::filesystem::exists(keplerBinPath.parent_path() / "naja.so"));
+
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  unsetenv("PYTHONPATH");
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    EXPECT_EQ(runWithConfigFile(cfgPath, keplerBinPath.string()), EXIT_SUCCESS);
+  }
+  ASSERT_NE(std::getenv("PYTHONPATH"), nullptr);
+  EXPECT_EQ(
+      std::filesystem::path(std::getenv("PYTHONPATH")),
+      keplerBinPath.parent_path());
+
+  EnvVarGuard pathGuard("PATH");
+  pathGuard.set(keplerBinPath.parent_path().string());
+  pythonPathGuard.set(fixture.tmpDir.string());
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    EXPECT_EQ(
+        runWithConfigFile(cfgPath, keplerBinPath.filename().string()),
+        EXIT_SUCCESS);
+  }
+  EXPECT_EQ(
+      std::getenv("PYTHONPATH"),
+      keplerBinPath.parent_path().string() + ":" + fixture.tmpDir.string());
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxPythonPrimitiveSecExample) {
+  const auto exampleDir =
+      repoRoot() / "examples" / "xilinx" / "register_slice";
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_sec");
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: sec\n"
+           "sec_engine: pdr\n"
+           "sec_encoding: dual_rail_steady\n"
+           "sec_uncomputable_seq_as_boundary: false\n"
+           "input_paths:\n"
+        << "  - " << (exampleDir / "xilinx_register_slice_mapped.v").string()
+        << "\n  - "
+        << (exampleDir / "xilinx_register_slice_compact.v").string()
+        << "\npy_tech_files:\n  - "
+        << (exampleDir.parent_path() / "xilinx.py").string()
+        << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxLutInstanceParameters) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_luts");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto cfgPath = fixture.tmpDir / "config.yaml";
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input a, b, output xor_y, and_y);\n"
+               "  LUT2 #(.INIT(4'h6)) xor_lut(.I0(a), .I1(b), .O(xor_y));\n"
+               "  LUT2 #(.INIT(4'h8)) and_lut(.I0(a), .I1(b), .O(and_y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, b, output xor_y, and_y);\n"
+               "  XOR2 explicit_xor(.A(a), .B(b), .Y(xor_y));\n"
+               "  AND2 explicit_and(.A(a), .B(b), .Y(and_y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << fixture.design0Path.string() << "\n"
+        << "  - " << fixture.design1Path.string() << "\n"
+           "py_tech_files:\n"
+        << "  - "
+        << (repoRoot() / "examples" / "xilinx" / "xilinx.py").string()
+        << "\nlog_file: " << (fixture.tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxVexRiscvGenFullLecExample) {
+  const auto exampleDir = repoRoot() / "examples" / "xilinx" / "vexriscv";
+  const auto netlist = exampleDir / "vexriscv_genfull_xilinx.v";
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_vexriscv_xilinx");
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << netlist.string() << "\n"
+        << "  - " << netlist.string() << "\n"
+           "verilog_design1_top: vexriscv.demo.GenFull\n"
+           "verilog_design2_top: vexriscv.demo.GenFull\n"
+           "py_tech_files:\n"
+        << "  - " << (exampleDir.parent_path() / "xilinx.py").string()
+        << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSv2vPythonPrimitivesBuildsComplexStubLibrary) {
@@ -1643,7 +1815,8 @@ TEST_F(KeplerFormalCliTests, ConfigCompactSystemVerilogLecCnfRejected) {
   const auto fixture = createSystemVerilogFlistFixture();
   const auto cnfPath = fixture.tmpDir / "compact_sv.cnf";
   const auto poCnfDir = fixture.tmpDir / "compact_sv_po_cnfs";
-  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
   const auto cfgPath = writeTempConfig(
       "format: systemverilog\n"
       "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
@@ -2104,7 +2277,7 @@ TEST_F(KeplerFormalCliTests, SnlMultiFileRejected) {
 
 TEST_F(KeplerFormalCliTests, MissingFirstNajaIfFails) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design1 = exampleDir / "tinyrocket_naja.if";
   ASSERT_TRUE(std::filesystem::exists(design1));
 
@@ -2120,7 +2293,7 @@ TEST_F(KeplerFormalCliTests, MissingFirstNajaIfFails) {
 
 TEST_F(KeplerFormalCliTests, MissingSecondNajaIfFails) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = exampleDir / "tinyrocket_naja.if";
   ASSERT_TRUE(std::filesystem::exists(design0));
 
@@ -2136,7 +2309,7 @@ TEST_F(KeplerFormalCliTests, MissingSecondNajaIfFails) {
 
 TEST_F(KeplerFormalCliTests, ConfigCompactNajaIfAccepted) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design = copyNajaIfForCurrentBuild(
       exampleDir / "tinyrocket_naja.if", "kepler_compact_naja_if");
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -3011,7 +3184,7 @@ TEST_F(KeplerFormalCliTests, ConfigSecDifferenceLogIncludesWitnessDetails) {
 
 TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design = exampleDir / "tinyrocket.v";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
   const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
@@ -4392,7 +4565,7 @@ TEST_F(KeplerFormalCliTests, VerilogNoLibertyCreatesDbAndFailsOnSecondParse) {
 
 TEST_F(KeplerFormalCliTests, SnlScopesNoDifference) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = copyNajaIfForCurrentBuild(
       exampleDir / "tinyrocket_naja.if", "kepler_scoped_naja_if");
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";

@@ -232,7 +232,7 @@ jobs:
           python3 -m pip install --no-build-isolation "${{github.workspace}}/thirdparty/naja"
 
     - name: Generate TinyRocket SEC inputs
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}/examples/tinyrocket
       run: |
         python3 to_naja_if.py
         python3 edit.py
@@ -265,7 +265,7 @@ jobs:
       run: |
         bash regress/run_sec_strategies_regress.sh \
           tinyrocket_self_sec \
-          "${{github.workspace}}/example" \
+          "${{github.workspace}}/examples/tinyrocket" \
           "${{github.workspace}}/build-sec-regress/src/bin/kepler-formal" \
           test_config_verilog_tinyrocket_sec.yaml \
           ${{ env.SEC_POSITIVE_EXPECTATION }} \
@@ -274,7 +274,7 @@ jobs:
           sec-encoding=${{ env.SEC_ENCODING }}
         bash regress/run_sec_strategies_regress.sh \
           tinyrocket_csrfile_sec \
-          "${{github.workspace}}/example" \
+          "${{github.workspace}}/examples/tinyrocket" \
           "${{github.workspace}}/build-sec-regress/src/bin/kepler-formal" \
           test_config_verilog_tinyrocket_csrfile_sec.yaml \
           expect-different \

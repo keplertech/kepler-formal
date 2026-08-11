@@ -453,8 +453,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input) {
-          const auto tt = SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getDesign(), 
-              term.getSnlBitTerm()->getOrderID());
+          const auto tt = SNLDesignModeling::getTruthTable(
+              instance.getSNLInstance(), term.getSnlBitTerm()->getOrderID());
           if (!tt.isInitialized()) {
             assert(termId < naja::DNL::get()->getDNLTerms().size());
             inputs.emplace_back(termId);
@@ -741,8 +741,9 @@ void BuildPrimaryOutputClauses::initVarNames() {
     // If direction is input, skip
     if (!tTerm.isTopPort() &&
         tTerm.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
-      const auto tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
-      tTerm.getSnlBitTerm()->getOrderID());
+      const auto tt = SNLDesignModeling::getTruthTable(
+          tTerm.getDNLInstance().getSNLInstance(),
+          tTerm.getSnlBitTerm()->getOrderID());
       if (tt.isInitialized()) {
         if (tt.all0()) {
           termDNLID2varID_[inputs_[i]] = 0;
