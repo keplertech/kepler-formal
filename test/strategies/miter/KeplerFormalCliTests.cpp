@@ -3613,6 +3613,69 @@ TEST_F(KeplerFormalCliTests, CliCcFormatRequiresSec) {
       EXIT_FAILURE);
 }
 
+TEST_F(KeplerFormalCliTests,
+       CliCVsRtlPreservesWriteOnlyReferenceOutputNames) {
+  const auto tmpDir =
+      makeUniqueTempDir("kepler_formal_cli_c_vs_rtl_named_outputs");
+  const auto ccPath = tmpDir / "adder.cc";
+  const auto svPath = tmpDir / "adder.sv";
+  const auto outputDir = tmpDir / "c2rtl";
+  {
+    std::ofstream cc(ccPath);
+    cc << "void adder(unsigned char a, unsigned char b, "
+          "unsigned char& sum, bool& overflow) {\n";
+    cc << "  unsigned short result = static_cast<unsigned short>(a) + "
+          "static_cast<unsigned short>(b);\n";
+    cc << "  sum = static_cast<unsigned char>(result);\n";
+    cc << "  overflow = ((result >> 8) & 1) != 0;\n";
+    cc << "}\n";
+  }
+  {
+    std::ofstream sv(svPath);
+    sv << "module adder_rtl(\n";
+    sv << "    input logic [7:0] a,\n";
+    sv << "    input logic [7:0] b,\n";
+    sv << "    output logic [7:0] sum,\n";
+    sv << "    output logic overflow\n";
+    sv << ");\n";
+    sv << "  assign {overflow, sum} = a + b;\n";
+    sv << "endmodule\n";
+  }
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-c_vs_rtl",
+                   "-v",
+                   "sec",
+                   "--sec-encoding",
+                   "binary",
+                   "-k",
+                   "2",
+                   "--cc_top",
+                   "adder",
+                   "--cc_design1_module_name",
+                   "adder_c2rtl",
+                   "--cc_output_dir",
+                   outputDir.string(),
+                   "--sv_design2_top",
+                   "adder_rtl",
+                   ccPath.string(),
+                   svPath.string()}),
+      kSecProvedExitCode);
+
+  const auto generatedPath = outputDir / "design1_adder.sv";
+  std::ifstream generated(generatedPath);
+  const std::string generatedText(
+      (std::istreambuf_iterator<char>(generated)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(generatedText.find("output wire [7:0] sum"), std::string::npos);
+  EXPECT_NE(generatedText.find("output wire overflow"), std::string::npos);
+  EXPECT_NE(generatedText.find("module adder_c2rtl__xls_impl"),
+            std::string::npos);
+
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, CliMissingInputFormatAfterPreOptionsFails) {
   EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "-k", "4"}), EXIT_FAILURE);
 }
