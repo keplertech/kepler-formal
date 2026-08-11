@@ -1,9 +1,11 @@
 filegroup(
     name = "testdata",
     srcs = glob([
-        "*.v",
-        "*.lib",
-        "*.if/**",
+        "**/*.v",
+        "**/*.lib",
+        "**/*.py",
+        "**/*.yaml",
+        "**/*.if/**",
     ]),
     visibility = ["//visibility:public"],
 )

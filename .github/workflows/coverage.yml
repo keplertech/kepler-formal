@@ -51,7 +51,7 @@ jobs:
         CXX:  clang++
 
     - name: Generate Naja IF test inputs with the local Naja checkout
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}/examples/tinyrocket
       env:
         GIT_CONFIG_COUNT: "1"
         GIT_CONFIG_KEY_0: core.abbrev

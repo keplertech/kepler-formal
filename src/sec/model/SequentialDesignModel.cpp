@@ -286,7 +286,7 @@ bool hasBuildableCombinationalRoot(
       return false;
     }
     const auto& truthTable = naja::NL::SNLDesignModeling::getTruthTable(
-        model, bitTerm->getOrderID());
+        instance.getSNLInstance(), bitTerm->getOrderID());
     return truthTable.isInitialized();
   }
 
@@ -1294,7 +1294,7 @@ bool isConstantInternalOutputTerm(const naja::DNL::DNLTerminalFull& term) {
   }
 
   const auto truthTable = naja::NL::SNLDesignModeling::getTruthTable(
-      model, term.getSnlBitTerm()->getOrderID());
+      instance.getSNLInstance(), term.getSnlBitTerm()->getOrderID());
   if (truthTable.isInitialized() && (truthTable.all0() || truthTable.all1())) {
     return true;
   }

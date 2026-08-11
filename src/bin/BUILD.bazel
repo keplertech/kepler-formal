@@ -1,6 +1,13 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
+genrule(
+    name = "naja_python_module",
+    srcs = ["@naja//src/nl/python/naja_wrapping:naja.so"],
+    outs = ["naja.so"],
+    cmd = "cp $(location @naja//src/nl/python/naja_wrapping:naja.so) $@",
+)
+
 cc_binary(
     name = "kepler-formal",
     srcs = [
@@ -8,6 +15,8 @@ cc_binary(
         "KeplerFormalUtils.h",
     ],
     copts = NAJA_HEADER_COPTS,
+    data = [":naja_python_module"],
+    dynamic_deps = ["@naja//src/nl/python/naja_wrapping:naja_runtime"],
     # capnp/kj (static), TBB (shared, bundled in the release tarball) and
     # zlib arrive transitively through @naja's cmake deps — no system -l
     # flags. The hermetic toolchain links libc++ statically by default,

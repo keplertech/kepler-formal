@@ -2576,7 +2576,8 @@ SNLDesign* loadLibertyMemoryModel(
     const std::string& libertyFileName,
     const std::string& cellName) {
   SNLLibertyConstructor constructor(primitivesLibrary);
-  constructor.construct(repoRootForSecTests() / "example" / libertyFileName);
+  constructor.construct(
+      repoRootForSecTests() / "examples" / "tinyrocket" / libertyFileName);
   auto* model = primitivesLibrary->getSNLDesign(NLName(cellName));
   if (model == nullptr) {
     throw std::runtime_error("Failed to load Liberty memory model `" + cellName + "`");

@@ -123,6 +123,16 @@ Bazel build notes, dependency details, release flow, and the BCR publication roa
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
 
+### Custom Python Primitives
+
+Custom technology primitives can be defined in Python and loaded with the YAML
+`py_tech_files` option. Kepler-formal automatically makes an adjacent `naja.so`
+available while preserving the user's existing `PYTHONPATH`. When relocating
+the executable, copy its complete directory, including `naja.so`, or set
+`PYTHONPATH` to another compatible module. See
+[Custom Python Primitives](docs/python-primitives.md) for the file format,
+lookup behavior, and deployment instructions.
+
 ### SEC Result Codes
 
 | Result | Exit code | Meaning |
@@ -216,7 +226,7 @@ verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 
 ## Examples 
 
-See [example tests](example)
+See the organized [examples](examples).
 
 ## Contact
 
