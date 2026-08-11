@@ -390,7 +390,7 @@ MultiFileVerilogFixture createMultiFileVerilogFixture() {
   const auto design1Top = fixture.tmpDir / "design1_top.v";
   fixture.cfgPath = fixture.tmpDir / "config.yaml";
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
   const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
   const auto lib2 = exampleDir / "fakeram45_64x32.lib";
@@ -477,7 +477,8 @@ SimpleCliFixture createEquivalentDesignFixture(const std::string& extension,
 
 std::filesystem::path copyExampleLibertyFile(const std::filesystem::path& directory,
                                              const std::string& filename) {
-  const auto source = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto source = repoRoot() / "examples" / "tinyrocket" /
+                      "NangateOpenCellLibrary_typical.lib";
   const auto destination = directory / filename;
   std::filesystem::copy_file(
       source, destination, std::filesystem::copy_options::overwrite_existing);
@@ -552,7 +553,8 @@ ScopedNajaIfFixture createEquivalentScopedNajaIfFixture() {
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_scope_if");
   fixture.design0IfPath = fixture.tmpDir / "design0.capnp";
   fixture.design1IfPath = fixture.tmpDir / "design1.capnp";
-  fixture.libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  fixture.libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                        "NangateOpenCellLibrary_typical.lib";
 
   const auto design0Child = fixture.tmpDir / "design0_child.v";
   const auto design0Top = fixture.tmpDir / "design0_top.v";
@@ -817,7 +819,7 @@ TEST_F(KeplerFormalCliTests, SecResultExitCodesAreStable) {
 
 TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = exampleDir / "tinyrocket.v";
   const auto design1 = exampleDir / "tinyrocket_edited.v";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -1327,7 +1329,8 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_prim");
   fixture.design0Path = fixture.tmpDir / "design0.sv";
   fixture.design1Path = fixture.tmpDir / "design1.v";
-  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
   ASSERT_TRUE(std::filesystem::exists(libertyPath));
 
   {
@@ -1437,7 +1440,8 @@ TEST_F(
 }
 
 TEST_F(KeplerFormalCliTests, ConfigXilinxPythonPrimitiveSecExample) {
-  const auto exampleDir = repoRoot() / "example";
+  const auto exampleDir =
+      repoRoot() / "examples" / "xilinx" / "register_slice";
   const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_sec");
   const auto cfgPath = tmpDir / "config.yaml";
   {
@@ -1451,7 +1455,8 @@ TEST_F(KeplerFormalCliTests, ConfigXilinxPythonPrimitiveSecExample) {
         << "  - " << (exampleDir / "xilinx_register_slice_mapped.v").string()
         << "\n  - "
         << (exampleDir / "xilinx_register_slice_compact.v").string()
-        << "\npy_tech_files:\n  - " << (exampleDir / "xilinx.py").string()
+        << "\npy_tech_files:\n  - "
+        << (exampleDir.parent_path() / "xilinx.py").string()
         << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
   }
 
@@ -1489,7 +1494,8 @@ TEST_F(KeplerFormalCliTests, ConfigXilinxLutInstanceParameters) {
         << "  - " << fixture.design0Path.string() << "\n"
         << "  - " << fixture.design1Path.string() << "\n"
            "py_tech_files:\n"
-        << "  - " << (repoRoot() / "example" / "xilinx.py").string()
+        << "  - "
+        << (repoRoot() / "examples" / "xilinx" / "xilinx.py").string()
         << "\nlog_file: " << (fixture.tmpDir / "miter.log").string() << "\n";
   }
 
@@ -1500,7 +1506,7 @@ TEST_F(KeplerFormalCliTests, ConfigXilinxLutInstanceParameters) {
 }
 
 TEST_F(KeplerFormalCliTests, ConfigXilinxVexRiscvGenFullLecExample) {
-  const auto exampleDir = repoRoot() / "example";
+  const auto exampleDir = repoRoot() / "examples" / "xilinx" / "vexriscv";
   const auto netlist = exampleDir / "vexriscv_genfull_xilinx.v";
   const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_vexriscv_xilinx");
   const auto cfgPath = tmpDir / "config.yaml";
@@ -1514,7 +1520,7 @@ TEST_F(KeplerFormalCliTests, ConfigXilinxVexRiscvGenFullLecExample) {
            "verilog_design1_top: vexriscv.demo.GenFull\n"
            "verilog_design2_top: vexriscv.demo.GenFull\n"
            "py_tech_files:\n"
-        << "  - " << (exampleDir / "xilinx.py").string()
+        << "  - " << (exampleDir.parent_path() / "xilinx.py").string()
         << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
   }
 
@@ -1809,7 +1815,8 @@ TEST_F(KeplerFormalCliTests, ConfigCompactSystemVerilogLecCnfRejected) {
   const auto fixture = createSystemVerilogFlistFixture();
   const auto cnfPath = fixture.tmpDir / "compact_sv.cnf";
   const auto poCnfDir = fixture.tmpDir / "compact_sv_po_cnfs";
-  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
   const auto cfgPath = writeTempConfig(
       "format: systemverilog\n"
       "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
@@ -2270,7 +2277,7 @@ TEST_F(KeplerFormalCliTests, SnlMultiFileRejected) {
 
 TEST_F(KeplerFormalCliTests, MissingFirstNajaIfFails) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design1 = exampleDir / "tinyrocket_naja.if";
   ASSERT_TRUE(std::filesystem::exists(design1));
 
@@ -2286,7 +2293,7 @@ TEST_F(KeplerFormalCliTests, MissingFirstNajaIfFails) {
 
 TEST_F(KeplerFormalCliTests, MissingSecondNajaIfFails) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = exampleDir / "tinyrocket_naja.if";
   ASSERT_TRUE(std::filesystem::exists(design0));
 
@@ -2302,7 +2309,7 @@ TEST_F(KeplerFormalCliTests, MissingSecondNajaIfFails) {
 
 TEST_F(KeplerFormalCliTests, ConfigCompactNajaIfAccepted) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design = copyNajaIfForCurrentBuild(
       exampleDir / "tinyrocket_naja.if", "kepler_compact_naja_if");
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -3177,7 +3184,7 @@ TEST_F(KeplerFormalCliTests, ConfigSecDifferenceLogIncludesWitnessDetails) {
 
 TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design = exampleDir / "tinyrocket.v";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
   const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
@@ -4558,7 +4565,7 @@ TEST_F(KeplerFormalCliTests, VerilogNoLibertyCreatesDbAndFailsOnSecondParse) {
 
 TEST_F(KeplerFormalCliTests, SnlScopesNoDifference) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = copyNajaIfForCurrentBuild(
       exampleDir / "tinyrocket_naja.if", "kepler_scoped_naja_if");
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";

@@ -60,7 +60,7 @@ jobs:
             "${{github.workspace}}/thirdparty/naja"
 
     - name: Generate Naja IF unit-test inputs
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}/examples/tinyrocket
       run: |
         python3 -m pip install \
           "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
@@ -225,29 +225,29 @@ jobs:
           expectation: positive
         - name: tinyrocket_self_sec
           source: local
-          case_dir: example
+          case_dir: examples/tinyrocket
           config: test_config_verilog_tinyrocket_sec.yaml
           expectation: positive
         - name: tinyrocket_csrfile_sec
           source: local
-          case_dir: example
+          case_dir: examples/tinyrocket
           config: test_config_verilog_tinyrocket_csrfile_sec.yaml
           expectation: expect-different
           generator: csrfile
         - name: xilinx_register_slice_sec
           source: local
-          case_dir: example
+          case_dir: examples/xilinx/register_slice
           config: test_config_verilog_xilinx_sec.yaml
           expectation: positive
         - name: vexriscv_genfull_xilinx_self_sec
           source: local
-          case_dir: example
+          case_dir: examples/xilinx/vexriscv
           config: test_config_verilog_vexriscv_genfull_xilinx_lec.yaml
           expectation: positive
           max_k: 1
         - name: vexriscv_genfull_xilinx_difference_sec
           source: local
-          case_dir: example
+          case_dir: examples/xilinx/vexriscv
           config: test_config_verilog_vexriscv_genfull_xilinx_lec_different.yaml
           expectation: expect-different
           max_k: 1
@@ -307,7 +307,7 @@ jobs:
 
     - name: Generate local regression inputs
       if: ${{ matrix.case.generator == 'naja_if' || matrix.case.generator == 'csrfile' || matrix.case.generator == 'edit' }}
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}/examples/tinyrocket
       env:
         CASE_GENERATOR: ${{ matrix.case.generator }}
       run: |

@@ -5,7 +5,7 @@ cc_test(
     name = "SequentialEquivalenceStrategyTests",
     srcs = ["SequentialEquivalenceStrategyTests.cpp"],
     data = [
-        "//example:testdata",
+        "//examples:testdata",
         "@naja//:ff_scan_lib",
     ],
     env = {

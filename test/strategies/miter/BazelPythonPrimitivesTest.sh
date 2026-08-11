@@ -5,18 +5,13 @@ set -eu
 workspace="${TEST_SRCDIR}/${TEST_WORKSPACE}"
 workdir="${TEST_TMPDIR}/xilinx-python-primitives"
 mkdir -p "${workdir}"
-cp "${workspace}/example/xilinx.py" "${workdir}/"
-cp "${workspace}/example/xilinx_register_slice_compact.v" "${workdir}/"
-cp "${workspace}/example/xilinx_register_slice_mapped.v" "${workdir}/"
-cp "${workspace}/example/test_config_verilog_xilinx_sec.yaml" "${workdir}/"
-cp "${workspace}/example/vexriscv_genfull_xilinx.v" "${workdir}/"
-cp "${workspace}/example/vexriscv_genfull_xilinx_different.v" "${workdir}/"
-cp "${workspace}/example/test_config_verilog_vexriscv_genfull_xilinx_lec_different.yaml" "${workdir}/"
+cp -R "${workspace}/examples/xilinx" "${workdir}/"
 
-cd "${workdir}"
+cd "${workdir}/xilinx/register_slice"
 "${workspace}/src/bin/kepler-formal" \
   --config test_config_verilog_xilinx_sec.yaml
 
+cd "${workdir}/xilinx/vexriscv"
 set +e
 difference_output="$("${workspace}/src/bin/kepler-formal" \
   --config test_config_verilog_vexriscv_genfull_xilinx_lec_different.yaml 2>&1)"

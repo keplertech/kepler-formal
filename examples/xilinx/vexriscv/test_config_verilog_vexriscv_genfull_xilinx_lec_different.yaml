@@ -5,9 +5,10 @@ format: verilog
 verification: lec
 input_paths:
   - vexriscv_genfull_xilinx.v
-  - vexriscv_genfull_xilinx.v
-verilog_design1_top: vexriscv.demo.GenFull
-verilog_design2_top: vexriscv.demo.GenFull
+  - vexriscv_genfull_xilinx_different.v
+verilog_design1_top: vexriscv_genfull_xilinx_probe
+verilog_design2_top: vexriscv_genfull_xilinx_probe
 py_tech_files:
-  - xilinx.py
+  - ../xilinx.py
+log_level: info
 solver: kissat

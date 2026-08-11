@@ -10,6 +10,6 @@ input_paths:
   - xilinx_register_slice_mapped.v
   - xilinx_register_slice_compact.v
 py_tech_files:
-  - xilinx.py
+  - ../xilinx.py
 log_level: info
 solver: kissat

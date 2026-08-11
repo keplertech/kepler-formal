@@ -5,7 +5,7 @@ sh_test(
     name = "BazelPythonPrimitivesTest",
     srcs = ["BazelPythonPrimitivesTest.sh"],
     data = [
-        "//example:testdata",
+        "//examples:testdata",
         "//src/bin:kepler-formal",
     ],
 )
@@ -15,7 +15,7 @@ cc_test(
     srcs = ["MiterTests.cpp"],
     data = [
         "//src/bin:kepler-formal",
-        "//example:testdata",
+        "//examples:testdata",
     ] + glob(["*.yaml"]),
     env = {
         "KEPLER_BIN": "$(rootpath //src/bin:kepler-formal)",
