@@ -133,14 +133,6 @@ the executable, copy its complete directory, including `naja.so`, or set
 [Custom Python Primitives](docs/python-primitives.md) for the file format,
 lookup behavior, and deployment instructions.
 
-### Exampels for Python Primitives
-
-Files are loaded in their listed order. See the
-[Xilinx primitive model](examples/xilinx/xilinx.py) and its
-[register-slice](examples/xilinx/register_slice) and
-[VexRiscv](examples/xilinx/vexriscv) examples for combinational,
-parameterized, and sequential models.
-
 ### SEC Result Codes
 
 | Result | Exit code | Meaning |
