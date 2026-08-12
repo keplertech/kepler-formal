@@ -119,10 +119,10 @@ The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/
 
 ### Custom Python Primitives
 
-Custom technology primitives can be defined in Python and loaded with the YAML
-`py_tech_files` option. See [Custom Python Primitives](docs/python-primitives.md)
-for setup and deployment, and the [Xilinx examples](examples/xilinx) for
-working models and configurations.
+Custom technology primitives can be defined in Python and loaded through the
+YAML `py_tech_files` option. See
+[Custom Python Primitives](docs/python-primitives.md) for setup and deployment
+and the [Xilinx FPGA example](examples/xilinx) for the use model.
 
 ### SEC Result Codes
 
