@@ -95,30 +95,21 @@ cmake .. \
 
 ## Bazel (experimental)
 
-The Bazel build is a secondary, experimental option. Build notes, dependency
-details, release flow, and the BCR publication roadmap are tracked in
-[docs/bcr-roadmap.md](docs/bcr-roadmap.md).
-
-### CMake toolchain (Linux)
-
-As a secondary, experimental option, Bazel can provide the compiler
-(hermetic clang/libc++) and pinned library dependencies (Boost, Cap'n Proto,
-TBB, zlib, FlexLexer.h) for the CMake build. Only build tools are needed:
+On Ubuntu, install the required host tools:
 
 ```bash
-sudo apt-get install cmake make pkg-config bison flex python3-dev
-bazelisk run //:deps
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=$PWD/deps/toolchain.cmake
+sudo apt-get install build-essential pkg-config bison flex python3-dev
 ```
 
-The exported `deps/` tree (~450 MB, mostly the clang distribution) is
-git-ignored and regenerated on each run; the compiler and library versions
-are byte-identical to the ones the Bazel build uses.
+Build and test with Bazelisk:
 
-Note: cadical and kissat build in-source (`thirdparty/{cadical,kissat}`).
-When switching between the system toolchain and `deps/toolchain.cmake`,
-clean those build directories first (`git -C thirdparty/cadical clean -dfx`
-and likewise for kissat) so no objects from the other compiler linger.
+```bash
+bazelisk build //src/bin:kepler-formal
+bazelisk test //test/...
+```
+
+Additional notes and the BCR publication roadmap are tracked in
+[docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 
