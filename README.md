@@ -120,12 +120,9 @@ The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/
 ### Custom Python Primitives
 
 Custom technology primitives can be defined in Python and loaded with the YAML
-`py_tech_files` option. Kepler-formal automatically makes an adjacent `naja.so`
-available while preserving the user's existing `PYTHONPATH`. When relocating
-the executable, copy its complete directory, including `naja.so`, or set
-`PYTHONPATH` to another compatible module. See
-[Custom Python Primitives](docs/python-primitives.md) for the file format,
-lookup behavior, and deployment instructions.
+`py_tech_files` option. See [Custom Python Primitives](docs/python-primitives.md)
+for setup and deployment, and the [Xilinx examples](examples/xilinx) for
+working models and configurations.
 
 ### SEC Result Codes
 
