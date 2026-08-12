@@ -35,6 +35,7 @@ struct C2RtlEquivalenceResult {
   size_t comparedBits = 0;
   size_t comparedOutputs = 0;
   std::string reason;
+  std::string counterexampleTrace;
   std::string clock;
   std::string reset;
   bool resetActiveHigh = true;

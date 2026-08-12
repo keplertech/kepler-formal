@@ -2887,6 +2887,11 @@ int KeplerFormalMain(int argc, char** argv) {
                 "C2RTL PDR found a counterexample at frame {}: {}",
                 result.bound,
                 result.reason);
+            if (!result.counterexampleTrace.empty()) {
+              SPDLOG_INFO(
+                  "C2RTL counterexample details:\n{}",
+                  result.counterexampleTrace);
+            }
             return kSecCounterexampleExitCode;
           case KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStatus::Inconclusive:
             SPDLOG_WARN("C2RTL proof was inconclusive: {}", result.reason);

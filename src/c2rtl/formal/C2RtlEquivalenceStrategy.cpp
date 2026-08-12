@@ -24,6 +24,7 @@
 #include "SNLPath.h"
 #include "clocks/SecClockModel.h"
 #include "common/SignalKey.h"
+#include "kinduction/BaseCaseSolver.h"
 #include "kinduction/KInductionProblem.h"
 #include "model/SequentialDesignModel.h"
 #include "pdr/PDREngine.h"
@@ -35,6 +36,7 @@ namespace {
 using KEPLER_FORMAL::SEC::ClockEvent;
 using KEPLER_FORMAL::SEC::ClockPhase;
 using KEPLER_FORMAL::SEC::KInductionProblem;
+using KEPLER_FORMAL::SEC::KInductionResult;
 using KEPLER_FORMAL::SEC::PDRResult;
 using KEPLER_FORMAL::SEC::PDRStatus;
 using KEPLER_FORMAL::SEC::SequentialDesignModel;
@@ -54,6 +56,44 @@ std::string joinStrings(const std::vector<std::string> &values,
       oss << separator;
     }
     oss << values[i];
+  }
+  return oss.str();
+}
+
+std::string formatCounterexampleTrace(
+    const KInductionResult::CounterexampleWitness &witness) {
+  std::ostringstream oss;
+  oss << "C2RTL counterexample reaches the first bad frame at cycle "
+      << witness.badFrame << ".\n";
+  if (witness.inputTrace.empty()) {
+    oss << "Input trace: <none>\n";
+  } else {
+    oss << "Input trace:\n";
+    for (const auto &frame : witness.inputTrace) {
+      oss << "  cycle " << frame.frame << ": ";
+      if (frame.assignments.empty()) {
+        oss << "<no environment inputs>";
+      } else {
+        for (size_t i = 0; i < frame.assignments.size(); ++i) {
+          if (i != 0) {
+            oss << ", ";
+          }
+          oss << frame.assignments[i].signal << "="
+              << (frame.assignments[i].value ? "1" : "0");
+        }
+      }
+      oss << "\n";
+    }
+  }
+  if (!witness.outputMismatches.empty()) {
+    oss << "Delayed-reference/RTL output mismatches at cycle "
+        << witness.badFrame << ":\n";
+    for (const auto &mismatch : witness.outputMismatches) {
+      oss << "  " << mismatch.signal
+          << ": delayed_reference="
+          << (mismatch.design0Value ? "1" : "0")
+          << ", rtl=" << (mismatch.design1Value ? "1" : "0") << "\n";
+    }
   }
   return oss.str();
 }
@@ -1043,6 +1083,16 @@ BuiltC2RtlProblem buildProblem(const SequentialDesignModel &reference,
   for (const auto &bit : comparedBits) {
     BoolExpr *delayedReference =
         bit.delay == 0 ? bit.referenceExpr : BoolExpr::Var(bit.history.back());
+    BoolExpr *comparisonEnabled = notResetActive;
+    if (bit.delay != 0) {
+      comparisonEnabled = BoolExpr::And(
+          comparisonEnabled, BoolExpr::Var(validSymbols[bit.delay - 1]));
+    }
+    problem.observedOutputNames.push_back(bit.name);
+    problem.observedOutputExprs0.push_back(
+        BoolExpr::And(comparisonEnabled, delayedReference));
+    problem.observedOutputExprs1.push_back(
+        BoolExpr::And(comparisonEnabled, bit.implementationExpr));
     BoolExpr *bitProperty =
         makeEquality(delayedReference, bit.implementationExpr);
     if (bit.delay != 0) {
@@ -1137,6 +1187,10 @@ C2RtlEquivalenceResult C2RtlEquivalenceStrategy::run(size_t maxFrames) const {
       result.reason =
           "PDR found a trace that violates a configured delayed output "
           "relation";
+      if (const auto witness = KEPLER_FORMAL::SEC::findBaseCounterexample(
+              built.problem, solverType_, proof.bound)) {
+        result.counterexampleTrace = formatCounterexampleTrace(*witness);
+      }
       break;
     case PDRStatus::Inconclusive:
     default:
