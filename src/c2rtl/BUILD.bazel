@@ -1,4 +1,20 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
+
+cc_library(
+    name = "kepler_c2rtl_formal",
+    srcs = ["formal/C2RtlEquivalenceStrategy.cpp"],
+    hdrs = ["formal/C2RtlEquivalenceStrategy.h"],
+    includes = ["."],
+    copts = NAJA_HEADER_COPTS,
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/config:kepler_config",
+        "//src/sec:kepler_sec",
+        "@naja",
+        "@naja//:naja_extra_headers",
+    ],
+)
 
 cc_library(
     name = "kepler_xls_c2rtl",

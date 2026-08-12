@@ -3617,28 +3617,26 @@ TEST_F(KeplerFormalCliTests,
        CliCVsRtlPreservesWriteOnlyReferenceOutputNames) {
   const auto tmpDir =
       makeUniqueTempDir("kepler_formal_cli_c_vs_rtl_named_outputs");
-  const auto ccPath = tmpDir / "adder.cc";
-  const auto svPath = tmpDir / "adder.sv";
+  const auto ccPath = tmpDir / "byte_classifier.cc";
+  const auto svPath = tmpDir / "byte_classifier.sv";
   const auto outputDir = tmpDir / "c2rtl";
   {
     std::ofstream cc(ccPath);
-    cc << "void adder(unsigned char a, unsigned char b, "
-          "unsigned char& sum, bool& overflow) {\n";
-    cc << "  unsigned short result = static_cast<unsigned short>(a) + "
-          "static_cast<unsigned short>(b);\n";
-    cc << "  sum = static_cast<unsigned char>(result);\n";
-    cc << "  overflow = ((result >> 8) & 1) != 0;\n";
+    cc << "void byte_classifier(unsigned char sample, "
+          "unsigned char& complemented, unsigned char& is_zero) {\n";
+    cc << "  complemented = static_cast<unsigned char>(sample ^ 0xff);\n";
+    cc << "  is_zero = static_cast<unsigned char>(sample == 0);\n";
     cc << "}\n";
   }
   {
     std::ofstream sv(svPath);
-    sv << "module adder_rtl(\n";
-    sv << "    input logic [7:0] a,\n";
-    sv << "    input logic [7:0] b,\n";
-    sv << "    output logic [7:0] sum,\n";
-    sv << "    output logic overflow\n";
+    sv << "module byte_classifier_rtl(\n";
+    sv << "    input logic [7:0] sample,\n";
+    sv << "    output logic [7:0] complemented,\n";
+    sv << "    output logic [7:0] is_zero\n";
     sv << ");\n";
-    sv << "  assign {overflow, sum} = a + b;\n";
+    sv << "  assign complemented = ~sample;\n";
+    sv << "  assign is_zero = {7'b0, sample == 8'h00};\n";
     sv << "endmodule\n";
   }
 
@@ -3652,26 +3650,225 @@ TEST_F(KeplerFormalCliTests,
                    "-k",
                    "2",
                    "--cc_top",
-                   "adder",
+                   "byte_classifier",
                    "--cc_design1_module_name",
-                   "adder_c2rtl",
+                   "byte_classifier_c2rtl",
                    "--cc_output_dir",
                    outputDir.string(),
                    "--sv_design2_top",
-                   "adder_rtl",
+                   "byte_classifier_rtl",
                    ccPath.string(),
                    svPath.string()}),
       kSecProvedExitCode);
 
-  const auto generatedPath = outputDir / "design1_adder.sv";
+  const auto generatedPath = outputDir / "design1_byte_classifier.sv";
   std::ifstream generated(generatedPath);
   const std::string generatedText(
       (std::istreambuf_iterator<char>(generated)),
       std::istreambuf_iterator<char>());
-  EXPECT_NE(generatedText.find("output wire [7:0] sum"), std::string::npos);
-  EXPECT_NE(generatedText.find("output wire overflow"), std::string::npos);
-  EXPECT_NE(generatedText.find("module adder_c2rtl__xls_impl"),
+  EXPECT_NE(generatedText.find("output wire [7:0] complemented"),
             std::string::npos);
+  EXPECT_NE(generatedText.find("output wire [7:0] is_zero"),
+            std::string::npos);
+  EXPECT_NE(generatedText.find("module byte_classifier_c2rtl__xls_impl"),
+            std::string::npos);
+
+  std::filesystem::remove_all(tmpDir);
+}
+
+struct TemporalC2RtlClassifierFixture {
+  std::filesystem::path tmpDir;
+  std::filesystem::path ccPath;
+  std::filesystem::path svPath;
+  std::filesystem::path outputDir;
+  std::filesystem::path logPath;
+};
+
+TemporalC2RtlClassifierFixture createTemporalC2RtlClassifierFixture() {
+  TemporalC2RtlClassifierFixture fixture;
+  fixture.tmpDir =
+      makeUniqueTempDir("kepler_formal_cli_temporal_c2rtl_classifier");
+  fixture.ccPath = fixture.tmpDir / "byte_classifier.cc";
+  fixture.svPath = fixture.tmpDir / "byte_classifier.sv";
+  fixture.outputDir = fixture.tmpDir / "c2rtl";
+  fixture.logPath = fixture.tmpDir / "c2rtl.log";
+  {
+    std::ofstream cc(fixture.ccPath);
+    cc << "void byte_classifier(unsigned char sample, "
+          "unsigned char& complemented, unsigned char& is_zero) {\n";
+    cc << "  complemented = static_cast<unsigned char>(sample ^ 0xff);\n";
+    cc << "  is_zero = static_cast<unsigned char>(sample == 0);\n";
+    cc << "}\n";
+  }
+  {
+    std::ofstream sv(fixture.svPath);
+    sv << "module byte_classifier_rtl(\n";
+    sv << "  input logic clock, input logic reset_n,\n";
+    sv << "  input logic [7:0] sample,\n";
+    sv << "  output logic [7:0] complemented, output logic is_zero);\n";
+    sv << "  always_ff @(posedge clock or negedge reset_n) begin\n";
+    sv << "    if (!reset_n) begin complemented <= '0; is_zero <= 1'b0; end\n";
+    sv << "    else begin complemented <= ~sample; "
+          "is_zero <= sample == 8'h00; end\n";
+    sv << "  end\n";
+    sv << "endmodule\n";
+  }
+  return fixture;
+}
+
+std::filesystem::path writeTemporalC2RtlClassifierConfig(
+    const TemporalC2RtlClassifierFixture& fixture,
+    const std::string& delayEntries,
+    const std::string& verification = "sec") {
+  const auto cfgPath = fixture.tmpDir /
+      ("config_" +
+       std::to_string(
+           std::chrono::steady_clock::now().time_since_epoch().count()) +
+       ".yaml");
+  std::ofstream cfg(cfgPath);
+  cfg << "format: c_vs_rtl\n";
+  cfg << "verification: " << verification << "\n";
+  cfg << "max_k: 8\n";
+  cfg << "sec_engine: pdr\n";
+  cfg << "sec_encoding: binary\n";
+  cfg << "c2rtl_auto_align: true\n";
+  cfg << "c2rtl_output_delays:\n";
+  cfg << delayEntries;
+  cfg << "cc_top: byte_classifier\n";
+  cfg << "cc_design1_module_name: byte_classifier_c2rtl\n";
+  cfg << "cc_output_dir: " << fixture.outputDir.string() << "\n";
+  cfg << "sv_design2_top: byte_classifier_rtl\n";
+  cfg << "log_file: " << fixture.logPath.string() << "\n";
+  cfg << "input_paths:\n";
+  cfg << "  - " << fixture.ccPath.string() << "\n";
+  cfg << "  - " << fixture.svPath.string() << "\n";
+  return cfgPath;
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlClassifierProvesWithExplicitDelays) {
+  const auto fixture = createTemporalC2RtlClassifierFixture();
+  const auto cfgPath = writeTemporalC2RtlClassifierConfig(
+      fixture, "  complemented: 1\n  is_zero: 1\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlProvesIndependentOutputDelays) {
+  const auto fixture = createTemporalC2RtlClassifierFixture();
+  {
+    std::ofstream sv(fixture.svPath);
+    sv << "module byte_classifier_rtl(\n";
+    sv << "  input logic clock, input logic reset_n,\n";
+    sv << "  input logic [7:0] sample,\n";
+    sv << "  output logic [7:0] complemented, output logic is_zero);\n";
+    sv << "  logic zero_stage;\n";
+    sv << "  always_ff @(posedge clock or negedge reset_n) begin\n";
+    sv << "    if (!reset_n) begin complemented <= '0; zero_stage <= 1'b0; "
+          "is_zero <= 1'b0; end\n";
+    sv << "    else begin\n";
+    sv << "      complemented <= ~sample;\n";
+    sv << "      zero_stage <= sample == 8'h00;\n";
+    sv << "      is_zero <= zero_stage;\n";
+    sv << "    end\n";
+    sv << "  end\n";
+    sv << "endmodule\n";
+  }
+  const auto cfgPath = writeTemporalC2RtlClassifierConfig(
+      fixture, "  complemented: 1\n  is_zero: 2\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsMissingOutputDelayBeforeProof) {
+  const auto fixture = createTemporalC2RtlClassifierFixture();
+  const auto cfgPath = writeTemporalC2RtlClassifierConfig(
+      fixture, "  complemented: 1\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  std::ifstream log(fixture.logPath);
+  const std::string logText(
+      (std::istreambuf_iterator<char>(log)),
+      std::istreambuf_iterator<char>());
+  EXPECT_NE(
+      logText.find("output delay setting is required"), std::string::npos);
+  EXPECT_NE(logText.find("is_zero"), std::string::npos);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsNegativeOutputDelay) {
+  const auto fixture = createTemporalC2RtlClassifierFixture();
+  const auto cfgPath = writeTemporalC2RtlClassifierConfig(
+      fixture, "  complemented: -1\n  is_zero: 1\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsLecVerificationMode) {
+  const auto fixture = createTemporalC2RtlClassifierFixture();
+  const auto cfgPath = writeTemporalC2RtlClassifierConfig(
+      fixture, "  complemented: 1\n  is_zero: 1\n", "lec");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsRegisterEnable) {
+  const auto tmpDir =
+      makeUniqueTempDir("kepler_formal_cli_temporal_c2rtl_enable");
+  const auto ccPath = tmpDir / "conditional_mask.cc";
+  const auto svPath = tmpDir / "conditional_capture.sv";
+  const auto outputDir = tmpDir / "c2rtl";
+  const auto logPath = tmpDir / "c2rtl.log";
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cc(ccPath);
+    cc << "unsigned char conditional_mask(unsigned char sample, bool load) { "
+          "return load ? static_cast<unsigned char>(sample ^ 0x5a) : 0; }\n";
+  }
+  {
+    std::ofstream sv(svPath);
+    sv << "module conditional_capture(input logic clock, input logic load, "
+          "input logic [7:0] sample, output logic [7:0] out);\n";
+    sv << "  always_ff @(posedge clock) if (load) out <= sample ^ 8'h5a;\n";
+    sv << "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: c_vs_rtl\nverification: sec\nmax_k: 4\n";
+    cfg << "sec_engine: pdr\nsec_encoding: binary\n";
+    cfg << "c2rtl_auto_align: true\n";
+    cfg << "c2rtl_output_delays:\n  out: 1\n";
+    cfg << "cc_top: conditional_mask\n";
+    cfg << "cc_design1_module_name: conditional_mask_c2rtl\n";
+    cfg << "cc_output_dir: " << outputDir.string() << "\n";
+    cfg << "sv_design2_top: conditional_capture\n";
+    cfg << "log_file: " << logPath.string() << "\n";
+    cfg << "input_paths:\n  - " << ccPath.string() << "\n  - "
+        << svPath.string() << "\n";
+  }
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  std::ifstream log(logPath);
+  const std::string logText(
+      (std::istreambuf_iterator<char>(log)),
+      std::istreambuf_iterator<char>());
+  EXPECT_TRUE(
+      logText.find("enable") != std::string::npos ||
+      logText.find("state feedback") != std::string::npos);
 
   std::filesystem::remove_all(tmpDir);
 }

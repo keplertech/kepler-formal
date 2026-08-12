@@ -321,3 +321,20 @@ target_link_libraries(kepler_xls_c2rtl
     absl::symbolize
     absl::time
 )
+
+add_library(kepler_c2rtl_formal STATIC
+  formal/C2RtlEquivalenceStrategy.cpp
+)
+
+target_include_directories(kepler_c2rtl_formal
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(kepler_c2rtl_formal
+  PUBLIC
+    kepler_sec
+    kepler_config
+    naja_dnl
+    naja_nl
+)

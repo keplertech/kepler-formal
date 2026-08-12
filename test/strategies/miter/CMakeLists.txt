@@ -42,6 +42,7 @@ target_link_libraries(keplerFormalCliTests
     scope_extraction
     yaml-cpp
     ${SPDLOG_TARGET}
+    kepler_c2rtl_formal
     kepler_xls_c2rtl
     pthread
 )

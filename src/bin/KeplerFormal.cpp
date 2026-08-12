@@ -10,6 +10,7 @@
 #include <optional>
 #include <cctype>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <filesystem>
@@ -42,6 +43,7 @@
 #include "Tree2BoolExpr.h"
 #include "model/SequentialDesignModel.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
+#include "formal/C2RtlEquivalenceStrategy.h"
 #include "KeplerXlsC2Rtl.h"
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -389,6 +391,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "cc_design2_block_proto_path",
       "cc_include_paths",
       "cc_output_dir",
+      "c2rtl_auto_align",
+      "c2rtl_output_delays",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -1529,6 +1533,9 @@ int KeplerFormalMain(int argc, char** argv) {
   size_t secMaxK = kDefaultSecMaxK;
   bool secMaxKExplicit = false;
   bool secTreatUncomputableSeqAsBoundary = true;
+  bool c2rtlAutoAlign = false;
+  bool c2rtlOutputDelaysConfigured = false;
+  std::unordered_map<std::string, size_t> c2rtlOutputDelays;
 
   // Basic argument sanity
   if (argc < 2) {
@@ -1681,6 +1688,62 @@ int KeplerFormalMain(int argc, char** argv) {
             // LCOV_EXCL_STOP
           }
           secEncodingExplicit = true;  // LCOV_EXCL_LINE
+        }
+
+        if (cfg["c2rtl_auto_align"]) {
+          if (!cfg["c2rtl_auto_align"].IsScalar()) {
+            SPDLOG_CRITICAL("c2rtl_auto_align must be a boolean scalar");
+            return EXIT_FAILURE;
+          }
+          try {
+            c2rtlAutoAlign = cfg["c2rtl_auto_align"].as<bool>();
+          } catch (const YAML::Exception&) {
+            SPDLOG_CRITICAL("c2rtl_auto_align must be true or false");
+            return EXIT_FAILURE;
+          }
+        }
+
+        if (cfg["c2rtl_output_delays"]) {
+          c2rtlOutputDelaysConfigured = true;
+          const YAML::Node delays = cfg["c2rtl_output_delays"];
+          if (!delays.IsMap()) {
+            SPDLOG_CRITICAL(
+                "c2rtl_output_delays must be a map of output names to "
+                "non-negative integer delays");
+            return EXIT_FAILURE;
+          }
+          for (auto it = delays.begin(); it != delays.end(); ++it) {
+            if (!it->first.IsScalar() || !it->second.IsScalar()) {
+              SPDLOG_CRITICAL(
+                  "c2rtl_output_delays entries must be scalar output names "
+                  "and non-negative integer delays");
+              return EXIT_FAILURE;
+            }
+            const std::string outputName = it->first.as<std::string>();
+            if (outputName.empty()) {
+              SPDLOG_CRITICAL(
+                  "c2rtl_output_delays output names must not be empty");
+              return EXIT_FAILURE;
+            }
+            size_t delay = 0;
+            std::string delayError;
+            if (!parseNonNegativeSizeToken(
+                    it->second.as<std::string>(),
+                    "c2rtl_output_delays value",
+                    delay,
+                    delayError)) {
+              SPDLOG_CRITICAL(
+                  "Invalid C2RTL delay for output {}: {}",
+                  outputName,
+                  delayError);
+              return EXIT_FAILURE;
+            }
+            if (!c2rtlOutputDelays.emplace(outputName, delay).second) {
+              SPDLOG_CRITICAL(
+                  "Duplicate C2RTL output delay setting for {}", outputName);
+              return EXIT_FAILURE;
+            }
+          }
         }
 
         if (cfg["sec_uncomputable_seq_as_boundary"]) {
@@ -2543,6 +2606,38 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
   }
 
+  if (c2rtlOutputDelaysConfigured && !c2rtlAutoAlign) {
+    SPDLOG_CRITICAL(
+        "c2rtl_output_delays requires c2rtl_auto_align: true");
+    return EXIT_FAILURE;
+  }
+  if (c2rtlAutoAlign) {
+    if (inputFormatType != FormatType::C_VS_RTL) {
+      SPDLOG_CRITICAL(
+          "c2rtl_auto_align is only supported with format: c_vs_rtl");
+      return EXIT_FAILURE;
+    }
+    if (verificationMode != VerificationMode::SEC) {
+      SPDLOG_CRITICAL(
+          "c2rtl_auto_align requires verification: sec");
+      return EXIT_FAILURE;
+    }
+    if (secEngine != KEPLER_FORMAL::SEC::SecEngine::Pdr) {
+      SPDLOG_CRITICAL(
+          "c2rtl_auto_align currently requires sec_engine: pdr");
+      return EXIT_FAILURE;
+    }
+    if (secEncoding != KEPLER_FORMAL::SEC::SecEncoding::Binary) {
+      SPDLOG_CRITICAL(
+          "c2rtl_auto_align currently requires sec_encoding: binary");
+      return EXIT_FAILURE;
+    }
+    if (compactMode) {
+      SPDLOG_CRITICAL("c2rtl_auto_align does not support compact_mode");
+      return EXIT_FAILURE;
+    }
+  }
+
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
   KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(
@@ -2752,6 +2847,54 @@ int KeplerFormalMain(int argc, char** argv) {
             // LCOV_EXCL_START
             return kSecInconclusiveExitCode;
             // LCOV_EXCL_STOP
+        }
+      };
+
+  auto emitC2RtlResult =
+      [&](const KEPLER_FORMAL::C2RTL::C2RtlEquivalenceResult& result) {
+        if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
+          spdlog::set_default_logger(mainLogger);
+        }
+        if (!result.clock.empty()) {
+          SPDLOG_INFO("C2RTL clock: {}", result.clock);
+        }
+        if (!result.reset.empty()) {
+          SPDLOG_INFO(
+              "C2RTL reset: {} ({})",
+              result.reset,
+              result.resetActiveHigh ? "active high" : "active low");
+        } else if (!result.clock.empty()) {
+          SPDLOG_INFO("C2RTL reset: none");
+        }
+        for (const auto& [output, delay] : result.outputDelays) {
+          SPDLOG_INFO("C2RTL output delay: {}={}", output, delay);
+        }
+        if (result.comparedBits != 0) {
+          SPDLOG_INFO(
+              "C2RTL compared {} bit(s) across {} logical output(s)",
+              result.comparedBits,
+              result.comparedOutputs);
+        }
+        switch (result.status) {
+          case KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStatus::Equivalent:
+            SPDLOG_INFO(
+                "C2RTL PDR proved the configured delayed output relation at "
+                "frame {}.",
+                result.bound);
+            return kSecProvedExitCode;
+          case KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStatus::Different:
+            SPDLOG_INFO(
+                "C2RTL PDR found a counterexample at frame {}: {}",
+                result.bound,
+                result.reason);
+            return kSecCounterexampleExitCode;
+          case KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStatus::Inconclusive:
+            SPDLOG_WARN("C2RTL proof was inconclusive: {}", result.reason);
+            return kSecInconclusiveExitCode;
+          case KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStatus::Unsupported:
+          default:
+            SPDLOG_CRITICAL("C2RTL comparison is unsupported: {}", result.reason);
+            return kSecInconclusiveExitCode;
         }
       };
 
@@ -3368,6 +3511,15 @@ int KeplerFormalMain(int argc, char** argv) {
   if (verificationMode == VerificationMode::SEC) {
   // LCOV_EXCL_STOP
     try {
+      if (c2rtlAutoAlign) {
+        KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStrategy strategy(
+            top0,
+            top1,
+            solverType,
+            KEPLER_FORMAL::C2RTL::C2RtlEquivalenceOptions{
+                c2rtlOutputDelays});
+        return emitC2RtlResult(strategy.run(secMaxK));
+      }
       // LCOV_EXCL_START
       KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
           top0,
