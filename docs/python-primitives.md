@@ -37,6 +37,8 @@ def constructPrimitives(lib):
     inv.setTruthTable(0b01)
 ```
 
+## Exampels
+
 Files are loaded in their listed order. See the
 [Xilinx primitive model](../examples/xilinx/xilinx.py) and its
 [register-slice](../examples/xilinx/register_slice) and
