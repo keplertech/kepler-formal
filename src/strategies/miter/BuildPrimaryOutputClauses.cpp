@@ -245,7 +245,6 @@ void resetOutputConeAcyclicityCache() {
 
 struct SharedIsoExpressionCache {
   std::mutex mutex;
-  const BuildPrimaryOutputClauses* owner = nullptr;
 };
 
 SharedIsoExpressionCache& getIsoExpressionCache() {
@@ -253,21 +252,20 @@ SharedIsoExpressionCache& getIsoExpressionCache() {
   return shared;
 }
 
-void resetIsoExpressionCache(const BuildPrimaryOutputClauses* owner) {
+void resetIsoExpressionCache() {
   auto& shared = getIsoExpressionCache();
   std::lock_guard<std::mutex> lock(shared.mutex);
   Tree2BoolExpr::iso2boolExpr_.clear();
-  shared.owner = owner;
 }
 
 class ScopedIsoExpressionCacheUse {
  public:
-  explicit ScopedIsoExpressionCacheUse(const BuildPrimaryOutputClauses* owner)
+  ScopedIsoExpressionCacheUse()
       : shared_(getIsoExpressionCache()), lock_(shared_.mutex) {
-    if (shared_.owner != owner) {
-      Tree2BoolExpr::iso2boolExpr_.clear();
-      shared_.owner = owner;
-    }
+    // Cached formulas contain builder-local variable IDs. A later builder can
+    // occupy the same address, so pointer identity cannot extend their lifetime
+    // across build() calls.
+    Tree2BoolExpr::iso2boolExpr_.clear();
   }
 
  private:
@@ -961,7 +959,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 
 void BuildPrimaryOutputClauses::collect() {
   resetOutputConeAcyclicityCache();
-  resetIsoExpressionCache(this);
+  resetIsoExpressionCache();
   inputs_ = collectInputs();
   for (const auto& input : inputs_) {
     PathKey key = getTerminalPathKey(naja::DNL::get()->getDNLTerminalFromID(input));
@@ -1043,7 +1041,7 @@ void BuildPrimaryOutputClauses::initVarNames() {
 
 void BuildPrimaryOutputClauses::build() {
   auto* dnl = naja::DNL::get();
-  ScopedIsoExpressionCacheUse isoExpressionCacheUse(this);
+  ScopedIsoExpressionCacheUse isoExpressionCacheUse;
   POs_.clear();
   POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
   initVarNames();

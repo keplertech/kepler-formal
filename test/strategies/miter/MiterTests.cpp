@@ -763,6 +763,73 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs)
   EXPECT_EQ(outputTerm.getSnlBitTerm()->getName().getString(), "y");
 }
 
+TEST_F(MiterTests,
+       BuildPrimaryOutputClausesDoesNotReuseExpressionsAcrossVariableLayouts) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("primitives"));
+  SNLDesign* top =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+  univ->setTopDesign(top);
+
+  auto* unused =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("unused"));
+  auto* a = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("a"));
+  auto* b = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("b"));
+  auto* y = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Output, NLName("y"));
+
+  auto* andModel =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("AND2"));
+  auto* andA = SNLScalarTerm::create(
+      andModel, SNLTerm::Direction::Input, NLName("a"));
+  auto* andB = SNLScalarTerm::create(
+      andModel, SNLTerm::Direction::Input, NLName("b"));
+  auto* andY = SNLScalarTerm::create(
+      andModel, SNLTerm::Direction::Output, NLName("y"));
+  SNLDesignModeling::setTruthTable(
+      andModel,
+      SNLTruthTable(2, 0b1000, getInputFlatDependencies(andModel)));
+
+  auto* unusedNet = SNLScalarNet::create(top, NLName("unused_net"));
+  auto* aNet = SNLScalarNet::create(top, NLName("a_net"));
+  auto* bNet = SNLScalarNet::create(top, NLName("b_net"));
+  auto* yNet = SNLScalarNet::create(top, NLName("y_net"));
+  unused->setNet(unusedNet);
+  a->setNet(aNet);
+  b->setNet(bNet);
+  y->setNet(yNet);
+  auto* andInstance = SNLInstance::create(top, andModel, NLName("and0"));
+  andInstance->getInstTerm(andA)->setNet(aNet);
+  andInstance->getInstTerm(andB)->setNet(bNet);
+  andInstance->getInstTerm(andY)->setNet(yNet);
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.build();
+
+  std::vector<naja::DNL::DNLID> usedInputs;
+  for (const auto inputID : builder.getInputs()) {
+    const auto& inputTerm = naja::DNL::get()->getDNLTerminalFromID(inputID);
+    if (inputTerm.getSnlBitTerm()->getName().getString() != "unused") {
+      usedInputs.push_back(inputID);
+    }
+  }
+  ASSERT_EQ(usedInputs.size(), 2u);
+
+  builder.setInputs(usedInputs);
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 1u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  EXPECT_EQ(builder.getPOs()[0]->getSupportVars(),
+            (std::set<size_t>{2, 3}));
+}
+
 TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
