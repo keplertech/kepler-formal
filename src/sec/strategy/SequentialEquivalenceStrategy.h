@@ -64,7 +64,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
   std::vector<std::string> skippedObservedOutputs;
   std::vector<std::string> resetUnanchoredSkippedOutputs;
   std::vector<std::string> multiClockDomainSkippedOutputs;
-  std::vector<std::string> abstractedSequentialBoundaries;
+  std::vector<std::string> opaqueCellSkippedOutputs;
   std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
 
   double outputCoveragePercent() const {

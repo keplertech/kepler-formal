@@ -41,7 +41,6 @@
 #include "SNLScalarTerm.h"
 #include "common/AlignedSignals.h"
 #include "common/BoolExprUtils.h"
-#include "common/PrivateProofSymbol.h"
 #include "common/ProofProblemDebug.h"
 #include "common/SecDiag.h"
 #include "imc/CraigInterpolatingModelChecker.h"
@@ -1135,7 +1134,7 @@ class SequentialEquivalenceStrategyTests : public ::testing::Test {
       MalformedSequentialExpression fault,
       const char* expectedReason);
 
-  void expectMissingSequentialStateOutputHandled(bool boundaryAbstraction);
+  void expectUnreferencedSequentialStateWithoutOutputIgnored();
 
   void TearDown() override {
     naja::DNL::destroy();
@@ -1208,22 +1207,6 @@ class ScopedUnsetEnvVar {
  private:
   const char* name_;
   std::optional<std::string> previousValue_;
-};
-
-class ScopedSecBoundaryAbstraction {
- public:
-  explicit ScopedSecBoundaryAbstraction(bool enabled)
-      : previousValue_(
-            KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary()) {
-    KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(enabled);
-  }
-
-  ~ScopedSecBoundaryAbstraction() {
-    KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(previousValue_);
-  }
-
- private:
-  bool previousValue_;
 };
 
 // Synthetic tests below do not always build a Naja universe. Production SEC
@@ -2920,6 +2903,8 @@ SNLDesign* createOpaqueBoundaryTop(
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topIn =
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topGood =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("good"));
   auto* topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
 
@@ -2928,6 +2913,7 @@ SNLDesign* createOpaqueBoundaryTop(
   auto* netOut = SNLScalarNet::create(top, NLName("net_out"));
 
   topIn->setNet(netIn);
+  topGood->setNet(netIn);
   topOut->setNet(netOut);
   opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("A")))->setNet(netIn);
   opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("Y")))->setNet(netOut);
@@ -3188,6 +3174,43 @@ SNLDesign* createNamedComplementSequentialModel(
   return model;
 }
 
+SNLDesign* createIndependentSequentialOutputModel(
+    NLLibrary* library,
+    const std::string& name) {
+  auto* model =
+      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(name));
+  auto* goodData = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("D_GOOD"));
+  auto* badData = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("D_BAD"));
+  auto* clock =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("CK"));
+  auto* latchGate = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("LATCH_GATE"));
+  auto* good = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Output, NLName("GOOD"));
+  auto* bad = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Output, NLName("BAD"));
+  SNLDesignModeling::addInputsToClockArcs({goodData}, clock);
+  SNLDesignModeling::addClockToOutputsArcs(clock, {good});
+  SNLDesignModeling::addInputsToClockArcs({badData}, latchGate);
+  SNLDesignModeling::addClockToOutputsArcs(latchGate, {bad});
+
+  SNLDesignModeling::SequentialModel sequentialModel;
+  sequentialModel.clockedOn = makeSequentialTermExpression(clock);
+  for (auto* data : {goodData, badData}) {
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(data);
+    sequentialModel.states.push_back(std::move(state));
+  }
+  sequentialModel.outputs.push_back(
+      {good, makeSequentialStateExpression(0)});
+  sequentialModel.outputs.push_back(
+      {bad, makeSequentialStateExpression(1)});
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  return model;
+}
+
 SNLDesign* createComplementFirstSequentialModel(
     NLLibrary* library,
     const std::string& name,
@@ -3420,6 +3443,43 @@ SNLDesign* createSequentialOutputPairTop(
   seq->getInstTerm(sequentialModel->getScalarTerm(NLName(secondaryPinName)))->setNet(
       netSecondary);
 
+  return top;
+}
+
+SNLDesign* createIndependentSequentialOutputTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* sequentialModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* goodData = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("good_data"));
+  auto* badData = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("bad_data"));
+  auto* clock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* latchGate = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("latch_gate"));
+  auto* good =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("good"));
+  auto* bad =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("bad"));
+  auto* instance = SNLInstance::create(top, sequentialModel, NLName("ff0"));
+
+  for (const auto& [topTerm, modelTermName] :
+       std::vector<std::pair<SNLScalarTerm*, const char*>>{
+           {goodData, "D_GOOD"},
+           {badData, "D_BAD"},
+           {clock, "CK"},
+           {latchGate, "LATCH_GATE"},
+           {good, "GOOD"},
+           {bad, "BAD"}}) {
+    auto* net = SNLScalarNet::create(
+        top, NLName(std::string("net_") + modelTermName));
+    topTerm->setNet(net);
+    instance->getInstTerm(
+        sequentialModel->getScalarTerm(NLName(modelTermName)))->setNet(net);
+  }
   return top;
 }
 
@@ -3837,7 +3897,6 @@ void SequentialEquivalenceStrategyTests::
     expectMalformedSequentialExpressionUnsupported(
         MalformedSequentialExpression fault,
         const char* expectedReason) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -3884,16 +3943,21 @@ void SequentialEquivalenceStrategyTests::
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  ASSERT_FALSE(extracted.unsupportedReasons.empty());
-  EXPECT_NE(
-      extracted.unsupportedReasons.front().find(expectedReason),
-      std::string::npos);
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_FALSE(extracted.skippedObservedOutputs.empty());
+  EXPECT_TRUE(std::any_of(
+      extracted.skippedObservedOutputs.begin(),
+      extracted.skippedObservedOutputs.end(),
+      [&](const SignalKey& key) {
+        const auto skip = extracted.connectivitySkipInfoByKey.find(key);
+        return skip != extracted.connectivitySkipInfoByKey.end() &&
+               skip->second.origin == ConnectivitySkipOrigin::OpaqueInternal &&
+               skip->second.detail.find(expectedReason) != std::string::npos;
+      }));
 }
 
 void SequentialEquivalenceStrategyTests::
-    expectMissingSequentialStateOutputHandled(bool boundaryAbstraction) {
-  ScopedSecBoundaryAbstraction boundaryMode(boundaryAbstraction);
+    expectUnreferencedSequentialStateWithoutOutputIgnored() {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -3915,21 +3979,10 @@ void SequentialEquivalenceStrategyTests::
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  if (boundaryAbstraction) {
-    EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-    ASSERT_FALSE(extracted.abstractedSequentialBoundaries.empty());
-    EXPECT_NE(
-        extracted.abstractedSequentialBoundaries.front().find(
-            "state has no physical output"),
-        std::string::npos);
-  } else {
-    EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-    ASSERT_FALSE(extracted.unsupportedReasons.empty());
-    EXPECT_NE(
-        extracted.unsupportedReasons.front().find(
-            "state has no physical output"),
-        std::string::npos);
-  }
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs.size(), 2u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_TRUE(extracted.opaqueInternalInfoByKey.empty());
 }
 
 SNLDesign* createDffreTop(
@@ -4354,6 +4407,22 @@ SignalKey findKeyByDisplayName(const SequentialDesignModel& model,
     }
   }
   throw std::runtime_error("Missing display name in extracted model: " + displayName);
+}
+
+void expectOpaqueOutputSkipWithReason(
+    const SequentialDesignModel& model,
+    const std::string& reason) {
+  EXPECT_FALSE(model.hasUnsupportedFeatures());
+  ASSERT_FALSE(model.skippedObservedOutputs.empty());
+  EXPECT_TRUE(std::any_of(
+      model.skippedObservedOutputs.begin(),
+      model.skippedObservedOutputs.end(),
+      [&](const SignalKey& key) {
+        const auto skip = model.connectivitySkipInfoByKey.find(key);
+        return skip != model.connectivitySkipInfoByKey.end() &&
+               skip->second.origin == ConnectivitySkipOrigin::OpaqueInternal &&
+               skip->second.detail.find(reason) != std::string::npos;
+      }));
 }
 
 void expectAllExpressionSupportIsPublished(const SequentialDesignModel& model) {
@@ -13401,44 +13470,24 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const SignalKey internalIn = makeSignalKey("internal_in");
   const SignalKey internalOut = makeSignalKey("internal_out");
   model0.unsupportedReasons = {"unsupported sequential state"};
-  model0.abstractedSequentialBoundaries = {"abstracted cell u_ff"};
   model0.internalBoundaryInputKeys = {internalIn};
   model0.internalBoundaryOutputKeys = {internalOut};
   model0.displayNameByKey.emplace(stateKey, "u_ff.STATE[0]");
   model0.displayNameByKey.emplace(internalIn, "u_logic.A[0]");
   model0.displayNameByKey.emplace(internalOut, "u_logic.Y[0]");
-  model0.abstractedSequentialBoundaryDetails.push_back(
-      {"u_ff", {stateKey}, model0.allObservedOutputs});
 
   auto strategy = makeBinaryExtractedSecStrategy();
   const auto result = strategy.runExtractedModels(model0, model1, 1);
 
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
   EXPECT_NE(result.reason.find("unsupported sequential state"), std::string::npos);
-  ASSERT_EQ(result.abstractedSequentialBoundaries.size(), 1u);
-  EXPECT_EQ(result.abstractedSequentialBoundaries.front(),
-            "design0 abstracted cell u_ff");
-  EXPECT_GE(result.extractedBoundaryReports.size(), 4u);
-  const auto stateReport = std::find_if(
-      result.extractedBoundaryReports.begin(),
-      result.extractedBoundaryReports.end(),
-      [](const ExtractedBoundaryReportEntry& entry) {
-        return entry.signal == "u_ff.STATE[0]";
-      });
-  ASSERT_NE(stateReport, result.extractedBoundaryReports.end());
-  EXPECT_NE(
-      std::find(
-          stateReport->roles.begin(),
-          stateReport->roles.end(),
-          "abstracted_sequential_state"),
-      stateReport->roles.end());
+  EXPECT_GE(result.extractedBoundaryReports.size(), 3u);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
        RunExtractedModelsStopsOnUnsupportedSecondModelAfterFirstReports) {
   auto model0 = makeCombinationalExtractedModel(BoolExpr::Var(2));
   auto model1 = makeCombinationalExtractedModel(BoolExpr::Var(2));
-  model0.abstractedSequentialBoundaries = {"kept first-side boundary"};
   model1.unsupportedReasons = {"unsupported second side"};
 
   auto strategy = makeBinaryExtractedSecStrategy();
@@ -13446,20 +13495,18 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
   EXPECT_NE(result.reason.find("unsupported second side"), std::string::npos);
-  ASSERT_EQ(result.abstractedSequentialBoundaries.size(), 1u);
-  EXPECT_EQ(result.abstractedSequentialBoundaries.front(),
-            "design0 kept first-side boundary");
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
        RunExtractedModelsReportsAllConnectivitySkippedOutputs) {
   SequentialDesignModel model0;
   SequentialDesignModel model1;
-  std::array<ConnectivitySkipOrigin, 4> origins = {
+  std::array<ConnectivitySkipOrigin, 5> origins = {
       ConnectivitySkipOrigin::NoDriver,
       ConnectivitySkipOrigin::MultiDriver,
       ConnectivitySkipOrigin::LogicalLoop,
-      ConnectivitySkipOrigin::MultiClockDomain};
+      ConnectivitySkipOrigin::MultiClockDomain,
+      ConnectivitySkipOrigin::OpaqueInternal};
   for (size_t i = 0; i < origins.size(); ++i) {
     const SignalKey key = makeSignalKey("skipped_out_" + std::to_string(i));
     const std::string name = "out" + std::to_string(i) + "[0]";
@@ -13492,10 +13539,14 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_TRUE(hasSkipText("multi-driver connectivity"));
   EXPECT_TRUE(hasSkipText("logical-loop connectivity"));
   EXPECT_TRUE(hasSkipText("multi-clock-domain connectivity"));
+  EXPECT_TRUE(hasSkipText("opaque-internal"));
   ASSERT_EQ(result.multiClockDomainSkippedOutputs.size(), 1u);
   EXPECT_NE(
       result.multiClockDomainSkippedOutputs.front().find("multi-clock-domain"),
       std::string::npos);
+  ASSERT_EQ(result.opaqueCellSkippedOutputs.size(), 1u);
+  EXPECT_NE(result.opaqueCellSkippedOutputs.front().find("opaque-internal"),
+            std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -14470,7 +14521,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       LazyTransitionUnpublishedSupportStaysDesignPrivate) {
+       LazyTransitionUnpublishedSupportIsRejected) {
   KInductionProblem problem;
   constexpr size_t combinedState0 = 10;
   constexpr size_t combinedState1 = 20;
@@ -14492,29 +14543,18 @@ TEST_F(SequentialEquivalenceStrategyTests,
   problem.allSymbols = {combinedState0, combinedState1};
 
   const TransitionExprResolver transitionByState(problem);
-  const size_t private0 = makePrivateProofLeafSymbol(0, unpublishedLocal);
-  const size_t private1 = makePrivateProofLeafSymbol(1, unpublishedLocal);
-
-  EXPECT_NE(private0, private1);
+  EXPECT_THROW(
+      static_cast<void>(transitionByState.support(combinedState0)),
+      std::runtime_error);
+  EXPECT_THROW(
+      static_cast<void>(transitionByState.support(combinedState1)),
+      std::runtime_error);
   EXPECT_EQ(
-      transitionByState.support(combinedState0),
-      (std::set<size_t>{combinedState0, private0}));
+      lazyTransitions->localToCombinedByDesign[0].find(unpublishedLocal),
+      lazyTransitions->localToCombinedByDesign[0].end());
   EXPECT_EQ(
-      transitionByState.support(combinedState1),
-      (std::set<size_t>{combinedState1, private1}));
-  EXPECT_EQ(
-      lazyTransitions->localToCombinedByDesign[0].at(unpublishedLocal),
-      private0);
-  EXPECT_EQ(
-      lazyTransitions->localToCombinedByDesign[1].at(unpublishedLocal),
-      private1);
-
-  EXPECT_EQ(
-      transitionByState.at(combinedState0)->getSupportVars(),
-      (std::set<size_t>{combinedState0, private0}));
-  EXPECT_EQ(
-      transitionByState.at(combinedState1)->getSupportVars(),
-      (std::set<size_t>{combinedState1, private1}));
+      lazyTransitions->localToCombinedByDesign[1].find(unpublishedLocal),
+      lazyTransitions->localToCombinedByDesign[1].end());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -15848,7 +15888,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
   };
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.abstractedSequentialBoundaries.empty());
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem0."));
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem0."));
   EXPECT_FALSE(extracted.stateBits.empty());
@@ -15879,7 +15918,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
   };
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.abstractedSequentialBoundaries.empty());
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem0."));
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem0."));
   EXPECT_FALSE(extracted.stateBits.empty());
@@ -16196,7 +16234,6 @@ TEST_F(
   // full SEC runs: the inferred memory should stay inside the sequential model
   // instead of leaking back out as generic boundary terms.
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.abstractedSequentialBoundaries.empty());
   EXPECT_FALSE(
       hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "generic_counter_q_mem"));
   EXPECT_FALSE(
@@ -16256,7 +16293,6 @@ endmodule
   };
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.abstractedSequentialBoundaries.empty());
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem_q"));
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem_q"));
   EXPECT_FALSE(extracted.stateBits.empty());
@@ -16522,7 +16558,6 @@ endmodule
   };
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.abstractedSequentialBoundaries.empty());
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem_q"));
   EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem_q"));
   EXPECT_FALSE(extracted.stateBits.empty());
@@ -16980,8 +17015,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractAbstractsUncomputableSequentialAsBoundaryByDefault) {
-  ScopedSecBoundaryAbstraction boundaryAbstraction(true);
+       SequentialDesignModelExtractSkipsOutputDrivenBySequentialWithoutModel) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -16995,27 +17029,27 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_TRUE(extracted.stateBits.empty());
-  EXPECT_NE(
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  const auto skip = extracted.connectivitySkipInfoByKey.find(
+      extracted.skippedObservedOutputs.front());
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+  EXPECT_NE(skip->second.detail.find("ff0"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("SEQ_NO_D"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Q[0]"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Missing Naja sequential model"),
+            std::string::npos);
+  EXPECT_EQ(
       std::find(
           extracted.environmentInputs.begin(),
           extracted.environmentInputs.end(),
           findKeyByDisplayName(extracted, "ff0.Q[0]")),
       extracted.environmentInputs.end());
-  EXPECT_NE(
-      std::find(
-          extracted.observedOutputs.begin(),
-          extracted.observedOutputs.end(),
-          findKeyByDisplayName(extracted, "ff0.CK[0]")),
-      extracted.observedOutputs.end());
-  ASSERT_EQ(extracted.abstractedSequentialBoundaries.size(), 1u);
-  EXPECT_NE(
-      extracted.abstractedSequentialBoundaries.front().find("ff0"),
-      std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractAbstractsSequentialWithUnsupportedUpdatePinsAsBoundaryByDefault) {
-  ScopedSecBoundaryAbstraction boundaryAbstraction(true);
+       SequentialDesignModelExtractSkipsSequentialWithUnsupportedUpdatePin) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17029,49 +17063,13 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_TRUE(extracted.stateBits.empty());
-  EXPECT_FALSE(extracted.abstractedSequentialBoundaries.empty());
-  EXPECT_NE(
-      extracted.abstractedSequentialBoundaries.front().find("update pin `A`"),
-      std::string::npos);
-}
-
-TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractReportsUnsupportedSequentialWithoutDInput) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
-  NLUniverse::create();
-  auto* db = NLDB::create(NLUniverse::get());
-  auto* primitives =
-      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
-  auto* library =
-      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* model = createNoDataSequentialModel(primitives, "SEQ_NO_D");
-  auto* top = createNoDataSequentialTop(library, "top", model);
-
-  const auto extracted = SequentialDesignModel::extract(top);
-
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  EXPECT_FALSE(extracted.unsupportedReasons.empty());
-}
-
-TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractRejectsSequentialWithUnsupportedUpdatePinsInStrictMode) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
-  NLUniverse::create();
-  auto* db = NLDB::create(NLUniverse::get());
-  auto* primitives =
-      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
-  auto* library =
-      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* model = createExtraUpdatePinSequentialModel(primitives, "SEQ_ADDR");
-  auto* top = createExtraUpdatePinSequentialTop(library, "top", model);
-
-  const auto extracted = SequentialDesignModel::extract(top);
-
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  ASSERT_FALSE(extracted.unsupportedReasons.empty());
-  EXPECT_NE(
-      extracted.unsupportedReasons.front().find("update pin `A`"),
-      std::string::npos);
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  const auto skip = extracted.connectivitySkipInfoByKey.find(
+      extracted.skippedObservedOutputs.front());
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+  EXPECT_NE(skip->second.detail.find("update pin `A`"), std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17088,7 +17086,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto extracted = SequentialDesignModel::extract(top);
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.abstractedSequentialBoundaries.empty());
   EXPECT_TRUE(extracted.internalBoundaryOutputKeys.empty());
   ASSERT_EQ(extracted.stateBits.size(), 1u);
   ASSERT_EQ(extracted.topOutputKeys.size(), 1u);
@@ -17218,8 +17215,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractRejectsUnsupportedOutputFunction) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       SequentialDesignModelExtractSkipsUnsupportedOutputFunction) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17238,17 +17234,132 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  ASSERT_FALSE(extracted.unsupportedReasons.empty());
+  expectOpaqueOutputSkipWithReason(
+      extracted, "Unsupported Naja sequential output function");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractKeepsIndependentSequentialOutput) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      createIndependentSequentialOutputModel(primitives, "SEQ_GOOD_BAD");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+  SNLDesignModeling::BooleanExpression invalidBadTransition;
+  invalidBadTransition.addTerm(model->getScalarTerm(NLName("D_BAD")));
+  sequentialModel.states[1].nextState = std::move(invalidBadTransition);
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createIndependentSequentialOutputTop(library, "top", model);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  const auto goodOutput = findKeyByDisplayName(extracted, "good[0]");
+  const auto badOutput = findKeyByDisplayName(extracted, "bad[0]");
+  const auto goodState = findKeyByDisplayName(extracted, "ff0.GOOD[0]");
+  const auto badState = findKeyByDisplayName(extracted, "ff0.BAD[0]");
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs, std::vector<SignalKey>{goodOutput});
+  EXPECT_EQ(extracted.skippedObservedOutputs, std::vector<SignalKey>{badOutput});
   EXPECT_NE(
-      extracted.unsupportedReasons.front().find(
-          "Unsupported Naja sequential output function"),
+      std::find(extracted.stateBits.begin(), extracted.stateBits.end(), goodState),
+      extracted.stateBits.end());
+  EXPECT_NE(
+      std::find(
+          extracted.skippedStateBits.begin(),
+          extracted.skippedStateBits.end(),
+          badState),
+      extracted.skippedStateBits.end());
+  EXPECT_NE(extracted.nextStateExprByStateKey.find(goodState),
+            extracted.nextStateExprByStateKey.end());
+  const auto skip = extracted.connectivitySkipInfoByKey.find(badOutput);
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  ASSERT_TRUE(skip->second.opaqueInternal.has_value());
+  EXPECT_EQ(skip->second.opaqueInternal->pin, "BAD[0]");
+  EXPECT_EQ(skip->second.opaqueInternal->reason,
+            "Invalid Naja sequential expression");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractKeepsModeledOutputBesideOpaqueLatchOutput) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      createIndependentSequentialOutputModel(primitives, "MIXED_FF_LATCH");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+  sequentialModel.states.pop_back();
+  sequentialModel.outputs.pop_back();
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createIndependentSequentialOutputTop(library, "top", model);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  const auto goodOutput = findKeyByDisplayName(extracted, "good[0]");
+  const auto badOutput = findKeyByDisplayName(extracted, "bad[0]");
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs, std::vector<SignalKey>{goodOutput});
+  EXPECT_EQ(extracted.skippedObservedOutputs, std::vector<SignalKey>{badOutput});
+  const auto skip = extracted.connectivitySkipInfoByKey.find(badOutput);
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  ASSERT_TRUE(skip->second.opaqueInternal.has_value());
+  EXPECT_EQ(skip->second.opaqueInternal->pin, "BAD[0]");
+  EXPECT_EQ(skip->second.opaqueInternal->reason,
+            "Missing Naja sequential output model");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractPropagatesOpaqueSequentialDependency) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      createIndependentSequentialOutputModel(primitives, "SEQ_GOOD_BAD_DEP");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+  using Operator = SNLDesignModeling::BooleanExpression::Operator;
+  SNLDesignModeling::BooleanExpression dependentGoodTransition;
+  const auto goodData = dependentGoodTransition.addTerm(
+      model->getScalarTerm(NLName("D_GOOD")));
+  const auto badState = dependentGoodTransition.addState(1);
+  dependentGoodTransition.root = dependentGoodTransition.addOperation(
+      Operator::And, {goodData, badState});
+  sequentialModel.states[0].nextState = std::move(dependentGoodTransition);
+  SNLDesignModeling::BooleanExpression invalidBadTransition;
+  invalidBadTransition.addTerm(model->getScalarTerm(NLName("D_BAD")));
+  sequentialModel.states[1].nextState = std::move(invalidBadTransition);
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createIndependentSequentialOutputTop(library, "top", model);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  const auto goodOutput = findKeyByDisplayName(extracted, "good[0]");
+  const auto badOutput = findKeyByDisplayName(extracted, "bad[0]");
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  EXPECT_EQ(extracted.skippedObservedOutputs.size(), 2u);
+  for (const auto& output : {goodOutput, badOutput}) {
+    const auto skip = extracted.connectivitySkipInfoByKey.find(output);
+    ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+    ASSERT_TRUE(skip->second.opaqueInternal.has_value());
+    EXPECT_EQ(skip->second.opaqueInternal->pin, "BAD[0]");
+  }
+  EXPECT_NE(
+      extracted.connectivitySkipInfoByKey.at(goodOutput).detail.find(
+          "Depends on skipped state `ff0.BAD[0]`"),
       std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractRejectsOutputFromAnotherPrimitive) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       SequentialDesignModelExtractIgnoresOutputFromAnotherPrimitive) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17270,27 +17381,19 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  ASSERT_FALSE(extracted.unsupportedReasons.empty());
-  EXPECT_NE(
-      extracted.unsupportedReasons.front().find(
-          "sequential output is not present on the instance"),
-      std::string::npos);
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs.size(), 2u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_TRUE(extracted.opaqueInternalInfoByKey.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractAbstractsStateWithoutPhysicalOutput) {
-  expectMissingSequentialStateOutputHandled(true);
+       SequentialDesignModelExtractIgnoresUnreferencedStateWithoutPhysicalOutput) {
+  expectUnreferencedSequentialStateWithoutOutputIgnored();
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractRejectsStateWithoutPhysicalOutput) {
-  expectMissingSequentialStateOutputHandled(false);
-}
-
-TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractReportsSharedScalarDataForMultiOutputPrimitive) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       SequentialDesignModelExtractSkipsSharedScalarDataForMultiOutputPrimitive) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17304,19 +17407,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  ASSERT_FALSE(extracted.unsupportedReasons.empty());
-  EXPECT_NE(
-      extracted.unsupportedReasons.front().find("multiple independent state outputs"),
-      std::string::npos);
-  for (const auto& reason : extracted.unsupportedReasons) {
-    EXPECT_EQ(reason.find("Missing next-state relation"), std::string::npos);
-  }
+  expectOpaqueOutputSkipWithReason(
+      extracted, "multiple independent state outputs");
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractReportsSharedScalarDataForQAndUnrelatedOutput) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       SequentialDesignModelExtractSkipsSharedScalarDataForQAndUnrelatedOutput) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17330,19 +17426,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
-  ASSERT_FALSE(extracted.unsupportedReasons.empty());
-  EXPECT_NE(
-      extracted.unsupportedReasons.front().find("multiple independent state outputs"),
-      std::string::npos);
-  for (const auto& reason : extracted.unsupportedReasons) {
-    EXPECT_EQ(reason.find("Missing next-state relation"), std::string::npos);
-  }
+  expectOpaqueOutputSkipWithReason(
+      extracted, "multiple independent state outputs");
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractStopsBeforeConeBuildForUnsupportedPrimitiveInfo) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       SequentialDesignModelExtractBuildsConeThenSkipsUnsupportedPrimitiveInfo) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17359,14 +17448,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto extracted = SequentialDesignModel::extract(top);
   const std::string stderrOutput = testing::internal::GetCapturedStderr();
 
-  EXPECT_TRUE(extracted.hasUnsupportedFeatures());
+  expectOpaqueOutputSkipWithReason(
+      extracted, "multiple independent state outputs");
   EXPECT_NE(
       stderrOutput.find("SEC diag: extract(top) collect begin"),
       std::string::npos);
   EXPECT_NE(
-      stderrOutput.find("SEC diag: extract(top) early unsupported exit before build"),
-      std::string::npos);
-  EXPECT_EQ(
       stderrOutput.find("SEC diag: extract(top) build begin"),
       std::string::npos);
 }
@@ -17459,7 +17546,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
 TEST_F(SequentialEquivalenceStrategyTests,
        UnsupportedReasonsFromBothDesignsAreJoined) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17481,8 +17567,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       StrategyStopsBeforeSecondExtractionAndProofOnUnsupportedPrimitiveInfo) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       StrategyStillChecksTopOutputAlignmentAfterOpaqueConeSkipping) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17496,16 +17581,8 @@ TEST_F(SequentialEquivalenceStrategyTests,
       library, "top0", unsupportedModel, "STATE", "ALT");
   auto* top1 = createDffTop(library, "top1", invModel, false, false);
 
-  ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
-  testing::internal::CaptureStderr();
   auto strategy = makeBinarySecStrategy(top0, top1);
-  const auto result = strategy.run(1);
-  const std::string stderrOutput = testing::internal::GetCapturedStderr();
-
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
-  EXPECT_NE(stderrOutput.find("SEC diag: extracted design0"), std::string::npos);
-  EXPECT_EQ(stderrOutput.find("SEC diag: extracted design1"), std::string::npos);
-  EXPECT_EQ(stderrOutput.find("SEC diag: aligning inputs/outputs"), std::string::npos);
+  EXPECT_THROW(static_cast<void>(strategy.run(1)), std::runtime_error);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17631,7 +17708,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       EquivalentOpaqueLeafDesignsReportOpaqueInternalBoundaryTerms) {
+       GenericOpaqueCellSkipsOnlyItsTopLevelOutput) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17645,29 +17722,22 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto strategy = makeBinarySecStrategy(top0, top1);
   const auto result = strategy.run(2);
 
-  auto hasRole = [&](const char* design, const char* signal, const char* role) {
-    return std::any_of(
-        result.extractedBoundaryReports.begin(),
-        result.extractedBoundaryReports.end(),
-        [&](const ExtractedBoundaryReportEntry& entry) {
-          return entry.design == design && entry.signal == signal &&
-                 std::find(entry.roles.begin(), entry.roles.end(), role) !=
-                     entry.roles.end();
-        });
-  };
-
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
-  EXPECT_TRUE(hasRole("design0", "in[0]", "top_input"));
-  EXPECT_TRUE(hasRole("design0", "out[0]", "top_output"));
-  EXPECT_TRUE(hasRole("design0", "opaque0.Y[0]", "opaque_internal_input"));
-  EXPECT_TRUE(hasRole("design0", "opaque0.A[0]", "opaque_internal_output"));
-  EXPECT_TRUE(hasRole("design1", "opaque0.Y[0]", "opaque_internal_input"));
-  EXPECT_TRUE(hasRole("design1", "opaque0.A[0]", "opaque_internal_output"));
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::PartiallyProved);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 2u);
+  ASSERT_EQ(result.skippedObservedOutputs.size(), 1u);
+  ASSERT_EQ(result.opaqueCellSkippedOutputs.size(), 1u);
+  const auto& report = result.opaqueCellSkippedOutputs.front();
+  EXPECT_NE(report.find("out[0]"), std::string::npos);
+  EXPECT_NE(report.find("opaque0"), std::string::npos);
+  EXPECT_NE(report.find("OPAQUE"), std::string::npos);
+  EXPECT_NE(report.find("Y[0]"), std::string::npos);
+  EXPECT_NE(report.find("no initialized combinational truth table"),
+            std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       UnsupportedSequentialInterfacesCanBeAbstractedAsSecBoundariesByDefault) {
-  ScopedSecBoundaryAbstraction boundaryAbstraction(true);
+       SequentialCellWithoutModelSkipsOnlyItsTopLevelOutput) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17683,36 +17753,21 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto strategy = makeBinarySecStrategy(top0, top1);
   const auto result = strategy.run(2);
 
-  auto hasRole = [&](const char* design, const char* signal, const char* role) {
-    return std::any_of(
-        result.extractedBoundaryReports.begin(),
-        result.extractedBoundaryReports.end(),
-        [&](const ExtractedBoundaryReportEntry& entry) {
-          return entry.design == design && entry.signal == signal &&
-                 std::find(entry.roles.begin(), entry.roles.end(), role) !=
-                     entry.roles.end();
-        });
-  };
-
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
-  EXPECT_FALSE(result.abstractedSequentialBoundaries.empty());
-  EXPECT_TRUE(hasRole("design0", "clk[0]", "top_input"));
-  EXPECT_TRUE(hasRole("design0", "in[0]", "top_input"));
-  EXPECT_TRUE(hasRole("design0", "good[0]", "top_output"));
-  EXPECT_TRUE(hasRole("design0", "bad[0]", "top_output"));
-  EXPECT_FALSE(hasRole("design0", "ff0.Q[0]", "opaque_internal_input"));
-  EXPECT_FALSE(hasRole("design0", "ff0.CK[0]", "opaque_internal_output"));
-  EXPECT_TRUE(hasRole("design0", "ff0.Q[0]", "abstracted_sequential_state"));
-  EXPECT_TRUE(hasRole("design0", "ff0.CK[0]", "abstracted_sequential_observed"));
-  EXPECT_FALSE(hasRole("design1", "ff0.Q[0]", "opaque_internal_input"));
-  EXPECT_FALSE(hasRole("design1", "ff0.CK[0]", "opaque_internal_output"));
-  EXPECT_TRUE(hasRole("design1", "ff0.Q[0]", "abstracted_sequential_state"));
-  EXPECT_TRUE(hasRole("design1", "ff0.CK[0]", "abstracted_sequential_observed"));
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::PartiallyProved);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 2u);
+  ASSERT_EQ(result.skippedObservedOutputs.size(), 1u);
+  ASSERT_EQ(result.opaqueCellSkippedOutputs.size(), 1u);
+  const auto& report = result.opaqueCellSkippedOutputs.front();
+  EXPECT_NE(report.find("bad[0]"), std::string::npos);
+  EXPECT_NE(report.find("ff0"), std::string::npos);
+  EXPECT_NE(report.find("SEQ_NO_D"), std::string::npos);
+  EXPECT_NE(report.find("Q[0]"), std::string::npos);
+  EXPECT_NE(report.find("Missing Naja sequential model"), std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       UnsupportedPrimitiveInformationStillFailsEvenWithOtherCoveredOutputs) {
-  ScopedSecBoundaryAbstraction strictSequentialModeling(false);
+       AllOpaqueTopLevelOutputsReturnUnsupported) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17720,17 +17775,41 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   auto* unsupportedModel = createNoDataSequentialModel(primitives, "SEQ_NO_D");
-  auto* top0 =
-      createUnsupportedPrimitiveCoverageTop(library, "top0", unsupportedModel);
-  auto* top1 =
-      createUnsupportedPrimitiveCoverageTop(library, "top1", unsupportedModel);
+  auto* top0 = createNoDataSequentialTop(library, "top0", unsupportedModel);
+  auto* top1 = createNoDataSequentialTop(library, "top1", unsupportedModel);
 
   auto strategy = makeBinarySecStrategy(top0, top1);
   const auto result = strategy.run(2);
 
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(result.coveredOutputs, 0u);
+  EXPECT_EQ(result.totalOutputs, 1u);
+  ASSERT_EQ(result.skippedObservedOutputs.size(), 1u);
+  ASSERT_EQ(result.opaqueCellSkippedOutputs.size(), 1u);
+  EXPECT_NE(result.reason.find("No aligned observed outputs remain"),
+            std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       ModeledCombinationalCellVerifiesAllOutputsWithoutOpaqueSkips) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top0 = createCombinationalInvTop(library, "top0", invModel);
+  auto* top1 = createCombinationalInvTop(library, "top1", invModel);
+
+  auto strategy = makeBinarySecStrategy(top0, top1);
+  const auto result = strategy.run(2);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 1u);
   EXPECT_TRUE(result.skippedObservedOutputs.empty());
-  EXPECT_FALSE(result.reason.empty());
+  EXPECT_TRUE(result.opaqueCellSkippedOutputs.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17862,7 +17941,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       UnpublishedInternalSupportIsDesignPrivateDuringSecRemap) {
+       UnpublishedInternalSupportIsRejectedDuringSecRemap) {
   SequentialDesignModel model0;
   SequentialDesignModel model1;
   const SignalKey out = makeSignalKey("privateSupportOut");
@@ -17881,13 +17960,9 @@ TEST_F(SequentialEquivalenceStrategyTests,
   model1.observedOutputExprByKey.emplace(out1, BoolExpr::Var(42));
 
   auto strategy = makeBinaryExtractedSecStrategy(SecEngine::Imc);
-  const auto result = strategy.runExtractedModels(model0, model1, 1);
-
-  // Same local variable ID, different extracted designs: this support is not a
-  // top terminal, so SEC must not equate it by name or by local BoolExpr ID.
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
-  EXPECT_EQ(result.coveredOutputs, 1u);
-  EXPECT_EQ(result.totalOutputs, 1u);
+  EXPECT_THROW(
+      static_cast<void>(strategy.runExtractedModels(model0, model1, 1)),
+      std::runtime_error);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

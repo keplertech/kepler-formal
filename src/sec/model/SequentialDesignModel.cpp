@@ -33,7 +33,6 @@
 #include "SNLPath.h"
 #include "../../clauses/SNLLogicCloud.h"
 #include "../../clauses/Tree2BoolExpr.h"
-#include "../../config/Config.h"
 #include "common/BoolExprUtils.h"
 #include "../../strategies/miter/BuildPrimaryOutputClauses.h"
 
@@ -54,6 +53,11 @@ struct StateOutputTerm {
   naja::NL::NLID::Bit bit = 0;
   size_t stateIndex = 0;
   bool complemented = false;
+};
+
+struct OpaqueStateOutputTerm {
+  naja::DNL::DNLID termID = naja::DNL::DNLID_MAX;
+  std::string reason;
 };
 
 struct PendingStateReference {
@@ -129,22 +133,11 @@ struct InstanceBoundaryInfo {
 struct SequentialInstanceScan {
   PendingTermMap modelTermIDs;
   std::vector<StateOutputTerm> stateOutputs;
+  std::vector<OpaqueStateOutputTerm> opaqueStateOutputs;
+  std::vector<std::optional<std::string>> opaqueStateReasons;
   const naja::NL::SNLDesignModeling::SequentialModel* model = nullptr;
-  std::string unsupportedReason;
   InstanceBoundaryInfo boundaryInfo;
 };
-
-AbstractedSequentialBoundaryDetail makeAbstractedBoundaryDetail(
-    const InstanceBoundaryInfo& info) {
-  AbstractedSequentialBoundaryDetail detail;
-  detail.instancePath = info.instancePath;
-  detail.stateKeys = info.stateKeys;
-  detail.observedKeys.reserve(info.observedTerms.size());
-  for (const auto& observedTerm : info.observedTerms) {
-    detail.observedKeys.push_back(observedTerm.key);
-  }
-  return detail;
-}
 
 struct BuiltObservedExpr {  // LCOV_EXCL_LINE
   BoolExpr* expr = nullptr;  // LCOV_EXCL_LINE
@@ -157,6 +150,8 @@ using BuilderSkippedOutputReason =
     KEPLER_FORMAL::BuildPrimaryOutputClauses::SkippedOutputReason;
 
 std::string normalizePinName(const std::string& name);
+
+ConnectivitySkipInfo makeOpaqueInternalSkip(const OpaqueInternalInfo& info);
 
 bool isClockTreeBufferCell(const naja::DNL::DNLTerminalFull& term);
 
@@ -307,6 +302,8 @@ std::string describeConnectivitySkipOrigin(ConnectivitySkipOrigin origin) {
       // LCOV_EXCL_START
       return "multi-clock-domain";  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
+    case ConnectivitySkipOrigin::OpaqueInternal:
+      return "opaque-internal";
   }
   // LCOV_EXCL_START
   return "connectivity";  // LCOV_EXCL_LINE
@@ -1189,14 +1186,24 @@ std::string displayNameForSignalKey(  // LCOV_EXCL_LINE
 }
 
 // LCOV_EXCL_START
-ConnectivitySkipInfo makeUnpublishedSupportSkip(size_t varID) {  // LCOV_EXCL_LINE
-  return ConnectivitySkipInfo{  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
-      ConnectivitySkipOrigin::NoDriver,
-      // LCOV_EXCL_START
-      "Depends on unpublished internal support variable v" + std::to_string(varID),  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-  };
+ConnectivitySkipInfo makeUnpublishedSupportSkip(  // LCOV_EXCL_LINE
+    const SequentialDesignModel& model,
+    size_t varID) {
+  for (const auto& [key, mappedVarID] : model.inputVarByKey) {
+    if (mappedVarID != varID) {
+      continue;
+    }
+    if (const auto opaqueIt = model.opaqueInternalInfoByKey.find(key);
+        opaqueIt != model.opaqueInternalInfoByKey.end()) {
+      return makeOpaqueInternalSkip(opaqueIt->second);
+    }
+  }
+
+  OpaqueInternalInfo info;
+  info.instance = "<unknown internal frontier>";
+  info.pin = "v" + std::to_string(varID);
+  info.reason = "formula contains an unpublished internal support variable";
+  return makeOpaqueInternalSkip(info);
 // LCOV_EXCL_START
 }  // LCOV_EXCL_LINE
 // LCOV_EXCL_STOP
@@ -1223,6 +1230,45 @@ std::string getTerminalDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
   oss << terminal.getSnlBitTerm()->getName().getString() << "["
       << terminal.getSnlBitTerm()->getBit() << "]";
   return oss.str();
+}
+
+OpaqueInternalInfo makeOpaqueInternalInfo(
+    const naja::DNL::DNLTerminalFull& terminal,
+    std::string reason) {
+  OpaqueInternalInfo info;
+  info.instance = terminal.getDNLInstance().getFullPath();
+  while (!info.instance.empty() &&
+         (info.instance.back() == '/' || info.instance.back() == '.')) {
+    info.instance.pop_back();
+  }
+  if (info.instance.empty()) {
+    info.instance = "<unnamed internal instance>";
+  }
+  if (const auto* model = terminal.getDNLInstance().getSNLModel()) {
+    info.model = model->getName().getString();
+  }
+  info.pin = terminal.getSnlBitTerm()->getName().getString() + "[" +
+             std::to_string(terminal.getSnlBitTerm()->getBit()) + "]";
+  info.reason = std::move(reason);
+  return info;
+}
+
+std::string describeOpaqueInternalInfo(const OpaqueInternalInfo& info) {
+  std::ostringstream oss;
+  oss << "opaque internal cell `" << info.instance << "`";
+  if (!info.model.empty()) {
+    oss << " (model `" << info.model << "`)";
+  }
+  oss << " pin `" << info.pin << "`: " << info.reason;
+  return oss.str();
+}
+
+ConnectivitySkipInfo makeOpaqueInternalSkip(const OpaqueInternalInfo& info) {
+  return ConnectivitySkipInfo{
+      ConnectivitySkipOrigin::OpaqueInternal,
+      describeOpaqueInternalInfo(info),
+      info,
+  };
 }
 
 std::string normalizePinName(const std::string& name) {
@@ -1722,6 +1768,12 @@ std::optional<std::string> getPendingTransitionUnsupportedReason(
       if (node.operation == Operator::State &&
           node.state >= pending.stateReferences.size()) {
         return "Naja sequential expression references an unmapped state";
+      }
+      if (node.operation == Operator::State &&
+          pending.stateReferences[node.state].termID ==
+              naja::DNL::DNLID_MAX) {
+        return "Naja sequential expression references a state without a "
+               "modelable output";
       }
       for (const auto operand : node.operands) {
         if (operand >= expression.nodes.size()) {
@@ -2470,7 +2522,6 @@ struct ExtractContext {
   naja::NL::SNLDesign* previousTop = nullptr;
   std::string topName;
   bool secDiagEnabled = false;
-  bool abstractUncomputableSequentialBoundaries = false;
   // LCOV_EXCL_START
   KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
   // LCOV_EXCL_STOP
@@ -2488,13 +2539,8 @@ struct ExtractContext {
   // LCOV_EXCL_STOP
   std::set<SignalKey, SignalKeyLess> allObservedOutputs;
   // LCOV_EXCL_START
-  std::unordered_set<naja::DNL::DNLID> prunedBuilderOutputTerms;
   std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>
       collectedSkippedOutputs;
-  std::set<SignalKey, SignalKeyLess> abstractedBoundaryStateKeys;
-  std::vector<std::pair<naja::DNL::DNLID, SignalKey>> abstractedBoundaryObservedTerms;
-  std::unordered_set<SignalKey, SignalKeyHash> abstractedBoundaryObservedKeys;
-  std::unordered_set<SignalKey, SignalKeyHash> unsupportedStateBits;
   std::vector<PendingTransition> pendingTransitions;
   std::vector<PendingMemoryInstance> pendingMemoryInstances;
   std::vector<InstanceBoundaryInfo> instanceBoundaryInfos;
@@ -2885,11 +2931,18 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
     model.displayNameByKey.try_emplace(key, getTerminalDisplayName(term));
     if (isSequentialStateOutput(term)) {
       ctx.stateBits.insert(key);
-    } else {
+    } else if (term.isTopPort()) {
       ctx.environmentInputs.insert(key);
-      if (!term.isTopPort() && !isSequentialInstanceTerm(ctx, term)) {
-        ctx.internalBoundaryInputKeys.insert(key);
-      }
+    } else {
+      ctx.internalBoundaryInputKeys.insert(key);
+      const auto truthTable = naja::NL::SNLDesignModeling::getTruthTable(
+          term.getDNLInstance().getSNLInstance(),
+          term.getSnlBitTerm()->getOrderID());
+      const std::string reason = truthTable.isInitialized()
+          ? "the internal output has no usable SEC model"
+          : "no initialized combinational truth table or usable sequential model";
+      model.opaqueInternalInfoByKey.emplace(
+          key, makeOpaqueInternalInfo(term, reason));
     }
   }
 
@@ -2915,6 +2968,7 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
   SequentialInstanceScan scan;
   // LCOV_EXCL_STOP
   scan.boundaryInfo.instancePath = instance.getFullPath();
+  std::vector<naja::DNL::DNLID> physicalStateOutputTermIDs;
 
   for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
        termID != naja::DNL::DNLID_MAX &&
@@ -2925,26 +2979,31 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
       scan.modelTermIDs.emplace(
           term.getSnlBitTerm(),
           PendingPinTerm{termID, term.getSnlBitTerm()->getBit()});
+      if (isSequentialStateOutput(term) &&
+          term.getSnlBitTerm()->getDirection() !=
+              naja::NL::SNLBitTerm::Direction::Input) {
+        physicalStateOutputTermIDs.push_back(termID);
+      }
     }
   }
 
   const auto* primitive = instance.getSNLModel();
   if (naja::NL::SNLDesignModeling::hasSequentialModel(primitive)) {
     scan.model = &naja::NL::SNLDesignModeling::getSequentialModel(primitive);
+    scan.opaqueStateReasons.resize(scan.model->states.size());
+    std::unordered_set<naja::DNL::DNLID> modeledPhysicalOutputs;
     for (const auto& output : scan.model->outputs) {
       const auto termIt = scan.modelTermIDs.find(output.term);
       if (termIt == scan.modelTermIDs.end()) {
-        scan.unsupportedReason =
-            "Naja sequential output is not present on the instance";
         continue;
       }
+      modeledPhysicalOutputs.insert(termIt->second.termID);
       const auto stateReference = getStateOutputReference(output.function);
       if (!stateReference.has_value() ||
           stateReference->first >= scan.model->states.size()) {
-        scan.unsupportedReason =
-            "Unsupported Naja sequential output function";
-        scan.stateOutputs.push_back({
-            termIt->second.termID, termIt->second.bit, 0, false});
+        scan.opaqueStateOutputs.push_back(
+            {termIt->second.termID,
+             "Unsupported Naja sequential output function"});
         continue;
       }
       scan.stateOutputs.push_back({
@@ -2952,6 +3011,12 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
           termIt->second.bit,
           stateReference->first,
           stateReference->second});
+    }
+    for (const auto termID : physicalStateOutputTermIDs) {
+      if (modeledPhysicalOutputs.find(termID) == modeledPhysicalOutputs.end()) {
+        scan.opaqueStateOutputs.push_back(
+            {termID, "Missing Naja sequential output model"});
+      }
     }
 
     using Operator =
@@ -2975,10 +3040,29 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
               instance.getTerminalFromBitTerm(
                   const_cast<naja::NL::SNLBitTerm*>(modelTerm))) &&
           modeledUpdateTerms.find(modelTerm) == modeledUpdateTerms.end()) {
-        scan.unsupportedReason =
+        const std::string reason =
             "Unsupported sequential primitive with update pin `" +
             modelTerm->getName().getString() + "`";
-        break;
+        std::unordered_set<const naja::NL::SNLBitTerm*> relatedClocks;
+        for (auto* clock : naja::NL::SNLDesignModeling::getInputRelatedClocks(
+                 const_cast<naja::NL::SNLBitTerm*>(modelTerm))) {
+          relatedClocks.insert(clock);
+        }
+        for (const auto& stateOutput : scan.stateOutputs) {
+          auto* outputTerm = naja::DNL::get()
+                                 ->getDNLTerminalFromID(stateOutput.termID)
+                                 .getSnlBitTerm();
+          const auto outputClocks =
+              naja::NL::SNLDesignModeling::getOutputRelatedClocks(outputTerm);
+          if (std::any_of(
+                  outputClocks.begin(),
+                  outputClocks.end(),
+                  [&](const auto* clock) {
+                    return relatedClocks.find(clock) != relatedClocks.end();
+                  })) {
+            scan.opaqueStateReasons[stateOutput.stateIndex] = reason;
+          }
+        }
       }
     }
 
@@ -2998,32 +3082,31 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
       sharedDataTerm = root.term;
     }
     if (hasSharedScalarData) {
-      scan.unsupportedReason =
-          "Shared scalar data input cannot define multiple independent state outputs";
+      std::fill(
+          scan.opaqueStateReasons.begin(),
+          scan.opaqueStateReasons.end(),
+          "Shared scalar data input cannot define multiple independent state "
+          "outputs");
     }
   } else {
-    scan.unsupportedReason = "Missing Naja sequential model";
-    size_t stateIndex = 0;
-    for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
-         termID != naja::DNL::DNLID_MAX &&
-         termID <= instance.getTermIndexes().second;
-         ++termID) {
-      const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
-      if (isSequentialStateOutput(term) &&
-          term.getSnlBitTerm()->getDirection() !=
-              naja::NL::SNLBitTerm::Direction::Input) {
-        scan.stateOutputs.push_back(
-            {termID, term.getSnlBitTerm()->getBit(), stateIndex++, false});
-      }
+    for (const auto termID : physicalStateOutputTermIDs) {
+      scan.opaqueStateOutputs.push_back(
+          {termID, "Missing Naja sequential model"});
     }
   }
 
-  if (scan.stateOutputs.empty()) {
+  if (scan.stateOutputs.empty() && scan.opaqueStateOutputs.empty()) {
     return std::nullopt;
   }
 
   std::set<SignalKey, SignalKeyLess> boundaryStateKeys;
   for (const auto& stateOutput : scan.stateOutputs) {
+    const auto keyIt = inputKeyByTerm.find(stateOutput.termID);
+    if (keyIt != inputKeyByTerm.end()) {
+      boundaryStateKeys.insert(keyIt->second);
+    }
+  }
+  for (const auto& stateOutput : scan.opaqueStateOutputs) {
     const auto keyIt = inputKeyByTerm.find(stateOutput.termID);
     if (keyIt != inputKeyByTerm.end()) {
       boundaryStateKeys.insert(keyIt->second);
@@ -3361,50 +3444,31 @@ void appendPendingTransitionsForInstance(
   ctx.instanceBoundaryInfos.push_back(scan.boundaryInfo);
   const size_t boundaryInfoIndex = ctx.instanceBoundaryInfos.size() - 1;
 
-  auto markUnsupportedInstanceStateOutputs = [&]() {
-    for (const auto& key : ctx.instanceBoundaryInfos[boundaryInfoIndex].stateKeys) {
-      ctx.unsupportedStateBits.insert(key);
+  auto markOpaqueOutput = [&](naja::DNL::DNLID termID,
+                              const std::string& reason) {
+    const auto keyIt = ctx.inputKeyByTerm.find(termID);
+    if (keyIt == ctx.inputKeyByTerm.end()) {
+      return;
     }
+    const auto& term = ctx.dnl->getDNLTerminalFromID(termID);
+    const auto info = makeOpaqueInternalInfo(term, reason);
+    model.opaqueInternalInfoByKey.insert_or_assign(keyIt->second, info);
+    model.connectivitySkipInfoByKey.insert_or_assign(
+        keyIt->second, makeOpaqueInternalSkip(info));
   };
-  auto abstractUnsupportedInstanceAsBoundary = [&](const std::string& reason) {
-    const auto& info = ctx.instanceBoundaryInfos[boundaryInfoIndex];
-    model.abstractedSequentialBoundaries.push_back(
-        "Abstracted uncomputable sequential instance `" + info.instancePath +
-        "` as a SEC boundary: " + reason);
-    model.abstractedSequentialBoundaryDetails.push_back(
-        makeAbstractedBoundaryDetail(info));
-
-    for (const auto& key : info.stateKeys) {
-      ctx.abstractedBoundaryStateKeys.insert(key);
-    }
-
-    for (const auto& observedTerm : info.observedTerms) {
-      if (ctx.abstractedBoundaryObservedKeys.insert(observedTerm.key).second) {
-        ctx.abstractedBoundaryObservedTerms.emplace_back(observedTerm.termID, observedTerm.key);
-        ctx.allObservedOutputs.insert(observedTerm.key);
+  auto markOpaqueState = [&](size_t stateIndex, const std::string& reason) {
+    for (const auto& stateOutput : scan.stateOutputs) {
+      if (stateOutput.stateIndex == stateIndex) {
+        markOpaqueOutput(stateOutput.termID, reason);
       }
-      ctx.prunedBuilderOutputTerms.insert(observedTerm.termID);
     }
   };
 
-  const size_t pendingStart = ctx.pendingTransitions.size();
-  const size_t complementedStart = model.complementedStateRelations.size();
-  bool unsupportedInstance = false;
-  bool abstractedUnsupportedInstance = false;
-  std::string abstractedUnsupportedReason;
+  for (const auto& opaqueOutput : scan.opaqueStateOutputs) {
+    markOpaqueOutput(opaqueOutput.termID, opaqueOutput.reason);
+  }
 
-  if (!scan.unsupportedReason.empty() || scan.model == nullptr) {
-    const std::string reason = scan.unsupportedReason.empty()
-        ? "Missing Naja sequential model"
-        : scan.unsupportedReason;
-    if (ctx.abstractUncomputableSequentialBoundaries) {
-      abstractUnsupportedInstanceAsBoundary(reason);
-    } else {
-      markUnsupportedInstanceStateOutputs();
-      model.unsupportedReasons.push_back(
-          "Unsupported sequential primitive for `" +
-          scan.boundaryInfo.instancePath + "`: " + reason);
-    }
+  if (scan.model == nullptr) {
     return;
   }
 
@@ -3415,24 +3479,11 @@ void appendPendingTransitionsForInstance(
       primary = &output;
     }
   }
-  if (std::any_of(primaryOutputs.begin(), primaryOutputs.end(),
-                  [](const auto* output) { return output == nullptr; })) {
-    const std::string reason = "Naja sequential state has no physical output";
-    if (ctx.abstractUncomputableSequentialBoundaries) {
-      abstractUnsupportedInstanceAsBoundary(reason);
-    } else {
-      markUnsupportedInstanceStateOutputs();
-      model.unsupportedReasons.push_back(
-          "Unsupported sequential primitive for `" +
-          scan.boundaryInfo.instancePath + "`: " + reason);
+  std::vector<PendingStateReference> stateReferences(primaryOutputs.size());
+  for (size_t stateIndex = 0; stateIndex < primaryOutputs.size(); ++stateIndex) {
+    if (const auto* output = primaryOutputs[stateIndex]) {
+      stateReferences[stateIndex] = {output->termID, output->complemented};
     }
-    return;
-  }
-
-  std::vector<PendingStateReference> stateReferences;
-  stateReferences.reserve(primaryOutputs.size());
-  for (const auto* output : primaryOutputs) {
-    stateReferences.push_back({output->termID, output->complemented});
   }
   std::vector<PendingPinTerm> clockTermIDs;
   std::unordered_set<naja::DNL::DNLID> seenClockTerms;
@@ -3450,6 +3501,13 @@ void appendPendingTransitionsForInstance(
   }
 
   for (size_t stateIndex = 0; stateIndex < primaryOutputs.size(); ++stateIndex) {
+    if (primaryOutputs[stateIndex] == nullptr) {
+      continue;
+    }
+    if (scan.opaqueStateReasons[stateIndex].has_value()) {
+      markOpaqueState(stateIndex, *scan.opaqueStateReasons[stateIndex]);
+      continue;
+    }
     const auto& stateOutput = *primaryOutputs[stateIndex];
 
     PendingTransition pending;
@@ -3478,18 +3536,7 @@ void appendPendingTransitionsForInstance(
 
     if (const auto unsupportedReason =
             getPendingTransitionUnsupportedReason(pending)) {
-      // Unsupported sequential cells are classified before cone construction.
-      // Boundary mode exposes their interface; strict mode reports a structural
-      // unsupported reason without relying on exception-to-result conversion.
-      if (ctx.abstractUncomputableSequentialBoundaries) {
-        abstractedUnsupportedInstance = true;
-        abstractedUnsupportedReason = *unsupportedReason;
-        break;
-      }
-      unsupportedInstance = true;
-      model.unsupportedReasons.push_back(
-          "Unsupported sequential primitive for `" +
-          signalKeyToString(pending.stateKey) + "`: " + *unsupportedReason);
+      markOpaqueState(stateIndex, *unsupportedReason);
       continue;
     }
 
@@ -3498,22 +3545,6 @@ void appendPendingTransitionsForInstance(
         complementedRelations.begin(),
         complementedRelations.end());
     ctx.pendingTransitions.push_back(std::move(pending));
-  }
-
-  if (abstractedUnsupportedInstance) {
-    ctx.pendingTransitions.erase(
-        ctx.pendingTransitions.begin() + static_cast<std::ptrdiff_t>(pendingStart),
-        ctx.pendingTransitions.end());
-    model.complementedStateRelations.erase(
-        model.complementedStateRelations.begin() +
-            static_cast<std::ptrdiff_t>(complementedStart),
-        model.complementedStateRelations.end());
-    abstractUnsupportedInstanceAsBoundary(abstractedUnsupportedReason);
-    return;
-  }
-
-  if (unsupportedInstance) {
-    markUnsupportedInstanceStateOutputs();
   }
 }
 
@@ -3540,15 +3571,9 @@ void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& mo
 
 std::vector<naja::DNL::DNLID> collectInitialObservedTerms(const ExtractContext& ctx) {
   std::vector<naja::DNL::DNLID> initialObservedTerms;
-  initialObservedTerms.reserve(
-      ctx.topOutputKeyByTerm.size() + ctx.abstractedBoundaryObservedTerms.size());
+  initialObservedTerms.reserve(ctx.topOutputKeyByTerm.size());
   std::unordered_set<naja::DNL::DNLID> initialObservedTermSet;
   for (const auto& [termID, _] : ctx.topOutputKeyByTerm) {
-    if (initialObservedTermSet.insert(termID).second) {
-      initialObservedTerms.push_back(termID);
-    }
-  }
-  for (const auto& [termID, _] : ctx.abstractedBoundaryObservedTerms) {
     if (initialObservedTermSet.insert(termID).second) {
       initialObservedTerms.push_back(termID);
     }
@@ -3556,7 +3581,7 @@ std::vector<naja::DNL::DNLID> collectInitialObservedTerms(const ExtractContext& 
   return initialObservedTerms;
 }
 
-void buildInitialObservedOutputClouds(ExtractContext& ctx, SequentialDesignModel& model) {
+void buildInitialObservedOutputClouds(ExtractContext& ctx) {
   const auto initialObservedTerms = collectInitialObservedTerms(ctx);
   std::unordered_set<naja::DNL::DNLID> collectedOutputSet(
       ctx.builder.getOutputs().begin(), ctx.builder.getOutputs().end());
@@ -3571,10 +3596,8 @@ void buildInitialObservedOutputClouds(ExtractContext& ctx, SequentialDesignModel
   if (ctx.secDiagEnabled) {
     fprintf(
         stderr,
-        "SEC diag: extract(%s) abstracted_boundaries=%zu pruned_builder_outputs=%zu initial_observed_outputs=%zu\n",
+        "SEC diag: extract(%s) initial_observed_outputs=%zu\n",
         ctx.topName.c_str(),
-        model.abstractedSequentialBoundaries.size(),
-        ctx.prunedBuilderOutputTerms.size(),
         initialMaterializedOutputs.size());
     fflush(stderr);
   }
@@ -3643,17 +3666,6 @@ void orderComplementedStateBitsByPrimary(SequentialDesignModel& model) {
 }
 
 void publishNormalizedBoundary(ExtractContext& ctx, SequentialDesignModel& model) {
-  for (const auto& key : ctx.abstractedBoundaryStateKeys) {
-    ctx.stateBits.erase(key);
-    ctx.environmentInputs.insert(key);
-  }
-  // Opaque internal boundary inputs behave exactly like additional SEC
-  // environment inputs: extraction gives them symbolic leaf variables because
-  // the surrounding cone cannot be modeled combinationally, so the published
-  // interface must carry them forward into the shared proof symbol space.
-  ctx.environmentInputs.insert(
-      ctx.internalBoundaryInputKeys.begin(), ctx.internalBoundaryInputKeys.end());
-
   model.topInputKeys.assign(ctx.topInputKeys.begin(), ctx.topInputKeys.end());
   model.topOutputKeys.assign(ctx.topOutputKeys.begin(), ctx.topOutputKeys.end());
   model.environmentInputs.assign(ctx.environmentInputs.begin(), ctx.environmentInputs.end());
@@ -4151,60 +4163,6 @@ void buildStructuredMemoryTransitions(
 
 
 // LCOV_EXCL_STOP
-void materializeBoundaryObservedOutputs(
-    const std::vector<std::pair<naja::DNL::DNLID, SignalKey>>& observedTerms,
-    // LCOV_EXCL_START
-    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
-    const std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>& skippedOutputsByTerm,
-    const std::vector<naja::DNL::DNLID>& builderInputs,
-    const std::vector<naja::DNL::DNLID>& builderOutputs,
-    const std::vector<size_t>& termDNLID2varID,
-    // LCOV_EXCL_STOP
-    SequentialDesignModel& model) {
-  // LCOV_EXCL_START
-  for (const auto& [termID, key] : observedTerms) {
-    if (const auto exprIt = outputExprByTerm.find(termID);
-        exprIt != outputExprByTerm.end()) {
-        // LCOV_EXCL_STOP
-      model.observedOutputExprByKey.emplace(key, exprIt->second);
-      // LCOV_EXCL_START
-      continue;
-    }
-    if (const auto skippedIt = skippedOutputsByTerm.find(termID);  // LCOV_EXCL_LINE
-        skippedIt != skippedOutputsByTerm.end()) {  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second);  // LCOV_EXCL_LINE
-          skipInfo.has_value()) {  // LCOV_EXCL_LINE
-        model.connectivitySkipInfoByKey.emplace(key, *skipInfo);  // LCOV_EXCL_LINE
-        continue;  // LCOV_EXCL_LINE
-      }
-      model.unsupportedReasons.push_back(  // LCOV_EXCL_LINE
-          "Unsupported SEC boundary output `" + model.displayNameByKey.at(key) +  // LCOV_EXCL_LINE
-          "`: " + skippedIt->second.detail);  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }
-
-    const auto built = buildObservedExprForTerm(  // LCOV_EXCL_LINE
-        termID, outputExprByTerm, builderInputs, builderOutputs, termDNLID2varID);  // LCOV_EXCL_LINE
-    if (built.expr != nullptr) {  // LCOV_EXCL_LINE
-      // LCOV_EXCL_START
-      model.observedOutputExprByKey.emplace(key, built.expr);  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }
-    if (built.connectivitySkip.has_value()) {  // LCOV_EXCL_LINE
-      model.connectivitySkipInfoByKey.emplace(key, *built.connectivitySkip);  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-    }
-    // LCOV_EXCL_START
-    model.unsupportedReasons.push_back(  // LCOV_EXCL_LINE
-        "Unsupported SEC boundary output `" + model.displayNameByKey.at(key) +  // LCOV_EXCL_LINE
-        "`: " + built.unsupportedReason);  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
-}
-
-// LCOV_EXCL_START
 void materializeTopObservedOutputs(
     const std::unordered_map<naja::DNL::DNLID, SignalKey>& topOutputKeyByTerm,
     // LCOV_EXCL_STOP
@@ -4242,8 +4200,6 @@ void materializeTopObservedOutputs(
 // LCOV_EXCL_STOP
 struct RebuiltTransitionArtifacts {
   std::unordered_set<SignalKey, SignalKeyHash> requiredStateKeys;
-  std::set<SignalKey, SignalKeyLess> lateAbstractedBoundaryStateKeys;
-  std::vector<std::pair<naja::DNL::DNLID, SignalKey>> lateAbstractedBoundaryObservedTerms;
 };
 
 constexpr size_t kMaxCompleteStateFrontierForStartupMatching = 5000;
@@ -4345,55 +4301,27 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       [&](const SignalKey& key, const ConnectivitySkipInfo& info) {
         model.connectivitySkipInfoByKey.emplace(key, info);
       };
-  auto markUnsupportedState = [&](const SignalKey& key) {
-    ctx.unsupportedStateBits.insert(key);  // LCOV_EXCL_LINE
-  };  // LCOV_EXCL_LINE
-
-  std::unordered_set<SignalKey, SignalKeyHash> lateAbstractedBoundaryObservedKeys;
-  std::unordered_set<size_t> lateAbstractedBoundaryIndexes;
-  auto recordLateAbstractedInstanceBoundary =
-  // LCOV_EXCL_STOP
-      [&](size_t boundaryInfoIndex, const std::string& reason) {  // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        if (boundaryInfoIndex == std::numeric_limits<size_t>::max()) {  // LCOV_EXCL_LINE
-          return;  // LCOV_EXCL_LINE
-        }
-        if (!lateAbstractedBoundaryIndexes.insert(boundaryInfoIndex).second) {  // LCOV_EXCL_LINE
-          return;  // LCOV_EXCL_LINE
-          // LCOV_EXCL_STOP
-        }
-
-// LCOV_EXCL_START
-
-
-// LCOV_EXCL_STOP
-        const auto& info = ctx.instanceBoundaryInfos[boundaryInfoIndex];  // LCOV_EXCL_LINE
-        if (ctx.secDiagEnabled) {  // LCOV_EXCL_LINE
-          fprintf(  // LCOV_EXCL_LINE
-              stderr,  // LCOV_EXCL_LINE
-              "SEC diag: extract(%s) late abstracted sequential instance `%s`: %s\n",
-              ctx.topName.c_str(),  // LCOV_EXCL_LINE
-              info.instancePath.c_str(),  // LCOV_EXCL_LINE
-              reason.c_str());  // LCOV_EXCL_LINE
-          // LCOV_EXCL_START
-          fflush(stderr);  // LCOV_EXCL_LINE
-          // LCOV_EXCL_STOP
-        }  // LCOV_EXCL_LINE
-        model.abstractedSequentialBoundaries.push_back(  // LCOV_EXCL_LINE
-            "Abstracted uncomputable sequential instance `" +  // LCOV_EXCL_LINE
-            info.instancePath + "` as a SEC boundary: " + reason);  // LCOV_EXCL_LINE
-        model.abstractedSequentialBoundaryDetails.push_back(  // LCOV_EXCL_LINE
-            makeAbstractedBoundaryDetail(info));  // LCOV_EXCL_LINE
-        for (const auto& key : info.stateKeys) {  // LCOV_EXCL_LINE
-          artifacts.lateAbstractedBoundaryStateKeys.insert(key);  // LCOV_EXCL_LINE
-        }
-        for (const auto& observedTerm : info.observedTerms) {  // LCOV_EXCL_LINE
-          if (lateAbstractedBoundaryObservedKeys.insert(observedTerm.key).second) {  // LCOV_EXCL_LINE
-            artifacts.lateAbstractedBoundaryObservedTerms.emplace_back(  // LCOV_EXCL_LINE
-                observedTerm.termID, observedTerm.key);  // LCOV_EXCL_LINE
-          }  // LCOV_EXCL_LINE
-        }
-      };  // LCOV_EXCL_LINE
+  auto markOpaqueState = [&](const PendingTransition& pending,
+                             const std::string& reason) {
+    auto markKey = [&](const SignalKey& key) {
+      auto termIt = std::find_if(
+          ctx.inputKeyByTerm.begin(),
+          ctx.inputKeyByTerm.end(),
+          [&](const auto& entry) { return entry.second == key; });
+      if (termIt == ctx.inputKeyByTerm.end()) {
+        return;
+      }
+      const auto info = makeOpaqueInternalInfo(
+          ctx.dnl->getDNLTerminalFromID(termIt->first), reason);
+      model.opaqueInternalInfoByKey.insert_or_assign(key, info);
+      model.connectivitySkipInfoByKey.insert_or_assign(
+          key, makeOpaqueInternalSkip(info));
+    };
+    markKey(pending.stateKey);
+    for (const auto& key : pending.complementedStateKeys) {
+      markKey(key);
+    }
+  };
 
   std::unordered_map<size_t, SignalKey> requiredStateKeyByVarID;
   requiredStateKeyByVarID.reserve(model.stateBits.size());
@@ -4701,30 +4629,11 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
           break;
         }
 
-        if (ctx.abstractUncomputableSequentialBoundaries) {  // LCOV_EXCL_LINE
-          recordLateAbstractedInstanceBoundary(  // LCOV_EXCL_LINE
-              pending.boundaryInfoIndex,  // LCOV_EXCL_LINE
-              "unsupported sequential terminal `" +  // LCOV_EXCL_LINE
-                  modelTerm->getName().getString() + "`: " +  // LCOV_EXCL_LINE
-                  skippedIt->second.detail);  // LCOV_EXCL_LINE
-          abortPending = true;  // LCOV_EXCL_LINE
-          break;  // LCOV_EXCL_LINE
-        }
-
-
-// LCOV_EXCL_STOP
-        model.unsupportedReasons.push_back(  // LCOV_EXCL_LINE
-            // LCOV_EXCL_START
-            "Unsupported sequential primitive for `" + signalKeyToString(pending.stateKey) +  // LCOV_EXCL_LINE
-            // LCOV_EXCL_STOP
-            "`: Sequential terminal `" + modelTerm->getName().getString() +  // LCOV_EXCL_LINE
-                "` is unsupported: " +  // LCOV_EXCL_LINE
-            skippedIt->second.detail);  // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        markUnsupportedState(pending.stateKey);  // LCOV_EXCL_LINE
-        for (const auto& complementedKey : pending.complementedStateKeys) {  // LCOV_EXCL_LINE
-          markUnsupportedState(complementedKey);  // LCOV_EXCL_LINE
-        }
+        markOpaqueState(
+            pending,
+            "unsupported sequential terminal `" +
+                modelTerm->getName().getString() + "`: " +
+                skippedIt->second.detail);
         abortPending = true;  // LCOV_EXCL_LINE
         break;  // LCOV_EXCL_LINE
       }
@@ -4755,26 +4664,10 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
 
 
 // LCOV_EXCL_STOP
-          if (ctx.abstractUncomputableSequentialBoundaries) {  // LCOV_EXCL_LINE
-            recordLateAbstractedInstanceBoundary(  // LCOV_EXCL_LINE
-                pending.boundaryInfoIndex,  // LCOV_EXCL_LINE
-                "unsupported sequential clock pin: " +  // LCOV_EXCL_LINE
-                    // LCOV_EXCL_START
-                    skippedIt->second.detail);  // LCOV_EXCL_LINE
-                    // LCOV_EXCL_STOP
-            abortPending = true;  // LCOV_EXCL_LINE
-            break;  // LCOV_EXCL_LINE
-          }
-
-          model.unsupportedReasons.push_back(  // LCOV_EXCL_LINE
-              "Unsupported sequential primitive for `" +  // LCOV_EXCL_LINE
-              signalKeyToString(pending.stateKey) +  // LCOV_EXCL_LINE
-              "`: Sequential clock pin is unsupported: " +  // LCOV_EXCL_LINE
-              skippedIt->second.detail);  // LCOV_EXCL_LINE
-          markUnsupportedState(pending.stateKey);  // LCOV_EXCL_LINE
-          for (const auto& complementedKey : pending.complementedStateKeys) {  // LCOV_EXCL_LINE
-            markUnsupportedState(complementedKey);  // LCOV_EXCL_LINE
-          }
+          markOpaqueState(
+              pending,
+              "unsupported sequential clock pin: " +
+                  skippedIt->second.detail);
           abortPending = true;  // LCOV_EXCL_LINE
           break;  // LCOV_EXCL_LINE
         }
@@ -4806,9 +4699,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
           termDNLID2varID,
           outputExprByTerm,
           clockEventByCarrierVarID);
-      // This diagnostic is intentionally after clock-carrier stripping: any
-      // remaining unpublished support would become a private proof input and
-      // can hide the real reason state matching stopped converging.
+      // This diagnostic is intentionally after clock-carrier stripping so any
+      // remaining unpublished support identifies an opaque cone precisely.
       logUnpublishedTransitionSupport(
           ctx,
           // LCOV_EXCL_START
@@ -4924,6 +4816,7 @@ void removeDeadFoldedClockGateLatchInputs(
     }
     eraseSignalKeyFromVector(model.environmentInputs, keyIt->second);
     eraseSignalKeyFromVector(model.internalBoundaryInputKeys, keyIt->second);
+    model.opaqueInternalInfoByKey.erase(keyIt->second);
     model.inputVarByKey.erase(keyIt->second);
   }
 }
@@ -5132,14 +5025,8 @@ void markMultiClockDomainConesAsSkipped(SequentialDesignModel& model) {
 }
 
 void applyRebuiltTransitionArtifacts(
-    const ExtractContext& ctx,
     const RebuiltTransitionArtifacts& artifacts,
-    SequentialDesignModel& model,
-    const std::vector<naja::DNL::DNLID>& builderInputs,
-    const std::vector<naja::DNL::DNLID>& builderOutputs,
-    const std::vector<size_t>& termDNLID2varID,
-    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
-    const std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>& skippedOutputsByTerm) {
+    SequentialDesignModel& model) {
   // The transition rebuild already closes the observed-output frontier while it
   // can still materialize missing next-state cones.  Pruning must reuse that
   // frontier instead of rewalking the whole BoolExpr model again; the latter is
@@ -5180,89 +5067,9 @@ void applyRebuiltTransitionArtifacts(
                        retainedStateKeys.end();
           }),
       model.complementedStateRelations.end());
-
-  for (const auto& key : artifacts.lateAbstractedBoundaryStateKeys) {
-    model.nextStateExprByStateKey.erase(key);  // LCOV_EXCL_LINE
-    model.initialStateValueByKey.erase(key);  // LCOV_EXCL_LINE
-    model.clockEventByStateKey.erase(key);  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-    if (std::find(model.environmentInputs.begin(), model.environmentInputs.end(), key) ==  // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        model.environmentInputs.end()) {  // LCOV_EXCL_LINE
-      model.environmentInputs.push_back(key);  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-    }  // LCOV_EXCL_LINE
-  }
-  // LCOV_EXCL_START
-  if (!artifacts.lateAbstractedBoundaryStateKeys.empty()) {
-    model.stateBits.erase(  // LCOV_EXCL_LINE
-        std::remove_if(  // LCOV_EXCL_LINE
-            model.stateBits.begin(),  // LCOV_EXCL_LINE
-            // LCOV_EXCL_STOP
-            model.stateBits.end(),  // LCOV_EXCL_LINE
-            [&](const SignalKey& key) {  // LCOV_EXCL_LINE
-              return artifacts.lateAbstractedBoundaryStateKeys.find(key) !=  // LCOV_EXCL_LINE
-                     artifacts.lateAbstractedBoundaryStateKeys.end();  // LCOV_EXCL_LINE
-            }),
-        model.stateBits.end());  // LCOV_EXCL_LINE
-    model.complementedStateRelations.erase(  // LCOV_EXCL_LINE
-        std::remove_if(  // LCOV_EXCL_LINE
-            model.complementedStateRelations.begin(),  // LCOV_EXCL_LINE
-            model.complementedStateRelations.end(),  // LCOV_EXCL_LINE
-            [&](const ComplementedStateRelation& relation) {  // LCOV_EXCL_LINE
-              return artifacts.lateAbstractedBoundaryStateKeys.find(relation.primaryKey) !=  // LCOV_EXCL_LINE
-                         artifacts.lateAbstractedBoundaryStateKeys.end() ||  // LCOV_EXCL_LINE
-                     artifacts.lateAbstractedBoundaryStateKeys.find(  // LCOV_EXCL_LINE
-                         relation.complementedKey) !=  // LCOV_EXCL_LINE
-                         artifacts.lateAbstractedBoundaryStateKeys.end();  // LCOV_EXCL_LINE
-            }),
-        model.complementedStateRelations.end());  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-
-  for (const auto& [_, key] : artifacts.lateAbstractedBoundaryObservedTerms) {
-    if (std::find(model.allObservedOutputs.begin(), model.allObservedOutputs.end(), key) ==  // LCOV_EXCL_LINE
-        model.allObservedOutputs.end()) {  // LCOV_EXCL_LINE
-      model.allObservedOutputs.push_back(key);  // LCOV_EXCL_LINE
-    }  // LCOV_EXCL_LINE
-  }
-  materializeBoundaryObservedOutputs(
-      artifacts.lateAbstractedBoundaryObservedTerms,
-      outputExprByTerm,
-      // LCOV_EXCL_START
-      skippedOutputsByTerm,
-      builderInputs,
-      // LCOV_EXCL_STOP
-      builderOutputs,
-      termDNLID2varID,
-      model);
 }
 
 void filterUnsupportedAndUnmappedBoundary(ExtractContext& ctx, SequentialDesignModel& model) {
-  {
-    // Any published leaf variable that is not retained as sequential state is a
-    // free SEC environment input, regardless of whether it originated from the
-    // top interface, an opaque internal boundary, or a later abstraction step.
-    // Compact SEC rebuilds the proof problem only from this normalized model,
-    // so leaving such leaves out of the environment interface causes remapped
-    // formulas to reference symbols that the shared proof symbol space never
-    // allocates.
-    std::unordered_set<SignalKey, SignalKeyHash> stateKeys(
-        model.stateBits.begin(), model.stateBits.end());
-    std::unordered_set<SignalKey, SignalKeyHash> publishedInputs(
-        model.environmentInputs.begin(), model.environmentInputs.end());
-    // LCOV_EXCL_START
-    for (const auto& [key, _] : model.inputVarByKey) {
-      if (stateKeys.find(key) != stateKeys.end()) {
-        continue;
-      }
-      if (publishedInputs.insert(key).second) {
-        model.environmentInputs.push_back(key);  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-    }
-  // LCOV_EXCL_START
-  }
-
   // Inputs or state bits can disappear if the underlying BoolExpr builder
   // optimized them away to constants; remove them from the aligned interface.
   auto keepMappedInputs = [&](std::vector<SignalKey>& keys) {
@@ -5277,39 +5084,6 @@ void filterUnsupportedAndUnmappedBoundary(ExtractContext& ctx, SequentialDesignM
   };
   keepMappedInputs(model.environmentInputs);
   keepMappedInputs(model.stateBits);
-  // LCOV_EXCL_STOP
-  if (!ctx.unsupportedStateBits.empty()) {
-    // LCOV_EXCL_START
-    model.stateBits.erase(  // LCOV_EXCL_LINE
-        std::remove_if(  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-            model.stateBits.begin(),  // LCOV_EXCL_LINE
-            model.stateBits.end(),  // LCOV_EXCL_LINE
-            [&](const SignalKey& key) {  // LCOV_EXCL_LINE
-              if (ctx.unsupportedStateBits.find(key) == ctx.unsupportedStateBits.end()) {  // LCOV_EXCL_LINE
-                return false;  // LCOV_EXCL_LINE
-              }
-              model.nextStateExprByStateKey.erase(key);  // LCOV_EXCL_LINE
-              model.initialStateValueByKey.erase(key);  // LCOV_EXCL_LINE
-              model.clockEventByStateKey.erase(key);  // LCOV_EXCL_LINE
-              model.inputVarByKey.erase(key);  // LCOV_EXCL_LINE
-              return true;  // LCOV_EXCL_LINE
-            }),  // LCOV_EXCL_LINE
-        model.stateBits.end());  // LCOV_EXCL_LINE
-    model.complementedStateRelations.erase(  // LCOV_EXCL_LINE
-        std::remove_if(  // LCOV_EXCL_LINE
-            model.complementedStateRelations.begin(),  // LCOV_EXCL_LINE
-            model.complementedStateRelations.end(),  // LCOV_EXCL_LINE
-            [&](const ComplementedStateRelation& relation) {  // LCOV_EXCL_LINE
-              return ctx.unsupportedStateBits.find(relation.primaryKey) !=  // LCOV_EXCL_LINE
-                         // LCOV_EXCL_START
-                         ctx.unsupportedStateBits.end() ||  // LCOV_EXCL_LINE
-                         // LCOV_EXCL_STOP
-                     ctx.unsupportedStateBits.find(relation.complementedKey) !=  // LCOV_EXCL_LINE
-                         ctx.unsupportedStateBits.end();  // LCOV_EXCL_LINE
-            }),
-        model.complementedStateRelations.end());  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
   if (ctx.secDiagEnabled) {
     fprintf(
         stderr,
@@ -5477,13 +5251,12 @@ void propagateConnectivitySkipsThroughDependencies(SequentialDesignModel& model)
       return std::nullopt;  // LCOV_EXCL_LINE
     // LCOV_EXCL_START
     }
-    return ConnectivitySkipInfo{
-        skipInfoIt->second.origin,
-        "Depends on skipped state `" + model.displayNameByKey.at(sourceKeyIt->second) +
-            "` whose cone traces to a " +
-            // LCOV_EXCL_STOP
-            describeConnectivitySkipOrigin(skipInfoIt->second.origin) + " issue",
-    };
+    ConnectivitySkipInfo dependencySkip = skipInfoIt->second;
+    dependencySkip.detail =
+        "Depends on skipped state `" +
+        model.displayNameByKey.at(sourceKeyIt->second) + "`: " +
+        skipInfoIt->second.detail;
+    return dependencySkip;
   };
 
   while (!pendingSkippedStateVars.empty()) {
@@ -5570,7 +5343,8 @@ void markFormulasWithUnpublishedSupportAsSkipped(  // LCOV_EXCL_LINE
     }
     if (const auto varID =  // LCOV_EXCL_LINE
             findFirstUnpublishedSupportVar(expr, isPublishedVar, scratch)) {  // LCOV_EXCL_LINE
-      model.connectivitySkipInfoByKey.emplace(key, makeUnpublishedSupportSkip(*varID));  // LCOV_EXCL_LINE
+      model.connectivitySkipInfoByKey.emplace(
+          key, makeUnpublishedSupportSkip(model, *varID));  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
       ++skippedStates;  // LCOV_EXCL_LINE
       // LCOV_EXCL_START
@@ -5599,7 +5373,8 @@ void markFormulasWithUnpublishedSupportAsSkipped(  // LCOV_EXCL_LINE
     }
     if (const auto varID =  // LCOV_EXCL_LINE
             findFirstUnpublishedSupportVar(expr, isPublishedVar, scratch)) {  // LCOV_EXCL_LINE
-      model.connectivitySkipInfoByKey.emplace(key, makeUnpublishedSupportSkip(*varID));  // LCOV_EXCL_LINE
+      model.connectivitySkipInfoByKey.emplace(
+          key, makeUnpublishedSupportSkip(model, *varID));  // LCOV_EXCL_LINE
       ++skippedOutputs;  // LCOV_EXCL_LINE
       if (ctx.secDiagEnabled) {  // LCOV_EXCL_LINE
         fprintf(  // LCOV_EXCL_LINE
@@ -5658,6 +5433,13 @@ void partitionCoveredSignals(SequentialDesignModel& model) {
   }
 }
 
+void discardOpaqueInternalVariables(SequentialDesignModel& model) {
+  for (const auto& [key, _] : model.opaqueInternalInfoByKey) {
+    eraseSignalKeyFromVector(model.environmentInputs, key);
+    model.inputVarByKey.erase(key);
+  }
+}
+
 void validateExtractedModel(SequentialDesignModel& model) {
   // Missing formulas mean we do not have a sound SEC model, so report the
   // design as unsupported instead of continuing with partial information.
@@ -5695,11 +5477,10 @@ void logExtractedModelDebugSummary(const ExtractContext& ctx,
   }
   fprintf(
       stderr,
-      "SEC diag: extract(%s) structured_memories=%zu structured_memory_cells=%zu abstracted_seq_boundaries=%zu opaque_inputs=%zu opaque_outputs=%zu\n",
+      "SEC diag: extract(%s) structured_memories=%zu structured_memory_cells=%zu opaque_inputs=%zu opaque_outputs=%zu\n",
       ctx.topName.c_str(),
       ctx.pendingMemoryInstances.size(),
       structuredMemoryCellCount,
-      model.abstractedSequentialBoundaries.size(),
       model.internalBoundaryInputKeys.size(),
       model.internalBoundaryOutputKeys.size());
 
@@ -5777,8 +5558,6 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       .previousTop = universe->getTopDesign(),
       .topName = top->getName().getString(),
       .secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr,
-      .abstractUncomputableSequentialBoundaries =
-          KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary(),
   };
   ctx.builder.setRetainDnl(true);
 
@@ -5811,10 +5590,9 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     return model;
   }
 
-  // Phase 2: build the initial boundary formulas for real top outputs plus any
-  // already abstracted boundary terms, then publish the normalized SEC
-  // interface and variable map.
-  buildInitialObservedOutputClouds(ctx, model);
+  // Phase 2: build top-output formulas, stopping at the temporary internal
+  // frontiers identified during collection, then publish the SEC interface.
+  buildInitialObservedOutputClouds(ctx);
   publishNormalizedBoundary(ctx, model);
 
   std::vector<naja::DNL::DNLID> builderInputs = ctx.builder.getInputs();
@@ -5864,14 +5642,6 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   // Phase 3: materialize the observed output formulas that SEC will actually
   // compare, classifying anything missing as either a skippable connectivity
   // gap or a hard unsupported boundary.
-  materializeBoundaryObservedOutputs(
-      ctx.abstractedBoundaryObservedTerms,
-      outputExprByTerm,
-      skippedOutputsByTerm,
-      builderInputs,
-      builderOutputs,
-      termDNLID2varID,
-      model);
   materializeTopObservedOutputs(
       ctx.topOutputKeyByTerm, outputExprByTerm, skippedOutputsByTerm, model);
   if (ctx.secDiagEnabled) {
@@ -5895,9 +5665,8 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
         skippedOutputsByTerm);
   }
 
-  // Phase 4: rebuild the next-state relations for just the state that is still
-  // relevant to covered outputs, then fold any late boundary abstractions back
-  // into the published interface.
+  // Phase 4: rebuild the next-state relations for state that can influence a
+  // requested top output.
   const auto rebuiltArtifacts = rebuildRequiredStateTransitions(
       ctx,
       model,
@@ -5908,30 +5677,18 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       termDNLID2varID,
       outputExprByTerm,
       skippedOutputsByTerm);
-  applyRebuiltTransitionArtifacts(
-      ctx,
-      rebuiltArtifacts,
-      model,
-      builderInputs,
-      builderOutputs,
-      termDNLID2varID,
-      outputExprByTerm,
-      skippedOutputsByTerm);
+  applyRebuiltTransitionArtifacts(rebuiltArtifacts, model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 
-  // Phase 5: propagate connectivity skips through dependent state/output cones,
-  // then partition the final interface into covered vs skipped signals.  The
-  // proof remapper treats any remaining unpublished internal support as a
-  // design-private free input, so normal SEC extraction should not skip an
-  // otherwise covered top output just because a memory/opaque internal leaf was
-  // not part of the public state/environment interface.
-  if (std::getenv("KEPLER_SEC_STRICT_UNPUBLISHED_SUPPORT") != nullptr) {
-    markFormulasWithUnpublishedSupportAsSkipped(ctx, model);  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
+  // Phase 5: any remaining unpublished support is an opaque internal frontier.
+  // Skip every dependent top output; never promote that frontier to a proof
+  // input or invent a design-local replacement symbol.
+  markFormulasWithUnpublishedSupportAsSkipped(ctx, model);
   propagateConnectivitySkipsThroughDependencies(model);
   partitionCoveredSignals(model);
+  discardOpaqueInternalVariables(model);
 
   logExtractedModelDebugSummary(ctx, model);
 

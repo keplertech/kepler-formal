@@ -39,21 +39,12 @@ public:
     return reportSkippedPOs_;
   }
 
-  static void setSecTreatUncomputableSeqAsBoundary(bool enabled) {
-    secTreatUncomputableSeqAsBoundary_ = enabled;
-  }
-
-  static bool getSecTreatUncomputableSeqAsBoundary() {  // LCOV_EXCL_LINE
-    return secTreatUncomputableSeqAsBoundary_;  // LCOV_EXCL_LINE
-  }
-
 private:
   Config() = default;
   ~Config() = default;
 
   inline static SolverType solverType_ = KISSAT;
   inline static bool reportSkippedPOs_ = false;
-  inline static bool secTreatUncomputableSeqAsBoundary_ = true;
 };
 
 } // namespace kepler

@@ -336,11 +336,27 @@ std::string describeConnectivitySkipOrigin(ConnectivitySkipOrigin origin) {
       return "logical-loop";
     case ConnectivitySkipOrigin::MultiClockDomain:
       return "multi-clock-domain";
+    case ConnectivitySkipOrigin::OpaqueInternal:
+      return "opaque-internal";
   }
   return "connectivity";  // LCOV_EXCL_LINE
 }
 
 std::string describeConnectivitySkipInfo(const ConnectivitySkipInfo& info) {
+  if (info.origin == ConnectivitySkipOrigin::OpaqueInternal) {
+    if (info.opaqueInternal.has_value()) {
+      const auto& opaque = *info.opaqueInternal;
+      std::ostringstream oss;
+      oss << describeConnectivitySkipOrigin(info.origin)
+          << ": opaque internal cell `" << opaque.instance << "`";
+      if (!opaque.model.empty()) {
+        oss << " (model `" << opaque.model << "`)";
+      }
+      oss << " pin `" << opaque.pin << "`: " << opaque.reason;
+      return oss.str();
+    }
+    return describeConnectivitySkipOrigin(info.origin) + ": " + info.detail;
+  }
   std::ostringstream oss;
   oss << describeConnectivitySkipOrigin(info.origin) << " connectivity: "
       << info.detail;
@@ -367,6 +383,7 @@ struct OutputCoverageSelection {
   std::vector<std::string> skippedOutputs;
   std::vector<std::string> resetUnanchoredSkippedOutputs;
   std::vector<std::string> multiClockDomainSkippedOutputs;
+  std::vector<std::string> opaqueCellSkippedOutputs;
   size_t totalOutputs = 0;
 };
 
@@ -400,29 +417,14 @@ struct DualRailStateSymbolMaps {
   std::unordered_map<size_t, DualRailSymbolPair> localState1BySymbol;
 };
 
-size_t privateSupportSymbol(
-    size_t designIndex,
-    size_t localSymbol,
-    std::unordered_map<size_t, size_t>& symbolMap,
-    KInductionProblem& problem,
-    size_t& nextSymbol);
-
 // LCOV_EXCL_START
 class SecDualRailVariableMapper final : public DualRailVariableMapper {
  public:
   SecDualRailVariableMapper(
-      size_t designIndex,
       const std::unordered_map<size_t, DualRailSymbolPair>& stateRails,
       // LCOV_EXCL_STOP
-      std::unordered_map<size_t, size_t>& binarySymbolMap,
-      KInductionProblem& problem,
-      size_t& nextSymbol)
-      : designIndex_(designIndex),
-        stateRails_(stateRails),
-        binarySymbolMap_(binarySymbolMap),
-        problem_(problem),
-        // LCOV_EXCL_START
-        nextSymbol_(nextSymbol) {}
+      const std::unordered_map<size_t, size_t>& binarySymbolMap)
+      : stateRails_(stateRails), binarySymbolMap_(binarySymbolMap) {}
 
 
 // LCOV_EXCL_STOP
@@ -444,27 +446,20 @@ class SecDualRailVariableMapper final : public DualRailVariableMapper {
                        BoolExpr::createFalse(), BoolExpr::createTrue()};  // LCOV_EXCL_LINE
     }
 
-    size_t binarySymbol = 0;
-    // LCOV_EXCL_START
     if (const auto mappedIt = binarySymbolMap_.find(symbol);
-    // LCOV_EXCL_STOP
         mappedIt != binarySymbolMap_.end()) {
-      binarySymbol = mappedIt->second;
-    } else {
-      binarySymbol = privateSupportSymbol(  // LCOV_EXCL_LINE
-          designIndex_, symbol, binarySymbolMap_, problem_, nextSymbol_);  // LCOV_EXCL_LINE
+      return DualRailBoolExpr{
+          BoolExpr::Var(mappedIt->second),
+          BoolExpr::Not(BoolExpr::Var(mappedIt->second))};
     }
-    return DualRailBoolExpr{
-        BoolExpr::Var(binarySymbol),
-        BoolExpr::Not(BoolExpr::Var(binarySymbol))};
+    throw std::runtime_error(
+        "SEC formula contains unpublished internal support v" +
+        std::to_string(symbol));
   }
 
  private:
-  size_t designIndex_ = 0;
   const std::unordered_map<size_t, DualRailSymbolPair>& stateRails_;
-  std::unordered_map<size_t, size_t>& binarySymbolMap_;
-  KInductionProblem& problem_;
-  size_t& nextSymbol_;
+  const std::unordered_map<size_t, size_t>& binarySymbolMap_;
 };
 
 struct ScopedDnlContext {
@@ -923,8 +918,8 @@ OutputCoverageSelection selectCoveredObservedOutputs(
     const AlignedSignals& allObservedOutputs,
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1) {
-  // Connectivity skips are the only SEC skips we allow here. Unsupported
-  // primitive semantics should already have stopped extraction earlier.
+  // Extraction records both connectivity failures and opaque internal
+  // frontiers as per-output skips before interface alignment.
   OutputCoverageSelection selection;
   selection.totalOutputs = allObservedOutputs.names.size();
   selection.checkedOutputs.names.reserve(allObservedOutputs.names.size());
@@ -959,6 +954,14 @@ OutputCoverageSelection selectCoveredObservedOutputs(
       if (skippedByMultiClockDomain) {
         selection.multiClockDomainSkippedOutputs.push_back(skippedOutput);
       }
+      const bool skippedByOpaqueCell =
+          (skip0 != model0.connectivitySkipInfoByKey.end() &&
+           skip0->second.origin == ConnectivitySkipOrigin::OpaqueInternal) ||
+          (skip1 != model1.connectivitySkipInfoByKey.end() &&
+           skip1->second.origin == ConnectivitySkipOrigin::OpaqueInternal);
+      if (skippedByOpaqueCell) {
+        selection.opaqueCellSkippedOutputs.push_back(skippedOutput);
+      }
       continue;
     }
 
@@ -986,7 +989,6 @@ SequentialEquivalenceResult makeSecResult(
     std::string reason,
     // LCOV_EXCL_STOP
     const OutputCoverageSelection& coverage,
-    std::vector<std::string> abstractedSequentialBoundaries = {},
     std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports = {}) {
   SequentialEquivalenceResult result;
   result.status = status;
@@ -1008,8 +1010,7 @@ SequentialEquivalenceResult makeSecResult(
       // LCOV_EXCL_STOP
   result.multiClockDomainSkippedOutputs =
       coverage.multiClockDomainSkippedOutputs;
-  result.abstractedSequentialBoundaries =
-      std::move(abstractedSequentialBoundaries);
+  result.opaqueCellSkippedOutputs = coverage.opaqueCellSkippedOutputs;
   result.extractedBoundaryReports = std::move(extractedBoundaryReports);
   return result;
 }
@@ -1561,7 +1562,6 @@ bool findAndRecordDualRailResidualCounterexample(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports,
     DualRailResidualEngine engine,
     DualRailResidualProofState& proofState);
@@ -1678,7 +1678,6 @@ void recordDualRailResidualCounterexample(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports,
     DualRailResidualProofState& proofState) {
   KInductionResult witnessResult{
@@ -1688,7 +1687,6 @@ void recordDualRailResidualCounterexample(
       witnessResult.bound,
       formatCounterexampleWitness(witnessResult, model0, model1, top0, top1),
       outputCoverage,
-      abstractedSequentialBoundaries,
       extractedBoundaryReports);
 }
 
@@ -1702,7 +1700,6 @@ void proveDualRailResidualOutputSet(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports,
     DualRailResidualEngine engine,
     bool runCounterexampleSweep,
@@ -1725,7 +1722,6 @@ void proveDualRailResidualOutputSet(
           top0, // LCOV_EXCL_LINE
           top1, // LCOV_EXCL_LINE
           outputCoverage, // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries, // LCOV_EXCL_LINE
           extractedBoundaryReports, // LCOV_EXCL_LINE
           engine, // LCOV_EXCL_LINE
           proofState)) { // LCOV_EXCL_LINE
@@ -1763,7 +1759,6 @@ void proveDualRailResidualOutputSet(
             formatCounterexampleWitness(  // LCOV_EXCL_LINE
                 witnessResult, model0, model1, top0, top1),  // LCOV_EXCL_LINE
             outputCoverage,  // LCOV_EXCL_LINE
-            abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
             extractedBoundaryReports);  // LCOV_EXCL_LINE
         return;
       }  // LCOV_EXCL_LINE
@@ -1791,7 +1786,6 @@ void proveDualRailResidualOutputSet(
               : "Classic k-induction found a counterexample at k = " +  // LCOV_EXCL_LINE
                     std::to_string(result.bound),  // LCOV_EXCL_LINE
           outputCoverage,  // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
           extractedBoundaryReports);  // LCOV_EXCL_LINE
       return;  // LCOV_EXCL_LINE
     }
@@ -1811,7 +1805,6 @@ void proveDualRailResidualOutputSet(
         top0,
         top1,
         outputCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports,
         engine,
         runCounterexampleSweep,
@@ -1826,7 +1819,6 @@ void proveDualRailResidualOutputSet(
         top0,
         top1,
         outputCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports,
         engine,
         runCounterexampleSweep,
@@ -1847,7 +1839,6 @@ bool findAndRecordDualRailResidualCounterexample(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports,
     DualRailResidualEngine engine,
     DualRailResidualProofState& proofState) {
@@ -1870,7 +1861,6 @@ bool findAndRecordDualRailResidualCounterexample(
         top0, // LCOV_EXCL_LINE
         top1, // LCOV_EXCL_LINE
         outputCoverage, // LCOV_EXCL_LINE
-        abstractedSequentialBoundaries, // LCOV_EXCL_LINE
         extractedBoundaryReports, // LCOV_EXCL_LINE
         proofState); // LCOV_EXCL_LINE
     return true; // LCOV_EXCL_LINE
@@ -1887,7 +1877,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports,
     DualRailResidualEngine engine) {
   if (!problem.usesDualRailStateEncoding ||
@@ -1920,7 +1909,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
           0,
           "Dual-rail output skips left no selected-engine obligation",  // LCOV_EXCL_LINE
           partialCoverage,
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
           extractedBoundaryReports);  // LCOV_EXCL_LINE
     }  // LCOV_EXCL_LINE
     return std::nullopt; // LCOV_EXCL_LINE
@@ -1940,7 +1928,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
         top0,
         top1,
         outputCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports,
         proofState);
     return proofState.terminalResult;
@@ -1965,7 +1952,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
         0,
         "Dual-rail residual surface exceeded selected-engine proof limits", // LCOV_EXCL_LINE
         partialCoverage,
-        abstractedSequentialBoundaries, // LCOV_EXCL_LINE
         extractedBoundaryReports); // LCOV_EXCL_LINE
   } // LCOV_EXCL_LINE
 
@@ -1980,7 +1966,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
           top0,
           top1,
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports,
           engine,
           proofState)) {
@@ -2009,7 +1994,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
         // LCOV_DISABLED_START
         outputCoverage,
         // LCOV_DISABLED_STOP
-        abstractedSequentialBoundaries,
         extractedBoundaryReports,
         engine,
         /*runCounterexampleSweep=*/false,
@@ -2033,7 +2017,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
             dualRailResidualEngineName(engine) +
             " did not prove any output",
         finalCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
 
@@ -2046,7 +2029,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
             std::to_string(proofState.coveredOutputs.size()) +
             " observed outputs; remaining outputs are inconclusive",
         finalCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
 
@@ -2055,7 +2037,6 @@ std::optional<SequentialEquivalenceResult> proveDualRailResidualsWithSelectedEng
       proofState.provedBound,
       "",
       finalCoverage,
-      abstractedSequentialBoundaries,
       extractedBoundaryReports);
 }
 
@@ -2072,19 +2053,6 @@ OutputBatchingLimits dualRailPdrOutputBatchingLimits(
       "KEPLER_SEC_DUAL_RAIL_OUTPUT_BATCH_SUPPORT_LIMIT",
       defaultLimits.outputBatchSupportLimit);
   return defaultLimits;
-}
-
-void appendAbstractedSequentialBoundaries(
-    const SequentialDesignModel& model,
-    const char* designPrefix,
-    std::vector<std::string>& abstractedSequentialBoundaries) {
-  abstractedSequentialBoundaries.reserve(
-      abstractedSequentialBoundaries.size() +
-      model.abstractedSequentialBoundaries.size());
-  for (const auto& description : model.abstractedSequentialBoundaries) {
-    abstractedSequentialBoundaries.push_back(
-        std::string(designPrefix) + " " + description);
-  }
 }
 
 void appendExtractedBoundaryReports(
@@ -2110,11 +2078,9 @@ void appendExtractedBoundaryReports(
     appendUniqueRole(entry.roles, role);
   };
 
-  // Boundary terms are the full exposed SEC cut surface:
+  // Boundary terms describe the extraction surface for diagnostics:
   // - the original top interface
-  // - opaque internal cut points from leaves SEC cannot model combinationally
-  //   and does not recognize as sequential
-  // - the interface exposed when an uncomputable sequential is abstracted
+  // - opaque internal frontiers that SEC did not expose as proof inputs
   for (const auto& key : model.topInputKeys) {
     addRole(key, "top_input");
   }
@@ -2127,15 +2093,6 @@ void appendExtractedBoundaryReports(
   for (const auto& key : model.internalBoundaryOutputKeys) {
     addRole(key, "opaque_internal_output");
   }
-  for (const auto& detail : model.abstractedSequentialBoundaryDetails) {
-    for (const auto& key : detail.stateKeys) {
-      addRole(key, "abstracted_sequential_state");
-    }
-    for (const auto& key : detail.observedKeys) {
-      addRole(key, "abstracted_sequential_observed");
-    }
-  }
-
   reports.reserve(reports.size() + reportsBySignal.size());
   for (auto& [_, entry] : reportsBySignal) {
     reports.push_back(std::move(entry));
@@ -2269,34 +2226,10 @@ size_t nextUnusedProofSymbol(const KInductionProblem& problem) {
   return nextSymbol;
 }
 
-size_t privateSupportSymbol(
-    size_t designIndex,
-    size_t localSymbol,
-    std::unordered_map<size_t, size_t>& symbolMap,
-    KInductionProblem& problem,
-    size_t& nextSymbol) {
-  const auto existingIt = symbolMap.find(localSymbol);
-  if (existingIt != symbolMap.end()) {
-    return existingIt->second;
-  }
-
-  const size_t privateSymbol = nextSymbol++;
-  symbolMap.emplace(localSymbol, privateSymbol);
-  problem.allSymbols.push_back(privateSymbol);
-  problem.inputSymbols.push_back(privateSymbol);
-  problem.environmentInputNames.push_back(
-      "$private_d" + std::to_string(designIndex) + "_v" +
-      std::to_string(localSymbol));
-  return privateSymbol;
-}
-
-BoolExpr* remapSecFormulaWithPrivateSupport(
+BoolExpr* remapSecFormulaStrict(
     BoolExpr* root,
-    size_t designIndex,
-    std::unordered_map<size_t, size_t>& symbolMap,
-    std::unordered_map<BoolExpr*, BoolExpr*>& memo,
-    KInductionProblem& problem,
-    size_t& nextSymbol) {
+    const std::unordered_map<size_t, size_t>& symbolMap,
+    std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
   if (root == nullptr) {
     return nullptr;  // LCOV_EXCL_LINE
   }
@@ -2309,17 +2242,9 @@ BoolExpr* remapSecFormulaWithPrivateSupport(
     bool visited = false;
   };
 
-  // LCOV_DISABLED_START
-  // Internal support left after compact extraction is a design-local free
-  // input, not a name-aligned SEC assumption.  Allocate private proof symbols
-  // LCOV_DISABLED_STOP
-  // on demand while preserving the same iterative DAG remap used by
-  // LCOV_DISABLED_START
-  // BoolExprUtils for large gate-level cones.
   std::vector<StackFrame> stack;
   stack.push_back({root, false});
   while (!stack.empty()) {
-  // LCOV_DISABLED_STOP
     const StackFrame current = stack.back();
     stack.pop_back();
     BoolExpr* node = current.expr;
@@ -2329,9 +2254,13 @@ BoolExpr* remapSecFormulaWithPrivateSupport(
 
     if (node->getOp() == Op::VAR) {
       const size_t id = node->getId();
-      const size_t mapped =
-          id < 2 ? id : privateSupportSymbol(
-                            designIndex, id, symbolMap, problem, nextSymbol);
+      const auto mappedIt = symbolMap.find(id);
+      if (id >= 2 && mappedIt == symbolMap.end()) {
+        throw std::runtime_error(
+            "SEC formula contains unpublished internal support v" +
+            std::to_string(id));
+      }
+      const size_t mapped = id < 2 ? id : mappedIt->second;
       memo.emplace(node, BoolExpr::Var(mapped));
       continue;
     }
@@ -2385,25 +2314,17 @@ RemappedSecExpressions remapSecExpressions(
   RemappedSecExpressions remapped;
   std::unordered_map<BoolExpr*, BoolExpr*> remapMemo0;
   std::unordered_map<BoolExpr*, BoolExpr*> remapMemo1;
-  size_t nextPrivateSymbol = nextUnusedProofSymbol(problem);
-
   for (size_t i = 0; i < alignedOutputs.names.size(); ++i) {
     const auto& key0 = alignedOutputs.keys0[i];
     const auto& key1 = alignedOutputs.keys1[i];
-    const auto remappedOutput0 = remapSecFormulaWithPrivateSupport(
+    const auto remappedOutput0 = remapSecFormulaStrict(
         model0.observedOutputExprByKey.at(key0),
-        /*designIndex=*/0,
         symbolSpace.localToCombined0,
-        remapMemo0,
-        problem,
-        nextPrivateSymbol);
-    const auto remappedOutput1 = remapSecFormulaWithPrivateSupport(
+        remapMemo0);
+    const auto remappedOutput1 = remapSecFormulaStrict(
         model1.observedOutputExprByKey.at(key1),
-        /*designIndex=*/1,
         symbolSpace.localToCombined1,
-        remapMemo1,
-        problem,
-        nextPrivateSymbol);
+        remapMemo1);
     problem.observedOutputExprs0.push_back(remappedOutput0);
     problem.observedOutputExprs1.push_back(remappedOutput1);
   }
@@ -2413,24 +2334,18 @@ RemappedSecExpressions remapSecExpressions(
     for (const auto& key : model0.stateBits) {
       remapped.next0.emplace(
           key,
-          remapSecFormulaWithPrivateSupport(
+          remapSecFormulaStrict(
               model0.nextStateExprByStateKey.at(key),
-              /*designIndex=*/0,
               symbolSpace.localToCombined0,
-              remapMemo0,
-              problem,
-              nextPrivateSymbol));
+              remapMemo0));
     }
     for (const auto& key : model1.stateBits) {
       remapped.next1.emplace(
           key,
-          remapSecFormulaWithPrivateSupport(
+          remapSecFormulaStrict(
               model1.nextStateExprByStateKey.at(key),
-              /*designIndex=*/1,
               symbolSpace.localToCombined1,
-              remapMemo1,
-              problem,
-              nextPrivateSymbol));
+              remapMemo1));
     }
     logSecDiagLine(secDiagEnabled, "SEC diag: remapped next-state formulas");
   } else {
@@ -2878,20 +2793,11 @@ KInductionProblem buildDualRailSecProblem(
 // LCOV_DISABLED_START
 
   SecDualRailVariableMapper mapper0(
-      0,
       railMaps.localState0BySymbol,
-      symbolSpace.localToCombined0,
-      // LCOV_DISABLED_STOP
-      problem,
-      // LCOV_DISABLED_START
-      nextSymbol);
-      // LCOV_DISABLED_STOP
+      symbolSpace.localToCombined0);
   SecDualRailVariableMapper mapper1(
-      1,
       railMaps.localState1BySymbol,
-      symbolSpace.localToCombined1,
-      problem,
-      nextSymbol);
+      symbolSpace.localToCombined1);
   std::unordered_map<BoolExpr*, DualRailBoolExpr> memo0;
   std::unordered_map<BoolExpr*, DualRailBoolExpr> memo1;
 
@@ -3070,7 +2976,6 @@ SequentialEquivalenceResult runPdrSecEngine(
     // LCOV_DISABLED_STOP
     const OutputCoverageSelection& outputCoverage,
     // LCOV_DISABLED_START
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
 // LCOV_DISABLED_STOP
   const std::vector<size_t> dualRailEngineOutputIndices =
@@ -3100,7 +3005,6 @@ SequentialEquivalenceResult runPdrSecEngine(
         0,
         "Dual-rail PDR has no selected-engine output obligation to prove", // LCOV_EXCL_LINE
         partialCoverage,
-        abstractedSequentialBoundaries, // LCOV_EXCL_LINE
         extractedBoundaryReports); // LCOV_EXCL_LINE
   } // LCOV_EXCL_LINE
 
@@ -3215,7 +3119,6 @@ SequentialEquivalenceResult runPdrSecEngine(
             "Exact PDR found a defined-value counterexample at k = " +
                 std::to_string(pdrResult.bound),
             outputCoverage,
-            abstractedSequentialBoundaries,
             extractedBoundaryReports);
       case PDRStatus::Inconclusive:
       default:
@@ -3271,7 +3174,6 @@ SequentialEquivalenceResult runPdrSecEngine(
               ? "Exact dual-rail PDR did not prove any observed output"
               : "Exact PDR did not prove any observed output",
           noProofCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     }
     if (coveredOutputCount != pdrCoveredOutputs.size()) {
@@ -3285,7 +3187,6 @@ SequentialEquivalenceResult runPdrSecEngine(
               std::to_string(pdrCoveredOutputs.size()) +
               " observed outputs; remaining outputs are inconclusive",
           finalCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     }
     return makeSecResult(
@@ -3293,7 +3194,6 @@ SequentialEquivalenceResult runPdrSecEngine(
         provedBound,
         "",
         finalCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
 
@@ -3308,7 +3208,6 @@ SequentialEquivalenceResult runKInductionSecEngine(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
   if (auto dualRailResult = proveDualRailResidualsWithSelectedEngine(
           problem,
@@ -3319,7 +3218,6 @@ SequentialEquivalenceResult runKInductionSecEngine(
           top0,
           top1,
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports,
           DualRailResidualEngine::KInduction);
       dualRailResult.has_value()) {
@@ -3335,7 +3233,6 @@ SequentialEquivalenceResult runKInductionSecEngine(
           result.bound,
           "",
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     case KInductionStatus::Different:
       return makeSecResult(
@@ -3346,7 +3243,6 @@ SequentialEquivalenceResult runKInductionSecEngine(
               : "Classic k-induction found a counterexample at k = " +  // LCOV_EXCL_LINE
                     std::to_string(result.bound),  // LCOV_EXCL_LINE
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     case KInductionStatus::Inconclusive:  // LCOV_EXCL_LINE
     default:
@@ -3357,7 +3253,6 @@ SequentialEquivalenceResult runKInductionSecEngine(
           result.bound,  // LCOV_EXCL_LINE
           "Reached max_k without a proof or counterexample",  // LCOV_EXCL_LINE
           outputCoverage,  // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
           extractedBoundaryReports);  // LCOV_EXCL_LINE
   }
 }
@@ -3366,7 +3261,6 @@ SequentialEquivalenceResult finishDualRailImcProof(
     const KInductionProblem& problem,
     const IMCResult& guardedResult,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
   DualRailResidualProofState proofState;
   proofState.coveredOutputs.assign(
@@ -3433,7 +3327,6 @@ SequentialEquivalenceResult finishDualRailImcProof(
       proofState.provedBound,
       std::move(reason),
       finalCoverage,
-      abstractedSequentialBoundaries,
       extractedBoundaryReports);
   setExactSecEngineProofProgress(
       secResult, problem, "IMC", proofState.coveredOutputs);
@@ -3449,7 +3342,6 @@ SequentialEquivalenceResult runImcSecEngine(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
   // IMC must remain an interpolation-based engine.  Do not route dual-rail
   // residuals through the KI residual helper before the IMC engine runs.
@@ -3461,7 +3353,6 @@ SequentialEquivalenceResult runImcSecEngine(
         problem,
         result,
         outputCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
   switch (result.status) {
@@ -3473,7 +3364,6 @@ SequentialEquivalenceResult runImcSecEngine(
           result.bound,
           "",
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
       setSecEngineProofProgress(
           secResult, problem, "IMC", problem.observedOutputExprs0.size());
@@ -3490,7 +3380,6 @@ SequentialEquivalenceResult runImcSecEngine(
               : "IMC found a counterexample at k = " +  // LCOV_EXCL_LINE
                     std::to_string(result.bound),  // LCOV_EXCL_LINE
           outputCoverage,  // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
           extractedBoundaryReports);  // LCOV_EXCL_LINE
     }  // LCOV_EXCL_LINE
     case IMCStatus::Inconclusive:  // LCOV_EXCL_LINE
@@ -3512,7 +3401,6 @@ SequentialEquivalenceResult runImcSecEngine(
           result.bound,  // LCOV_EXCL_LINE
           "Reached max_k without a proof or counterexample",  // LCOV_EXCL_LINE
           outputCoverage,  // LCOV_EXCL_LINE
-          abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
           extractedBoundaryReports);  // LCOV_EXCL_LINE
       if (result.firstUnprovenOutput.has_value()) {  // LCOV_EXCL_LINE
         setSecEngineProofProgress(  // LCOV_EXCL_LINE
@@ -3533,7 +3421,6 @@ SequentialEquivalenceResult runSelectedSecEngine(
     naja::NL::SNLDesign* top0,
     naja::NL::SNLDesign* top1,
     const OutputCoverageSelection& outputCoverage,
-    const std::vector<std::string>& abstractedSequentialBoundaries,
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
   switch (secEngine) {
     case SecEngine::Pdr:
@@ -3546,7 +3433,6 @@ SequentialEquivalenceResult runSelectedSecEngine(
           top0,
           top1,
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     case SecEngine::KInduction:
       return runKInductionSecEngine(
@@ -3558,7 +3444,6 @@ SequentialEquivalenceResult runSelectedSecEngine(
           top0,
           top1,
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     case SecEngine::Imc:
       return runImcSecEngine(
@@ -3570,7 +3455,6 @@ SequentialEquivalenceResult runSelectedSecEngine(
           top0,
           top1,
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
     default:
       // Defensive fallback for corrupted enum values; public parsing rejects
@@ -3585,7 +3469,6 @@ SequentialEquivalenceResult runSelectedSecEngine(
           top0,
           top1,
           outputCoverage,
-          abstractedSequentialBoundaries,
           extractedBoundaryReports);
       // LCOV_EXCL_STOP
   }
@@ -3700,17 +3583,13 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   const auto model0 =
       extractSecDesign(top0_, "SEC diag: extracted design0", secDiagEnabled);
   if (model0.hasUnsupportedFeatures()) {
-    std::vector<std::string> abstractedSequentialBoundaries;
     std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
-    appendAbstractedSequentialBoundaries(
-        model0, "design0", abstractedSequentialBoundaries);
     appendExtractedBoundaryReports(model0, "design0", extractedBoundaryReports);
     return makeSecResult(
         SequentialEquivalenceStatus::Unsupported,
         0,
         joinReasons(model0.unsupportedReasons),
         OutputCoverageSelection{},
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
 
@@ -3729,10 +3608,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   // Compact SEC can release the elaborated Naja DBs after extraction and run
   // entirely from these value-type models. Rebuilding the boundary summaries
   // here keeps normal and compact flows reporting the same coverage details.
-  std::vector<std::string> abstractedSequentialBoundaries;
   std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
-  appendAbstractedSequentialBoundaries(
-      model0, "design0", abstractedSequentialBoundaries);
   appendExtractedBoundaryReports(model0, "design0", extractedBoundaryReports);
   if (model0.hasUnsupportedFeatures()) {
     return makeSecResult(
@@ -3740,11 +3616,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         0,
         joinReasons(model0.unsupportedReasons),
         OutputCoverageSelection{},
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
-  appendAbstractedSequentialBoundaries(
-      model1, "design1", abstractedSequentialBoundaries);
   appendExtractedBoundaryReports(model1, "design1", extractedBoundaryReports);
   if (model1.hasUnsupportedFeatures()) {
     return makeSecResult(
@@ -3752,7 +3625,6 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         0,
         joinReasons(model1.unsupportedReasons),
         OutputCoverageSelection{},
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
 
@@ -3768,10 +3640,9 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     return makeSecResult(
         SequentialEquivalenceStatus::Unsupported,
         0,
-        "No aligned observed outputs remain after skipping cones with no-driver, "
-        "multi-driver, or logical-loop connectivity.",
+        "No aligned observed outputs remain after skipping unverifiable cones, "
+        "including opaque internal cells and connectivity failures.",
         aligned.outputCoverage,
-        abstractedSequentialBoundaries,
         extractedBoundaryReports);
   }
 
@@ -3820,7 +3691,6 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         "No aligned observed outputs remain after skipping cones that depend "  // LCOV_EXCL_LINE
         "on reset-unanchored internal state.",
         aligned.outputCoverage,  // LCOV_EXCL_LINE
-        abstractedSequentialBoundaries,  // LCOV_EXCL_LINE
         extractedBoundaryReports);  // LCOV_EXCL_LINE
   }
   // KI and PDR both work on small COI slices of a potentially huge SEC
@@ -3890,7 +3760,6 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       top0_,
       top1_,
       aligned.outputCoverage,
-      abstractedSequentialBoundaries,
       extractedBoundaryReports);
 }
 

@@ -56,6 +56,8 @@ static const char* kSkippedResetUnanchoredPOReport =
     "skipped_reset_unanchored_pos.txt";
 static const char* kSkippedMultiClockDomainPOReport =
     "skipped_multi_clock_domain_pos.txt";
+static const char* kSkippedOpaqueCellPOReport =
+    "skipped_opaque_cells_pos.txt";
 
 static void addNajaPythonPath(const char* argv0) {
   if (!argv0 || !*argv0) {
@@ -117,12 +119,12 @@ static void print_usage(const char* prog) {
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
-      "[--no-sec-uncomputable-seq-boundary] [--allow-boundary-mismatch] [--compact] "
+      "[--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--design1 <file...>] [--design2 <file...>] "
-      "[--no-sec-uncomputable-seq-boundary] [--allow-boundary-mismatch] [--compact] "
+      "[--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos]",
       prog);
 // LCOV_EXCL_START
@@ -387,7 +389,6 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "max_k",
       "sec_engine",
       "sec_encoding",
-      "sec_uncomputable_seq_as_boundary",
       "allow-boundary-mismatch",
       "input_paths",
       "liberty_files",
@@ -494,10 +495,8 @@ void writeBoundaryTermsReport(
   report << "# SEC boundary terms report\n";
   report << "# Categories:\n";
   report << "# - top_input / top_output: original top-level interface terms.\n";
-  report << "# - opaque_internal_input / opaque_internal_output: internal leaf cut points\n";
-  report << "#   that SEC could not reconstruct combinationally and did not model as sequential.\n";
-  report << "# - abstracted_sequential_state / abstracted_sequential_observed: interface terms\n";
-  report << "#   exposed when an uncomputable sequential instance is abstracted as a SEC boundary.\n\n";
+  report << "# - opaque_internal_input / opaque_internal_output: diagnostic internal\n";
+  report << "#   frontiers that SEC could not model; they are never proof inputs.\n\n";
   for (size_t i = 0; i < reports.size(); ++i) {
     const auto& entry = reports[i];
     report << "- design: " << entry.design << "\n";
@@ -564,6 +563,23 @@ void writeMultiClockDomainSkippedOutputsReport(
 // LCOV_EXCL_START
 }
 // LCOV_EXCL_STOP
+
+void writeOpaqueCellSkippedOutputsReport(
+    const std::filesystem::path& reportPath,
+    const std::vector<std::string>& skippedOutputs) {
+  if (skippedOutputs.empty()) {
+    return;
+  }
+
+  std::ofstream report(reportPath, std::ios::trunc);
+  report << "# SEC opaque-cell skipped top-level outputs\n";
+  report << "# These outputs were not verified because backward cone traversal\n";
+  report << "# reached an internal cell or pin without usable semantics. No free\n";
+  report << "# or shared proof symbol was substituted for the opaque element.\n\n";
+  for (const auto& skippedOutput : skippedOutputs) {
+    report << "- " << skippedOutput << "\n";
+  }
+}
 
 struct DesignInputs {
   std::vector<std::string> design0;
@@ -1187,8 +1203,6 @@ int KeplerFormalMain(int argc, char** argv) {
   bool secEncodingExplicit = false;
   size_t secMaxK = kDefaultSecMaxK;
   bool secMaxKExplicit = false;
-  bool secTreatUncomputableSeqAsBoundary = true;
-
   // Basic argument sanity
   if (argc < 2) {
     // LCOV_EXCL_START
@@ -1214,7 +1228,6 @@ int KeplerFormalMain(int argc, char** argv) {
   std::string dumpPoCnfPath;
 
   KEPLER_FORMAL::Config::setReportSkippedPOs(false);
-  KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(true);
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -1331,22 +1344,6 @@ int KeplerFormalMain(int argc, char** argv) {
           }
           secEncodingExplicit = true;  // LCOV_EXCL_LINE
         }
-
-        if (cfg["sec_uncomputable_seq_as_boundary"]) {
-          // LCOV_EXCL_START
-          if (!cfg["sec_uncomputable_seq_as_boundary"].IsScalar()) {
-            SPDLOG_CRITICAL(
-            // LCOV_EXCL_STOP
-                "sec_uncomputable_seq_as_boundary must be a scalar");
-            // LCOV_EXCL_START
-            return EXIT_FAILURE;
-            // LCOV_EXCL_STOP
-          }
-          // LCOV_EXCL_START
-          secTreatUncomputableSeqAsBoundary =
-              cfg["sec_uncomputable_seq_as_boundary"].as<bool>();
-        }
-        // LCOV_EXCL_STOP
 
         // input_paths
         if (cfg["input_paths"]) {
@@ -1576,19 +1573,6 @@ int KeplerFormalMain(int argc, char** argv) {
         parseStart += 2;
         continue;
       }
-      if (arg == "--sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = true;
-        ++parseStart;
-        continue;
-        // LCOV_EXCL_STOP
-      }
-      // LCOV_EXCL_START
-      if (arg == "--no-sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = false;
-        ++parseStart;
-        continue;
-        // LCOV_EXCL_STOP
-      }
       if (arg == "--allow-boundary-mismatch") {
         allowBoundaryMismatch = true;
         ++parseStart;
@@ -1710,17 +1694,6 @@ int KeplerFormalMain(int argc, char** argv) {
         // LCOV_EXCL_START
         secEncodingExplicit = true;
         continue;
-      }
-      if (arg == "--sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = true;
-        continue;
-        // LCOV_EXCL_STOP
-      }
-      // LCOV_EXCL_START
-      if (arg == "--no-sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = false;
-        continue;
-        // LCOV_EXCL_STOP
       }
       if (arg == "--allow-boundary-mismatch") {
         allowBoundaryMismatch = true;
@@ -2012,8 +1985,6 @@ int KeplerFormalMain(int argc, char** argv) {
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
-  KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(
-      secTreatUncomputableSeqAsBoundary);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -2028,10 +1999,6 @@ int KeplerFormalMain(int argc, char** argv) {
     SPDLOG_INFO("SEC max_k: {}", secMaxK);
     SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
     SPDLOG_INFO("SEC encoding: {}", secEncodingName(secEncoding));
-    SPDLOG_INFO(
-        "SEC uncomputable sequentials: {}",
-        secTreatUncomputableSeqAsBoundary ? "boundary abstraction"
-                                          : "strict failure");
   }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
@@ -2091,24 +2058,6 @@ int KeplerFormalMain(int argc, char** argv) {
         // LCOV_EXCL_START
         }
         // LCOV_EXCL_STOP
-        // LCOV_EXCL_START
-        if (!result.abstractedSequentialBoundaries.empty()) {
-          // LCOV_DISABLED_START
-          std::ostringstream abstractedBoundaries;
-          for (const auto& abstractedBoundary :
-               result.abstractedSequentialBoundaries) {
-            abstractedBoundaries << "  - " << abstractedBoundary << "\n";
-            // LCOV_DISABLED_STOP
-          }
-          // LCOV_DISABLED_START
-          SPDLOG_INFO(
-          // LCOV_DISABLED_STOP
-              "SEC abstracted uncomputable sequential interfaces as "
-              "boundaries:\n{}",
-              abstractedBoundaries.str());
-        // LCOV_DISABLED_START
-        }
-        // LCOV_DISABLED_STOP
         // LCOV_EXCL_STOP
         if (reportSkippedPOs) {
           // LCOV_EXCL_START
@@ -2120,6 +2069,9 @@ int KeplerFormalMain(int argc, char** argv) {
           writeMultiClockDomainSkippedOutputsReport(
               kSkippedMultiClockDomainPOReport,
               result.multiClockDomainSkippedOutputs);
+          writeOpaqueCellSkippedOutputsReport(
+              kSkippedOpaqueCellPOReport,
+              result.opaqueCellSkippedOutputs);
         }
         // LCOV_EXCL_STOP
         switch (result.status) {

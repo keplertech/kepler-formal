@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,17 +28,20 @@ enum class ConnectivitySkipOrigin {
   MultiDriver,
   LogicalLoop,
   MultiClockDomain,
+  OpaqueInternal,
+};
+
+struct OpaqueInternalInfo {  // LCOV_EXCL_LINE
+  std::string instance;
+  std::string model;
+  std::string pin;
+  std::string reason;
 };
 
 struct ConnectivitySkipInfo {  // LCOV_EXCL_LINE
   ConnectivitySkipOrigin origin = ConnectivitySkipOrigin::NoDriver;
   std::string detail;
-};
-
-struct AbstractedSequentialBoundaryDetail {  // LCOV_EXCL_LINE
-  std::string instancePath;
-  std::vector<SignalKey> stateKeys;
-  std::vector<SignalKey> observedKeys;
+  std::optional<OpaqueInternalInfo> opaqueInternal;
 };
 
 // Normalized view of a sequential design after extracting the interface we
@@ -69,14 +73,13 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::unordered_map<SignalKey, ClockEvent, SignalKeyHash> clockEventByStateKey;
   std::unordered_map<SignalKey, ConnectivitySkipInfo, SignalKeyHash>
       connectivitySkipInfoByKey;
+  std::unordered_map<SignalKey, OpaqueInternalInfo, SignalKeyHash>
+      opaqueInternalInfoByKey;
   std::vector<ComplementedStateRelation> complementedStateRelations;
-  std::vector<std::string> abstractedSequentialBoundaries;
-  std::vector<AbstractedSequentialBoundaryDetail>
-      abstractedSequentialBoundaryDetails;
   std::vector<std::string> unsupportedReasons;
 
-  // Extract the model from the given top design. Unsupported sequential
-  // structures are recorded in unsupportedReasons instead of being guessed.
+  // Extract the model from the given top design. Opaque per-output cones are
+  // skipped; globally unsupported structures are recorded in unsupportedReasons.
   static SequentialDesignModel extract(naja::NL::SNLDesign* top);
 
   bool hasUnsupportedFeatures() const {
