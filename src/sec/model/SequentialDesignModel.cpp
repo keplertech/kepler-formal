@@ -3868,6 +3868,11 @@ void buildInitialObservedOutputClouds(ExtractContext& ctx, SequentialDesignModel
         ctx.secDiagEnabled,
         ctx.topName.c_str(),
         "initial observed output build");
+    // The batch list excludes outputs already classified as connectivity skips.
+    // Preserve those collect-time facts just as the non-batched builder does.
+    for (const auto& [termID, info] : ctx.collectedSkippedOutputs) {
+      ctx.initialMaterializedOutputs.skippedOutputsByTerm.emplace(termID, info);
+    }
     ctx.hasInitialMaterializedOutputs = true;
     if (ctx.secDiagEnabled) {
       fprintf(stderr, "SEC diag: extract(%s) build end\n", ctx.topName.c_str());
