@@ -782,6 +782,39 @@ class KeplerFormalCliTests : public ::testing::Test {
         lineEnd == std::string::npos ? std::string::npos : lineEnd - start);
   }
 
+  static void expectSecDifferenceLogIncludesWitnessDetails(
+      const std::string& engine) {
+    const auto fixture = createDifferentSequentialNajaIfFixture();
+    const auto logPath =
+        fixture.tmpDir / ("sec_difference_" + engine + ".log");
+    const auto cfgPath = writeTempConfig(
+        "format: naja_if\n"
+        "verification: sec\n"
+        "sec_engine: " + engine + "\n"
+        "sec_encoding: dual_rail_steady\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + fixture.design0IfPath.string() + "\n"
+        "  - " + fixture.design1IfPath.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+
+    EXPECT_EQ(runWithConfigFile(cfgPath), kSecCounterexampleExitCode);
+    ASSERT_TRUE(std::filesystem::exists(logPath));
+    const auto contents = readFileContents(logPath);
+    EXPECT_NE(contents.find("SEC counterexample details:"), std::string::npos);
+    EXPECT_NE(
+        contents.find(
+            "Counterexample reaches the first bad frame at cycle 1."),
+        std::string::npos);
+    EXPECT_NE(contents.find("Input trace:"), std::string::npos);
+    EXPECT_NE(
+        contents.find("Observed output mismatches at cycle 1:"),
+        std::string::npos);
+
+    std::filesystem::remove(cfgPath);
+    std::filesystem::remove_all(fixture.tmpDir);
+  }
+
   void TearDown() override {
     KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
     KEPLER_FORMAL::BoolExprCache::destroy();
@@ -3141,29 +3174,17 @@ TEST_F(KeplerFormalCliTests, ConfigSecReportsPartialObservedOutputCoverage) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigSecDifferenceLogIncludesWitnessDetails) {
-  const auto fixture = createDifferentSequentialNajaIfFixture();
-  const auto logPath = fixture.tmpDir / "sec_difference.log";
-  const auto cfgPath = writeTempConfig(
-      "format: naja_if\n"
-      "verification: sec\n"
-      "sec_encoding: dual_rail_steady\n"
-      "max_k: 2\n"
-      "input_paths:\n"
-      "  - " + fixture.design0IfPath.string() + "\n"
-      "  - " + fixture.design1IfPath.string() + "\n"
-      "log_file: " + logPath.string() + "\n");
+TEST_F(KeplerFormalCliTests, ConfigSecPdrDifferenceLogIncludesWitnessDetails) {
+  expectSecDifferenceLogIncludesWitnessDetails("pdr");
+}
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecCounterexampleExitCode);
-  ASSERT_TRUE(std::filesystem::exists(logPath));
-  const auto contents = readFileContents(logPath);
-  EXPECT_NE(contents.find("SEC counterexample details:"), std::string::npos);
-  EXPECT_NE(
-      contents.find("Exact PDR found a defined-value counterexample at k = "),
-      std::string::npos);
+TEST_F(KeplerFormalCliTests,
+       ConfigSecKInductionDifferenceLogIncludesWitnessDetails) {
+  expectSecDifferenceLogIncludesWitnessDetails("k_induction");
+}
 
-  std::filesystem::remove(cfgPath);
-  std::filesystem::remove_all(fixture.tmpDir);
+TEST_F(KeplerFormalCliTests, ConfigSecImcDifferenceLogIncludesWitnessDetails) {
+  expectSecDifferenceLogIncludesWitnessDetails("imc");
 }
 
 TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {

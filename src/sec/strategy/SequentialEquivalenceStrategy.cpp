@@ -3112,14 +3112,26 @@ SequentialEquivalenceResult runPdrSecEngine(
             firstOutput,
             endOutput);
         break;
-      case PDRStatus::Different:
+      case PDRStatus::Different: {
+        auto witness = SEC::findBaseCounterexampleAtFrontier(
+            exactBatchProblem, solverType, pdrResult.bound);
+        KInductionResult witnessResult{
+            KInductionStatus::Different,
+            pdrResult.bound,
+            std::move(witness)};
+        const std::string reason =
+            witnessResult.witness.has_value()
+                ? formatCounterexampleWitness(
+                      witnessResult, model0, model1, top0, top1)
+                : "Exact PDR found a defined-value counterexample at k = " +
+                      std::to_string(pdrResult.bound);
         return makeSecResult(
             SequentialEquivalenceStatus::Different,
             pdrResult.bound,
-            "Exact PDR found a defined-value counterexample at k = " +
-                std::to_string(pdrResult.bound),
+            reason,
             outputCoverage,
             extractedBoundaryReports);
+      }
       case PDRStatus::Inconclusive:
       default:
         provedBound = std::max(provedBound, pdrResult.bound);

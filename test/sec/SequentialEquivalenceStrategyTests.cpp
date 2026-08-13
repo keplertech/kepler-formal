@@ -12919,7 +12919,15 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_EQ(result.bound, 1u);
   EXPECT_EQ(result.coveredOutputs, 1u);
   EXPECT_EQ(result.totalOutputs, 1u);
-  EXPECT_FALSE(result.reason.empty());
+  EXPECT_NE(
+      result.reason.find(
+          "Counterexample reaches the first bad frame at cycle 1."),
+      std::string::npos);
+  EXPECT_NE(result.reason.find("Input trace:"), std::string::npos);
+  EXPECT_NE(
+      result.reason.find("Observed output mismatches at cycle 1:"),
+      std::string::npos);
+  EXPECT_NE(result.reason.find("delayed_out[0]"), std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
