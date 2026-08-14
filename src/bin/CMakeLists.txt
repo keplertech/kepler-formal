@@ -18,6 +18,8 @@ target_link_libraries(kepler-formal
     scope_extraction
     yaml-cpp
     ${SPDLOG_TARGET}
+    kepler_c2rtl_formal
+    kepler_xls_c2rtl
 )
 
 add_dependencies(kepler-formal naja)

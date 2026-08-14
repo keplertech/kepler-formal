@@ -3694,6 +3694,52 @@ SNLDesign* createPartialCoverageMultiDriverTop(
   return top;
 }
 
+SNLDesign* createBatchedDirectMultiDriverOutputTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* invModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topInA =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in_a"));
+  auto* topInB =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in_b"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topCovered = SNLBusTerm::create(
+      top, SNLTerm::Direction::Output, 128, 0, NLName("covered"));
+  auto* topSkipped =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("skipped"));
+
+  auto* inv0 = SNLInstance::create(top, invModel, NLName("inv0"));
+  auto* inv1 = SNLInstance::create(top, invModel, NLName("inv1"));
+  auto* ff = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
+  auto* netInA = SNLScalarNet::create(top, NLName("net_in_a"));
+  auto* netInB = SNLScalarNet::create(top, NLName("net_in_b"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netMulti = SNLScalarNet::create(top, NLName("net_multi"));
+  auto* netQ = SNLScalarNet::create(top, NLName("net_q"));
+
+  topInA->setNet(netInA);
+  topInB->setNet(netInB);
+  topClock->setNet(netClock);
+  for (int bit = 0; bit < 129; ++bit) {
+    topCovered->getBit(bit)->setNet(netInA);
+  }
+  topSkipped->setNet(netMulti);
+
+  inv0->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netInA);
+  inv0->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(netMulti);
+  inv1->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netInB);
+  inv1->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(netMulti);
+
+  ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  ff->getInstTerm(NLDB0::getDFFData())->setNet(netInA);
+  ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ);
+
+  return top;
+}
+
 SNLDesign* createPartialCoverageLogicalLoopTop(
     NLLibrary* library,
     const std::string& name) {
@@ -16640,6 +16686,33 @@ TEST_F(SequentialEquivalenceStrategyTests,
             extracted.connectivitySkipInfoByKey.end());
   EXPECT_EQ(
       extracted.connectivitySkipInfoByKey.at(stateKey).origin,
+      ConnectivitySkipOrigin::MultiDriver);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractPreservesSkippedOutputsAcrossBatches) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top =
+      createBatchedDirectMultiDriverOutputTop(library, "top", invModel);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.totalObservedOutputCount(), 130u);
+  EXPECT_EQ(extracted.coveredObservedOutputCount(), 129u);
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  const auto skippedKey = findKeyByDisplayName(extracted, "skipped[0]");
+  EXPECT_EQ(extracted.skippedObservedOutputs.front(), skippedKey);
+  ASSERT_NE(extracted.connectivitySkipInfoByKey.find(skippedKey),
+            extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(
+      extracted.connectivitySkipInfoByKey.at(skippedKey).origin,
       ConnectivitySkipOrigin::MultiDriver);
 }
 

@@ -16,6 +16,32 @@ bazel_dep(name = "capnp-cpp", version = "1.4.0")
 bazel_dep(name = "zlib", version = "1.3.2")
 bazel_dep(name = "fmt", version = "12.2.0")
 bazel_dep(name = "spdlog", version = "1.17.0")
+bazel_dep(name = "abseil-cpp", version = "20260107.0")
+bazel_dep(name = "boringssl", version = "0.20250114.0")
+bazel_dep(name = "googleapis", version = "0.0.0-20240819-fe8ba054a")
+bazel_dep(name = "protobuf", version = "33.0")
+bazel_dep(name = "re2", version = "2025-11-05.bcr.1")
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "rules_python", version = "1.9.0")
+bazel_dep(name = "rules_shell", version = "0.6.1")
+bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "or-tools", version = "9.15")
+
+single_version_override(
+    module_name = "googleapis",
+    version = "0.0.0-20240819-fe8ba054a",
+)
+PYTHON_VERSION = "3.13"
+PYTHON_VERSION_NAME = PYTHON_VERSION.replace(".", "_")
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    python_version = PYTHON_VERSION,
+)
+use_repo(
+    python,
+    project_python = "python_{}".format(PYTHON_VERSION_NAME),
+    project_python_host = "python_{}_host".format(PYTHON_VERSION_NAME),
+)
 # TBB comes from the cmake-built @onetbb repo (bazel/deps.bzl), not the BCR
 # onetbb module: Naja's native targets and the kepler-formal binary must
 # share a single libtbb.so.12 runtime. The same install tree is exported
@@ -63,6 +89,37 @@ register_toolchains(
     "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
 )
 
+xls_c2rtl_repository = use_repo_rule(
+    "//bazel:xls_c2rtl_repo.bzl",
+    "xls_c2rtl_repository",
+)
+
+xls_c2rtl_repository(
+    name = "xls_c2rtl_src",
+    build_file = "//bazel:xls_c2rtl.BUILD.bazel",
+    src_marker = "//:MODULE.bazel",
+    src_subdir = "thirdparty/xls",
+)
+
+llvm_raw_ext = use_extension("//bazel:xls_llvm_extension.bzl", "llvm_raw_ext")
+use_repo(llvm_raw_ext, "llvm-raw")
+llvm_configure = use_repo_rule(
+    "@llvm-raw//utils/bazel:configure.bzl",
+    "llvm_configure",
+)
+llvm_configure(
+    name = "llvm-project",
+    targets = [
+        "AArch64",
+        "X86",
+    ],
+)
+bazel_dep(name = "zlib-ng", version = "2.3.3", repo_name = "llvm_zlib")
+bazel_dep(name = "zstd", version = "1.5.7.bcr.1", repo_name = "llvm_zstd")
+
+z3_ext = use_extension("//bazel:xls_z3_extension.bzl", "z3_extension")
+use_repo(z3_ext, "z3")
+
 # Third-party dependencies fetched via http_archive for BCR compatibility.
 # BUILD file overlays live in bazel/*.BUILD.bazel.
 # The cmake flow uses git submodules (thirdparty/) directly.
@@ -75,6 +132,7 @@ use_repo(
     "boost_headers",
     "cadical",
     "capnproto",
+    "cppitertools",
     "flex_headers",
     "flex_src",
     "flex_tool",

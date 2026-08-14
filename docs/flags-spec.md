@@ -36,12 +36,21 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
+| `-cc`, `-cxx`, `-cpp` | Synthesize one C/C++ translation unit per design to SystemVerilog through XLS, then run SEC on the generated RTL. |
 | `--help`, `-h` | Print usage and exit. |
 | `--config <file>`, `-c <file>` | Load a YAML config file. If present anywhere on the CLI, YAML parsing takes precedence over the rest of the arguments. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
+| `--cc_top <function>` | C/C++ top function for both designs. |
+| `--cc_design1_top <function>` | C/C++ top function for design 1 when it differs from `--cc_top`. |
+| `--cc_design2_top <function>` | C/C++ top function for design 2 when it differs from `--cc_top`. |
+| `--cc_module_name <name>` | Generated SystemVerilog module name for both designs. |
+| `--cc_design1_module_name <name>` | Generated SystemVerilog module name for design 1. |
+| `--cc_design2_module_name <name>` | Generated SystemVerilog module name for design 2. |
+| `--cc_include <dir>`, `--cc_include_path <dir>`, `-I<dir>` | Add an include directory for XLS C/C++ synthesis. May be repeated. |
+| `--cc_output_dir <dir>` | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
 | `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
@@ -52,7 +61,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. If omitted, the implementation defaults to `verilog`. |
+| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. If omitted, the implementation defaults to `verilog`. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
@@ -63,6 +72,17 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
+| `cc_top` | string | C/C++ top function for both designs. Required for `cc` unless both design-specific tops are set. |
+| `cc_design1_top` | string | C/C++ top function for design 1. |
+| `cc_design2_top` | string | C/C++ top function for design 2. |
+| `cc_module_name` | string | Generated SystemVerilog module name for both designs. Defaults to the resolved C/C++ top name. |
+| `cc_design1_module_name` | string | Generated SystemVerilog module name for design 1. |
+| `cc_design2_module_name` | string | Generated SystemVerilog module name for design 2. |
+| `cc_block_proto_path` | string | Optional XLSCC block proto path for both designs. |
+| `cc_design1_block_proto_path` | string | Optional XLSCC block proto path for design 1. |
+| `cc_design2_block_proto_path` | string | Optional XLSCC block proto path for design 2. |
+| `cc_include_paths` | list[string] | Include directories passed to XLS C/C++ synthesis. |
+| `cc_output_dir` | string | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
 | `log_level` | string | `debug` and `info` are handled explicitly. Other values currently fall back to `info`. |
 | `log_file` | string | Output path for the miter log file. If omitted, the tool writes `miter_log_<n>.txt` in the current working directory. |
 | `use_scopes` | bool | Enable scoped verification for `naja_if` inputs. |
@@ -99,6 +119,27 @@ cnf_export: true
 cnf_export_path: ./miter.cnf
 po_cnf_export: true
 po_cnf_export_path: ./po_cnfs
+```
+
+Example C/C++ C2RTL config:
+
+```yaml
+format: cc
+verification: sec
+cc_top: top_function
+cc_include_paths:
+  - include
+cc_output_dir: build/c2rtl
+input_paths:
+  - design0.cc
+  - design1.cc
+```
+
+The `kepler-formal` CMake build compiles the KF C2RTL bridge as the normal
+`kepler_xls_c2rtl` library target and links it into the binary:
+
+```bash
+cmake --build build --target kepler-formal
 ```
 
 SEC `sv2v` example:

@@ -55,17 +55,29 @@ The property of stable indices is employed to localize the scopes affected by ed
 
 #### Dependencies
 
-On Ubuntu:
+On Ubuntu 22.04, install the complete CMake dependency set with:
 
 ```bash
-sudo apt-get install g++ libboost-dev python3.9-dev capnproto libcapnp-dev libtbb-dev pkg-config bison flex doxygen libspdlog-dev libfmt-dev libboost-iostreams-dev zlib1g-dev
+bash .github/scripts/install-cmake-deps-ubuntu.sh
 ```
+
+The installer uses `sudo` for system packages. It installs the C/C++ build
+tools, Ninja, Python development headers, Boost, Cap'n Proto, TBB, Flex,
+Bison, spdlog, fmt, OpenSSL, Z3, zlib, GoogleTest, and the LLVM/Clang 22
+compiler and development headers. It also builds and installs the C2RTL
+dependencies Abseil, Protobuf, and RE2, and installs the OR-Tools graph
+headers under `/usr/local`. The pinned versions are defined at the top of
+[`.github/scripts/install-cmake-deps-ubuntu.sh`](.github/scripts/install-cmake-deps-ubuntu.sh).
+Set `KEPLER_LLVM_VERSION` before running the script only when intentionally
+using a different LLVM release.
 
 On macOS, using [Homebrew](https://brew.sh/):
 
 ```bash
 brew install cmake doxygen capnp tbb bison flex boost spdlog zlib
 ```
+C2RTL CMake builds also need LLVM, Abseil, Protobuf, OpenSSL, Z3, RE2, and
+OR-Tools graph headers. The macOS CI workflow installs the pinned headers.
 
 Ensure the versions of `bison` and `flex` installed via Homebrew take precedence over the macOS defaults by modifying your $PATH environment variable as follows:
 
@@ -140,7 +152,7 @@ errors are execution failures rather than SEC verdicts.
 
 ```bash
 # Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v> [options] \
+build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-cc/-cxx> [options] \
   <design1> <design2> [<library-file>...]
 
 # Multi-file Verilog
@@ -165,10 +177,14 @@ build/src/bin/kepler-formal -sv -v sec \
 | `-naja_if` | Parse both designs as Naja IF. |
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
+| `-cc`, `-cxx` | Synthesize one C/C++ translation unit per design to SystemVerilog with XLS, then run SEC on the generated RTL. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
+| `--cc_top <function>` | C/C++ top function for both designs. Use `--cc_design1_top` / `--cc_design2_top` when they differ. |
+| `--cc_include <dir>` | Add an include directory for XLS C/C++ synthesis. May be repeated. |
+| `--cc_output_dir <dir>` | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
 
@@ -188,7 +204,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. Defaults to `verilog` if omitted. |
+| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
@@ -196,6 +212,9 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
+| `cc_top` | string | C/C++ top function for both designs. Use `cc_design1_top` / `cc_design2_top` when they differ. |
+| `cc_include_paths` | list[string] | Include directories passed to XLS C/C++ synthesis. |
+| `cc_output_dir` | string | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
 
@@ -213,6 +232,22 @@ liberty_files:
 py_tech_files:
   - primitives.py             # Optional: Python tech loaders are YAML-only
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
+```
+
+### C/C++ C2RTL Inputs
+
+The C/C++ mode uses the Kepler fork of XLS under `thirdparty/xls`. The
+`kepler-formal` CMake build compiles the KF C2RTL bridge as the normal
+`kepler_xls_c2rtl` library target and links it into the binary:
+
+```bash
+cmake --build build --target kepler-formal
+```
+
+Then run:
+
+```bash
+build/src/bin/kepler-formal -cc -v sec --cc_top top_function design0.cc design1.cc
 ```
 
 ## Examples 
