@@ -73,8 +73,6 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::unordered_map<SignalKey, ClockEvent, SignalKeyHash> clockEventByStateKey;
   std::unordered_map<SignalKey, ConnectivitySkipInfo, SignalKeyHash>
       connectivitySkipInfoByKey;
-  std::unordered_map<SignalKey, OpaqueInternalInfo, SignalKeyHash>
-      opaqueInternalInfoByKey;
   std::vector<ComplementedStateRelation> complementedStateRelations;
   std::vector<std::string> unsupportedReasons;
 

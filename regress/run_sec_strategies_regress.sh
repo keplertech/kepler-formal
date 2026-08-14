@@ -407,8 +407,8 @@ run_engine() {
     fi
 
     # Non-dual positive SEC regressions may have all observed outputs skipped
-    # because both sides depend on reset-unanchored internal state. Treat that
-    # as measurement-only inconclusive when the workflow explicitly asks for it.
+    # because both sides depend on reset-unanchored state or opaque internal
+    # cones. Treat that as measurement-only when the workflow explicitly asks.
     if [[ "${expectation}" == "allow-unset-state-inconclusive" ]]; then
       if [[ "${kepler_status}" -eq 0 ]] &&
           grep -q "SEC proved equivalence" "${stdout_log}"; then
@@ -422,6 +422,11 @@ run_engine() {
       fi
       if [[ "${kepler_status}" -eq 2 ]] &&
           grep -q "No aligned observed outputs remain after skipping cones that depend on reset-unanchored internal state" "${stdout_log}"; then
+        grep "SEC cannot run on this design pair" "${stdout_log}"
+        return 0
+      fi
+      if [[ "${kepler_status}" -eq 2 ]] &&
+          grep -q "No aligned observed outputs remain after skipping unverifiable cones" "${stdout_log}"; then
         grep "SEC cannot run on this design pair" "${stdout_log}"
         return 0
       fi

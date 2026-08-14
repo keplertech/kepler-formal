@@ -2922,6 +2922,49 @@ SNLDesign* createOpaqueBoundaryTop(
   return top;
 }
 
+SNLDesign* createLateOpaqueSequentialDependencyTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* opaqueModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topGood =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("good"));
+  auto* topBad0 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("bad0"));
+  auto* topBad1 =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("bad1"));
+
+  auto* opaque = SNLInstance::create(top, opaqueModel, NLName("opaque0"));
+  auto* ff0 = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
+  auto* ff1 = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff1"));
+  auto* netIn = SNLScalarNet::create(top, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netOpaque = SNLScalarNet::create(top, NLName("net_opaque"));
+  auto* netQ0 = SNLScalarNet::create(top, NLName("net_q0"));
+  auto* netQ1 = SNLScalarNet::create(top, NLName("net_q1"));
+
+  topIn->setNet(netIn);
+  topClock->setNet(netClock);
+  topGood->setNet(netIn);
+  topBad0->setNet(netQ0);
+  topBad1->setNet(netQ1);
+  opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("A")))->setNet(netIn);
+  opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("Y")))->setNet(netOpaque);
+  ff0->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  ff0->getInstTerm(NLDB0::getDFFData())->setNet(netOpaque);
+  ff0->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ0);
+  ff1->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  ff1->getInstTerm(NLDB0::getDFFData())->setNet(netQ0);
+  ff1->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ1);
+
+  return top;
+}
+
 SNLDesign* createDffTop(
     NLLibrary* library,
     const std::string& name,
@@ -3993,7 +4036,6 @@ void SequentialEquivalenceStrategyTests::
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_EQ(extracted.observedOutputs.size(), 2u);
   EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
-  EXPECT_TRUE(extracted.opaqueInternalInfoByKey.empty());
 }
 
 SNLDesign* createDffreTop(
@@ -4043,6 +4085,39 @@ SNLDesign* createOpaqueClockGateLatchModel(NLLibrary* library) {
   return model;
 }
 
+SNLScalarTerm* getLatchGateTerm(SNLDesign* model) {
+  if (auto* gate = model->getScalarTerm(NLName("GATE"))) {
+    return gate;
+  }
+  return model->getScalarTerm(NLName("E"));
+}
+
+SNLDesign* createDirectLatchTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* latchModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topData =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("data"));
+  auto* topEnable =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("enable"));
+  auto* topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
+  auto* latch = SNLInstance::create(top, latchModel, NLName("latch0"));
+
+  auto* netData = SNLScalarNet::create(top, NLName("net_data"));
+  auto* netEnable = SNLScalarNet::create(top, NLName("net_enable"));
+  auto* netOut = SNLScalarNet::create(top, NLName("net_out"));
+  topData->setNet(netData);
+  topEnable->setNet(netEnable);
+  topOut->setNet(netOut);
+  latch->getInstTerm(latchModel->getScalarTerm(NLName("D")))->setNet(netData);
+  latch->getInstTerm(getLatchGateTerm(latchModel))->setNet(netEnable);
+  latch->getInstTerm(latchModel->getScalarTerm(NLName("Q")))->setNet(netOut);
+  return top;
+}
+
 SNLDesign* createConstantLowModel(NLLibrary* library) {
   auto* model =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("CONB"));
@@ -4085,7 +4160,7 @@ SNLDesign* createClockGateLatchDffTop(
   topOut->setNet(netOut);
 
   latch->getInstTerm(latchModel->getScalarTerm(NLName("D")))->setNet(netEnable);
-  latch->getInstTerm(latchModel->getScalarTerm(NLName("GATE")))->setNet(netClock);
+  latch->getInstTerm(getLatchGateTerm(latchModel))->setNet(netClock);
   latch->getInstTerm(latchModel->getScalarTerm(NLName("Q")))->setNet(netLatchQ);
 
   gateAnd->getInstTerm(andModel->getScalarTerm(NLName("A")))->setNet(netClock);
@@ -4359,7 +4434,7 @@ SNLDesign* createClockGateLatchDataDffTop(
   }
 
   latch->getInstTerm(latchModel->getScalarTerm(NLName("D")))->setNet(netEnable);
-  latch->getInstTerm(latchModel->getScalarTerm(NLName("GATE")))->setNet(netClock);
+  latch->getInstTerm(getLatchGateTerm(latchModel))->setNet(netClock);
   latch->getInstTerm(latchModel->getScalarTerm(NLName("Q")))->setNet(netLatchQ);
 
   dataAnd->getInstTerm(andModel->getScalarTerm(NLName("A")))->setNet(netIn);
@@ -16844,6 +16919,90 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractTreatsNajaLatchModelAsOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top = createDirectLatchTop(library, "top", NLDB0::getDLatch());
+
+  const auto extracted = SequentialDesignModel::extract(top);
+  const auto outputKey = findKeyByDisplayName(extracted, "out[0]");
+  const auto latchKey = findKeyByDisplayName(extracted, "latch0.Q[0]");
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.stateBits.empty());
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  EXPECT_EQ(extracted.skippedObservedOutputs.front(), outputKey);
+  const auto skip = extracted.connectivitySkipInfoByKey.find(outputKey);
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+  EXPECT_NE(skip->second.detail.find("latch0"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("naja_dlatch"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Q[0]"), std::string::npos);
+  EXPECT_NE(
+      skip->second.detail.find(
+          "Naja latch sequential models are not supported by SEC"),
+      std::string::npos);
+  EXPECT_EQ(extracted.inputVarByKey.find(latchKey),
+            extracted.inputVarByKey.end());
+  EXPECT_EQ(
+      std::find(
+          extracted.environmentInputs.begin(),
+          extracted.environmentInputs.end(),
+          latchKey),
+      extracted.environmentInputs.end());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractFoldsModeledClockGateLatchEnable) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* andModel = createAnd2Model(primitives);
+  auto* top = createClockGateLatchDffTop(
+      library, "top", andModel, NLDB0::getDLatch());
+
+  const auto extracted = SequentialDesignModel::extract(top);
+  expectAllExpressionSupportIsPublished(extracted);
+  const auto stateKey = findKeyByDisplayName(extracted, "ff0.Q[0]");
+  const auto inKey = findKeyByDisplayName(extracted, "in[0]");
+  const auto enableKey = findKeyByDisplayName(extracted, "en[0]");
+  const auto latchKey =
+      findKeyByDisplayName(extracted, "clock_gate_i.en_latch.Q[0]");
+  const size_t stateVar = extracted.inputVarByKey.at(stateKey);
+  auto* expr = extracted.nextStateExprByStateKey.at(stateKey);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs.size(), 1u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_EQ(extracted.inputVarByKey.find(latchKey),
+            extracted.inputVarByKey.end());
+  EXPECT_EQ(
+      std::find(
+          extracted.environmentInputs.begin(),
+          extracted.environmentInputs.end(),
+          latchKey),
+      extracted.environmentInputs.end());
+  EXPECT_TRUE(expr->evaluate(
+      {{extracted.inputVarByKey.at(inKey), false},
+       {extracted.inputVarByKey.at(enableKey), false},
+       {stateVar, true}}));
+  EXPECT_TRUE(expr->evaluate(
+      {{extracted.inputVarByKey.at(inKey), true},
+       {extracted.inputVarByKey.at(enableKey), true},
+       {stateVar, false}}));
+  EXPECT_FALSE(expr->evaluate(
+      {{extracted.inputVarByKey.at(inKey), false},
+       {extracted.inputVarByKey.at(enableKey), true},
+       {stateVar, true}}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractTreatsNamedClockTreeBufferAsCarrier) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
@@ -17059,6 +17218,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto* top = createNoDataSequentialTop(library, "top", model);
 
   const auto extracted = SequentialDesignModel::extract(top);
+  const auto opaqueState = findKeyByDisplayName(extracted, "ff0.Q[0]");
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_TRUE(extracted.stateBits.empty());
@@ -17077,8 +17237,10 @@ TEST_F(SequentialEquivalenceStrategyTests,
       std::find(
           extracted.environmentInputs.begin(),
           extracted.environmentInputs.end(),
-          findKeyByDisplayName(extracted, "ff0.Q[0]")),
+          opaqueState),
       extracted.environmentInputs.end());
+  EXPECT_EQ(extracted.inputVarByKey.find(opaqueState),
+            extracted.inputVarByKey.end());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17307,20 +17469,15 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_NE(
       std::find(extracted.stateBits.begin(), extracted.stateBits.end(), goodState),
       extracted.stateBits.end());
-  EXPECT_NE(
-      std::find(
-          extracted.skippedStateBits.begin(),
-          extracted.skippedStateBits.end(),
-          badState),
-      extracted.skippedStateBits.end());
+  EXPECT_EQ(extracted.inputVarByKey.find(badState),
+            extracted.inputVarByKey.end());
   EXPECT_NE(extracted.nextStateExprByStateKey.find(goodState),
             extracted.nextStateExprByStateKey.end());
   const auto skip = extracted.connectivitySkipInfoByKey.find(badOutput);
   ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
-  ASSERT_TRUE(skip->second.opaqueInternal.has_value());
-  EXPECT_EQ(skip->second.opaqueInternal->pin, "BAD[0]");
-  EXPECT_EQ(skip->second.opaqueInternal->reason,
-            "Invalid Naja sequential expression");
+  EXPECT_NE(skip->second.detail.find("pin `BAD[0]`"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Invalid Naja sequential expression"),
+            std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17348,10 +17505,9 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_EQ(extracted.skippedObservedOutputs, std::vector<SignalKey>{badOutput});
   const auto skip = extracted.connectivitySkipInfoByKey.find(badOutput);
   ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
-  ASSERT_TRUE(skip->second.opaqueInternal.has_value());
-  EXPECT_EQ(skip->second.opaqueInternal->pin, "BAD[0]");
-  EXPECT_EQ(skip->second.opaqueInternal->reason,
-            "Missing Naja sequential output model");
+  EXPECT_NE(skip->second.detail.find("pin `BAD[0]`"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Missing Naja sequential output model"),
+            std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17389,12 +17545,11 @@ TEST_F(SequentialEquivalenceStrategyTests,
   for (const auto& output : {goodOutput, badOutput}) {
     const auto skip = extracted.connectivitySkipInfoByKey.find(output);
     ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
-    ASSERT_TRUE(skip->second.opaqueInternal.has_value());
-    EXPECT_EQ(skip->second.opaqueInternal->pin, "BAD[0]");
+    EXPECT_NE(skip->second.detail.find("pin `BAD[0]`"), std::string::npos);
   }
   EXPECT_NE(
       extracted.connectivitySkipInfoByKey.at(goodOutput).detail.find(
-          "Depends on skipped state `ff0.BAD[0]`"),
+          "Naja sequential expression depends on opaque internal cell"),
       std::string::npos);
 }
 
@@ -17424,7 +17579,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_EQ(extracted.observedOutputs.size(), 2u);
   EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
-  EXPECT_TRUE(extracted.opaqueInternalInfoByKey.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17759,6 +17913,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto* top0 = createOpaqueBoundaryTop(library, "top0", opaqueModel);
   auto* top1 = createOpaqueBoundaryTop(library, "top1", opaqueModel);
 
+  const auto extracted = SequentialDesignModel::extract(top0);
+  const auto opaqueOutput =
+      findKeyByDisplayName(extracted, "opaque0.Y[0]");
+  EXPECT_EQ(extracted.inputVarByKey.find(opaqueOutput),
+            extracted.inputVarByKey.end());
+
   auto strategy = makeBinarySecStrategy(top0, top1);
   const auto result = strategy.run(2);
 
@@ -17774,6 +17934,48 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_NE(report.find("Y[0]"), std::string::npos);
   EXPECT_NE(report.find("no initialized combinational truth table"),
             std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LateOpaqueSequentialDependencySkipsOnlyReachedOutputs) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top0 = createLateOpaqueSequentialDependencyTop(
+      library, "top0", opaqueModel);
+  auto* top1 = createLateOpaqueSequentialDependencyTop(
+      library, "top1", opaqueModel);
+
+  const auto extracted = SequentialDesignModel::extract(top0);
+  const auto good = findKeyByDisplayName(extracted, "good[0]");
+  const auto bad0 = findKeyByDisplayName(extracted, "bad0[0]");
+  const auto bad1 = findKeyByDisplayName(extracted, "bad1[0]");
+  EXPECT_EQ(extracted.observedOutputs, std::vector<SignalKey>{good});
+  EXPECT_EQ(
+      extracted.skippedObservedOutputs,
+      (std::vector<SignalKey>{bad0, bad1}));
+  for (const auto& output : {bad0, bad1}) {
+    const auto skip = extracted.connectivitySkipInfoByKey.find(output);
+    ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+    EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+    EXPECT_NE(skip->second.detail.find("opaque0"), std::string::npos);
+    EXPECT_NE(skip->second.detail.find("Y[0]"), std::string::npos);
+  }
+
+  auto strategy = makeBinarySecStrategy(top0, top1);
+  const auto result = strategy.run(2);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::PartiallyProved);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 3u);
+  ASSERT_EQ(result.opaqueCellSkippedOutputs.size(), 2u);
+  for (const auto& report : result.opaqueCellSkippedOutputs) {
+    EXPECT_NE(report.find("opaque0"), std::string::npos);
+    EXPECT_NE(report.find("Y[0]"), std::string::npos);
+  }
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

@@ -14,6 +14,10 @@ library, logging, solver, CNF export, and LEC flags remain documented in
 SEC clock extraction and multi-clock-domain coverage handling are documented in
 [sec-clock-handling.md](sec-clock-handling.md).
 
+Sequential primitive support, generic latch opacity, and the clock-gate latch
+rewrite are documented in
+[sec-sequential-models.md](sec-sequential-models.md).
+
 Supported SEC flows:
 
 | Flow | Typical inputs |
