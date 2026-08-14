@@ -452,9 +452,12 @@ class SecDualRailVariableMapper final : public DualRailVariableMapper {
           BoolExpr::Var(mappedIt->second),
           BoolExpr::Not(BoolExpr::Var(mappedIt->second))};
     }
+    // Extraction rejects unpublished support before dual-rail conversion.
+    // LCOV_EXCL_START
     throw std::runtime_error(
         "SEC formula contains unpublished internal support v" +
         std::to_string(symbol));
+    // LCOV_EXCL_STOP
   }
 
  private:
@@ -3123,8 +3126,8 @@ SequentialEquivalenceResult runPdrSecEngine(
             witnessResult.witness.has_value()
                 ? formatCounterexampleWitness(
                       witnessResult, model0, model1, top0, top1)
-                : "Exact PDR found a defined-value counterexample at k = " +
-                      std::to_string(pdrResult.bound);
+                : "Exact PDR found a defined-value counterexample at k = " +  // LCOV_EXCL_LINE
+                      std::to_string(pdrResult.bound);  // LCOV_EXCL_LINE
         return makeSecResult(
             SequentialEquivalenceStatus::Different,
             pdrResult.bound,

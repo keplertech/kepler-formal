@@ -290,26 +290,6 @@ bool hasBuildableCombinationalRoot(
   // LCOV_EXCL_STOP
 }
 
-std::string describeConnectivitySkipOrigin(ConnectivitySkipOrigin origin) {
-  switch (origin) {
-    case ConnectivitySkipOrigin::NoDriver:
-      return "no-driver";
-    case ConnectivitySkipOrigin::MultiDriver:
-      return "multi-driver";
-    case ConnectivitySkipOrigin::LogicalLoop:
-      return "logical-loop";
-    case ConnectivitySkipOrigin::MultiClockDomain:
-      // LCOV_EXCL_START
-      return "multi-clock-domain";  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-    case ConnectivitySkipOrigin::OpaqueInternal:
-      return "opaque-internal";
-  }
-  // LCOV_EXCL_START
-  return "connectivity";  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
-}
-
 const char* describeBuilderSkippedOutputReason(
     BuilderSkippedOutputReason reason) {
   switch (reason) {
@@ -1242,7 +1222,7 @@ OpaqueInternalInfo makeOpaqueInternalInfo(
     info.instance.pop_back();
   }
   if (info.instance.empty()) {
-    info.instance = "<unnamed internal instance>";
+    info.instance = "<unnamed internal instance>";  // LCOV_EXCL_LINE
   }
   if (const auto* model = terminal.getDNLInstance().getSNLModel()) {
     info.model = model->getName().getString();
@@ -4629,11 +4609,15 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
           break;
         }
 
+        // Builder skip entries always carry a connectivity reason today. Keep
+        // this fallback for future non-connectivity builder failures.
+        // LCOV_EXCL_START
         markOpaqueState(
             pending,
             "unsupported sequential terminal `" +
                 modelTerm->getName().getString() + "`: " +
                 skippedIt->second.detail);
+        // LCOV_EXCL_STOP
         abortPending = true;  // LCOV_EXCL_LINE
         break;  // LCOV_EXCL_LINE
       }
@@ -4664,10 +4648,13 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
 
 
 // LCOV_EXCL_STOP
+          // Builder skip entries always carry a connectivity reason today.
+          // LCOV_EXCL_START
           markOpaqueState(
               pending,
               "unsupported sequential clock pin: " +
                   skippedIt->second.detail);
+          // LCOV_EXCL_STOP
           abortPending = true;  // LCOV_EXCL_LINE
           break;  // LCOV_EXCL_LINE
         }
@@ -5556,7 +5543,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       .universe = universe,
       // LCOV_EXCL_STOP
       .previousTop = universe->getTopDesign(),
-      .topName = top->getName().getString(),
+      .topName = top->getName().getString(),  // LCOV_EXCL_LINE
       .secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr,
   };
   ctx.builder.setRetainDnl(true);

@@ -1125,6 +1125,7 @@ enum class MalformedSequentialExpression {
   InvalidRoot,
   UnmappedTerminal,
   UnmappedState,
+  StateWithoutOutput,
   OutOfRangeOperand,
 };
 
@@ -3926,6 +3927,16 @@ void SequentialEquivalenceStrategyTests::
       break;
     }
     case MalformedSequentialExpression::UnmappedState: {
+      const auto stateNode = expression.addState(1);
+      expression.root =
+          expression.addOperation(Operator::And, {dataNode, stateNode});
+      break;
+    }
+    case MalformedSequentialExpression::StateWithoutOutput: {
+      SNLDesignModeling::SequentialState hiddenState;
+      hiddenState.nextState.root = hiddenState.nextState.addTerm(
+          model->getScalarTerm(NLName("D")));
+      sequentialModel.states.push_back(std::move(hiddenState));
       const auto stateNode = expression.addState(1);
       expression.root =
           expression.addOperation(Operator::And, {dataNode, stateNode});
@@ -12744,6 +12755,20 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       RunExtractedModelsBinaryImcRemapsBothTransitionRelations) {
+  const auto models = makeHeldRailModelsForTest(
+      "binaryImcTransitionRemap", false, false);
+  auto strategy = makeBinaryExtractedSecStrategy(SecEngine::Imc);
+
+  const auto result =
+      strategy.runExtractedModels(models.model0, models.model1, 1);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 1u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        RunExtractedModelsDualRailLeavesResidualsUncoveredWithoutPdrFallback) {
   const SignalKey good = makeSignalKey("dualRailResidualGood");
   const SignalKey residual0 = makeSignalKey("dualRailResidualState");
@@ -17213,6 +17238,13 @@ TEST_F(SequentialEquivalenceStrategyTests,
   expectMalformedSequentialExpressionUnsupported(
       MalformedSequentialExpression::UnmappedState,
       "references an unmapped state");
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsStateWithoutModelableOutput) {
+  expectMalformedSequentialExpressionUnsupported(
+      MalformedSequentialExpression::StateWithoutOutput,
+      "state without a modelable output");
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
