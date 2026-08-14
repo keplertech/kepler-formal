@@ -4261,18 +4261,6 @@ struct RebuiltTransitionArtifacts {
   std::unordered_set<SignalKey, SignalKeyHash> requiredStateKeys;
 };
 
-constexpr size_t kMaxCompleteStateFrontierForStartupMatching = 5000;
-
-bool shouldRetainCompleteStateFrontierForStartupMatching(size_t stateCount) {
-  // Moderate-size SEC cases benefit from the complete transition relation:
-  // reset/startup checks can inspect local sequential cones without relying on
-  // internal flop names.  Large ASICs still use the COI frontier so
-  // LCOV_EXCL_START
-  // BlackParrot-scale proofs do not materialize every sequential cone up front.
-  // LCOV_EXCL_STOP
-  return stateCount <= kMaxCompleteStateFrontierForStartupMatching;
-}
-
 template <typename EnqueueStateKey>
 void enqueueStateDependenciesFromFormula(
     BoolExpr* expr,
@@ -4510,9 +4498,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   std::unordered_set<const BoolExpr*> scannedDependencyNodes;
   scannedDependencyNodes.reserve(std::max<size_t>(1024, outputExprByTerm.size() * 16));
   auto buildStateClosure =
-      [&](const SignalKey* observedOutputKey,
-          BoolExpr* rootExpr,
-          const std::vector<SignalKey>& seedStateKeys) {
+      [&](const SignalKey& observedOutputKey, BoolExpr* rootExpr) {
         std::deque<size_t> pendingWorkQueue;
         std::deque<SignalKey> stateDependencyWorkQueue;
         std::unordered_set<SignalKey, SignalKeyHash> localStateKeys;
@@ -4523,7 +4509,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         scannedDependencyNodes.clear();
 
         auto recordOpaqueDependency = [&](const SignalKey& stateKey) {
-          if (observedOutputKey == nullptr || opaqueDependency.has_value()) {
+          if (opaqueDependency.has_value()) {
             return;
           }
           const auto skipIt = model.connectivitySkipInfoByKey.find(stateKey);
@@ -4567,9 +4553,6 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
               enqueueStateVarID);
         };
 
-        for (const auto& key : seedStateKeys) {
-          enqueueStateKey(key);
-        }
         enqueueStateDependencies(rootExpr);
 
         while ((!stateDependencyWorkQueue.empty() ||
@@ -4773,22 +4756,16 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
 
         if (opaqueDependency.has_value()) {
           model.connectivitySkipInfoByKey.insert_or_assign(
-              *observedOutputKey, *opaqueDependency);
+              observedOutputKey, *opaqueDependency);
           return;
         }
         artifacts.requiredStateKeys.insert(
             localStateKeys.begin(), localStateKeys.end());
       };
 
-  const std::vector<SignalKey> noSeedStates;
   for (const auto& [key, expr] : model.observedOutputExprByKey) {
-    buildStateClosure(&key, expr, noSeedStates);
+    buildStateClosure(key, expr);
   }
-  if (shouldRetainCompleteStateFrontierForStartupMatching(
-          model.stateBits.size())) {
-    buildStateClosure(nullptr, nullptr, model.stateBits);
-  }
-
   if (ctx.secDiagEnabled) {
     fprintf(
         stderr,

@@ -2965,6 +2965,47 @@ SNLDesign* createLateOpaqueSequentialDependencyTop(
   return top;
 }
 
+SNLDesign* createUnobservedOpaqueClockStateChainTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* opaqueClockModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topGood =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("good"));
+
+  auto* opaque =
+      SNLInstance::create(top, opaqueClockModel, NLName("opaque_clock"));
+  auto* ff0 = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
+  auto* ff1 = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff1"));
+  auto* netIn = SNLScalarNet::create(top, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netOpaqueClock =
+      SNLScalarNet::create(top, NLName("net_opaque_clock"));
+  auto* netQ0 = SNLScalarNet::create(top, NLName("net_q0"));
+  auto* netQ1 = SNLScalarNet::create(top, NLName("net_q1"));
+
+  topIn->setNet(netIn);
+  topClock->setNet(netClock);
+  topGood->setNet(netIn);
+  opaque->getInstTerm(opaqueClockModel->getScalarTerm(NLName("CK")))
+      ->setNet(netClock);
+  opaque->getInstTerm(opaqueClockModel->getScalarTerm(NLName("Q")))
+      ->setNet(netOpaqueClock);
+  ff0->getInstTerm(NLDB0::getDFFClock())->setNet(netOpaqueClock);
+  ff0->getInstTerm(NLDB0::getDFFData())->setNet(netIn);
+  ff0->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ0);
+  ff1->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  ff1->getInstTerm(NLDB0::getDFFData())->setNet(netQ0);
+  ff1->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ1);
+
+  return top;
+}
+
 SNLDesign* createDffTop(
     NLLibrary* library,
     const std::string& name,
@@ -17976,6 +18017,35 @@ TEST_F(SequentialEquivalenceStrategyTests,
     EXPECT_NE(report.find("opaque0"), std::string::npos);
     EXPECT_NE(report.find("Y[0]"), std::string::npos);
   }
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       UnobservedOpaqueStateChainIsExcludedFromSecModel) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* opaqueModel =
+      createNoDataSequentialModel(primitives, "OPAQUE_CLOCK_STATE");
+  auto* top0 = createUnobservedOpaqueClockStateChainTop(
+      library, "top0", opaqueModel);
+  auto* top1 = createUnobservedOpaqueClockStateChainTop(
+      library, "top1", opaqueModel);
+
+  const auto extracted = SequentialDesignModel::extract(top0);
+  ASSERT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs.size(), 1u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_TRUE(extracted.stateBits.empty());
+
+  auto strategy = makeBinarySecStrategy(top0, top1);
+  const auto result = strategy.run(2);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 1u);
+  EXPECT_TRUE(result.skippedObservedOutputs.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
