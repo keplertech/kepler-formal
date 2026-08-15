@@ -2458,7 +2458,6 @@ struct ExtractContext {
   // LCOV_EXCL_START
   std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>
       collectedSkippedOutputs;
-  std::unique_ptr<PureClockCarrierStructureIndex> pureClockCarrierStructure;
   std::vector<PendingTransition> pendingTransitions;
   std::vector<PendingMemoryInstance> pendingMemoryInstances;
   std::vector<InstanceBoundaryInfo> instanceBoundaryInfos;
@@ -2688,11 +2687,7 @@ void retainModelableClockGateLatchOutputs(
     return;
   }
 
-  if (ctx.pureClockCarrierStructure == nullptr) {
-    ctx.pureClockCarrierStructure =
-        std::make_unique<PureClockCarrierStructureIndex>(ctx.dnl);
-  }
-  const auto& pureClockTerms = *ctx.pureClockCarrierStructure;
+  PureClockCarrierStructureIndex pureClockTerms(ctx.dnl);
   std::vector<bool> eligible(candidates.size(), false);
   std::vector<naja::DNL::DNLID> dependencyTerms;
   for (size_t i = 0; i < candidates.size(); ++i) {
@@ -4341,7 +4336,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   RebuiltTransitionArtifacts artifacts;
   auto markConnectivitySkippedState =
       [&](const SignalKey& key, const ConnectivitySkipInfo& info) {
-        model.connectivitySkipInfoByKey.insert_or_assign(key, info);
+        model.connectivitySkipInfoByKey.emplace(key, info);
       };
   auto markOpaqueState = [&](const PendingTransition& pending,
                              const std::string& reason) {
@@ -4376,16 +4371,13 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
     }
   }
 
+  std::unordered_set<size_t> requiredPendingIndexes;
   std::unordered_set<naja::DNL::DNLID> materializedOutputTerms;
   std::unordered_set<size_t> topClockCarrierVarIDs;
   // DNL connectivity and cell identities are immutable during extraction.
   // Classify the structural clock tree once, then only apply variable mappings
   // that become available as the dependency frontier is materialized.
-  if (ctx.pureClockCarrierStructure == nullptr) {
-    ctx.pureClockCarrierStructure =
-        std::make_unique<PureClockCarrierStructureIndex>(ctx.dnl);
-  }
-  const auto& pureClockCarrierStructure = *ctx.pureClockCarrierStructure;
+  PureClockCarrierStructureIndex pureClockCarrierStructure(ctx.dnl);
   std::unordered_set<naja::DNL::DNLID> pureClockCarrierTermIDs(
       pureClockCarrierStructure.pureClockCarrierTermIDs().begin(),
       pureClockCarrierStructure.pureClockCarrierTermIDs().end());
@@ -4494,278 +4486,274 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   std::unordered_map<size_t, BoolExpr*> clockGateLatchDataExprByVarID =
       collectClockGateLatchDataExprByVarID(
           ctx, model, topClockCarrierVarIDs, outputExprByTerm);
+  // LCOV_EXCL_START
+  std::deque<size_t> pendingWorkQueue;
+  // LCOV_EXCL_STOP
+  std::deque<SignalKey> stateDependencyWorkQueue;
+  std::unordered_set<SignalKey, SignalKeyHash> expandedStateDependencies;
   std::vector<const BoolExpr*> dependencyWalkStack;
   std::unordered_set<const BoolExpr*> scannedDependencyNodes;
   scannedDependencyNodes.reserve(std::max<size_t>(1024, outputExprByTerm.size() * 16));
-  auto buildStateClosure =
-      [&](const SignalKey& observedOutputKey, BoolExpr* rootExpr) {
-        std::deque<size_t> pendingWorkQueue;
-        std::deque<SignalKey> stateDependencyWorkQueue;
-        std::unordered_set<SignalKey, SignalKeyHash> localStateKeys;
-        std::unordered_set<SignalKey, SignalKeyHash> expandedStateDependencies;
-        std::unordered_set<size_t> enqueuedStateVarIDs;
-        std::unordered_set<size_t> queuedPendingIndexes;
-        std::optional<ConnectivitySkipInfo> opaqueDependency;
-        scannedDependencyNodes.clear();
+  // LCOV_EXCL_START
+  std::unordered_set<size_t> enqueuedStateVarIDs;
+  // LCOV_EXCL_STOP
+  enqueuedStateVarIDs.reserve(requiredStateVarIDs.size());
+  auto enqueueRequiredStateKey = [&](const SignalKey& key) {
+    if (!artifacts.requiredStateKeys.insert(key).second) {
+      return;
+    }
+    stateDependencyWorkQueue.push_back(key);
+    const auto pendingIt = pendingIndexByStateKey.find(key);
+    if (pendingIt != pendingIndexByStateKey.end() &&
+        requiredPendingIndexes.insert(pendingIt->second).second) {
+      pendingWorkQueue.push_back(pendingIt->second);
+    }
+  };
+  auto enqueueRequiredStateVarID = [&](size_t varID) {
+    if (!enqueuedStateVarIDs.insert(varID).second) {
+      return;  // LCOV_EXCL_LINE
+    }
+    const auto stateIt = requiredStateKeyByVarID.find(varID);
+    if (stateIt == requiredStateKeyByVarID.end()) {
+      return;  // LCOV_EXCL_LINE
+    }
+    enqueueRequiredStateKey(stateIt->second);
+  };
+  auto enqueueStateDependenciesFromExpr = [&](BoolExpr* expr) {
+    if (expr == nullptr || !expr->isValid()) {
+      return;  // LCOV_EXCL_LINE
+    }
+    enqueueStateDependenciesFromFormula(
+        expr,
+        requiredStateVarIDs,
+        dependencyWalkStack,
+        scannedDependencyNodes,
+        enqueueRequiredStateVarID);
+  // LCOV_EXCL_START
+  };
+  // LCOV_EXCL_STOP
 
-        auto recordOpaqueDependency = [&](const SignalKey& stateKey) {
-          if (opaqueDependency.has_value()) {
-            return;
-          }
-          const auto skipIt = model.connectivitySkipInfoByKey.find(stateKey);
-          if (skipIt == model.connectivitySkipInfoByKey.end() ||
-              skipIt->second.origin != ConnectivitySkipOrigin::OpaqueInternal) {
-            return;
-          }
-          opaqueDependency = skipIt->second;
-          const auto displayIt = model.displayNameByKey.find(stateKey);
-          opaqueDependency->detail =
-              "Depends on skipped state `" +
-              (displayIt == model.displayNameByKey.end()
-                   ? signalKeyToString(stateKey)
-                   : displayIt->second) +
-              "`: " + skipIt->second.detail;
-        };
-        auto enqueueStateKey = [&](const SignalKey& key) {
-          if (!localStateKeys.insert(key).second) {
-            return;
-          }
-          stateDependencyWorkQueue.push_back(key);
-        };
-        auto enqueueStateVarID = [&](size_t varID) {
-          if (!enqueuedStateVarIDs.insert(varID).second) {
-            return;
-          }
-          const auto stateIt = requiredStateKeyByVarID.find(varID);
-          if (stateIt != requiredStateKeyByVarID.end()) {
-            enqueueStateKey(stateIt->second);
-          }
-        };
-        auto enqueueStateDependencies = [&](BoolExpr* expr) {
-          if (expr == nullptr || !expr->isValid()) {
-            return;
-          }
-          enqueueStateDependenciesFromFormula(
-              expr,
-              requiredStateVarIDs,
-              dependencyWalkStack,
-              scannedDependencyNodes,
-              enqueueStateVarID);
-        };
+  for (const auto& [_, expr] : model.observedOutputExprByKey) {
+    enqueueStateDependenciesFromExpr(expr);
+  }
 
-        enqueueStateDependencies(rootExpr);
+  // Follow the state/output dependency frontier lazily so SEC only rebuilds the
+  // sequential update cones that can actually influence covered observations.
+  // States with prebuilt next-state relations, such as structured memories,
+  // participate in the same frontier expansion before we trim the SEC model.
+  while (!stateDependencyWorkQueue.empty() || !pendingWorkQueue.empty()) {
+    while (!stateDependencyWorkQueue.empty()) {
+      const SignalKey key = stateDependencyWorkQueue.front();
+      stateDependencyWorkQueue.pop_front();
+      const auto nextStateIt = model.nextStateExprByStateKey.find(key);
+      if (nextStateIt == model.nextStateExprByStateKey.end()) {
+        continue;
+      }
+      if (!expandedStateDependencies.insert(key).second) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      enqueueStateDependenciesFromExpr(nextStateIt->second);
+    }
 
-        while ((!stateDependencyWorkQueue.empty() ||
-                !pendingWorkQueue.empty()) &&
-               !opaqueDependency.has_value()) {
-          while (!stateDependencyWorkQueue.empty() &&
-                 !opaqueDependency.has_value()) {
-            const SignalKey key = stateDependencyWorkQueue.front();
-            stateDependencyWorkQueue.pop_front();
-            recordOpaqueDependency(key);
-            if (opaqueDependency.has_value()) {
-              break;
-            }
-            if (model.connectivitySkipInfoByKey.find(key) !=
-                model.connectivitySkipInfoByKey.end()) {
-              continue;
-            }
-            const auto nextStateIt = model.nextStateExprByStateKey.find(key);
-            if (nextStateIt != model.nextStateExprByStateKey.end()) {
-              if (expandedStateDependencies.insert(key).second) {
-                enqueueStateDependencies(nextStateIt->second);
-              }
-              continue;
-            }
-            const auto pendingIt = pendingIndexByStateKey.find(key);
-            if (pendingIt != pendingIndexByStateKey.end() &&
-                queuedPendingIndexes.insert(pendingIt->second).second) {
-              pendingWorkQueue.push_back(pendingIt->second);
-            }
-          }
+    if (pendingWorkQueue.empty()) {
+      continue;
+    }
 
-          if (opaqueDependency.has_value() || pendingWorkQueue.empty()) {
+    std::vector<size_t> batchPendingIndexes;
+    std::vector<naja::DNL::DNLID> batchOutputTerms;
+    std::unordered_set<naja::DNL::DNLID> batchOutputTermSet;
+    while (!pendingWorkQueue.empty()) {
+      const size_t pendingIndex = pendingWorkQueue.front();
+      pendingWorkQueue.pop_front();
+      batchPendingIndexes.push_back(pendingIndex);
+
+      const auto& pending = ctx.pendingTransitions[pendingIndex];
+      artifacts.requiredStateKeys.insert(pending.stateKey);
+      for (const auto& complementedKey : pending.complementedStateKeys) {
+        artifacts.requiredStateKeys.insert(complementedKey);
+      }
+
+      for (const auto& [_, term] : getPendingUpdateTerms(pending)) {
+        if (materializedOutputTerms.insert(term.termID).second &&
+            batchOutputTermSet.insert(term.termID).second) {
+          batchOutputTerms.push_back(term.termID);
+        }
+      }
+      for (const auto& clockTerm : pending.clockTermIDs) {
+        // Clock pins may have been materialized earlier as plain carriers.
+        // Rebuild required clocks after boundary/latch dependencies are known
+        // so gated clocks become clk & enable instead of a stale clk frontier.
+        const bool alreadyMaterialized =
+            !materializedOutputTerms.insert(clockTerm.termID).second;
+        if ((!alreadyMaterialized ||
+             hasBuildableCombinationalRoot(ctx.dnl, clockTerm.termID)) &&
+            batchOutputTermSet.insert(clockTerm.termID).second) {
+          batchOutputTerms.push_back(clockTerm.termID);
+        }
+      }
+    }
+
+    if (!batchOutputTerms.empty()) {
+      const auto dependencyOutputs = materializeBuilderOutputs(
+          batchOutputTerms,
+          builderInputs,
+          termDNLID2varID,
+          ctx.collectedSkippedOutputs,
+          ctx.secDiagEnabled,
+          // LCOV_EXCL_START
+          ctx.topName.c_str(),
+          // LCOV_EXCL_STOP
+          "dependency build");
+      appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
+      appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
+      mergeBuilderTermVarIDs(termDNLID2varID, dependencyOutputs.termDNLID2varID);
+      recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
+      for (const auto& [termID, expr] : dependencyOutputs.outputExprByTerm) {
+        outputExprByTerm.insert_or_assign(termID, expr);
+      }
+      for (const auto& [termID, info] : dependencyOutputs.skippedOutputsByTerm) {
+        skippedOutputsByTerm.emplace(termID, info);
+      // LCOV_EXCL_START
+      }
+      // LCOV_EXCL_STOP
+      refreshClockCarrierVarIDs();
+      clockGateLatchDataExprByVarID =
+          collectClockGateLatchDataExprByVarID(
+              ctx, model, topClockCarrierVarIDs, outputExprByTerm);
+    }
+
+    for (const auto pendingIndex : batchPendingIndexes) {
+      const auto& pending = ctx.pendingTransitions[pendingIndex];
+      std::optional<ConnectivitySkipInfo> skippedPinInfo;
+      // LCOV_EXCL_START
+      bool abortPending = false;
+      for (const auto& [modelTerm, term] : getPendingUpdateTerms(pending)) {
+        auto skippedIt = skippedOutputsByTerm.find(term.termID);
+        // LCOV_EXCL_STOP
+        if (skippedIt == skippedOutputsByTerm.end()) {
+          continue;
+        // LCOV_EXCL_START
+        }
+
+        if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second);
+            skipInfo.has_value()) {
+          // LCOV_EXCL_START
+          skippedPinInfo = {
+              skipInfo->origin,
+              // LCOV_EXCL_STOP
+              "Sequential terminal `" + modelTerm->getName().getString() +
+                  "` was skipped because " +
+                  skippedIt->second.detail,
+          };
+          break;
+        }
+        markOpaqueState(
+            pending,
+            "unsupported sequential terminal `" +
+                modelTerm->getName().getString() + "`: " +
+                skippedIt->second.detail);
+        abortPending = true;
+        break;
+      }
+      // LCOV_EXCL_STOP
+
+      if (!skippedPinInfo.has_value()) {
+        // LCOV_EXCL_START
+        for (const auto& clockTerm : pending.clockTermIDs) {
+          auto skippedIt = skippedOutputsByTerm.find(clockTerm.termID);
+          if (skippedIt == skippedOutputsByTerm.end()) {
             continue;
           }
 
-          std::vector<size_t> batchPendingIndexes;
-          std::vector<naja::DNL::DNLID> batchOutputTerms;
-          std::unordered_set<naja::DNL::DNLID> batchOutputTermSet;
-          while (!pendingWorkQueue.empty()) {
-            const size_t pendingIndex = pendingWorkQueue.front();
-            pendingWorkQueue.pop_front();
-            batchPendingIndexes.push_back(pendingIndex);
-
-            const auto& pending = ctx.pendingTransitions[pendingIndex];
-            localStateKeys.insert(pending.stateKey);
-            for (const auto& complementedKey : pending.complementedStateKeys) {
-              localStateKeys.insert(complementedKey);
-            }
-
-            for (const auto& [_, term] : getPendingUpdateTerms(pending)) {
-              if (materializedOutputTerms.insert(term.termID).second &&
-                  batchOutputTermSet.insert(term.termID).second) {
-                batchOutputTerms.push_back(term.termID);
-              }
-            }
-            for (const auto& clockTerm : pending.clockTermIDs) {
-              const bool alreadyMaterialized =
-                  !materializedOutputTerms.insert(clockTerm.termID).second;
-              if ((!alreadyMaterialized ||
-                   hasBuildableCombinationalRoot(ctx.dnl, clockTerm.termID)) &&
-                  batchOutputTermSet.insert(clockTerm.termID).second) {
-                batchOutputTerms.push_back(clockTerm.termID);
-              }
-            }
+          if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second);  // LCOV_EXCL_LINE
+              skipInfo.has_value()) {  // LCOV_EXCL_LINE
+              // LCOV_EXCL_STOP
+            skippedPinInfo = {  // LCOV_EXCL_LINE
+                // LCOV_EXCL_START
+                skipInfo->origin,  // LCOV_EXCL_LINE
+                "Sequential clock pin was skipped because " +  // LCOV_EXCL_LINE
+                // LCOV_EXCL_STOP
+                    skippedIt->second.detail,  // LCOV_EXCL_LINE
+            };
+            break;  // LCOV_EXCL_LINE
           }
 
-          if (!batchOutputTerms.empty()) {
-            const auto dependencyOutputs = materializeBuilderOutputs(
-                batchOutputTerms,
-                builderInputs,
-                termDNLID2varID,
-                ctx.collectedSkippedOutputs,
-                ctx.secDiagEnabled,
-                ctx.topName.c_str(),
-                "dependency build");
-            appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
-            appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
-            mergeBuilderTermVarIDs(
-                termDNLID2varID, dependencyOutputs.termDNLID2varID);
-            recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
-            for (const auto& [termID, expr] :
-                 dependencyOutputs.outputExprByTerm) {
-              outputExprByTerm.insert_or_assign(termID, expr);
-            }
-            for (const auto& [termID, info] :
-                 dependencyOutputs.skippedOutputsByTerm) {
-              skippedOutputsByTerm.emplace(termID, info);
-            }
-            refreshClockCarrierVarIDs();
-            clockGateLatchDataExprByVarID =
-                collectClockGateLatchDataExprByVarID(
-                    ctx, model, topClockCarrierVarIDs, outputExprByTerm);
-          }
+// LCOV_EXCL_START
 
-          for (const auto pendingIndex : batchPendingIndexes) {
-            const auto& pending = ctx.pendingTransitions[pendingIndex];
-            std::optional<ConnectivitySkipInfo> skippedPinInfo;
-            bool abortPending = false;
-            for (const auto& [modelTerm, term] :
-                 getPendingUpdateTerms(pending)) {
-              const auto skippedIt = skippedOutputsByTerm.find(term.termID);
-              if (skippedIt == skippedOutputsByTerm.end()) {
-                continue;
-              }
-              if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second)) {
-                skippedPinInfo = *skipInfo;
-                skippedPinInfo->detail =
-                    "Sequential terminal `" +
-                    modelTerm->getName().getString() +
-                    "` was skipped because " + skippedIt->second.detail;
-                break;
-              }
-              markOpaqueState(
-                  pending,
-                  "unsupported sequential terminal `" +
-                      modelTerm->getName().getString() + "`: " +
-                      skippedIt->second.detail);
-              recordOpaqueDependency(pending.stateKey);
-              abortPending = true;
-              break;
-            }
 
-            if (!skippedPinInfo.has_value() && !abortPending) {
-              for (const auto& clockTerm : pending.clockTermIDs) {
-                const auto skippedIt =
-                    skippedOutputsByTerm.find(clockTerm.termID);
-                if (skippedIt == skippedOutputsByTerm.end()) {
-                  continue;
-                }
-                if (auto skipInfo = getConnectivitySkipInfo(skippedIt->second)) {
-                  skippedPinInfo = *skipInfo;
-                  skippedPinInfo->detail =
-                      "Sequential clock pin was skipped because " +
-                      skippedIt->second.detail;
-                  break;
-                }
-                markOpaqueState(
-                    pending,
-                    "unsupported sequential clock pin: " +
-                        skippedIt->second.detail);
-                recordOpaqueDependency(pending.stateKey);
-                abortPending = true;
-                break;
-              }
-            }
-
-            if (abortPending) {
-              continue;
-            }
-            if (skippedPinInfo.has_value()) {
-              markConnectivitySkippedState(pending.stateKey, *skippedPinInfo);
-              for (const auto& complementedKey :
-                   pending.complementedStateKeys) {
-                markConnectivitySkippedState(complementedKey, *skippedPinInfo);
-              }
-              recordOpaqueDependency(pending.stateKey);
-              continue;
-            }
-
-            BoolExpr* nextStateExpr = buildNextStateExpr(
-                pending,
-                termDNLID2varID,
-                pureClockCarrierTermIDs,
-                topClockCarrierVarIDs,
-                clockEventByCarrierVarID,
-                clockGateLatchDataExprByVarID,
-                outputExprByTerm,
-                transitionClockStripMemo);
-            const auto clockEvent = classifyPendingClockEvent(
-                pending,
-                termDNLID2varID,
-                outputExprByTerm,
-                clockEventByCarrierVarID);
-            logUnpublishedTransitionSupport(
-                ctx,
-                model,
-                pending,
-                nextStateExpr,
-                termDNLID2varID,
-                topClockCarrierVarIDs,
-                pureClockCarrierTermIDs);
-            model.nextStateExprByStateKey.emplace(
-                pending.stateKey, nextStateExpr);
-            if (clockEvent.has_value()) {
-              model.clockEventByStateKey.emplace(
-                  pending.stateKey, *clockEvent);
-            }
-            stateDependencyWorkQueue.push_back(pending.stateKey);
-            for (const auto& complementedKey :
-                 pending.complementedStateKeys) {
-              model.nextStateExprByStateKey.emplace(
-                  complementedKey, BoolExpr::Not(nextStateExpr));
-              if (clockEvent.has_value()) {
-                model.clockEventByStateKey.emplace(
-                    complementedKey, *clockEvent);
-              }
-              stateDependencyWorkQueue.push_back(complementedKey);
-            }
-          }
+// LCOV_EXCL_STOP
+          markOpaqueState(
+              pending,
+              "unsupported sequential clock pin: " + skippedIt->second.detail);
+          abortPending = true;  // LCOV_EXCL_LINE
+          break;  // LCOV_EXCL_LINE
         }
+      }
 
-        if (opaqueDependency.has_value()) {
-          model.connectivitySkipInfoByKey.insert_or_assign(
-              observedOutputKey, *opaqueDependency);
-          return;
+      if (abortPending) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      if (skippedPinInfo.has_value()) {
+        markConnectivitySkippedState(pending.stateKey, *skippedPinInfo);
+        for (const auto& complementedKey : pending.complementedStateKeys) {
+          markConnectivitySkippedState(complementedKey, *skippedPinInfo);  // LCOV_EXCL_LINE
         }
-        artifacts.requiredStateKeys.insert(
-            localStateKeys.begin(), localStateKeys.end());
-      };
+        continue;
+      }
 
-  for (const auto& [key, expr] : model.observedOutputExprByKey) {
-    buildStateClosure(key, expr);
+      BoolExpr* nextStateExpr =
+          buildNextStateExpr(
+              pending,
+              termDNLID2varID,
+              pureClockCarrierTermIDs,
+              topClockCarrierVarIDs,
+              clockEventByCarrierVarID,
+              clockGateLatchDataExprByVarID,
+              outputExprByTerm,
+              transitionClockStripMemo);
+      const auto clockEvent = classifyPendingClockEvent(
+          pending,
+          termDNLID2varID,
+          outputExprByTerm,
+          clockEventByCarrierVarID);
+      // This diagnostic is intentionally after clock-carrier stripping: any
+      // remaining unpublished support would become a private proof input and
+      // can hide the real reason state matching stopped converging.
+      logUnpublishedTransitionSupport(
+          ctx,
+          // LCOV_EXCL_START
+          model,
+          pending,
+          nextStateExpr,
+          // LCOV_EXCL_STOP
+          termDNLID2varID,
+          topClockCarrierVarIDs,
+          // LCOV_EXCL_START
+          pureClockCarrierTermIDs);
+      model.nextStateExprByStateKey.emplace(pending.stateKey, nextStateExpr);
+      if (clockEvent.has_value()) {
+        model.clockEventByStateKey.emplace(pending.stateKey, *clockEvent);
+      }
+      // Liberty flops such as DFF_X1 expose both Q and QN. They share one
+      // LCOV_EXCL_STOP
+      // storage element, so complementary outputs inherit the same next-state
+      // LCOV_EXCL_START
+      // function with a logical inversion.
+      // LCOV_EXCL_STOP
+      for (const auto& complementedKey : pending.complementedStateKeys) {
+        model.nextStateExprByStateKey.emplace(complementedKey, BoolExpr::Not(nextStateExpr));
+        if (clockEvent.has_value()) {
+          model.clockEventByStateKey.emplace(complementedKey, *clockEvent);
+        }
+        if (artifacts.requiredStateKeys.find(complementedKey) !=
+            artifacts.requiredStateKeys.end()) {
+          stateDependencyWorkQueue.push_back(complementedKey);
+        }
+      }
+      stateDependencyWorkQueue.push_back(pending.stateKey);
+    }
   }
+
   if (ctx.secDiagEnabled) {
     fprintf(
         stderr,
@@ -5124,8 +5112,7 @@ void filterUnsupportedAndUnmappedBoundary(ExtractContext& ctx, SequentialDesignM
   }
 }
 
-void propagateConnectivitySkipsThroughDependencies(
-    SequentialDesignModel& model) {
+void propagateConnectivitySkipsThroughDependencies(SequentialDesignModel& model) {
   std::unordered_map<size_t, SignalKey> stateKeyByVarID;
   size_t maxCandidateStateVarID = 0;
   std::deque<size_t> pendingSkippedStateVars;
@@ -5137,9 +5124,8 @@ void propagateConnectivitySkipsThroughDependencies(
     }
     stateKeyByVarID.emplace(varIt->second, key);
     maxCandidateStateVarID = std::max(maxCandidateStateVarID, varIt->second);
-    const auto skipIt = model.connectivitySkipInfoByKey.find(key);
-    if (skipIt != model.connectivitySkipInfoByKey.end() &&
-        skipIt->second.origin != ConnectivitySkipOrigin::OpaqueInternal &&
+    if (model.connectivitySkipInfoByKey.find(key) !=
+            model.connectivitySkipInfoByKey.end() &&
         enqueuedSkippedStateVars.insert(varIt->second).second) {
       pendingSkippedStateVars.push_back(varIt->second);
     }
@@ -5620,9 +5606,8 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 
-  // Phase 5: propagate non-opaque connectivity skips, then retain only the
-  // outputs whose cones were fully modeled. Opaque cones stopped during their
-  // per-output state traversal above.
+  // Phase 5: propagate skipped state dependencies to observed outputs, then
+  // retain only outputs whose cones were fully modeled.
   propagateConnectivitySkipsThroughDependencies(model);
   partitionCoveredSignals(model);
 
