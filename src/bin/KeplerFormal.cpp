@@ -494,9 +494,7 @@ void writeBoundaryTermsReport(
   std::ofstream report(reportPath, std::ios::trunc);
   report << "# SEC boundary terms report\n";
   report << "# Categories:\n";
-  report << "# - top_input / top_output: original top-level interface terms.\n";
-  report << "# - opaque_internal_input / opaque_internal_output: diagnostic internal\n";
-  report << "#   frontiers that SEC could not model; they are never proof inputs.\n\n";
+  report << "# - top_input / top_output: original top-level interface terms.\n\n";
   for (size_t i = 0; i < reports.size(); ++i) {
     const auto& entry = reports[i];
     report << "- design: " << entry.design << "\n";

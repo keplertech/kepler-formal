@@ -193,7 +193,7 @@ write the following files in the current working directory:
 
 | File | Producer | Contents |
 | --- | --- | --- |
-| `boundary_terms.txt` | SEC | Diagnostic extraction surface. Includes top inputs, top outputs, opaque internal frontiers, and skip annotations when present. Opaque terms are not proof inputs. |
+| `boundary_terms.txt` | SEC | Top-level SEC input/output surface and skip annotations when present. |
 | `skipped_no_driver_pos.txt` | shared cone builder | Outputs skipped because the relevant iso has no driver. |
 | `skipped_multi_driver_pos.txt` | shared cone builder | Outputs skipped because the relevant iso has multiple drivers. |
 | `skipped_logical_loop_pos.txt` | shared cone builder | Outputs skipped because the relevant cone contains a logical loop. |
@@ -207,8 +207,6 @@ write the following files in the current working directory:
 | --- | --- |
 | `top_input` | Original top-level input term. |
 | `top_output` | Original top-level output term. |
-| `opaque_internal_input` | Diagnostic internal frontier that SEC could not model. It is not exposed as a proof input. |
-| `opaque_internal_output` | Diagnostic term paired with an opaque internal frontier. It is not compared or shared across designs. |
 
 Skipped outputs are also summarized in the main run log, including no-driver,
 multi-driver, logical-loop, reset-unanchored, multi-clock-domain, and opaque

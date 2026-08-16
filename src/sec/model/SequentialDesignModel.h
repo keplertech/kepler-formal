@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,17 +30,9 @@ enum class ConnectivitySkipOrigin {
   OpaqueInternal,
 };
 
-struct OpaqueInternalInfo {  // LCOV_EXCL_LINE
-  std::string instance;
-  std::string model;
-  std::string pin;
-  std::string reason;
-};
-
 struct ConnectivitySkipInfo {  // LCOV_EXCL_LINE
   ConnectivitySkipOrigin origin = ConnectivitySkipOrigin::NoDriver;
   std::string detail;
-  std::optional<OpaqueInternalInfo> opaqueInternal;
 };
 
 // Normalized view of a sequential design after extracting the interface we
@@ -52,10 +43,6 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::vector<SignalKey> stateBits;
   std::vector<SignalKey> topInputKeys;
   std::vector<SignalKey> topOutputKeys;
-  // Opaque internal cut points introduced by the clause builder for leaves
-  // that are neither modeled sequentially nor reconstructed combinationally.
-  std::vector<SignalKey> internalBoundaryInputKeys;
-  std::vector<SignalKey> internalBoundaryOutputKeys;
   std::vector<SignalKey> allObservedOutputs;
   std::vector<SignalKey> observedOutputs;
   std::vector<SignalKey> skippedStateBits;

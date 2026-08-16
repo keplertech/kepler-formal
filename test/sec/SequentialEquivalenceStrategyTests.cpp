@@ -13615,22 +13615,14 @@ TEST_F(SequentialEquivalenceStrategyTests,
        RunExtractedModelsStopsOnUnsupportedFirstModelWithBoundaryReports) {
   auto model0 = makeCombinationalExtractedModel(BoolExpr::Var(2));
   auto model1 = makeCombinationalExtractedModel(BoolExpr::Var(2));
-  const SignalKey stateKey = makeSignalKey("state");
-  const SignalKey internalIn = makeSignalKey("internal_in");
-  const SignalKey internalOut = makeSignalKey("internal_out");
   model0.unsupportedReasons = {"unsupported sequential state"};
-  model0.internalBoundaryInputKeys = {internalIn};
-  model0.internalBoundaryOutputKeys = {internalOut};
-  model0.displayNameByKey.emplace(stateKey, "u_ff.STATE[0]");
-  model0.displayNameByKey.emplace(internalIn, "u_logic.A[0]");
-  model0.displayNameByKey.emplace(internalOut, "u_logic.Y[0]");
 
   auto strategy = makeBinaryExtractedSecStrategy();
   const auto result = strategy.runExtractedModels(model0, model1, 1);
 
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
   EXPECT_NE(result.reason.find("unsupported sequential state"), std::string::npos);
-  EXPECT_GE(result.extractedBoundaryReports.size(), 3u);
+  EXPECT_EQ(result.extractedBoundaryReports.size(), 2u);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -16015,7 +16007,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractModelsStructuredMemoryWithoutBoundaryFallback) {
+       SequentialDesignModelExtractModelsStructuredMemory) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -16027,24 +16019,13 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  auto hasBoundaryRoleName = [&](const std::vector<SignalKey>& keys,
-                                 const std::string& prefix) {
-    return std::any_of(keys.begin(), keys.end(), [&](const SignalKey& key) {
-      const auto it = extracted.displayNameByKey.find(key);
-      return it != extracted.displayNameByKey.end() &&
-             it->second.rfind(prefix, 0) == 0;
-    });
-  };
-
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem0."));
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem0."));
   EXPECT_FALSE(extracted.stateBits.empty());
   EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractModelsImportedLibertyMemoryWithoutOpaqueBoundaryTerms) {
+       SequentialDesignModelExtractModelsImportedLibertyMemory) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -16057,18 +16038,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  auto hasBoundaryRoleName = [&](const std::vector<SignalKey>& keys,
-                                 const std::string& prefix) {
-    return std::any_of(keys.begin(), keys.end(), [&](const SignalKey& key) {
-      const auto it = extracted.displayNameByKey.find(key);
-      return it != extracted.displayNameByKey.end() &&
-             it->second.rfind(prefix, 0) == 0;
-    });
-  };
-
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem0."));
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem0."));
   EXPECT_FALSE(extracted.stateBits.empty());
   EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
 }
@@ -16353,7 +16323,7 @@ TEST_F(
 
 TEST_F(
     SequentialEquivalenceStrategyTests,
-    SequentialDesignModelExtractModelsRealCva6PerfCountersTargetConfigMemoryWithoutBoundaryFallback) {
+    SequentialDesignModelExtractModelsRealCva6PerfCountersTargetConfigMemory) {
   const auto context = resolveCva6SourceContextForSecTests();
   if (!context.has_value()) {
     GTEST_SKIP()
@@ -16370,23 +16340,8 @@ TEST_F(
       "real_cva6_perf_counters_module_with_target_config_sec_memory_supported");
 
   const auto extracted = SequentialDesignModel::extract(top);
-  auto hasBoundaryRoleName = [&](const std::vector<SignalKey>& keys,
-                                 const std::string& needle) {
-    return std::any_of(keys.begin(), keys.end(), [&](const SignalKey& key) {
-      const auto it = extracted.displayNameByKey.find(key);
-      return it != extracted.displayNameByKey.end() &&
-             it->second.find(needle) != std::string::npos;
-    });
-  };
-
-  // Guard the exact configured CVA6 perf-counter memory path that fails in
-  // full SEC runs: the inferred memory should stay inside the sequential model
-  // instead of leaking back out as generic boundary terms.
+  // Guard the exact configured CVA6 perf-counter memory path used by full SEC.
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_FALSE(
-      hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "generic_counter_q_mem"));
-  EXPECT_FALSE(
-      hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "generic_counter_q_mem"));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -16432,18 +16387,7 @@ endmodule
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  auto hasBoundaryRoleName = [&](const std::vector<SignalKey>& keys,
-                                 const std::string& prefix) {
-    return std::any_of(keys.begin(), keys.end(), [&](const SignalKey& key) {
-      const auto it = extracted.displayNameByKey.find(key);
-      return it != extracted.displayNameByKey.end() &&
-             it->second.rfind(prefix, 0) == 0;
-    });
-  };
-
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem_q"));
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem_q"));
   EXPECT_FALSE(extracted.stateBits.empty());
   EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
   EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
@@ -16697,18 +16641,7 @@ endmodule
 
   const auto extracted = SequentialDesignModel::extract(top);
 
-  auto hasBoundaryRoleName = [&](const std::vector<SignalKey>& keys,
-                                 const std::string& prefix) {
-    return std::any_of(keys.begin(), keys.end(), [&](const SignalKey& key) {
-      const auto it = extracted.displayNameByKey.find(key);
-      return it != extracted.displayNameByKey.end() &&
-             it->second.rfind(prefix, 0) == 0;
-    });
-  };
-
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryInputKeys, "mem_q"));
-  EXPECT_FALSE(hasBoundaryRoleName(extracted.internalBoundaryOutputKeys, "mem_q"));
   EXPECT_FALSE(extracted.stateBits.empty());
   EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
   EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
@@ -17322,7 +17255,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto extracted = SequentialDesignModel::extract(top);
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_TRUE(extracted.internalBoundaryOutputKeys.empty());
   ASSERT_EQ(extracted.stateBits.size(), 1u);
   ASSERT_EQ(extracted.topOutputKeys.size(), 1u);
   EXPECT_EQ(extracted.observedOutputs.size(), extracted.topOutputKeys.size());

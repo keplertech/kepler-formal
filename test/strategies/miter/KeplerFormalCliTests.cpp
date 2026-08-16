@@ -3318,23 +3318,18 @@ TEST_F(KeplerFormalCliTests, WriteBoundaryTermsReportFormatsEntries) {
       {.design = "design0", .signal = "clk[0]", .roles = {"top_input"}},
       {.design = "design0",
        .signal = "bad[0]",
-       .roles = {"top_output", "opaque_internal_output"},
+       .roles = {"top_output"},
        .connectivitySkip = "logical-loop connectivity: cycle"}};
 
   writeBoundaryTermsReport(reportPath, reports);
 
   const auto content = readFileContents(reportPath);
   EXPECT_NE(content.find("# SEC boundary terms report"), std::string::npos);
-  EXPECT_NE(content.find("opaque_internal_input / opaque_internal_output"),
-            std::string::npos);
   EXPECT_NE(content.find("design: design0"), std::string::npos);
   EXPECT_NE(content.find("signal: clk[0]"), std::string::npos);
   EXPECT_NE(content.find("roles: [top_input]"), std::string::npos);
   EXPECT_NE(content.find("signal: bad[0]"), std::string::npos);
-  EXPECT_NE(
-      content.find(
-          "roles: [top_output, opaque_internal_output]"),
-      std::string::npos);
+  EXPECT_NE(content.find("roles: [top_output]"), std::string::npos);
   EXPECT_NE(
       content.find("connectivity_skip: logical-loop connectivity: cycle"),
       std::string::npos);

@@ -344,17 +344,6 @@ std::string describeConnectivitySkipOrigin(ConnectivitySkipOrigin origin) {
 
 std::string describeConnectivitySkipInfo(const ConnectivitySkipInfo& info) {
   if (info.origin == ConnectivitySkipOrigin::OpaqueInternal) {
-    if (info.opaqueInternal.has_value()) {
-      const auto& opaque = *info.opaqueInternal;
-      std::ostringstream oss;
-      oss << describeConnectivitySkipOrigin(info.origin)
-          << ": opaque internal cell `" << opaque.instance << "`";
-      if (!opaque.model.empty()) {
-        oss << " (model `" << opaque.model << "`)";
-      }
-      oss << " pin `" << opaque.pin << "`: " << opaque.reason;
-      return oss.str();
-    }
     return describeConnectivitySkipOrigin(info.origin) + ": " + info.detail;
   }
   std::ostringstream oss;
@@ -2081,20 +2070,12 @@ void appendExtractedBoundaryReports(
     appendUniqueRole(entry.roles, role);
   };
 
-  // Boundary terms describe the extraction surface for diagnostics:
-  // - the original top interface
-  // - opaque internal frontiers that SEC did not expose as proof inputs
+  // Boundary terms describe the original top interface for diagnostics.
   for (const auto& key : model.topInputKeys) {
     addRole(key, "top_input");
   }
   for (const auto& key : model.topOutputKeys) {
     addRole(key, "top_output");
-  }
-  for (const auto& key : model.internalBoundaryInputKeys) {
-    addRole(key, "opaque_internal_input");
-  }
-  for (const auto& key : model.internalBoundaryOutputKeys) {
-    addRole(key, "opaque_internal_output");
   }
   reports.reserve(reports.size() + reportsBySignal.size());
   for (auto& [_, entry] : reportsBySignal) {
