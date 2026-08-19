@@ -1,7 +1,7 @@
 // Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
-#include "model/SecOpaqueConeAnalysis.h"
+#include "model/SecNetlistChecks.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -393,10 +393,11 @@ std::vector<DNLID> findReachedTopOutputs(naja::DNL::DNLFull* dnl,
 
 }  // namespace
 
-std::vector<OpaqueReachedTopOutput> findTopOutputsReachedByOpaqueTerminals(
-    naja::DNL::DNLFull* dnl, std::vector<OpaqueTerminalSeed> opaqueSeeds,
-    const std::vector<SecLocalTerminalDependency>& extraDependencies) {
-  if (dnl == nullptr || opaqueSeeds.empty()) {
+std::vector<OpaqueReachedTopOutput>
+SecNetlistChecks::findTopOutputsReachedByOpaqueTerminals(
+    std::vector<OpaqueTerminalSeed> opaqueSeeds,
+    const std::vector<SecLocalTerminalDependency>& extraDependencies) const {
+  if (dnl_ == nullptr || opaqueSeeds.empty()) {
     return {};
   }
   std::sort(
@@ -414,17 +415,17 @@ std::vector<OpaqueReachedTopOutput> findTopOutputsReachedByOpaqueTerminals(
     opaqueTerms.insert(seed.termID);
   }
   const auto dependencies =
-      buildLocalDependencyGraph(dnl, opaqueTerms, extraDependencies);
+      buildLocalDependencyGraph(dnl_, opaqueTerms, extraDependencies);
 
   std::vector<std::vector<DNLID>> reachedBySeed(opaqueSeeds.size());
   tbb::parallel_for(tbb::blocked_range<size_t>(0, opaqueSeeds.size()),
                     [&](const tbb::blocked_range<size_t>& range) {
-                      std::vector<uint8_t> visited(dnl->getNBterms(), 0);
+                      std::vector<uint8_t> visited(dnl_->getNBterms(), 0);
                       std::vector<DNLID> work;
                       for (size_t seedIndex = range.begin();
                            seedIndex != range.end(); ++seedIndex) {
                         reachedBySeed[seedIndex] = findReachedTopOutputs(
-                            dnl, dependencies, opaqueSeeds[seedIndex].termID,
+                            dnl_, dependencies, opaqueSeeds[seedIndex].termID,
                             visited, work);
                         for (const auto termID : work) {
                           visited[termID] = 0;

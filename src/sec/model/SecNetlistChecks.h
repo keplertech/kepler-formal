@@ -25,8 +25,17 @@ struct OpaqueReachedTopOutput {
   OpaqueTerminalSeed source;
 };
 
-std::vector<OpaqueReachedTopOutput> findTopOutputsReachedByOpaqueTerminals(
-    naja::DNL::DNLFull* dnl, std::vector<OpaqueTerminalSeed> opaqueSeeds,
-    const std::vector<SecLocalTerminalDependency>& extraDependencies = {});
+class SecNetlistChecks {
+ public:
+  explicit SecNetlistChecks(naja::DNL::DNLFull* dnl) : dnl_(dnl) {}
+
+  std::vector<OpaqueReachedTopOutput> findTopOutputsReachedByOpaqueTerminals(
+      std::vector<OpaqueTerminalSeed> opaqueSeeds,
+      const std::vector<SecLocalTerminalDependency>& extraDependencies = {})
+      const;
+
+ private:
+  naja::DNL::DNLFull* dnl_ = nullptr;
+};
 
 }  // namespace KEPLER_FORMAL::SEC

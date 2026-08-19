@@ -9,7 +9,7 @@ add_library(kepler_sec STATIC
     imc/IMCEngine.cpp
     kinduction/KInductionEngine.cpp
     kinduction/OutputBatching.cpp
-    model/SecOpaqueConeAnalysis.cpp
+    model/SecNetlistChecks.cpp
     model/SequentialDesignModel.cpp
     pdr/PDREngine.cpp
     proof/DualRailEncoding.cpp

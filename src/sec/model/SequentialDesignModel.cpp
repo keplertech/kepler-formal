@@ -32,7 +32,7 @@
 #include "../../clauses/SNLLogicCloud.h"
 #include "../../clauses/Tree2BoolExpr.h"
 #include "common/BoolExprUtils.h"
-#include "model/SecOpaqueConeAnalysis.h"
+#include "model/SecNetlistChecks.h"
 #include "../../strategies/miter/BuildPrimaryOutputClauses.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -2757,10 +2757,9 @@ void skipTopOutputsReachedByOpaqueTerminals(
   }
 
   ctx.hasOpaqueInternalTerminals = !opaqueSeeds.empty();
-  const auto reachedOutputs = findTopOutputsReachedByOpaqueTerminals(
-      ctx.dnl,
-      std::move(opaqueSeeds),
-      ctx.opaqueConeExtraDependencies);
+  const SecNetlistChecks checks(ctx.dnl);
+  const auto reachedOutputs = checks.findTopOutputsReachedByOpaqueTerminals(
+      std::move(opaqueSeeds), ctx.opaqueConeExtraDependencies);
   for (const auto& reached : reachedOutputs) {
     const auto outputIt =
         ctx.topOutputKeyByTerm.find(reached.topOutputTermID);
