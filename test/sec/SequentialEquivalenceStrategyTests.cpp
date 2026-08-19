@@ -2345,7 +2345,9 @@ SNLDesign* createSinglePortMemoryTop(
     const std::string& name,
     SNLDesign* memoryModel,
     std::optional<int> floatingWriteDataBit = std::nullopt,
-    bool floatingReset = false) {
+    bool floatingReset = false,
+    SNLDesign* opaqueWriteDataModel = nullptr,
+    bool undrivenWriteEnable = false) {
   auto* top =
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topClock =
@@ -2368,6 +2370,10 @@ SNLDesign* createSinglePortMemoryTop(
       SNLBusTerm::create(top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
 
   auto* memory = SNLInstance::create(top, memoryModel, NLName("mem0"));
+  auto* opaqueWriteData = opaqueWriteDataModel == nullptr
+      ? nullptr
+      : SNLInstance::create(
+            top, opaqueWriteDataModel, NLName("opaque_wdata"));
   auto* clockNet = SNLScalarNet::create(top, NLName("clk_net"));
   auto* chipEnableNet = SNLScalarNet::create(top, NLName("ce_net"));
   auto* writeEnableNet = SNLScalarNet::create(top, NLName("we_net"));
@@ -2381,7 +2387,9 @@ SNLDesign* createSinglePortMemoryTop(
 
   topClock->setNet(clockNet);
   topChipEnable->setNet(chipEnableNet);
-  topWriteEnable->setNet(writeEnableNet);
+  if (!undrivenWriteEnable) {
+    topWriteEnable->setNet(writeEnableNet);
+  }
   if (topReset != nullptr) {
     topReset->setNet(resetNet);
   }
@@ -2396,12 +2404,26 @@ SNLDesign* createSinglePortMemoryTop(
   auto* modelWriteData = memoryModel->getBusTerm(NLName("WDATA"));
   auto* modelWriteMask = memoryModel->getBusTerm(NLName("WMASK"));
   auto* modelReadData = memoryModel->getBusTerm(NLName("RDATA"));
+  auto* opaqueWriteDataNet = opaqueWriteData == nullptr
+      ? nullptr
+      : SNLScalarNet::create(top, NLName("opaque_wdata_net"));
   for (int bit = 0; bit <= 1; ++bit) {
     topAddress->getBit(bit)->setNet(addressNet->getBit(bit));
     memory->getInstTerm(modelAddress->getBit(bit))->setNet(addressNet->getBit(bit));
   }
   for (int bit = 0; bit <= 3; ++bit) {
-    if (floatingWriteDataBit.has_value() && bit == *floatingWriteDataBit) {
+    if (opaqueWriteData != nullptr && bit == 0) {
+      topWriteData->getBit(bit)->setNet(writeDataNet->getBit(bit));
+      opaqueWriteData
+          ->getInstTerm(opaqueWriteDataModel->getScalarTerm(NLName("A")))
+          ->setNet(writeDataNet->getBit(bit));
+      opaqueWriteData
+          ->getInstTerm(opaqueWriteDataModel->getScalarTerm(NLName("Y")))
+          ->setNet(opaqueWriteDataNet);
+      memory->getInstTerm(modelWriteData->getBit(bit))
+          ->setNet(opaqueWriteDataNet);
+    } else if (
+        floatingWriteDataBit.has_value() && bit == *floatingWriteDataBit) {
       auto* floatingWriteDataNet = SNLScalarNet::create(
           top, NLName("floating_wdata" + std::to_string(bit) + "_net"));
       memory->getInstTerm(modelWriteData->getBit(bit))->setNet(floatingWriteDataNet);
@@ -2919,6 +2941,47 @@ SNLDesign* createOpaqueBoundaryTop(
   opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("A")))->setNet(netIn);
   opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("Y")))->setNet(netOut);
 
+  return top;
+}
+
+SNLDesign* createOpaqueIndependentOutputTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* opaqueModel,
+    SNLDesign* muxModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topGood =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("good"));
+  auto* topBad =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("bad"));
+  auto* opaque = SNLInstance::create(top, opaqueModel, NLName("opaque0"));
+  auto* mux = SNLInstance::create(top, muxModel, NLName("mux0"));
+
+  auto* inputNet = SNLScalarNet::create(top, NLName("input_net"));
+  auto* opaqueNet = SNLScalarNet::create(top, NLName("opaque_net"));
+  auto* goodNet = SNLScalarNet::create(top, NLName("good_net"));
+  auto* badNet = SNLScalarNet::create(top, NLName("bad_net"));
+  topIn->setNet(inputNet);
+  topGood->setNet(goodNet);
+  topBad->setNet(badNet);
+  opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("A")))
+      ->setNet(inputNet);
+  opaque->getInstTerm(opaqueModel->getScalarTerm(NLName("Y")))
+      ->setNet(opaqueNet);
+  mux->getInstTerm(NLDB0::getMux2InputA(muxModel)->getBit(0))
+      ->setNet(opaqueNet);
+  mux->getInstTerm(NLDB0::getMux2InputA(muxModel)->getBit(1))
+      ->setNet(inputNet);
+  mux->getInstTerm(NLDB0::getMux2InputB(muxModel)->getBit(0))
+      ->setNet(inputNet);
+  mux->getInstTerm(NLDB0::getMux2InputB(muxModel)->getBit(1))
+      ->setNet(inputNet);
+  mux->getInstTerm(NLDB0::getMux2Select(muxModel))->setNet(inputNet);
+  mux->getInstTerm(NLDB0::getMux2Output(muxModel)->getBit(0))->setNet(badNet);
+  mux->getInstTerm(NLDB0::getMux2Output(muxModel)->getBit(1))->setNet(goodNet);
   return top;
 }
 
@@ -16532,6 +16595,70 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       OpaqueEnabledMemoryWriteDataSkipsReadOutputs) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_OPAQUE_ENABLED_WRITE");
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library,
+      "structured_memory_opaque_enabled_write",
+      memoryModel,
+      std::nullopt,
+      false,
+      opaqueModel);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  EXPECT_EQ(extracted.skippedObservedOutputs.size(), 4u);
+  for (const auto& output : extracted.skippedObservedOutputs) {
+    const auto skip = extracted.connectivitySkipInfoByKey.find(output);
+    ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+    EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+    EXPECT_NE(skip->second.detail.find("opaque_wdata"), std::string::npos);
+  }
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       OpaqueDisabledMemoryWriteDataDoesNotSkipReadOutputs) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_OPAQUE_DISABLED_WRITE");
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library,
+      "structured_memory_opaque_disabled_write",
+      memoryModel,
+      std::nullopt,
+      false,
+      opaqueModel,
+      true);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.observedOutputs.size(), 4u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  const auto opaqueOutput =
+      findKeyByDisplayName(extracted, "opaque_wdata.Y[0]");
+  EXPECT_EQ(
+      extracted.inputVarByKey.find(opaqueOutput),
+      extracted.inputVarByKey.end());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractSkipsWholeMemoryForUndrivenWriteData) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
@@ -17907,6 +18034,45 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_NE(report.find("Y[0]"), std::string::npos);
   EXPECT_NE(report.find("no initialized combinational truth table"),
             std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       OpaqueConeFollowsOnlyOutputsDependentOnReachedInput) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* muxModel = NLDB0::getOrCreateMux2(2);
+  auto* top0 = createOpaqueIndependentOutputTop(
+      library, "top0", opaqueModel, muxModel);
+  auto* top1 = createOpaqueIndependentOutputTop(
+      library, "top1", opaqueModel, muxModel);
+
+  const auto extracted = SequentialDesignModel::extract(top0);
+  const auto good = findKeyByDisplayName(extracted, "good[0]");
+  const auto bad = findKeyByDisplayName(extracted, "bad[0]");
+  EXPECT_EQ(extracted.observedOutputs, std::vector<SignalKey>{good});
+  EXPECT_EQ(extracted.skippedObservedOutputs, std::vector<SignalKey>{bad});
+  const auto skip = extracted.connectivitySkipInfoByKey.find(bad);
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+  EXPECT_NE(skip->second.detail.find("opaque0"), std::string::npos);
+
+  auto strategy = makeBinarySecStrategy(top0, top1);
+  const auto result = strategy.run(2);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::PartiallyProved);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 2u);
+  ASSERT_EQ(result.opaqueCellSkippedOutputs.size(), 1u);
+  EXPECT_NE(
+      result.opaqueCellSkippedOutputs.front().find("bad[0]"),
+      std::string::npos);
+  EXPECT_EQ(
+      result.opaqueCellSkippedOutputs.front().find("good[0]"),
+      std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

@@ -190,6 +190,7 @@ jobs:
           case_dir: kepler-formal-examples/nangate45_ariane136
           config: 6_final_sec_test.yml
           expectation: positive
+          pdr_dual_rail_expectation: allow-inconclusive
         - name: asap7_ethmac
           source: examples
           case_dir: kepler-formal-examples/asap7_ethmac

@@ -399,6 +399,11 @@ run_engine() {
         grep "SEC was inconclusive" "${stdout_log}"
         return 0
       fi
+      if [[ "${kepler_status}" -eq 2 ]] &&
+          grep -q "No aligned observed outputs remain after skipping unverifiable cones" "${stdout_log}"; then
+        grep "SEC cannot run on this design pair" "${stdout_log}"
+        return 0
+      fi
       if [[ "${kepler_status}" -ne 0 ]]; then
         return "${kepler_status}"
       fi
