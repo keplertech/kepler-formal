@@ -52,6 +52,7 @@
 #include "kinduction/BaseCaseSolver.h"
 #include "kinduction/SatEncoding.h"
 #include "kinduction/InductionStepSolver.h"
+#include "model/SecNetlistChecks.h"
 #include "model/SequentialDesignModel.h"
 #include "proof/TransitionExprResolver.h"
 #include "BuildPrimaryOutputClauses.h"
@@ -4613,6 +4614,64 @@ void expectOpaqueOutputSkipWithReason(
                skip->second.origin == ConnectivitySkipOrigin::OpaqueInternal &&
                skip->second.detail.find(reason) != std::string::npos;
       }));
+}
+
+std::vector<std::string> findOpaqueReachedOutputNamesForTest(
+    SNLDesign* top,
+    const std::string& opaqueOutputName) {
+  detail::ScopedDnlContextForTest dnlContext(top);
+  auto* dnl = dnlContext.dnl();
+  const auto opaqueTerm =
+      detail::findTermByDisplayNameForTest(dnl, opaqueOutputName);
+  if (!opaqueTerm.has_value()) {
+    throw std::runtime_error(
+        "Missing opaque output terminal: " + opaqueOutputName);
+  }
+
+  const SecNetlistChecks checks(dnl);
+  const auto reached = checks.findTopOutputsReachedByOpaqueTerminals(
+      {{*opaqueTerm, "test opaque terminal"}});
+  std::vector<std::string> names;
+  names.reserve(reached.size());
+  for (const auto& output : reached) {
+    names.push_back(detail::getTerminalDisplayNameForTest(
+        dnl->getDNLTerminalFromID(output.topOutputTermID)));
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+std::optional<KEPLER_FORMAL::BuildPrimaryOutputClauses::SkippedOutputInfo>
+buildStrictOpaqueOutputForTest(
+    SNLDesign* top,
+    const std::string& opaqueOutputName,
+    const std::string& topOutputName) {
+  detail::ScopedDnlContextForTest dnlContext(top);
+  auto* dnl = dnlContext.dnl();
+  const auto opaqueTerm =
+      detail::findTermByDisplayNameForTest(dnl, opaqueOutputName);
+  const auto topOutput =
+      detail::findTermByDisplayNameForTest(dnl, topOutputName);
+  if (!opaqueTerm.has_value() || !topOutput.has_value()) {
+    throw std::runtime_error("Missing strict opaque-builder test terminal");
+  }
+
+  KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
+  builder.setRetainDnl(true);
+  builder.collect();
+  auto inputs = builder.getInputs();
+  inputs.erase(std::remove(inputs.begin(), inputs.end(), *opaqueTerm),
+               inputs.end());
+  builder.setInputs(inputs);
+  builder.setOutputs({*topOutput});
+  builder.setStopAtOpaqueInternalOutputs(true);
+  builder.build();
+
+  const auto skipped = builder.getSkippedOutputs().find(*topOutput);
+  if (skipped == builder.getSkippedOutputs().end()) {
+    return std::nullopt;
+  }
+  return skipped->second;
 }
 
 void expectAllExpressionSupportIsPublished(const SequentialDesignModel& model) {
@@ -16659,6 +16718,116 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SecNetlistChecksPropagatesEnabledMemoryWriteThroughResetModel) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_RESET_DEPENDENCY", true);
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library, "memory_reset_dependency", memoryModel, std::nullopt, false,
+      opaqueModel);
+
+  EXPECT_EQ(findOpaqueReachedOutputNamesForTest(top, "opaque_wdata.Y[0]"),
+            (std::vector<std::string>{
+                "out[0]", "out[1]", "out[2]", "out[3]"}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SecNetlistChecksToleratesMissingOptionalMemoryResetTerm) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_NULL_RESET_DEPENDENCY");
+  auto interface = SNLDesignModeling::getMemoryInterface(memoryModel);
+  interface.resetMode = SNLDesignModeling::MemoryResetMode::AsyncHigh;
+  SNLDesignModeling::setMemoryInterface(memoryModel, interface);
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library, "memory_null_reset_dependency", memoryModel, std::nullopt,
+      false, opaqueModel);
+
+  EXPECT_EQ(findOpaqueReachedOutputNamesForTest(top, "opaque_wdata.Y[0]"),
+            (std::vector<std::string>{
+                "out[0]", "out[1]", "out[2]", "out[3]"}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SecNetlistChecksRejectsMismatchedMemoryReadShape) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_BAD_READ_SHAPE");
+  auto interface = SNLDesignModeling::getMemoryInterface(memoryModel);
+  interface.readPorts.front().address.pop_back();
+  SNLDesignModeling::setMemoryInterface(memoryModel, interface);
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library, "memory_bad_read_shape", memoryModel, std::nullopt, false,
+      opaqueModel);
+
+  EXPECT_TRUE(
+      findOpaqueReachedOutputNamesForTest(top, "opaque_wdata.Y[0]").empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SecNetlistChecksRejectsUnsupportedMemoryWriteShape) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_BAD_WRITE_SHAPE");
+  auto interface = SNLDesignModeling::getMemoryInterface(memoryModel);
+  interface.writePorts.front().extraWriteInputs.push_back(
+      {interface.writePorts.front().data.front()});
+  SNLDesignModeling::setMemoryInterface(memoryModel, interface);
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library, "memory_bad_write_shape", memoryModel, std::nullopt, false,
+      opaqueModel);
+
+  EXPECT_TRUE(
+      findOpaqueReachedOutputNamesForTest(top, "opaque_wdata.Y[0]").empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SecNetlistChecksTreatsDisconnectedMemoryWriteEnableAsDisabled) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel =
+      createSinglePortMemoryModel(primitives, "MEM_DISCONNECTED_WE");
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createSinglePortMemoryTop(
+      library, "memory_disconnected_we", memoryModel, std::nullopt, false,
+      opaqueModel);
+  top->getInstance(NLName("mem0"))
+      ->getInstTerm(memoryModel->getScalarTerm(NLName("WE")))
+      ->setNet(nullptr);
+
+  EXPECT_TRUE(
+      findOpaqueReachedOutputNamesForTest(top, "opaque_wdata.Y[0]").empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractSkipsWholeMemoryForUndrivenWriteData) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
@@ -17654,6 +17823,71 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SecNetlistChecksPropagatesSequentialStateAndControlDependencies) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      createIndependentSequentialOutputModel(primitives, "SEQ_DEP_COVERAGE");
+  auto sequentialModel = SNLDesignModeling::getSequentialModel(model);
+
+  auto* foreignModel = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("FOREIGN_SEQ_METADATA"));
+  auto* foreignInput = SNLScalarTerm::create(
+      foreignModel, SNLTerm::Direction::Input, NLName("A"));
+  auto* foreignOutput = SNLScalarTerm::create(
+      foreignModel, SNLTerm::Direction::Output, NLName("Y"));
+  using Expression = SNLDesignModeling::BooleanExpression;
+  using Operator = Expression::Operator;
+  Expression nextState;
+  const auto data =
+      nextState.addTerm(model->getScalarTerm(NLName("D_GOOD")));
+  const auto foreign = nextState.addTerm(foreignInput);
+  const auto badState = nextState.addState(1);
+  const auto unmappedState = nextState.addState(99);
+  nextState.root = nextState.addOperation(
+      Operator::Or, {data, foreign, badState, badState, unmappedState});
+  sequentialModel.states[0].nextState = std::move(nextState);
+  sequentialModel.states[0].clear = Expression{};
+  sequentialModel.states[0].preset = makeSequentialTermExpression(
+      model->getScalarTerm(NLName("D_BAD")));
+  sequentialModel.outputs.push_back(
+      {foreignOutput, makeSequentialStateExpression(0)});
+  sequentialModel.outputs.push_back(
+      {model->getScalarTerm(NLName("BAD")),
+       makeSequentialStateExpression(99)});
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+  auto* top = createIndependentSequentialOutputTop(library, "top", model);
+
+  detail::ScopedDnlContextForTest dnlContext(top);
+  auto* dnl = dnlContext.dnl();
+  const auto badStateTerm =
+      detail::findTermByDisplayNameForTest(dnl, "ff0.BAD[0]");
+  const auto goodStateTerm =
+      detail::findTermByDisplayNameForTest(dnl, "ff0.GOOD[0]");
+  ASSERT_TRUE(badStateTerm.has_value());
+  ASSERT_TRUE(goodStateTerm.has_value());
+
+  const SecNetlistChecks checks(dnl);
+  const auto reached = checks.findTopOutputsReachedByOpaqueTerminals(
+      {{*badStateTerm, "opaque BAD"}, {*badStateTerm, "opaque BAD"}},
+      {{naja::DNL::DNLID_MAX, *goodStateTerm},
+       {*goodStateTerm, *goodStateTerm}});
+  std::vector<std::string> reachedNames;
+  for (const auto& output : reached) {
+    reachedNames.push_back(detail::getTerminalDisplayNameForTest(
+        dnl->getDNLTerminalFromID(output.topOutputTermID)));
+    EXPECT_EQ(output.source.detail, "opaque BAD");
+  }
+  std::sort(reachedNames.begin(), reachedNames.end());
+  EXPECT_EQ(reachedNames,
+            (std::vector<std::string>{"bad[0]", "good[0]"}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractIgnoresOutputFromAnotherPrimitive) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
@@ -18073,6 +18307,80 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_EQ(
       result.opaqueCellSkippedOutputs.front().find("good[0]"),
       std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SNLLogicCloudReportsMissingSequentialModelAtStrictBoundary) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNoDataSequentialModel(primitives, "SEQ_NO_MODEL");
+  auto* top = createNoDataSequentialTop(library, "top", model);
+
+  const auto skipped =
+      buildStrictOpaqueOutputForTest(top, "ff0.Q[0]", "out[0]");
+  ASSERT_TRUE(skipped.has_value());
+  EXPECT_EQ(
+      skipped->reason,
+      KEPLER_FORMAL::BuildPrimaryOutputClauses::SkippedOutputReason::
+          OpaqueInternal);
+  EXPECT_NE(skipped->detail.find("Missing Naja sequential model"),
+            std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SNLLogicCloudReportsUnsupportedLatchAtStrictBoundary) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top = createDirectLatchTop(library, "top", NLDB0::getDLatch());
+
+  const auto skipped =
+      buildStrictOpaqueOutputForTest(top, "latch0.Q[0]", "out[0]");
+  ASSERT_TRUE(skipped.has_value());
+  EXPECT_NE(skipped->detail.find(
+                "Naja latch sequential models are not supported by SEC"),
+            std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SNLLogicCloudReportsUnusableFlipFlopOutputAtStrictBoundary) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top = createDffTop(library, "top", nullptr, false, false);
+
+  const auto skipped =
+      buildStrictOpaqueOutputForTest(top, "ff0.Q[0]", "out[0]");
+  ASSERT_TRUE(skipped.has_value());
+  EXPECT_NE(skipped->detail.find("sequential output has no usable SEC model"),
+            std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SNLLogicCloudStopsWhenOpaqueTerminalIsReachedInsideCone) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* opaqueModel = createOpaqueLeafModel(primitives);
+  auto* top = createOpaqueIndependentOutputTop(
+      library, "top", opaqueModel, NLDB0::getOrCreateMux2(2));
+
+  const auto skipped =
+      buildStrictOpaqueOutputForTest(top, "opaque0.Y[0]", "bad[0]");
+  ASSERT_TRUE(skipped.has_value());
+  EXPECT_NE(skipped->detail.find("opaque0"), std::string::npos);
+  EXPECT_NE(skipped->detail.find(
+                "no initialized combinational truth table or usable sequential model"),
+            std::string::npos);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

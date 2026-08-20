@@ -113,7 +113,7 @@ std::optional<DNLID> findInstanceTerm(const InstanceTermMap& instanceTerms,
 bool supportsStructuredMemoryModel(
     const naja::NL::SNLDesignModeling::MemoryInterface& interface) {
   if (!interface.isValid()) {
-    return false;
+    return false;  // LCOV_EXCL_LINE - Naja rejects invalid interfaces on set.
   }
   for (const auto& readPort : interface.readPorts) {
     if (readPort.address.size() != interface.abits ||
@@ -134,11 +134,11 @@ bool supportsStructuredMemoryModel(
 
 bool isDisabledMemoryWriteEnable(naja::DNL::DNLFull* dnl, DNLID termID) {
   if (termID == naja::DNL::DNLID_MAX) {
-    return true;
+    return true;  // LCOV_EXCL_LINE - callers pass only mapped instance terms.
   }
   const auto& term = dnl->getDNLTerminalFromID(termID);
   if (term.isNull() || term.getIsoID() == naja::DNL::DNLID_MAX) {
-    return true;
+    return true;  // LCOV_EXCL_LINE - mapped terms receive an iso from DNL.
   }
   const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
   return iso.isConstant0() || (!iso.isConstant() && iso.getDrivers().empty());
@@ -277,7 +277,7 @@ void addStructuredMemoryDependencies(
     for (const auto* term : terms) {
       const auto source = findInstanceTerm(instanceTerms, term);
       if (!source.has_value()) {
-        continue;
+        continue;  // LCOV_EXCL_LINE - Naja validates memory-term ownership.
       }
       for (const auto target : targets) {
         addDependency(dependencies, *source, target);

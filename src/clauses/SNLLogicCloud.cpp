@@ -1248,7 +1248,7 @@ bool SNLLogicCloud::rejectOpaqueInternalOutput(naja::DNL::DNLID termID) {
   const auto& term = dnl_.getDNLTerminalFromID(termID);
   if (term.isNull() || term.isTopPort() ||
       term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
-    return false;
+    return false;  // LCOV_EXCL_LINE - callers pass an internal iso driver.
   }
   const auto truthTable = SNLDesignModeling::getTruthTable(
       term.getDNLInstance().getSNLInstance(),
@@ -1279,7 +1279,8 @@ bool SNLLogicCloud::rejectOpaqueInternalOutput(naja::DNL::DNLID termID) {
     instance.pop_back();
   }
   if (instance.empty()) {
-    instance = "<unnamed internal instance>";
+    // DNL uses the instance ID when an SNL instance has no name.
+    instance = "<unnamed internal instance>";  // LCOV_EXCL_LINE
   }
   std::ostringstream detail;
   detail << "opaque internal cell `" << instance << "`";
