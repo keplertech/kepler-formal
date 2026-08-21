@@ -247,8 +247,9 @@ bool containsDependencyBit(const std::vector<uint64_t>& deps, uint64_t orderID) 
 
 BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
     BuildPrimaryOutputClauses::SkippedOutputReason reason,
-    std::string detail) {
-  return {reason, std::move(detail)};
+    std::string detail,
+    DNLID opaqueTerm = DNLID_MAX) {
+  return {reason, std::move(detail), opaqueTerm};
 }
 
 void reportSkippedPO(const DNLFull* dnl,
@@ -814,7 +815,6 @@ void BuildPrimaryOutputClauses::build() {
     // LCOV_EXCL_STOP
     IsPOs_[po] = true;
   }
-
   std::vector<size_t> representativeForOutput(outputs_.size());
   std::vector<size_t> representativeOutputs;
   representativeOutputs.reserve(outputs_.size());
@@ -869,7 +869,11 @@ void BuildPrimaryOutputClauses::build() {
       return;
     }
     
-    SNLLogicCloud cloud(out, IsPIs_, IsPOs_);
+    SNLLogicCloud cloud(
+        out,
+        IsPIs_,
+        IsPOs_,
+        stopAtOpaqueInternalOutputs_);
     #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
     #endif
@@ -972,6 +976,9 @@ void BuildPrimaryOutputClauses::build() {
         case SNLLogicCloud::SkipReason::LogicalLoop:
           skipReason = SkippedOutputReason::LogicalLoop;
           break;
+        case SNLLogicCloud::SkipReason::OpaqueInternal:
+          skipReason = SkippedOutputReason::OpaqueInternal;
+          break;
         // LCOV_EXCL_START
         case SNLLogicCloud::SkipReason::None:  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
@@ -983,7 +990,11 @@ void BuildPrimaryOutputClauses::build() {
       if (skipReason != SkippedOutputReason::None) {
         std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
         skippedOutputs_[out] = makeSkippedOutputInfo(
-            skipReason, cloud.getSkipReasonText());
+            skipReason,
+            cloud.getSkipReasonText(),
+            skipReason == SkippedOutputReason::OpaqueInternal
+                ? cloud.getOpaqueInternalTerm()
+                : DNLID_MAX);
       }
     }
     #ifdef DEBUG_CHECKS

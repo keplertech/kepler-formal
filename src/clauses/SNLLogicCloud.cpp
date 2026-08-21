@@ -1240,6 +1240,63 @@ naja::DNL::DNLID SNLLogicCloud::resolveTransparentLoopTarget(
   return currentTermID;
 }
 
+bool SNLLogicCloud::rejectOpaqueInternalOutput(naja::DNL::DNLID termID) {
+  if (!stopAtOpaqueInternalOutputs_ || isInput(termID)) {
+    return false;
+  }
+
+  const auto& term = dnl_.getDNLTerminalFromID(termID);
+  if (term.isNull() || term.isTopPort() ||
+      term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
+    return false;  // LCOV_EXCL_LINE - callers pass an internal iso driver.
+  }
+  const auto truthTable = SNLDesignModeling::getTruthTable(
+      term.getDNLInstance().getSNLInstance(),
+      term.getSnlBitTerm()->getOrderID());
+  if (truthTable.isInitialized()) {
+    return false;
+  }
+
+  std::string reason =
+      "no initialized combinational truth table or usable sequential model";
+  const auto relatedClocks =
+      SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm());
+  if (!relatedClocks.empty()) {
+    const auto* model = term.getDNLInstance().getSNLModel();
+    if (model == nullptr || !SNLDesignModeling::hasSequentialModel(model)) {
+      reason = "Missing Naja sequential model";
+    } else if (SNLDesignModeling::getSequentialModel(model).kind ==
+               SNLDesignModeling::SequentialModel::Kind::Latch) {
+      reason = "Naja latch sequential models are not supported by SEC";
+    } else {
+      reason = "the sequential output has no usable SEC model";
+    }
+  }
+
+  std::string instance = term.getDNLInstance().getFullPath();
+  while (!instance.empty() &&
+         (instance.back() == '/' || instance.back() == '.')) {
+    instance.pop_back();
+  }
+  if (instance.empty()) {
+    // DNL uses the instance ID when an SNL instance has no name.
+    instance = "<unnamed internal instance>";  // LCOV_EXCL_LINE
+  }
+  std::ostringstream detail;
+  detail << "opaque internal cell `" << instance << "`";
+  if (const auto* model = term.getDNLInstance().getSNLModel()) {
+    detail << " (model `" << model->getName().getString() << "`)";
+  }
+  detail << " pin `" << term.getSnlBitTerm()->getName().getString() << "["
+         << term.getSnlBitTerm()->getBit() << "]`: " << reason;
+
+  skipReason_ = SkipReason::OpaqueInternal;
+  skipReasonText_ = detail.str();
+  opaqueInternalTerm_ = termID;
+  table_ = SNLTruthTableTree();
+  return true;
+}
+
 void SNLLogicCloud::compute() {
   refreshPerDnlCaches(dnl_);
   clearNewIterationInputsTL();
@@ -1286,6 +1343,9 @@ void SNLLogicCloud::compute() {
     // LCOV_EXCL_STOP
     const auto& driver = iso.getDrivers().front();
     auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+    if (rejectOpaqueInternalOutput(driver)) {
+      return;
+    }
     if (isInput(driver)) {
       currentIterationInputs.emplace_back(driver);
       table_ = SNLTruthTableTree(inst.getID(), driver,
@@ -1468,7 +1528,9 @@ void SNLLogicCloud::compute() {
         // LCOV_EXCL_STOP
       }
       const auto& driver = iso.getDrivers().front();
-      
+      if (rejectOpaqueInternalOutput(driver)) {
+        return;
+      }
       if (isInput(driver) || canUseCachedIsoShortcut(iso, driver)) {
         newIterationInputs.emplace_back(driver);
         DEBUG_LOG(

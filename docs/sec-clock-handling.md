@@ -107,6 +107,9 @@ This means clock gating is modeled as state enable behavior rather than as a
 new independent clock. Clock-gate latch data that has been folded during SEC
 extraction is substituted before the clock event is classified, so common
 integrated clock-gating structures can still expose the intended enable.
+Generic latch models are not consumed as SEC state; the validated clock-gate
+rewrite and strict fallback behavior are documented in
+[sec-sequential-models.md](sec-sequential-models.md).
 
 ## Complex Clock Trees
 

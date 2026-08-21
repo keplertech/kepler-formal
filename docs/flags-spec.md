@@ -29,8 +29,6 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--max-k <n>`, `-k <n>` | Set the SEC proof/search bound. Defaults to `32`; SEC only. |
 | `--sec-engine <k_induction\|imc\|pdr>` | Select the SEC engine. Defaults to `pdr`; SEC only. |
 | `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
-| `--sec-uncomputable-seq-boundary` | Abstract unsupported sequential instances as SEC boundaries. This is the default. |
-| `--no-sec-uncomputable-seq-boundary` | Fail SEC when an unsupported sequential instance is encountered. |
 | `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
 | `-verilog` | Use Verilog Format. |
 | `-naja_if` | Use naja-if format. |
@@ -57,7 +55,6 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
 | `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
-| `sec_uncomputable_seq_as_boundary` | bool | Abstract unsupported sequential instances as SEC boundaries. Defaults to `true`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
@@ -109,7 +106,6 @@ verification: sec
 max_k: 32
 sec_engine: pdr
 sec_encoding: dual_rail_steady
-sec_uncomputable_seq_as_boundary: true
 input_paths:
   - [rtl_pkg.sv, rtl_top.sv]
   - [gate_top.v]

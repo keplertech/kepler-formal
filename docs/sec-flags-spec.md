@@ -14,6 +14,10 @@ library, logging, solver, CNF export, and LEC flags remain documented in
 SEC clock extraction and multi-clock-domain coverage handling are documented in
 [sec-clock-handling.md](sec-clock-handling.md).
 
+Sequential primitive support, generic latch opacity, and the clock-gate latch
+rewrite are documented in
+[sec-sequential-models.md](sec-sequential-models.md).
+
 Supported SEC flows:
 
 | Flow | Typical inputs |
@@ -33,7 +37,6 @@ kepler-formal -verilog \
   -k 4 \
   --sec-engine pdr \
   --sec-encoding dual_rail_steady \
-  --sec-uncomputable-seq-boundary \
   --report-skipped-pos \
   design0.v design1.v library.lib
 ```
@@ -84,7 +87,6 @@ verification: sec
 sec_engine: pdr
 sec_encoding: dual_rail_steady
 max_k: 32
-sec_uncomputable_seq_as_boundary: true
 compact_mode: true
 report_skipped_pos: true
 solver: kissat
@@ -104,8 +106,6 @@ liberty_files:
 | `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the SEC proof/search bound. |
 | `--sec-engine <engine>` | `sec_engine: <engine>` | `pdr` | `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
-| `--sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: true` | `true` | boolean | Abstracts unsupported sequential instances as SEC boundaries instead of failing immediately. |
-| `--no-sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: false` | `true` | boolean | Uses strict mode: unsupported sequential interfaces cause SEC to fail as unsupported. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 
@@ -147,6 +147,14 @@ cross-design equivalence assumption. Internal names may still be used inside a
 single extracted design for diagnostics, state updates, and local recovery
 heuristics.
 
+Opaque internal elements always use strict per-output handling. If backward
+cone construction reaches any internal cell or pin without usable SEC
+semantics, traversal for that top-level output stops and the entire output is
+removed from the proof surface. SEC never substitutes a free, shared, or
+design-local proof symbol for that element. Other modeled outputs remain
+eligible for proof, so the result is partial when only some outputs are skipped
+and unsupported when no aligned verifiable output remains.
+
 ## Bounds And Results
 
 `max_k` is parsed as a non-negative integer.
@@ -174,7 +182,6 @@ The log always prints:
 SEC max_k: <n>
 SEC engine: <engine>
 SEC encoding: binary|dual_rail_steady
-SEC uncomputable sequentials: boundary abstraction|strict failure
 Compact mode: enabled|disabled
 Skipped PO reports: enabled|disabled
 ```
@@ -186,12 +193,13 @@ write the following files in the current working directory:
 
 | File | Producer | Contents |
 | --- | --- | --- |
-| `boundary_terms.txt` | SEC | Extracted SEC boundary surface. Includes top inputs, top outputs, opaque internal cut points, abstracted sequential state terms, abstracted sequential observed terms, and connectivity-skip annotations when present. |
+| `boundary_terms.txt` | SEC | Top-level SEC input/output surface and skip annotations when present. |
 | `skipped_no_driver_pos.txt` | shared cone builder | Outputs skipped because the relevant iso has no driver. |
 | `skipped_multi_driver_pos.txt` | shared cone builder | Outputs skipped because the relevant iso has multiple drivers. |
 | `skipped_logical_loop_pos.txt` | shared cone builder | Outputs skipped because the relevant cone contains a logical loop. |
 | `skipped_reset_unanchored_pos.txt` | SEC | Outputs skipped in binary SEC because their cones depend on reset-unanchored internal state. |
 | `skipped_multi_clock_domain_pos.txt` | SEC clock model | Outputs skipped because the observed output cone spans multiple extracted clock domains. |
+| `skipped_opaque_cells_pos.txt` | SEC | One entry per ignored top-level output whose backward cone reached an opaque internal cell or pin. Each entry names the output, cell, pin, and reason. |
 
 `boundary_terms.txt` starts with a category legend. Current categories are:
 
@@ -199,14 +207,10 @@ write the following files in the current working directory:
 | --- | --- |
 | `top_input` | Original top-level input term. |
 | `top_output` | Original top-level output term. |
-| `opaque_internal_input` | Internal cut-point input that SEC could not reconstruct combinationally and did not model as sequential. |
-| `opaque_internal_output` | Internal cut-point output paired with an opaque internal boundary. |
-| `abstracted_sequential_state` | State-facing term exposed when an uncomputable sequential instance is abstracted as a SEC boundary. |
-| `abstracted_sequential_observed` | Observed-output-facing term exposed when an uncomputable sequential instance is abstracted as a SEC boundary. |
 
-Connectivity skipped outputs are also summarized in the main run log, including
-no-driver, multi-driver, logical-loop, reset-unanchored, and multi-clock-domain
-skips.
+Skipped outputs are also summarized in the main run log, including no-driver,
+multi-driver, logical-loop, reset-unanchored, multi-clock-domain, and opaque
+internal skips.
 
 ## Compact SEC
 
