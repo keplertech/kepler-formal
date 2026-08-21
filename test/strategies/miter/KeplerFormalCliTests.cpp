@@ -2714,6 +2714,60 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests,
+     SecClockGateWithArityMismatchIsSkippedAsOpaque) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
+      "  wire gclk;\n"
+      "  wire qn;\n"
+      "  wire pass_n;\n"
+      "  CLKGATE_X1 u_gate(.CK(clk), .E(en), .GCK(gclk));\n"
+      "  DFFR_X1 u_q(.CK(gclk), .D(d), .Q(q), .QN(qn), .RN(rst_n));\n"
+      "  DFFR_X1 u_pass(.CK(clk), .D(d), .Q(pass), .QN(pass_n), .RN(rst_n));\n"
+      "endmodule\n",
+      "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
+      "  wire next_q;\n"
+      "  wire qn;\n"
+      "  wire pass_n;\n"
+      "  MUX2_X1 u_hold(.A(q), .B(d), .S(en), .Z(next_q));\n"
+      "  DFFR_X1 u_q(.CK(clk), .D(next_q), .Q(q), .QN(qn), .RN(rst_n));\n"
+      "  DFFR_X1 u_pass(.CK(clk), .D(d), .Q(pass), .QN(pass_n), .RN(rst_n));\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_clockgate_opaque.log";
+  const auto libertyPath =
+      repoRoot() / "examples" / "tinyrocket" /
+      "NangateOpenCellLibrary_typical.lib";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_encoding: dual_rail_steady\n"
+      "sec_engine: pdr\n"
+      "max_k: 2\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files:\n"
+      "  - " + libertyPath.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecPartiallyProvedExitCode);
+
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC checked-output coverage: 50.00% (1/2"),
+            std::string::npos);
+  EXPECT_NE(contents.find("q[0]: design0 opaque-internal"), std::string::npos);
+  EXPECT_NE(contents.find("CLKGATE_X1"), std::string::npos);
+  EXPECT_NE(contents.find("combinational truth table arity does not match "
+                          "instance inputs"),
+            std::string::npos);
+  EXPECT_EQ(contents.find("SNLLogicCloud arity mismatch"), std::string::npos);
+  EXPECT_EQ(contents.find("unpublished internal support"), std::string::npos);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSecUnsupportedMismatchLogUsesUnsupportedResult) {
   const auto fixture =
       createEquivalentSequentialNajaIfFixture("ff0", "ff0", "out", "z");

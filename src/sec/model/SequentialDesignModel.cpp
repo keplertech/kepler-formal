@@ -4448,9 +4448,8 @@ void propagateConnectivitySkipsThroughDependencies(
     }
     stateKeyByVarID.emplace(varIt->second, key);
     maxCandidateStateVarID = std::max(maxCandidateStateVarID, varIt->second);
-    const auto skipIt = model.connectivitySkipInfoByKey.find(key);
-    if (skipIt != model.connectivitySkipInfoByKey.end() &&
-        skipIt->second.origin != ConnectivitySkipOrigin::OpaqueInternal &&
+    if (model.connectivitySkipInfoByKey.find(key) !=
+            model.connectivitySkipInfoByKey.end() &&
         enqueuedSkippedStateVars.insert(varIt->second).second) {
       pendingSkippedStateVars.push_back(varIt->second);
     }
@@ -4929,9 +4928,8 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 
-  // Phase 5: propagate non-opaque connectivity skips, then retain only the
-  // outputs whose cones were fully modeled. Opaque cones stopped during their
-  // per-output state traversal above.
+  // Phase 5: propagate connectivity skips, then retain only the outputs whose
+  // cones were fully modeled.
   propagateConnectivitySkipsThroughDependencies(model);
   partitionCoveredSignals(model);
 
