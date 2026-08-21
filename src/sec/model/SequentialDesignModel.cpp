@@ -1056,32 +1056,6 @@ const std::vector<size_t>& collectCandidateStateDependenciesFromExpr(
   return scratch.dependencies;
 }
 
-void collectCandidateDependenciesIntoSet(
-    BoolExpr* expr,
-    const std::vector<uint8_t>& isCandidateVar,
-    CandidateDependencyScratch& scratch,
-    std::unordered_set<size_t>& dependencies) {
-  for (const auto varID :
-       collectCandidateStateDependenciesFromExpr(expr, isCandidateVar, scratch)) {
-    // LCOV_EXCL_START
-    dependencies.insert(varID);  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-}
-
-std::vector<uint8_t> buildCandidateVarMask(
-    const std::unordered_map<size_t, BoolExpr*>& candidateExprByVarID) {
-  size_t maxVarID = 0;
-  for (const auto& [varID, _] : candidateExprByVarID) {
-    maxVarID = std::max(maxVarID, varID);
-  }
-  std::vector<uint8_t> isCandidateVar(maxVarID + 1, 0);
-  for (const auto& [varID, _] : candidateExprByVarID) {
-    isCandidateVar[varID] = 1;
-  }
-  return isCandidateVar;
-}
-
 SignalKey getTerminalPathKey(const naja::DNL::DNLTerminalFull& terminal) {
   SignalKey key;
   const auto pathNames = terminal.getDNLInstance().getPath().getPathNames();
@@ -1326,99 +1300,6 @@ BoolExpr* stripClockCarriersFromSequentialUpdate(
       update, stripClockCarrierFromClockEnable(update, topClockCarrierVarIDs, memo));
 }
 
-BoolExpr* substituteClockGateLatchVars(
-    BoolExpr* root,
-    const std::unordered_map<size_t, BoolExpr*>& latchDataExprByVarID,
-    std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
-  if (root == nullptr) {
-    // LCOV_EXCL_START
-    return nullptr;  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-  if (const auto it = memo.find(root); it != memo.end()) {
-    return it->second;
-  }
-
-  BoolExpr* substituted = nullptr;
-  switch (root->getOp()) {
-    case Op::VAR: {
-      const auto it = latchDataExprByVarID.find(root->getId());
-      substituted = it == latchDataExprByVarID.end() ? root : it->second;
-      break;
-    }
-    case Op::NOT: {
-      BoolExpr* left = substituteClockGateLatchVars(
-          root->getLeft(), latchDataExprByVarID, memo);
-      substituted = left == root->getLeft() ? root : BoolExpr::Not(left);
-      break;
-    }
-    case Op::AND: {
-      BoolExpr* left = substituteClockGateLatchVars(
-          root->getLeft(), latchDataExprByVarID, memo);
-      BoolExpr* right = substituteClockGateLatchVars(
-          root->getRight(), latchDataExprByVarID, memo);
-      substituted = left == root->getLeft() && right == root->getRight()
-                        ? root
-                        : BoolExpr::And(left, right);
-      break;
-    }
-    case Op::OR: {
-      BoolExpr* left = substituteClockGateLatchVars(
-          root->getLeft(), latchDataExprByVarID, memo);
-      BoolExpr* right = substituteClockGateLatchVars(
-          root->getRight(), latchDataExprByVarID, memo);
-      substituted = left == root->getLeft() && right == root->getRight()
-                        ? root
-                        // LCOV_EXCL_START
-                        : BoolExpr::Or(left, right);  // LCOV_EXCL_LINE
-                        // LCOV_EXCL_STOP
-      break;
-    }
-    case Op::XOR: {
-      // LCOV_EXCL_START
-      BoolExpr* left = substituteClockGateLatchVars(  // LCOV_EXCL_LINE
-          root->getLeft(), latchDataExprByVarID, memo);  // LCOV_EXCL_LINE
-      BoolExpr* right = substituteClockGateLatchVars(  // LCOV_EXCL_LINE
-          root->getRight(), latchDataExprByVarID, memo);  // LCOV_EXCL_LINE
-      substituted = left == root->getLeft() && right == root->getRight()  // LCOV_EXCL_LINE
-                        ? root  // LCOV_EXCL_LINE
-                        : BoolExpr::Xor(left, right);  // LCOV_EXCL_LINE
-      break;  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-    }
-    // LCOV_EXCL_START
-    case Op::NONE:  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-    default:
-      // LCOV_EXCL_START
-      throw std::runtime_error("Unsupported BoolExpr operator in latch substitution");  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-  }
-
-  memo.emplace(root, substituted);
-  return substituted;
-}
-
-BoolExpr* simplifyWhenClockGateLatchVarsChanged(
-    BoolExpr* original, BoolExpr* substituted) {
-  // Folded latch outputs are rare. Preserve untouched shared subtrees so large
-  // SEC models only simplify cones that actually reference the latch output.
-  return substituted == original ? original : BoolExpr::simplify(substituted);
-}
-
-BoolExpr* substituteClockGateLatchVarsInExpr(
-    BoolExpr* expr,
-    const std::unordered_map<size_t, BoolExpr*>& latchDataExprByVarID) {
-  if (expr == nullptr || latchDataExprByVarID.empty()) {
-    // LCOV_EXCL_START
-    return expr;  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-  std::unordered_map<BoolExpr*, BoolExpr*> memo;
-  return simplifyWhenClockGateLatchVarsChanged(
-      expr, substituteClockGateLatchVars(expr, latchDataExprByVarID, memo));
-}
-
 BoolExpr* buildSequentialModelExpr(
     const naja::NL::SNLDesignModeling::BooleanExpression& expression,
     const PendingTransition& pending,
@@ -1557,7 +1438,6 @@ BoolExpr* getLocalClockEnableExpr(
     const std::unordered_set<naja::DNL::DNLID>& pureClockCarrierTermIDs,
     const std::unordered_set<size_t>& topClockCarrierVarIDs,
     const std::unordered_map<size_t, ClockEvent>& clockEventByCarrierVarID,
-    const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID,
     const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
     std::unordered_map<BoolExpr*, BoolExpr*>& clockCarrierStripMemo) {
   if (pending.clockTermIDs.empty()) {
@@ -1585,10 +1465,6 @@ BoolExpr* getLocalClockEnableExpr(
     // LCOV_EXCL_STOP
   }
 
-  if (!clockGateLatchDataExprByVarID.empty()) {
-    clockExpr = substituteClockGateLatchVarsInExpr(
-        clockExpr, clockGateLatchDataExprByVarID);
-  }
   if (const auto event =
           classifyClockEventExpression(clockExpr, clockEventByCarrierVarID)) {
     return clockEventIsUngated(*event) ? nullptr : event->enable;
@@ -1725,7 +1601,6 @@ BoolExpr* buildNextStateExpr(
     const std::unordered_set<naja::DNL::DNLID>& pureClockCarrierTermIDs,
     const std::unordered_set<size_t>& topClockCarrierVarIDs,
     const std::unordered_map<size_t, ClockEvent>& clockEventByCarrierVarID,
-    const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID,
     const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
     std::unordered_map<BoolExpr*, BoolExpr*>& clockCarrierStripMemo) {
   const auto& currentReference =
@@ -1754,7 +1629,6 @@ BoolExpr* buildNextStateExpr(
               pureClockCarrierTermIDs,
               topClockCarrierVarIDs,
               clockEventByCarrierVarID,
-              clockGateLatchDataExprByVarID,
               outputExprByTerm,
               clockCarrierStripMemo)) {
     next = BoolExpr::Or(
@@ -2427,7 +2301,6 @@ struct ExtractContext {
       collectedSkippedOutputs;
   bool hasOpaqueInternalTerminals = false;
   std::unordered_set<naja::DNL::DNLID> opaqueSkippedTopOutputTerms;
-  std::vector<SecLocalTerminalDependency> opaqueConeExtraDependencies;
   std::unique_ptr<PureClockCarrierStructureIndex> pureClockCarrierStructure;
   std::vector<PendingTransition> pendingTransitions;
   std::vector<PendingMemoryInstance> pendingMemoryInstances;
@@ -2559,71 +2432,9 @@ void collectTopInterfaceTerms(ExtractContext& ctx, SequentialDesignModel& model)
   }
 }
 
-bool isLatchLikeOutputPinName(const std::string& pinName) {
-  return pinName == "Q" || pinName == "IQ";
-}
-
-bool isLatchLikeDataPinName(const std::string& pinName) {
-  return pinName == "D";
-}
-
-bool isLatchLikeClockPinName(const std::string& pinName) {
-  return pinName == "E" || pinName == "EN" || pinName == "GATE" ||
-         pinName == "GATE_N" || pinName == "GATEN" || pinName == "CLK" ||
-         pinName == "CK";
-}
-
-struct ClockGateLatchCandidate {
-  naja::DNL::DNLID outputTerm = naja::DNL::DNLID_MAX;
-  naja::DNL::DNLID dataTerm = naja::DNL::DNLID_MAX;
-  std::vector<naja::DNL::DNLID> clockTerms;
-};
-
-std::vector<ClockGateLatchCandidate> collectClockGateLatchCandidates(
-    const ExtractContext& ctx) {
-  std::vector<ClockGateLatchCandidate> candidates;
-  for (auto leafID : ctx.dnl->getLeaves()) {
-    const auto& instance = ctx.dnl->getDNLInstanceFromID(leafID);
-    const auto* primitive = instance.getSNLModel();
-    if (naja::NL::SNLDesignModeling::hasSequentialModel(primitive) &&
-        naja::NL::SNLDesignModeling::getSequentialModel(primitive).kind !=
-            naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch) {
-      continue;
-    }
-    std::vector<naja::DNL::DNLID> outputTerms;
-    std::vector<naja::DNL::DNLID> dataTerms;
-    std::vector<naja::DNL::DNLID> clockTerms;
-    for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
-         termID != naja::DNL::DNLID_MAX &&
-         termID <= instance.getTermIndexes().second;
-         ++termID) {
-      const auto& term = ctx.dnl->getDNLTerminalFromID(termID);
-      const std::string pinName =
-          normalizePinName(term.getSnlBitTerm()->getName().getString());
-      if (term.getSnlBitTerm()->getDirection() ==
-          naja::NL::SNLBitTerm::Direction::Output) {
-        if (isLatchLikeOutputPinName(pinName)) {
-          outputTerms.push_back(termID);
-        }
-      } else if (isLatchLikeDataPinName(pinName)) {
-        dataTerms.push_back(termID);
-      } else if (isLatchLikeClockPinName(pinName)) {
-        clockTerms.push_back(termID);
-      }
-    }
-    if (outputTerms.size() == 1 && dataTerms.size() == 1 &&
-        !clockTerms.empty()) {
-      candidates.push_back(
-          {outputTerms.front(), dataTerms.front(), std::move(clockTerms)});
-    }
-  }
-  return candidates;
-}
-
 void filterOpaqueBuilderInputs(
     ExtractContext& ctx,
-    const SequentialDesignModel& model,
-    const std::vector<ClockGateLatchCandidate>& allowedLatchCandidates = {}) {
+    const SequentialDesignModel& model) {
   std::vector<naja::DNL::DNLID> retainedInputs;
   retainedInputs.reserve(ctx.builder.getInputs().size());
   for (const auto termID : ctx.builder.getInputs()) {
@@ -2634,101 +2445,11 @@ void filterOpaqueBuilderInputs(
     const bool opaque =
         skipIt != model.connectivitySkipInfoByKey.end() &&
         skipIt->second.origin == ConnectivitySkipOrigin::OpaqueInternal;
-    const bool allowedLatch = std::any_of(
-        allowedLatchCandidates.begin(),
-        allowedLatchCandidates.end(),
-        [&](const ClockGateLatchCandidate& candidate) {
-          return candidate.outputTerm == termID;
-        });
-    if (!opaque || allowedLatch) {
+    if (!opaque) {
       retainedInputs.push_back(termID);
     }
   }
   ctx.builder.setInputs(retainedInputs);
-}
-
-void retainModelableClockGateLatchOutputs(
-    ExtractContext& ctx,
-    SequentialDesignModel& model) {
-  const auto candidates = collectClockGateLatchCandidates(ctx);
-  filterOpaqueBuilderInputs(ctx, model, candidates);
-  if (candidates.empty()) {
-    return;
-  }
-
-  if (ctx.pureClockCarrierStructure == nullptr) {
-    ctx.pureClockCarrierStructure =
-        std::make_unique<PureClockCarrierStructureIndex>(ctx.dnl);
-  }
-  const auto& pureClockTerms = *ctx.pureClockCarrierStructure;
-  std::vector<bool> eligible(candidates.size(), false);
-  std::vector<naja::DNL::DNLID> dependencyTerms;
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    const auto& candidate = candidates[i];
-    const auto keyIt = ctx.inputKeyByTerm.find(candidate.outputTerm);
-    const auto skipIt = keyIt == ctx.inputKeyByTerm.end()
-                            ? model.connectivitySkipInfoByKey.end()
-                            : model.connectivitySkipInfoByKey.find(keyIt->second);
-    if (skipIt == model.connectivitySkipInfoByKey.end() ||
-        skipIt->second.origin != ConnectivitySkipOrigin::OpaqueInternal ||
-        !std::all_of(
-            candidate.clockTerms.begin(),
-            candidate.clockTerms.end(),
-            [&](naja::DNL::DNLID termID) {
-              return pureClockTerms.contains(termID);
-            })) {
-      continue;
-    }
-    eligible[i] = true;
-    dependencyTerms.push_back(candidate.dataTerm);
-    dependencyTerms.insert(
-        dependencyTerms.end(),
-        candidate.clockTerms.begin(),
-        candidate.clockTerms.end());
-  }
-  if (dependencyTerms.empty()) {
-    filterOpaqueBuilderInputs(ctx, model);
-    return;
-  }
-  std::sort(dependencyTerms.begin(), dependencyTerms.end());
-  dependencyTerms.erase(
-      std::unique(dependencyTerms.begin(), dependencyTerms.end()),
-      dependencyTerms.end());
-
-  const auto dependencies = materializeBuilderOutputs(
-      dependencyTerms,
-      ctx.builder.getInputs(),
-      {},
-      ctx.collectedSkippedOutputs,
-      ctx.secDiagEnabled,
-      ctx.topName.c_str(),
-      "clock-gate latch preflight");
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    if (!eligible[i]) {
-      continue;
-    }
-    const auto& candidate = candidates[i];
-    const bool hasData =
-        dependencies.outputExprByTerm.find(candidate.dataTerm) !=
-        dependencies.outputExprByTerm.end();
-    const bool hasClocks = std::all_of(
-        candidate.clockTerms.begin(),
-        candidate.clockTerms.end(),
-        [&](naja::DNL::DNLID termID) {
-          return dependencies.outputExprByTerm.find(termID) !=
-                 dependencies.outputExprByTerm.end();
-        });
-    if (hasData && hasClocks) {
-      const auto keyIt = ctx.inputKeyByTerm.find(candidate.outputTerm);
-      if (keyIt != ctx.inputKeyByTerm.end()) {
-        ctx.stateBits.erase(keyIt->second);
-        model.connectivitySkipInfoByKey.erase(keyIt->second);
-        ctx.opaqueConeExtraDependencies.push_back(
-            {candidate.dataTerm, candidate.outputTerm});
-      }
-    }
-  }
-  filterOpaqueBuilderInputs(ctx, model);
 }
 
 void skipTopOutputsReachedByOpaqueTerminals(
@@ -2759,7 +2480,7 @@ void skipTopOutputsReachedByOpaqueTerminals(
   ctx.hasOpaqueInternalTerminals = !opaqueSeeds.empty();
   const SecNetlistChecks checks(ctx.dnl);
   const auto reachedOutputs = checks.findTopOutputsReachedByOpaqueTerminals(
-      std::move(opaqueSeeds), ctx.opaqueConeExtraDependencies);
+      std::move(opaqueSeeds));
   for (const auto& reached : reachedOutputs) {
     const auto outputIt =
         ctx.topOutputKeyByTerm.find(reached.topOutputTermID);
@@ -2779,142 +2500,6 @@ void skipTopOutputsReachedByOpaqueTerminals(
         ctx.opaqueSkippedTopOutputTerms.size());
     fflush(stderr);
   }
-}
-
-std::vector<naja::DNL::DNLID> collectClockGateLatchDependencyTerms(
-    const ExtractContext& ctx,
-    const SequentialDesignModel& model) {
-  std::vector<naja::DNL::DNLID> terms;
-  std::unordered_set<SignalKey, SignalKeyHash> stateKeys(
-      model.stateBits.begin(), model.stateBits.end());
-  std::unordered_set<SignalKey, SignalKeyHash> topInputKeys(
-      model.topInputKeys.begin(), model.topInputKeys.end());
-
-  for (const auto& candidate : collectClockGateLatchCandidates(ctx)) {
-    const auto& outputTerm =
-        ctx.dnl->getDNLTerminalFromID(candidate.outputTerm);
-    const SignalKey outputKey = getTerminalPathKey(outputTerm);
-    if (stateKeys.find(outputKey) != stateKeys.end() ||
-        topInputKeys.find(outputKey) != topInputKeys.end() ||
-        model.inputVarByKey.find(outputKey) == model.inputVarByKey.end()) {
-      continue;
-    }
-
-    terms.push_back(candidate.dataTerm);
-    terms.insert(
-        terms.end(), candidate.clockTerms.begin(), candidate.clockTerms.end());
-  }
-
-  std::sort(terms.begin(), terms.end());
-  terms.erase(std::unique(terms.begin(), terms.end()), terms.end());
-  return terms;
-}
-
-std::unordered_map<size_t, BoolExpr*> collectClockGateLatchDataExprByVarID(
-    const ExtractContext& ctx,
-    const SequentialDesignModel& model,
-    const std::unordered_set<size_t>& topClockCarrierVarIDs,
-    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
-  std::unordered_map<size_t, BoolExpr*> dataExprByVarID;
-  const bool diagEnabled = std::getenv("KEPLER_SEC_CLOCK_GATE_DIAG") != nullptr;
-  size_t latchLikeCandidates = 0;
-  size_t latchLikeStateOutputs = 0;
-  size_t latchLikeTopOutputs = 0;
-  size_t latchLikeUnmappedOutputs = 0;
-  size_t latchLikeClockRejected = 0;
-  size_t latchLikeMissingDataExpr = 0;
-  size_t latchLikeMissingClockExpr = 0;
-  if (topClockCarrierVarIDs.empty()) {
-    return dataExprByVarID;
-  }
-
-  std::unordered_set<SignalKey, SignalKeyHash> stateKeys(
-      model.stateBits.begin(), model.stateBits.end());
-  std::unordered_set<SignalKey, SignalKeyHash> topInputKeys(
-      model.topInputKeys.begin(), model.topInputKeys.end());
-
-  for (const auto& candidate : collectClockGateLatchCandidates(ctx)) {
-    ++latchLikeCandidates;
-
-    const auto dataExprIt = outputExprByTerm.find(candidate.dataTerm);
-    if (dataExprIt == outputExprByTerm.end()) {
-      ++latchLikeMissingDataExpr;
-      continue;
-    }
-
-    BoolExpr* latchClockExpr = nullptr;
-    for (const auto clockTermID : candidate.clockTerms) {
-      const auto clockExprIt = outputExprByTerm.find(clockTermID);
-      if (clockExprIt == outputExprByTerm.end()) {
-        continue;  // LCOV_EXCL_LINE
-      }
-      latchClockExpr = latchClockExpr == nullptr
-                           ? clockExprIt->second
-                           // LCOV_EXCL_START
-                           : BoolExpr::And(latchClockExpr, clockExprIt->second);  // LCOV_EXCL_LINE
-                           // LCOV_EXCL_STOP
-    }
-    if (latchClockExpr == nullptr) {
-      ++latchLikeMissingClockExpr;  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }
-
-// LCOV_EXCL_START
-
-    std::unordered_map<BoolExpr*, BoolExpr*> clockStripMemo;
-    // LCOV_EXCL_STOP
-    BoolExpr* strippedClock = simplifyWhenClockCarriersChanged(
-        latchClockExpr,
-        stripClockCarrierFromClockEnable(
-            latchClockExpr, topClockCarrierVarIDs, clockStripMemo));
-    if (strippedClock != BoolExpr::createTrue()) {
-      // LCOV_EXCL_START
-      ++latchLikeClockRejected;
-      continue;
-      // LCOV_EXCL_STOP
-    }
-
-// LCOV_EXCL_START
-
-    const auto& outputTerm =
-        ctx.dnl->getDNLTerminalFromID(candidate.outputTerm);
-    const SignalKey outputKey = getTerminalPathKey(outputTerm);
-    if (stateKeys.find(outputKey) != stateKeys.end() ||
-        topInputKeys.find(outputKey) != topInputKeys.end()) {
-      if (stateKeys.find(outputKey) != stateKeys.end()) {
-        ++latchLikeStateOutputs;
-      } else {
-        ++latchLikeTopOutputs;  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      }
-      continue;
-    }
-    const auto varIt = model.inputVarByKey.find(outputKey);
-    if (varIt == model.inputVarByKey.end()) {
-      ++latchLikeUnmappedOutputs;  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }
-    dataExprByVarID.emplace(varIt->second, dataExprIt->second);
-  }
-
-  if (diagEnabled) {
-    fprintf(  // LCOV_EXCL_LINE
-        stderr,  // LCOV_EXCL_LINE
-        "SEC diag: clock-gate latch fold candidates=%zu mapped=%zu state=%zu top=%zu unmapped=%zu missing_data=%zu missing_clock=%zu clock_rejected=%zu\n",
-        latchLikeCandidates,  // LCOV_EXCL_LINE
-        dataExprByVarID.size(),  // LCOV_EXCL_LINE
-        latchLikeStateOutputs,  // LCOV_EXCL_LINE
-        latchLikeTopOutputs,  // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        latchLikeUnmappedOutputs,  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-        latchLikeMissingDataExpr,  // LCOV_EXCL_LINE
-        latchLikeMissingClockExpr,  // LCOV_EXCL_LINE
-        latchLikeClockRejected);  // LCOV_EXCL_LINE
-    fflush(stderr);  // LCOV_EXCL_LINE
-  }  // LCOV_EXCL_LINE
-
-  return dataExprByVarID;
 }
 
 void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& model) {
@@ -4226,16 +3811,6 @@ void enqueueStateDependenciesFromFormula(
 
 // LCOV_EXCL_START
 
-void removeDeadFoldedClockGateLatchInputs(
-// LCOV_EXCL_STOP
-    SequentialDesignModel& model,
-    const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID);
-void substituteFoldedClockGateLatchVarsInModel(
-    SequentialDesignModel& model,
-    const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID);
-
-// LCOV_EXCL_START
-
 RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
     // LCOV_EXCL_STOP
     ExtractContext& ctx, SequentialDesignModel& model,
@@ -4374,38 +3949,6 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   // LCOV_EXCL_START
   refreshClockCarrierVarIDs();
   // LCOV_EXCL_STOP
-  {
-    std::vector<naja::DNL::DNLID> latchDependencyTerms;
-    for (const auto termID : collectClockGateLatchDependencyTerms(ctx, model)) {
-      if (materializedOutputTerms.insert(termID).second) {
-        latchDependencyTerms.push_back(termID);
-      }
-    }
-    if (!latchDependencyTerms.empty()) {
-      const auto dependencyOutputs = materializeBuilderOutputs(
-          latchDependencyTerms, builderInputs, termDNLID2varID,
-          ctx.collectedSkippedOutputs, ctx.secDiagEnabled, ctx.topName.c_str(),
-          "clock-gate latch dependency build");
-      appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
-      appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
-      mergeBuilderTermVarIDs(termDNLID2varID,
-                             dependencyOutputs.termDNLID2varID);
-      recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
-      for (const auto& [termID, expr] : dependencyOutputs.outputExprByTerm) {
-        outputExprByTerm.insert_or_assign(termID, expr);
-      }
-      for (const auto& [termID, info] :
-           dependencyOutputs.skippedOutputsByTerm) {
-        skippedOutputsByTerm.emplace(termID, info); // LCOV_EXCL_LINE
-      }
-      refreshClockCarrierVarIDs();
-    }
-    // LCOV_EXCL_START
-  }
-  // LCOV_EXCL_STOP
-  std::unordered_map<size_t, BoolExpr*> clockGateLatchDataExprByVarID =
-      collectClockGateLatchDataExprByVarID(ctx, model, topClockCarrierVarIDs,
-                                           outputExprByTerm);
   std::deque<size_t> pendingWorkQueue;
   std::deque<SignalKey> stateDependencyWorkQueue;
   std::unordered_set<SignalKey, SignalKeyHash> expandedStateDependencies;
@@ -4521,8 +4064,6 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         skippedOutputsByTerm.emplace(termID, info);
       }
       refreshClockCarrierVarIDs();
-      clockGateLatchDataExprByVarID = collectClockGateLatchDataExprByVarID(
-          ctx, model, topClockCarrierVarIDs, outputExprByTerm);
     }
 
     for (const auto pendingIndex : batchPendingIndexes) {
@@ -4582,8 +4123,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       BoolExpr* nextStateExpr =
           buildNextStateExpr(pending, termDNLID2varID, pureClockCarrierTermIDs,
                              topClockCarrierVarIDs, clockEventByCarrierVarID,
-                             clockGateLatchDataExprByVarID, outputExprByTerm,
-                             transitionClockStripMemo);
+                             outputExprByTerm, transitionClockStripMemo);
       const auto clockEvent = classifyPendingClockEvent(
           pending, termDNLID2varID, outputExprByTerm, clockEventByCarrierVarID);
       logUnpublishedTransitionSupport(ctx, model, pending, nextStateExpr,
@@ -4617,73 +4157,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   std::sort(model.clockCarrierVarIDs.begin(), model.clockCarrierVarIDs.end());
   model.clockCarrierClasses = buildClockCarrierClasses(
       model.clockCarrierVarIDs, clockEventByCarrierVarID);
-  substituteFoldedClockGateLatchVarsInModel(model,
-                                            clockGateLatchDataExprByVarID);
-  removeDeadFoldedClockGateLatchInputs(model, clockGateLatchDataExprByVarID);
 
   return artifacts;
-}
-
-void eraseSignalKeyFromVector(std::vector<SignalKey>& keys, const SignalKey& key) {
-  keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
-}
-
-void substituteFoldedClockGateLatchVarsInModel(
-    SequentialDesignModel& model,
-    const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID) {
-  if (clockGateLatchDataExprByVarID.empty()) {
-    return;
-  }
-
-  for (auto& [_, expr] : model.observedOutputExprByKey) {
-    expr = substituteClockGateLatchVarsInExpr(
-        expr, clockGateLatchDataExprByVarID);
-  }
-  for (auto& [_, expr] : model.nextStateExprByStateKey) {
-    expr = substituteClockGateLatchVarsInExpr(
-        expr, clockGateLatchDataExprByVarID);
-  }
-}
-
-void removeDeadFoldedClockGateLatchInputs(
-    // LCOV_EXCL_START
-    SequentialDesignModel& model,
-    // LCOV_EXCL_STOP
-    const std::unordered_map<size_t, BoolExpr*>& clockGateLatchDataExprByVarID) {
-  if (clockGateLatchDataExprByVarID.empty()) {
-    return;
-  // LCOV_EXCL_START
-  }
-  // LCOV_EXCL_STOP
-
-  const auto isFoldedLatchVar =
-      buildCandidateVarMask(clockGateLatchDataExprByVarID);
-  CandidateDependencyScratch scratch;
-  std::unordered_set<size_t> liveVars;
-  for (const auto& [_, expr] : model.observedOutputExprByKey) {
-    collectCandidateDependenciesIntoSet(expr, isFoldedLatchVar, scratch, liveVars);
-  }
-  for (const auto& [_, expr] : model.nextStateExprByStateKey) {
-    collectCandidateDependenciesIntoSet(expr, isFoldedLatchVar, scratch, liveVars);
-  }
-
-  std::unordered_map<size_t, SignalKey> keyByVarID;
-  keyByVarID.reserve(model.inputVarByKey.size());
-  for (const auto& [key, varID] : model.inputVarByKey) {
-    keyByVarID.emplace(varID, key);
-  }
-
-  for (const auto& [varID, _] : clockGateLatchDataExprByVarID) {
-    if (liveVars.find(varID) != liveVars.end()) {
-      continue;  // LCOV_EXCL_LINE
-    }
-    const auto keyIt = keyByVarID.find(varID);
-    if (keyIt == keyByVarID.end()) {
-      continue;  // LCOV_EXCL_LINE
-    }
-    eraseSignalKeyFromVector(model.environmentInputs, keyIt->second);
-    model.inputVarByKey.erase(keyIt->second);
-  }
 }
 
 struct ClockDomainIndex {
@@ -5356,7 +4831,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     return model;
   }
 
-  retainModelableClockGateLatchOutputs(ctx, model);
+  filterOpaqueBuilderInputs(ctx, model);
   skipTopOutputsReachedByOpaqueTerminals(ctx, model);
 
   // Phase 2: build top-output formulas, stopping at the temporary internal

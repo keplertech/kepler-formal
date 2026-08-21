@@ -104,11 +104,9 @@ next_state = enable ? data_next : current_state
 ```
 
 This means clock gating is modeled as state enable behavior rather than as a
-new independent clock. Clock-gate latch data that has been folded during SEC
-extraction is substituted before the clock event is classified, so common
-integrated clock-gating structures can still expose the intended enable.
-Generic latch models are not consumed as SEC state; the validated clock-gate
-rewrite and strict fallback behavior are documented in
+new independent clock when the gate is combinational and fully modelable.
+A gated clock cone that reaches a latch is opaque because SEC does not model
+level-sensitive state. Latch handling and strict fallback behavior are documented in
 [sec-sequential-models.md](sec-sequential-models.md).
 
 ## Complex Clock Trees

@@ -42,27 +42,9 @@ that distinction with `SequentialModel::Kind::Latch`, and its built-in
 
 Kepler SEC does not currently implement generic level-sensitive transition
 semantics. It therefore does not consume a Naja latch model as ordinary SEC
-state. A generic latch output is opaque and any requested top-level output
-whose cone reaches it is skipped.
-
-## Clock-Gate Latch Rewrite
-
-SEC has one narrow latch-specific rewrite for recognized clock-gating
-structures. This is not a general latch transition model.
-
-A candidate must have one latch-like output, one data input, and a gate input.
-If the primitive has a Naja sequential model, its kind must explicitly be
-`Latch`; a `FlipFlop` model never enters this rewrite. The gate must
-structurally trace to a pure clock carrier, and both the data and gate
-dependency cones must be fully modelable. When all checks pass, SEC
-substitutes the latch output with its data expression while reconstructing the
-clock-gate enable. The latch output is then removed from the extracted SEC
-state and is not published as an environment input.
-
-This rewrite captures the clock-gating abstraction used by SEC: the latch
-holds an enable stable around the active clock edge, while the consuming
-flip-flop remains the actual modeled state. If candidate recognition or
-dependency validation fails, the latch output remains opaque.
+state. Every latch output is opaque, including latches used in clock-gating
+structures, and any requested top-level output whose cone reaches it is
+skipped. SEC does not infer latch behavior from cell or pin names.
 
 ## Opaque Outputs
 
