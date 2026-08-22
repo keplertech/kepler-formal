@@ -1253,23 +1253,43 @@ bool SNLLogicCloud::rejectOpaqueInternalOutput(naja::DNL::DNLID termID) {
   const auto truthTable = SNLDesignModeling::getTruthTable(
       term.getDNLInstance().getSNLInstance(),
       term.getSnlBitTerm()->getOrderID());
-  if (truthTable.isInitialized()) {
-    return false;
-  }
 
   std::string reason =
       "no initialized combinational truth table or usable sequential model";
-  const auto relatedClocks =
-      SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm());
-  if (!relatedClocks.empty()) {
-    const auto* model = term.getDNLInstance().getSNLModel();
-    if (model == nullptr || !SNLDesignModeling::hasSequentialModel(model)) {
-      reason = "Missing Naja sequential model";
-    } else if (SNLDesignModeling::getSequentialModel(model).kind ==
-               SNLDesignModeling::SequentialModel::Kind::Latch) {
-      reason = "Naja latch sequential models are not supported by SEC";
+  if (truthTable.isInitialized()) {
+    const auto& layout =
+        getModelInputLayout(dnl_, term.getDNLInstance().getSNLModel());
+    const size_t expectedInputCount =
+        layout.isMux2 ? size_t{3} : truthTable.size();
+    const size_t actualInputCount = getRelevantInstanceInputCount(termID);
+    if (expectedInputCount == actualInputCount) {
+      return false;
+    }
+
+    std::ostringstream arityReason;
+    arityReason
+        << "combinational truth table arity does not match instance inputs "
+        << "(TT arity=" << truthTable.size()
+        << ", instance input count=" << actualInputCount << ")";
+    reason = arityReason.str();
+  } else {
+    const auto relatedClocks =
+        SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm());
+    if (!relatedClocks.empty()) {
+      const auto* model = term.getDNLInstance().getSNLModel();
+      if (model == nullptr || !SNLDesignModeling::hasSequentialModel(model)) {
+        reason = "Missing Naja sequential model";
+      } else if (SNLDesignModeling::getSequentialModel(model).kind ==
+                 SNLDesignModeling::SequentialModel::Kind::Latch) {
+        reason = "Naja latch sequential models are not supported by SEC";
+      } else {
+        reason = "the sequential output has no usable SEC model";
+      }
     } else {
-      reason = "the sequential output has no usable SEC model";
+      const auto* model = term.getDNLInstance().getSNLModel();
+      if (model != nullptr && SNLDesignModeling::hasSequentialModel(model)) {
+        reason = "the sequential output has no usable SEC model";
+      }
     }
   }
 

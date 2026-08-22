@@ -4481,86 +4481,6 @@ SNLDesign* createMultiClockDomainOutputTop(
   return top;
 }
 
-SNLDesign* createClockGateLatchDataDffTop(
-    NLLibrary* library,
-    const std::string& name,
-    SNLDesign* andModel,
-    SNLDesign* latchModel,
-    bool includeIndependentDff = false) {
-  auto* top =
-      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
-  auto* topIn =
-      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
-  auto* topEnable =
-      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"));
-  auto* topClock =
-      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
-  auto* topOut =
-      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
-  SNLScalarTerm* topIndependentIn = nullptr;
-  SNLScalarTerm* topIndependentOut = nullptr;
-  if (includeIndependentDff) {
-    topIndependentIn = SNLScalarTerm::create(
-        top, SNLTerm::Direction::Input, NLName("independent_in"));
-    topIndependentOut = SNLScalarTerm::create(
-        top, SNLTerm::Direction::Output, NLName("independent_out"));
-  }
-
-  auto* latch = SNLInstance::create(top, latchModel, NLName("clock_gate_i.en_latch"));
-  auto* dataAnd = SNLInstance::create(top, andModel, NLName("data_and"));
-  auto* ff = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
-  SNLInstance* independentFf = nullptr;
-  if (includeIndependentDff) {
-    independentFf = SNLInstance::create(
-        top, NLDB0::getDFF(), NLName("independent_ff"));
-  }
-
-  auto* netIn = SNLScalarNet::create(top, NLName("net_in"));
-  auto* netEnable = SNLScalarNet::create(top, NLName("net_en"));
-  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
-  auto* netLatchQ = SNLScalarNet::create(top, NLName("net_latch_q"));
-  auto* netData = SNLScalarNet::create(top, NLName("net_data"));
-  auto* netOut = SNLScalarNet::create(top, NLName("net_out"));
-  SNLScalarNet* netIndependentIn = nullptr;
-  SNLScalarNet* netIndependentOut = nullptr;
-  if (includeIndependentDff) {
-    netIndependentIn = SNLScalarNet::create(top, NLName("net_independent_in"));
-    netIndependentOut =
-        SNLScalarNet::create(top, NLName("net_independent_out"));
-  }
-
-  topIn->setNet(netIn);
-  topEnable->setNet(netEnable);
-  topClock->setNet(netClock);
-  topOut->setNet(netOut);
-  if (includeIndependentDff) {
-    topIndependentIn->setNet(netIndependentIn);
-    topIndependentOut->setNet(netIndependentOut);
-  }
-
-  latch->getInstTerm(latchModel->getScalarTerm(NLName("D")))->setNet(netEnable);
-  latch->getInstTerm(getLatchGateTerm(latchModel))->setNet(netClock);
-  latch->getInstTerm(latchModel->getScalarTerm(NLName("Q")))->setNet(netLatchQ);
-
-  dataAnd->getInstTerm(andModel->getScalarTerm(NLName("A")))->setNet(netIn);
-  dataAnd->getInstTerm(andModel->getScalarTerm(NLName("B")))->setNet(netLatchQ);
-  dataAnd->getInstTerm(andModel->getScalarTerm(NLName("Y")))->setNet(netData);
-
-  ff->getInstTerm(NLDB0::getDFFData())->setNet(netData);
-  ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
-  ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netOut);
-  if (includeIndependentDff) {
-    // This cone intentionally does not reference the folded latch output. It
-    // catches regressions where latch substitution rebuilds unrelated SEC
-    // state expressions instead of preserving no-op subtrees.
-    independentFf->getInstTerm(NLDB0::getDFFData())->setNet(netIndependentIn);
-    independentFf->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
-    independentFf->getInstTerm(NLDB0::getDFFOutput())->setNet(netIndependentOut);
-  }
-
-  return top;
-}
-
 SNLDesign* createConstantDrivenDffTop(
     NLLibrary* library,
     const std::string& name,
@@ -17144,7 +17064,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractFoldsOpaqueClockGateLatchEnable) {
+       SequentialDesignModelExtractTreatsOpaqueClockGateLatchAsOpaque) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17157,16 +17077,25 @@ TEST_F(SequentialEquivalenceStrategyTests,
       library, "top", andModel, latchModel);
 
   const auto extracted = SequentialDesignModel::extract(top);
-  expectAllExpressionSupportIsPublished(extracted);
-  const auto stateKey = findKeyByDisplayName(extracted, "ff0.Q[0]");
-  const auto inKey = findKeyByDisplayName(extracted, "in[0]");
-  const auto enableKey = findKeyByDisplayName(extracted, "en[0]");
+  const auto outputKey = findKeyByDisplayName(extracted, "out[0]");
   const auto latchKey =
       findKeyByDisplayName(extracted, "clock_gate_i.en_latch.Q[0]");
-  const size_t stateVar = extracted.inputVarByKey.at(stateKey);
-  auto* expr = extracted.nextStateExprByStateKey.at(stateKey);
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  EXPECT_EQ(extracted.skippedObservedOutputs.front(), outputKey);
+  const auto skip = extracted.connectivitySkipInfoByKey.find(outputKey);
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+  EXPECT_NE(skip->second.detail.find("clock_gate_i.en_latch"),
+            std::string::npos);
+  EXPECT_NE(skip->second.detail.find("DLATCH_N"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Q[0]"), std::string::npos);
+  EXPECT_NE(
+      skip->second.detail.find(
+          "no initialized combinational truth table or usable sequential model"),
+      std::string::npos);
   EXPECT_EQ(extracted.inputVarByKey.find(latchKey), extracted.inputVarByKey.end());
   EXPECT_EQ(
       std::find(
@@ -17174,18 +17103,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
           extracted.environmentInputs.end(),
           latchKey),
       extracted.environmentInputs.end());
-  EXPECT_TRUE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), false},
-       {extracted.inputVarByKey.at(enableKey), false},
-       {stateVar, true}}));
-  EXPECT_TRUE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), true},
-       {extracted.inputVarByKey.at(enableKey), true},
-       {stateVar, false}}));
-  EXPECT_FALSE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), false},
-       {extracted.inputVarByKey.at(enableKey), true},
-       {stateVar, true}}));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17226,7 +17143,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractFoldsModeledClockGateLatchEnable) {
+       SequentialDesignModelExtractTreatsModeledClockGateLatchAsOpaque) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =
@@ -17238,18 +17155,25 @@ TEST_F(SequentialEquivalenceStrategyTests,
       library, "top", andModel, NLDB0::getDLatch());
 
   const auto extracted = SequentialDesignModel::extract(top);
-  expectAllExpressionSupportIsPublished(extracted);
-  const auto stateKey = findKeyByDisplayName(extracted, "ff0.Q[0]");
-  const auto inKey = findKeyByDisplayName(extracted, "in[0]");
-  const auto enableKey = findKeyByDisplayName(extracted, "en[0]");
+  const auto outputKey = findKeyByDisplayName(extracted, "out[0]");
   const auto latchKey =
       findKeyByDisplayName(extracted, "clock_gate_i.en_latch.Q[0]");
-  const size_t stateVar = extracted.inputVarByKey.at(stateKey);
-  auto* expr = extracted.nextStateExprByStateKey.at(stateKey);
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_EQ(extracted.observedOutputs.size(), 1u);
-  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_TRUE(extracted.observedOutputs.empty());
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  EXPECT_EQ(extracted.skippedObservedOutputs.front(), outputKey);
+  const auto skip = extracted.connectivitySkipInfoByKey.find(outputKey);
+  ASSERT_NE(skip, extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(skip->second.origin, ConnectivitySkipOrigin::OpaqueInternal);
+  EXPECT_NE(skip->second.detail.find("clock_gate_i.en_latch"),
+            std::string::npos);
+  EXPECT_NE(skip->second.detail.find("naja_dlatch"), std::string::npos);
+  EXPECT_NE(skip->second.detail.find("Q[0]"), std::string::npos);
+  EXPECT_NE(
+      skip->second.detail.find(
+          "Naja latch sequential models are not supported by SEC"),
+      std::string::npos);
   EXPECT_EQ(extracted.inputVarByKey.find(latchKey),
             extracted.inputVarByKey.end());
   EXPECT_EQ(
@@ -17258,18 +17182,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
           extracted.environmentInputs.end(),
           latchKey),
       extracted.environmentInputs.end());
-  EXPECT_TRUE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), false},
-       {extracted.inputVarByKey.at(enableKey), false},
-       {stateVar, true}}));
-  EXPECT_TRUE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), true},
-       {extracted.inputVarByKey.at(enableKey), true},
-       {stateVar, false}}));
-  EXPECT_FALSE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), false},
-       {extracted.inputVarByKey.at(enableKey), true},
-       {stateVar, true}}));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17351,83 +17263,6 @@ TEST_F(SequentialEquivalenceStrategyTests,
           extracted.clockCarrierVarIDs.end(),
           inVar),
       extracted.clockCarrierVarIDs.end());
-}
-
-TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractSubstitutesFoldedClockGateLatchDataUses) {
-  NLUniverse::create();
-  auto* db = NLDB::create(NLUniverse::get());
-  auto* primitives =
-      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
-  auto* library =
-      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* andModel = createAnd2Model(primitives);
-  auto* latchModel = createOpaqueClockGateLatchModel(primitives);
-  auto* top = createClockGateLatchDataDffTop(
-      library, "top", andModel, latchModel);
-
-  const auto extracted = SequentialDesignModel::extract(top);
-  expectAllExpressionSupportIsPublished(extracted);
-  const auto stateKey = findKeyByDisplayName(extracted, "ff0.Q[0]");
-  const auto inKey = findKeyByDisplayName(extracted, "in[0]");
-  const auto enableKey = findKeyByDisplayName(extracted, "en[0]");
-  const auto latchKey =
-      findKeyByDisplayName(extracted, "clock_gate_i.en_latch.Q[0]");
-  auto* expr = extracted.nextStateExprByStateKey.at(stateKey);
-
-  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_EQ(extracted.inputVarByKey.find(latchKey), extracted.inputVarByKey.end());
-  EXPECT_EQ(
-      std::find(
-          extracted.environmentInputs.begin(),
-          extracted.environmentInputs.end(),
-          latchKey),
-      extracted.environmentInputs.end());
-  EXPECT_FALSE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), true},
-       {extracted.inputVarByKey.at(enableKey), false}}));
-  EXPECT_FALSE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), false},
-       {extracted.inputVarByKey.at(enableKey), true}}));
-  EXPECT_TRUE(expr->evaluate(
-      {{extracted.inputVarByKey.at(inKey), true},
-       {extracted.inputVarByKey.at(enableKey), true}}));
-}
-
-TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractPreservesUnrelatedClockGateLatchCones) {
-  NLUniverse::create();
-  auto* db = NLDB::create(NLUniverse::get());
-  auto* primitives =
-      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
-  auto* library =
-      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* andModel = createAnd2Model(primitives);
-  auto* latchModel = createOpaqueClockGateLatchModel(primitives);
-  auto* top = createClockGateLatchDataDffTop(
-      library, "top", andModel, latchModel, true);
-
-  const auto extracted = SequentialDesignModel::extract(top);
-  expectAllExpressionSupportIsPublished(extracted);
-  const auto independentStateKey =
-      findKeyByDisplayName(extracted, "independent_ff.Q[0]");
-  const auto independentInKey =
-      findKeyByDisplayName(extracted, "independent_in[0]");
-  const auto enableKey = findKeyByDisplayName(extracted, "en[0]");
-  const auto latchKey =
-      findKeyByDisplayName(extracted, "clock_gate_i.en_latch.Q[0]");
-  auto* independentExpr =
-      extracted.nextStateExprByStateKey.at(independentStateKey);
-
-  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
-  EXPECT_EQ(extracted.inputVarByKey.find(latchKey), extracted.inputVarByKey.end());
-  EXPECT_EQ(independentExpr->getSupportVars().count(
-                extracted.inputVarByKey.at(enableKey)),
-            0u);
-  EXPECT_TRUE(independentExpr->evaluate(
-      {{extracted.inputVarByKey.at(independentInKey), true}}));
-  EXPECT_FALSE(independentExpr->evaluate(
-      {{extracted.inputVarByKey.at(independentInKey), false}}));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17873,9 +17708,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   const SecNetlistChecks checks(dnl);
   const auto reached = checks.findTopOutputsReachedByOpaqueTerminals(
-      {{*badStateTerm, "opaque BAD"}, {*badStateTerm, "opaque BAD"}},
-      {{naja::DNL::DNLID_MAX, *goodStateTerm},
-       {*goodStateTerm, *goodStateTerm}});
+      {{*badStateTerm, "opaque BAD"}, {*badStateTerm, "opaque BAD"}});
   std::vector<std::string> reachedNames;
   for (const auto& output : reached) {
     reachedNames.push_back(detail::getTerminalDisplayNameForTest(

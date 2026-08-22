@@ -316,8 +316,7 @@ void addStructuredMemoryDependencies(
 }
 
 DependencyGraph buildLocalDependencyGraph(
-    naja::DNL::DNLFull* dnl, const std::unordered_set<DNLID>& opaqueTerms,
-    const std::vector<SecLocalTerminalDependency>& extraDependencies) {
+    naja::DNL::DNLFull* dnl, const std::unordered_set<DNLID>& opaqueTerms) {
   DependencyGraph dependencies(dnl->getNBterms());
   for (const auto leafID : dnl->getLeaves()) {
     const auto& instance = dnl->getDNLInstanceFromID(leafID);
@@ -337,10 +336,6 @@ DependencyGraph buildLocalDependencyGraph(
                               dependencies);
     addStructuredMemoryDependencies(dnl, instance, instanceTerms, opaqueTerms,
                                     dependencies);
-  }
-  for (const auto& dependency : extraDependencies) {
-    addDependency(dependencies, dependency.sourceTermID,
-                  dependency.outputTermID);
   }
   for (auto& outputs : dependencies) {
     std::sort(outputs.begin(), outputs.end());
@@ -395,8 +390,7 @@ std::vector<DNLID> findReachedTopOutputs(naja::DNL::DNLFull* dnl,
 
 std::vector<OpaqueReachedTopOutput>
 SecNetlistChecks::findTopOutputsReachedByOpaqueTerminals(
-    std::vector<OpaqueTerminalSeed> opaqueSeeds,
-    const std::vector<SecLocalTerminalDependency>& extraDependencies) const {
+    std::vector<OpaqueTerminalSeed> opaqueSeeds) const {
   if (dnl_ == nullptr || opaqueSeeds.empty()) {
     return {};
   }
@@ -414,8 +408,7 @@ SecNetlistChecks::findTopOutputsReachedByOpaqueTerminals(
   for (const auto& seed : opaqueSeeds) {
     opaqueTerms.insert(seed.termID);
   }
-  const auto dependencies =
-      buildLocalDependencyGraph(dnl_, opaqueTerms, extraDependencies);
+  const auto dependencies = buildLocalDependencyGraph(dnl_, opaqueTerms);
 
   std::vector<std::vector<DNLID>> reachedBySeed(opaqueSeeds.size());
   tbb::parallel_for(tbb::blocked_range<size_t>(0, opaqueSeeds.size()),
