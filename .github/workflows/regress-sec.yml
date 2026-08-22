@@ -102,7 +102,8 @@ jobs:
   run-sec-regress:
     name: ${{ matrix.flow.name }} / ${{ matrix.case.name }}
     # SEC_HEAVY_RUNNER may name a larger or self-hosted runner for full-depth
-    # GCD KI and MockAlu PDR jobs. Pull requests also use bounded smoke depths.
+    # GCD KI and MockAlu PDR jobs. The GCD KI pull-request job uses a bounded
+    # smoke depth.
     runs-on: >-
       ${{
         (
@@ -222,7 +223,6 @@ jobs:
           config: 6_final_sec_test.yml
           expectation: positive
           pdr_dual_rail_expectation: allow-inconclusive
-          pdr_dual_rail_pr_max_k: 2
         - name: asap7_mock_cpu
           source: examples
           case_dir: kepler-formal-examples/asap7_mock_cpu
@@ -354,7 +354,6 @@ jobs:
         CASE_EXPECTATION: ${{ matrix.case.expectation }}
         CASE_MAX_K: ${{ matrix.case.max_k }}
         CASE_KI_DUAL_RAIL_PR_MAX_K: ${{ matrix.case.ki_dual_rail_pr_max_k }}
-        CASE_PDR_DUAL_RAIL_PR_MAX_K: ${{ matrix.case.pdr_dual_rail_pr_max_k }}
         CASE_PDR_DUAL_RAIL_EXPECTATION: ${{ matrix.case.pdr_dual_rail_expectation }}
         SEC_ENGINE: ${{ matrix.flow.engine }}
         SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
@@ -385,11 +384,6 @@ jobs:
               "${SEC_ENCODING}" == "dual_rail_steady" &&
               -n "${CASE_KI_DUAL_RAIL_PR_MAX_K}" ]]; then
           max_k="${CASE_KI_DUAL_RAIL_PR_MAX_K}"
-        elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" &&
-                "${SEC_ENGINE}" == "pdr" &&
-                "${SEC_ENCODING}" == "dual_rail_steady" &&
-                -n "${CASE_PDR_DUAL_RAIL_PR_MAX_K}" ]]; then
-          max_k="${CASE_PDR_DUAL_RAIL_PR_MAX_K}"
         fi
 
         args=(
