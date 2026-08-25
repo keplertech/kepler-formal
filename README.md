@@ -219,6 +219,27 @@ verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 
 See the organized [examples](examples).
 
+## Optional local MCP server
+
+An optional stdio MCP wrapper lives in [`mcp/`](mcp). Install it from this
+checkout with `python -m pip install ./mcp`, then start it with an explicit
+project root:
+
+```sh
+kepler-formal-mcp --project-root /absolute/path/to/design-project
+```
+
+It exposes one-shot `gate_lec`, `gate_sec`, and `rtl_sec` tools. Each invocation
+resolves `kepler-formal` from `PATH`, the local cache, or a checksummed GitHub
+Release; spawns a fresh native process; and enforces the caller's timeout. See
+the [MCP add-on README](mcp/README.md) for setup and the structured result
+taxonomy.
+
+The native stdio model is deliberate: local agent edits are immediately visible
+without Docker volume mapping, and kepler-formal only reads/checks design files.
+Containers remain the right packaging for CI or a future hosted deployment, not
+for this local editing loop.
+
 ## Contact
 
 contact@keplertech.io
