@@ -27,6 +27,10 @@ Files: tools/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
 
+Files: mcp/*
+Copyright: 2026 keplertech.io
+License: GPL-3.0-only
+
 Files: regress/*/miter.cnf regress/*/miter.cnf.tar.gz regress/*/po_cnfs.tar.gz
 Copyright: 2026 keplertech.io
 License: GPL-3.0-only
