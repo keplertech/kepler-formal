@@ -3263,17 +3263,16 @@ SequentialEquivalenceResult finishDualRailImcProof(
       problem.observedOutputExprs0.size(), false);
   proofState.provedBound = guardedResult.bound;
 
-  size_t guardedProvedPrefix = 0;
-  if (guardedResult.status == IMCStatus::Equivalent) {
-    guardedProvedPrefix = problem.observedOutputExprs0.size();
-  } else if (guardedResult.firstUnprovenOutput.has_value()) {
-    guardedProvedPrefix = std::min(
-        *guardedResult.firstUnprovenOutput,
-        problem.observedOutputExprs0.size());
+  std::vector<bool> guardedCoveredOutputs(
+      problem.observedOutputExprs0.size(),
+      guardedResult.status == IMCStatus::Equivalent);
+  if (guardedResult.coveredOutputs.size() == guardedCoveredOutputs.size()) {
+    guardedCoveredOutputs = guardedResult.coveredOutputs;
   }
 
   std::vector<size_t> provedOutputIndices;
-  provedOutputIndices.reserve(guardedProvedPrefix);
+  provedOutputIndices.reserve(static_cast<size_t>(std::count(
+      guardedCoveredOutputs.begin(), guardedCoveredOutputs.end(), true)));
   for (size_t outputIndex = 0;
        outputIndex < problem.observedOutputExprs0.size();
        ++outputIndex) {
@@ -3284,7 +3283,7 @@ SequentialEquivalenceResult finishDualRailImcProof(
           outputIndex, problem.dualRailOutputSkipReasons[outputIndex]);
       continue;
     }
-    if (outputIndex < guardedProvedPrefix) {
+    if (guardedCoveredOutputs[outputIndex]) {
       provedOutputIndices.push_back(outputIndex);
     } else {
       proofState.skipReasons.emplace(
@@ -3382,27 +3381,12 @@ SequentialEquivalenceResult runImcSecEngine(
     default: {
       // Honor the selected SEC engine.  IMC must not silently invoke PDR as a
       // secondary prover; callers can rerun with sec_engine=pdr if desired.
-      if (result.firstUnprovenOutput.has_value()) {  // LCOV_EXCL_LINE
-        emitSecEngineProofProgress(  // LCOV_EXCL_LINE
-            problem, "IMC", *result.firstUnprovenOutput);  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      const size_t provenOutputCount =  // LCOV_EXCL_LINE
-          result.firstUnprovenOutput.value_or(0);  // LCOV_EXCL_LINE
-      const SequentialEquivalenceStatus status =  // LCOV_EXCL_LINE
-          provenOutputCount > 0  // LCOV_EXCL_LINE
-              ? SequentialEquivalenceStatus::PartiallyProved  // LCOV_EXCL_LINE
-              : SequentialEquivalenceStatus::Inconclusive;  // LCOV_EXCL_LINE
-      SequentialEquivalenceResult secResult = makeSecResult(  // LCOV_EXCL_LINE
-          status,
+      return makeSecResult(  // LCOV_EXCL_LINE
+          SequentialEquivalenceStatus::Inconclusive,
           result.bound,  // LCOV_EXCL_LINE
           "Reached max_k without a proof or counterexample",  // LCOV_EXCL_LINE
           outputCoverage,  // LCOV_EXCL_LINE
           extractedBoundaryReports);  // LCOV_EXCL_LINE
-      if (result.firstUnprovenOutput.has_value()) {  // LCOV_EXCL_LINE
-        setSecEngineProofProgress(  // LCOV_EXCL_LINE
-            secResult, problem, "IMC", *result.firstUnprovenOutput);  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      return secResult;  // LCOV_EXCL_LINE
     }
   }
 }

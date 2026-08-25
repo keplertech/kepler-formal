@@ -11380,13 +11380,13 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       LargeDualRailImcBudgetSplitReportsFirstUnprovenOutput) {
+       LargeDualRailImcBudgetSplitPreservesLaterProvedOutput) {
   KInductionProblem problem = buildCraigResetSecProblem(/*equivalent=*/true);
   problem.observedOutputNames = {"out0", "out1"};
   problem.observedOutputExprs0.push_back(problem.observedOutputExprs0.front());
-  problem.observedOutputExprs1.push_back(problem.observedOutputExprs1.front());
-  // The duplicate output keeps the proof tiny but still exercises the same
-  // multi-output Craig batch split and first-unproven-output propagation.
+  problem.observedOutputExprs1.push_back(problem.observedOutputExprs0.front());
+  // The first output exhausts the strict Craig budget. The second is a
+  // tautology, so recursive splitting must retain its independent proof.
   problem.property = BoolExpr::And(
       makeEqualityExpr(
           problem.observedOutputExprs0[0], problem.observedOutputExprs1[0]),
@@ -11422,12 +11422,18 @@ TEST_F(SequentialEquivalenceStrategyTests,
       << stderrOutput;
   EXPECT_NE(
       stderrOutput.find(
+          "imc Craig output batch first=1 end=2 first_name=out1"),
+      std::string::npos)
+      << stderrOutput;
+  EXPECT_NE(
+      stderrOutput.find(
           "imc Craig stopping after inconclusive output batch first=0 end=2"),
       std::string::npos)
       << stderrOutput;
   EXPECT_EQ(result.status, IMCStatus::Inconclusive);
-  ASSERT_TRUE(result.firstUnprovenOutput.has_value());
-  EXPECT_EQ(*result.firstUnprovenOutput, 0u);
+  ASSERT_EQ(result.coveredOutputs.size(), 2u);
+  EXPECT_FALSE(result.coveredOutputs[0]);
+  EXPECT_TRUE(result.coveredOutputs[1]);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
