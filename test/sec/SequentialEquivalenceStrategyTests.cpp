@@ -16073,6 +16073,36 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractModelsConstantStructuredMemoryMask) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createSinglePortMemoryModel(primitives, "MEM_CONST_MASK");
+  auto* top = createSinglePortMemoryTop(library, "top", model);
+  auto* modelMask = model->getBusTerm(NLName("WMASK"));
+  auto* memory = top->getInstance(NLName("mem0"));
+  ASSERT_NE(modelMask, nullptr);
+  ASSERT_NE(memory, nullptr);
+
+  auto* constantOne = SNLScalarNet::create(top, NLName("mask_one"));
+  constantOne->setType(SNLNet::Type::Assign1);
+  for (int bit = 0; bit <= 3; ++bit) {
+    memory->getInstTerm(modelMask->getBit(bit))->setNet(constantOne);
+  }
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_FALSE(extracted.stateBits.empty());
+  EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
+  EXPECT_EQ(extracted.observedOutputs.size(), 4u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractModelsImportedLibertyMemory) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());

@@ -661,8 +661,10 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    if (term.getIsoID() != DNLID_MAX && 
-      dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().empty()) {
+    const auto& iso =
+        dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+    if (!iso.isConstant0() && !iso.isConstant1() &&
+        iso.getDrivers().empty()) {
       skippedOutputs_[out] = makeSkippedOutputInfo(
           SkippedOutputReason::NoDriver, "its iso has no drivers");
       reportSkippedPO(
@@ -676,8 +678,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    if (term.getIsoID() != DNLID_MAX && 
-      dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().size() > 1) {
+    if (iso.getDrivers().size() > 1) {
       skippedOutputs_[out] = makeSkippedOutputInfo(
           SkippedOutputReason::MultiDriver, "its iso has multiple drivers");
       reportSkippedPO(
@@ -848,6 +849,17 @@ void BuildPrimaryOutputClauses::build() {
 
     DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
     DEBUG_LOG("isoID: %zu\n", isoID);
+    if (isoID != DNLID_MAX) {
+      const auto& iso = get()->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      if (iso.isConstant0()) {
+        POs_[i] = BoolExpr::createFalse();
+        return;
+      }
+      if (iso.isConstant1()) {
+        POs_[i] = BoolExpr::createTrue();
+        return;
+      }
+    }
     auto cachedIt = Tree2BoolExpr::iso2boolExpr_.find(isoID);
     if (isoID != DNLID_MAX &&
         cachedIt != Tree2BoolExpr::iso2boolExpr_.end() &&
