@@ -4484,7 +4484,7 @@ SNLDesign* createMultiClockDomainOutputTop(
 SNLDesign* createConstantDrivenDffTop(
     NLLibrary* library,
     const std::string& name,
-    SNLDesign* constantModel) {
+    SNLDesign* anchorModel) {
   auto* top =
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topClock =
@@ -4492,17 +4492,18 @@ SNLDesign* createConstantDrivenDffTop(
   auto* topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
 
-  auto* constant = SNLInstance::create(top, constantModel, NLName("tie0"));
+  // Keep a second harmless child so DNL materializes the driverless net below.
+  SNLInstance::create(top, anchorModel, NLName("dnl_anchor"));
   auto* ff = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
 
   auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
   auto* netConstant = SNLScalarNet::create(top, NLName("net_const"));
+  netConstant->setType(SNLNet::Type::Assign0);
   auto* netOut = SNLScalarNet::create(top, NLName("net_out"));
 
   topClock->setNet(netClock);
   topOut->setNet(netOut);
 
-  constant->getInstTerm(constantModel->getScalarTerm(NLName("LO")))->setNet(netConstant);
   ff->getInstTerm(NLDB0::getDFFData())->setNet(netConstant);
   ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
   ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netOut);
@@ -17309,17 +17310,19 @@ TEST_F(SequentialEquivalenceStrategyTests,
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* constantModel = createConstantLowModel(primitives);
-  auto* top = createConstantDrivenDffTop(library, "top", constantModel);
+  auto* anchorModel = createConstantLowModel(primitives);
+  auto* top = createConstantDrivenDffTop(library, "top", anchorModel);
 
   const auto extracted = SequentialDesignModel::extract(top);
   expectAllExpressionSupportIsPublished(extracted);
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.nextStateExprByStateKey.size(), 1u);
+  EXPECT_EQ(extracted.nextStateExprByStateKey.begin()->second->toString(), "0");
   for (const auto& key : extracted.environmentInputs) {
     const auto nameIt = extracted.displayNameByKey.find(key);
     ASSERT_NE(nameIt, extracted.displayNameByKey.end());
-    EXPECT_NE(nameIt->second, "tie0.LO[0]");
+    EXPECT_NE(nameIt->second, "ff0.D[0]");
   }
 }
 
