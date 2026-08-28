@@ -13,6 +13,8 @@ library, logging, solver, CNF export, and LEC flags remain documented in
 [flags-spec.md](flags-spec.md).
 SEC clock extraction and multi-clock-domain coverage handling are documented in
 [sec-clock-handling.md](sec-clock-handling.md).
+User-driven reset sequences are documented in
+[sec-reset-bootstrap.md](sec-reset-bootstrap.md).
 
 Sequential primitive support and latch opacity are documented in
 [sec-sequential-models.md](sec-sequential-models.md).
@@ -105,6 +107,8 @@ liberty_files:
 | `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the SEC proof/search bound. |
 | `--sec-engine <engine>` | `sec_engine: <engine>` | `pdr` | `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
+| `--sec-reset-cycles <n>` | `sec_reset.cycles: <n>` | omitted | Positive integer | Holds user-listed reset ports active for the first `n` SEC cycles. |
+| `--sec-reset-port <name=0\|1>` | `sec_reset.ports` | omitted | Repeatable reset port assignment | Adds a top-level reset input and asserted value. Repeat for multiple reset ports. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 
@@ -127,6 +131,10 @@ There is no `default` token for `sec_encoding`. To use the default, omit
 `--sec-encoding` or omit `sec_encoding` from YAML. Tests, scripts, and regression
 flows that require stable behavior should always spell out either `binary` or
 `dual_rail_steady` explicitly.
+
+Reset bootstrap is optional. When enabled, both `cycles` and at least one reset
+port are required. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md) for the
+full YAML shape and CLI examples.
 
 ## Engine Semantics
 

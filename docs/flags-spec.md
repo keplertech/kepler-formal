@@ -29,6 +29,8 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--max-k <n>`, `-k <n>` | Set the SEC proof/search bound. Defaults to `32`; SEC only. |
 | `--sec-engine <k_induction\|imc\|pdr>` | Select the SEC engine. Defaults to `pdr`; SEC only. |
 | `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
+| `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
+| `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
 | `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
 | `-verilog` | Use Verilog Format. |
 | `-naja_if` | Use naja-if format. |
@@ -55,6 +57,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
 | `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
+| `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |

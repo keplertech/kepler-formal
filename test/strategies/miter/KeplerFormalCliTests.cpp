@@ -2604,6 +2604,108 @@ TEST_F(KeplerFormalCliTests, ConfigSecDefaultsToDualRailEncoding) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapAcceptsMultiplePorts) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input scan_reset_n, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_bootstrap.log";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n"
+      "    - name: scan_reset_n\n"
+      "      active_value: 0\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC reset bootstrap: 1 cycle(s)"),
+            std::string::npos);
+  EXPECT_NE(contents.find("SEC reset bootstrap port: reset active=1"),
+            std::string::npos);
+  EXPECT_NE(
+      contents.find("SEC reset bootstrap port: scan_reset_n active=0"),
+      std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapAcceptsRepeatedPorts) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input scan_reset_n, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-verilog",
+                   "-v",
+                   "sec",
+                   "--sec-engine",
+                   "pdr",
+                   "--sec-encoding",
+                   "binary",
+                   "-k",
+                   "1",
+                   "--sec-reset-cycles",
+                   "1",
+                   "--sec-reset-port",
+                   "reset=1",
+                   "--sec-reset-port",
+                   "scan_reset_n=0",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      kSecProvedExitCode);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapMissingPortFails) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_missing.log";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: missing\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(
+      contents.find(
+          "Reset bootstrap port `missing` was not found among aligned "
+          "top-level inputs"),
+      std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithPdrEngine) {
   const auto fixture = createEquivalentSequentialNajaIfFixture();
   const auto cfgPath = writeTempConfig(
