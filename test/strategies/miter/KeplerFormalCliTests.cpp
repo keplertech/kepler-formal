@@ -2741,6 +2741,17 @@ TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsMalformedYaml) {
   const std::vector<std::string> invalidResetBlocks = {
       "sec_reset: scalar\n",
       "sec_reset:\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: invalid\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n",
+      "sec_reset:\n"
       "  cycles: 1\n"
       "  ports:\n"
       "    - reset\n",
@@ -2748,6 +2759,11 @@ TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsMalformedYaml) {
       "  cycles: 1\n"
       "  ports:\n"
       "    - active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: \"\"\n"
+      "      active_value: 1\n",
       "sec_reset:\n"
       "  cycles: 1\n"
       "  ports:\n"
@@ -2777,6 +2793,19 @@ TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsMalformedYaml) {
         resetBlock);
     EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE) << resetBlock;
     std::filesystem::remove(cfgPath);
+  }
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapRejectsMalformedPortTokens) {
+  for (const char* resetPort : {"reset", "reset=maybe", "=1"}) {
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-v",
+                     "sec",
+                     "--sec-reset-port",
+                     resetPort,
+                     "-verilog"}),
+        EXIT_FAILURE) << resetPort;
   }
 }
 
