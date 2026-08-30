@@ -779,6 +779,9 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
         // LCOV_EXCL_STOP
       }
       const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      if (iso.isConstant0() || iso.isConstant1()) {
+        return currentTermID;
+      }
       if (iso.isConstant() || iso.getDrivers().size() != 1) {
         return std::nullopt;
       }

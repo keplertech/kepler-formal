@@ -10,6 +10,7 @@
 #include <optional>
 #include <cctype>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <filesystem>
@@ -34,6 +35,7 @@
 #include "SNLVRLDumper.h"
 #include "SNLBusTerm.h"
 #include "SNLInstance.h"
+#include "SNLRTLInfos.h"
 #include "SNLTerm.h"
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
@@ -1165,11 +1167,25 @@ static naja::NL::SNLDesign* findPrimitiveDesign(
 
 static void reconnectGeneratedPrimitiveStubs(
     naja::NL::NLLibrary* designLibrary,
-    const std::vector<naja::NL::NLLibrary*>& primitiveLibraries) {
-  if (designLibrary == nullptr || primitiveLibraries.empty()) {
+    const std::vector<naja::NL::NLLibrary*>& primitiveLibraries,
+    const std::filesystem::path& generatedStubPath) {
+  if (designLibrary == nullptr || primitiveLibraries.empty() ||
+      generatedStubPath.empty()) {
     return;
   }
 
+  const auto isGeneratedStub = [&](const naja::NL::SNLDesign* model) {
+    const auto* rtlInfos = model->getRTLInfos();
+    if (rtlInfos == nullptr || !rtlInfos->hasSourceLoc()) {
+      return false;
+    }
+    const auto& sourceLoc = *rtlInfos->getSourceLoc();
+    const std::filesystem::path sourcePath(sourceLoc.file.getString());
+    std::error_code ec;
+    return std::filesystem::equivalent(sourcePath, generatedStubPath, ec);
+  };
+
+  std::unordered_map<naja::NL::SNLDesign*, naja::NL::SNLDesign*> replacements;
   for (auto* design : designLibrary->getSNLDesigns()) {
     if (design == nullptr || design->isPrimitive()) {
       continue;  // LCOV_EXCL_LINE
@@ -1179,8 +1195,16 @@ static void reconnectGeneratedPrimitiveStubs(
       if (model == nullptr || model->isPrimitive() || model->isUnnamed()) {
         continue;  // LCOV_EXCL_LINE
       }
-      if (auto* primitive = findPrimitiveDesign(primitiveLibraries, model->getName())) {
-        instance->setModel(primitive);
+      auto [replacement, inserted] = replacements.try_emplace(model, nullptr);
+      if (inserted) {
+        auto* primitive =
+            findPrimitiveDesign(primitiveLibraries, model->getName());
+        if (primitive != nullptr && isGeneratedStub(model)) {
+          replacement->second = primitive;
+        }
+      }
+      if (replacement->second != nullptr) {
+        instance->setModel(replacement->second);
       }
     }
   }
@@ -1192,16 +1216,18 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
     const std::vector<std::string>& designInputs,
     const SystemVerilogDesignOptions& designOptions,
     std::vector<std::filesystem::path>& temporaryFiles,
-    const std::vector<naja::NL::NLLibrary*>* primitiveLibraries = nullptr) {
+    const std::vector<naja::NL::NLLibrary*>* primitiveLibraries = nullptr,
+    std::filesystem::path* generatedStubPath = nullptr) {
   // LCOV_EXCL_START
   std::vector<std::filesystem::path> svInputPaths = toPathVector(designInputs);
   // LCOV_EXCL_STOP
 
+  std::filesystem::path primitiveStubsPath;
   if (primitiveLibraries != nullptr) {
-    const auto primitiveStubsPath =
+    primitiveStubsPath =
         writeSystemVerilogPrimitiveStubs(*primitiveLibraries, temporaryFiles);
-    if (!primitiveStubsPath.empty()) {
-      svInputPaths.push_back(primitiveStubsPath);
+    if (generatedStubPath != nullptr) {
+      *generatedStubPath = primitiveStubsPath;
     }
   }
 
@@ -1249,6 +1275,10 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
     if (addDefaultTimescale) {
       topFlist << "--timescale 1ns/1ps\n";
     }
+    if (!primitiveStubsPath.empty()) {
+      // Keep earlier user definitions when the fallback stub library collides.
+      topFlist << "--allow-lib-module-redef\n";
+    }
     if (designOptions.top) {
       topFlist << "--top " << *designOptions.top << "\n";
     }
@@ -1260,6 +1290,9 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
     for (const auto& svInputPath : svInputPaths) {
       topFlist << quotePathForSlangCommandFile(svInputPath) << "\n";
       // LCOV_EXCL_STOP
+    }
+    if (!primitiveStubsPath.empty()) {
+      topFlist << "-v " << quotePathForSlangCommandFile(primitiveStubsPath) << "\n";
     }
     // LCOV_EXCL_START
     topFlist.close();
@@ -2472,16 +2505,22 @@ int KeplerFormalMain(int argc, char** argv) {
               (inputFormatType == FormatType::SV2V && designIndex == 0)
                   ? &primitiveLibraries
                   : nullptr;
+          std::filesystem::path generatedStubPath;
           const auto svInputPaths =
               // LCOV_EXCL_START
               buildSystemVerilogInputPaths(
-                  designPaths, designOptions, temporaryFiles, sv2vPrimitiveLibraries);
+                  designPaths,
+                  designOptions,
+                  temporaryFiles,
+                  sv2vPrimitiveLibraries,
+                  &generatedStubPath);
               // LCOV_EXCL_STOP
           try {
             // LCOV_EXCL_START
             constructor.construct(svInputPaths);
             if (sv2vPrimitiveLibraries != nullptr) {
-              reconnectGeneratedPrimitiveStubs(designLibrary, *sv2vPrimitiveLibraries);
+              reconnectGeneratedPrimitiveStubs(
+                  designLibrary, *sv2vPrimitiveLibraries, generatedStubPath);
             }
             // LCOV_EXCL_STOP
             // LCOV_EXCL_START
@@ -2787,17 +2826,20 @@ int KeplerFormalMain(int argc, char** argv) {
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
             inputFormatType == FormatType::SV2V ? &db0PrimitiveLibraries : nullptr;
+        std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design0,
             systemVerilogOptions.design0,
             temporaryFiles,
-            sv2vPrimitiveLibraries);
+            sv2vPrimitiveLibraries,
+            &generatedStubPath);
             // LCOV_EXCL_STOP
         try {
           // LCOV_EXCL_START
           constructor.construct(svInputPaths);
           if (sv2vPrimitiveLibraries != nullptr) {
-            reconnectGeneratedPrimitiveStubs(designLibrary, *sv2vPrimitiveLibraries);
+            reconnectGeneratedPrimitiveStubs(
+                designLibrary, *sv2vPrimitiveLibraries, generatedStubPath);
           }
         } catch (...) {
           for (const auto& temporaryFile : temporaryFiles) {

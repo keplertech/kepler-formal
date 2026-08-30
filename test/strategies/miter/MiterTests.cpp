@@ -713,6 +713,47 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesConstantFalseOutput) {
   EXPECT_EQ(builder.getPOs()[0]->toString(), "0");
 }
 
+TEST_F(MiterTests, BuildPrimaryOutputClausesDirectConstantOutputs) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("primitives"));
+  NLLibrary* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  SNLDesign* top =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top"));
+  SNLDesign* dummy = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("DUMMY"));
+  univ->setTopDesign(top);
+
+  // Keep the top non-leaf so DNL materializes its driverless constant nets.
+  SNLInstance::create(top, dummy, NLName("dummy0"));
+  SNLInstance::create(top, dummy, NLName("dummy1"));
+
+  auto* falseOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("false_out"));
+  auto* trueOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("true_out"));
+  auto* falseNet = SNLScalarNet::create(top, NLName("false_net"));
+  auto* trueNet = SNLScalarNet::create(top, NLName("true_net"));
+  falseNet->setType(SNLNet::Type::Assign0);
+  trueNet->setType(SNLNet::Type::Assign1);
+  falseOut->setNet(falseNet);
+  trueOut->setNet(trueNet);
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 2u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  ASSERT_NE(builder.getPOs()[1], nullptr);
+  EXPECT_EQ(builder.getPOs()[0]->toString(), "0");
+  EXPECT_EQ(builder.getPOs()[1]->toString(), "1");
+  EXPECT_TRUE(builder.getSkippedOutputs().empty());
+}
+
 TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);

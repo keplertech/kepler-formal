@@ -1385,6 +1385,87 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
 
 TEST_F(
     KeplerFormalCliTests,
+    ConfigSv2vDesignDefinedModuleOverridesGeneratedPrimitiveStub) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_owned_prim");
+  fixture.design0Path = fixture.tmpDir / "design0.sv";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
+  ASSERT_TRUE(std::filesystem::exists(libertyPath));
+
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module INV_X1(input A, output ZN);\n";
+    design0 << "  assign ZN = A;\n";
+    design0 << "endmodule\n";
+    design0 << "module top(input logic a, b, output logic y);\n";
+    design0 << "  logic n;\n";
+    design0 << "  INV_X1 u_owned(.A(a), .ZN(n));\n";
+    design0 << "  AND2_X1 u_lib(.A1(n), .A2(b), .ZN(y));\n";
+    design0 << "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, b, output y);\n";
+    design1 << "  AND2_X1 u_lib(.A1(a), .A2(b), .ZN(y));\n";
+    design1 << "endmodule\n";
+  }
+
+  for (const bool compact : {false, true}) {
+    const std::string mode = compact ? "compact" : "standard";
+    const auto runDir = fixture.tmpDir / mode;
+    std::filesystem::create_directories(runDir);
+    const auto logPath = runDir / "run.log";
+    const auto diagnosticsPath = runDir / "naja_sv_diagnostics.log";
+    const auto cfgPath = writeTempConfig(
+        "format: sv2v\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "sec_encoding: binary\n"
+        "max_k: 4\n"
+        "compact_mode: " + std::string(compact ? "true" : "false") + "\n"
+        "sv_design1_top: top\n"
+        "verilog_design2_top: top\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "liberty_files:\n"
+        "  - " + libertyPath.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+
+    {
+      CurrentPathGuard currentPathGuard;
+      std::filesystem::current_path(runDir);
+      EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS) << mode;
+    }
+    ASSERT_TRUE(std::filesystem::exists(logPath)) << mode;
+    const auto logContents = readFileContents(logPath);
+    EXPECT_NE(
+        logContents.find(
+            "SEC checked-output coverage: 100.00% (1/1 covered/existing outputs)."),
+        std::string::npos)
+        << mode;
+    const auto compactMarker =
+        "SEC compact mode: extracting and releasing design 1 before "
+        "loading design 2";
+    if (compact) {
+      EXPECT_NE(logContents.find(compactMarker), std::string::npos) << mode;
+    } else {
+      EXPECT_EQ(logContents.find(compactMarker), std::string::npos) << mode;
+    }
+    ASSERT_TRUE(std::filesystem::exists(diagnosticsPath)) << mode;
+    EXPECT_EQ(
+        readFileContents(diagnosticsPath).find("duplicate definition of 'INV_X1'"),
+        std::string::npos)
+        << mode;
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(
+    KeplerFormalCliTests,
     ConfigPythonPrimitivesUseAdjacentNajaModuleWithoutPythonPath) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_adjacent_naja");
