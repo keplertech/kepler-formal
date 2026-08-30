@@ -2642,6 +2642,37 @@ TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapAcceptsMultiplePorts) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapUsesSequentialResetInput) {
+  const EnvVarGuard secDiag("KEPLER_SEC_DIAG");
+  secDiag.set("1");
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic clk, input logic reset, input logic a, output logic y);\n"
+      "  always_ff @(posedge clk) begin\n"
+      "    if (reset) y <= 1'b0;\n"
+      "    else y <= a;\n"
+      "  end\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: true\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, CliSecResetBootstrapAcceptsRepeatedPorts) {
   const auto fixture = createEquivalentDesignFixture(
       "v",
@@ -2702,6 +2733,190 @@ TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapMissingPortFails) {
           "Reset bootstrap port `missing` was not found among aligned "
           "top-level inputs"),
       std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsMalformedYaml) {
+  const std::vector<std::string> invalidResetBlocks = {
+      "sec_reset: scalar\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - reset\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: maybe\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n"
+      "    - name: reset\n"
+      "      active_value: 0\n",
+      "sec_reset:\n"
+      "  cycles: 0\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n"};
+
+  for (const auto& resetBlock : invalidResetBlocks) {
+    const auto cfgPath = writeTempConfig(
+        "format: verilog\n"
+        "verification: sec\n" +
+        resetBlock);
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE) << resetBlock;
+    std::filesystem::remove(cfgPath);
+  }
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapIncompleteSpecFails) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-v",
+                   "sec",
+                   "--sec-reset-cycles",
+                   "1",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      EXIT_FAILURE);
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-v",
+                   "sec",
+                   "--sec-reset-port",
+                   "reset=1",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapRejectedForLec) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "--sec-reset-cycles",
+                   "1",
+                   "--sec-reset-port",
+                   "reset=1",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapAcceptsBareOneBitBus) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic [0:0] rst, input logic a, output logic y);\n"
+      "  assign y = rst[0] & a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: rst\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsBareMultiBitBus) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic [1:0] rst, input logic a, output logic y);\n"
+      "  assign y = (rst[0] & a) | rst[1];\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_bus.log";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: rst\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(
+      contents.find("matched multiple input bits; name each reset bit explicitly"),
+      std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsDuplicateResolvedBusBit) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic [0:0] rst, input logic a, output logic y);\n"
+      "  assign y = rst[0] & a;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_duplicate_bit.log";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: rst\n"
+      "      active_value: 1\n"
+      "    - name: rst[0]\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("resolves to the same top-level input"),
+            std::string::npos);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }

@@ -435,8 +435,10 @@ std::optional<std::string> resolveResetPortSymbol(
     return std::nullopt;
   }
   if (exactMatches.size() > 1) {
+    // LCOV_EXCL_START
     return "Reset bootstrap port `" + port.name +
            "` matched multiple aligned top-level inputs";
+    // LCOV_EXCL_STOP
   }
   if (bitMatches.size() == 1 &&
       alignedInputs.names[bitMatches.front()] == port.name + "[0]") {
@@ -460,7 +462,9 @@ std::optional<std::string> applyResetBootstrapSpec(
     return std::nullopt;
   }
   if (problem.inputSymbols.size() != alignedInputs.names.size()) {
+    // LCOV_EXCL_START
     return "Internal SEC error while resolving reset bootstrap inputs";
+    // LCOV_EXCL_STOP
   }
 
   problem.resetBootstrapCycles = resetSpec.cycles;
