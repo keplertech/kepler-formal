@@ -21,6 +21,23 @@ add_library(kepler_sec STATIC
     strategy/SequentialEquivalenceStrategy.cpp
 )
 
+add_library(kepler_sec_phase STATIC
+    phase/GeneralizedPhaseAnalysis.cpp
+    phase/LatchPhaseProfile.cpp
+    phase/NormalizedTransitionSystem.cpp
+    phase/PeriodicSignalAnalysis.cpp
+    phase/TernarySimulation.cpp
+)
+
+target_include_directories(kepler_sec_phase PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kepler_sec_phase
+    PUBLIC
+      formal_strategies
+      formal_structures
+      naja_dnl
+      naja_nl
+)
+
 target_include_directories(kepler_sec PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kepler_sec
     PUBLIC

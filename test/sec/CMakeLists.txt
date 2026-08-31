@@ -29,6 +29,29 @@ endif()
 
 GTEST_DISCOVER_TESTS(secStrategyTests)
 
+add_executable(secPhaseAnalysisTests
+    phase/GeneralizedPhaseAnalysisTests.cpp
+    phase/NormalizedTransitionSystemTests.cpp
+)
+target_link_libraries(secPhaseAnalysisTests
+    kepler_clauses
+    kepler_sec_phase
+    naja_dnl
+    naja_nl
+)
+
+if (TARGET GTest::gmock_main)
+    target_link_libraries(secPhaseAnalysisTests GTest::gmock_main)
+elseif (TARGET GTest::gtest_main)
+    target_link_libraries(secPhaseAnalysisTests gmock GTest::gtest_main)
+elseif (DEFINED GTEST_MAIN_LIBRARIES)
+    target_link_libraries(secPhaseAnalysisTests gmock ${GTEST_MAIN_LIBRARIES})
+else()
+    target_link_libraries(secPhaseAnalysisTests gmock gtest_main ${GTEST_LIBRARIES})
+endif()
+
+GTEST_DISCOVER_TESTS(secPhaseAnalysisTests)
+
 add_test(
     NAME SecRegressHelperTests.PartialProofExpectationModes
     COMMAND bash

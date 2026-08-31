@@ -80,3 +80,34 @@ cc_library(
         "@kissat",
     ],
 )
+
+cc_library(
+    name = "kepler_sec_phase",
+    srcs = [
+        "phase/GeneralizedPhaseAnalysis.cpp",
+        "phase/LatchPhaseProfile.cpp",
+        "phase/NormalizedTransitionSystem.cpp",
+        "phase/PeriodicSignalAnalysis.cpp",
+        "phase/TernarySimulation.cpp",
+    ],
+    hdrs = [
+        "phase/GeneralizedPhaseAnalysis.h",
+        "phase/LatchPhaseProfile.h",
+        "phase/NormalizedTransitionSystem.h",
+        "phase/PeriodicSignalAnalysis.h",
+        "phase/TernarySimulation.h",
+    ],
+    includes = [
+        ".",
+        "..",
+    ],
+    copts = NAJA_HEADER_COPTS,
+    visibility = ["//visibility:public"],
+    deps = TBB_DEPS + [
+        "//src/formal:formal_structures",
+        "//src/strategies:formal_strategies",
+        ":sec_common_headers",
+        "@naja",
+        "@naja//:naja_extra_headers",
+    ],
+)
