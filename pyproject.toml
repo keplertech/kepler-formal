@@ -76,7 +76,8 @@ before-all = '''
     https://capnproto.org/capnproto-c++-1.1.0.tar.gz
   tar -xzf capnproto-c++-1.1.0.tar.gz
   cd capnproto-c++-1.1.0
-  ./configure
+  # Keep the static archives usable when nested NajaEDA links shared objects.
+  ./configure --with-pic
   make -j$(nproc)
   make install
   cd ..
