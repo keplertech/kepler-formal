@@ -26,11 +26,22 @@ set(KEPLER_EXTERNAL_PIC_ARG "")
 if(BUILD_KEPLER_PYTHON)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   set(KEPLER_EXTERNAL_PIC_ARG -fPIC)
-  find_package(
-    Python3 3.10...<3.99
-    COMPONENTS Interpreter Development.Module Development.Embed
-    REQUIRED
-  )
+  if(BUILD_NAJA_PYTHON)
+    # Wheel builds use Naja's hosted-Python mode and must not require or link
+    # an embeddable libpython.  manylinux CPython intentionally provides only
+    # the extension-module development surface.
+    find_package(
+      Python3 3.10...<3.99
+      COMPONENTS Interpreter Development.Module
+      REQUIRED
+    )
+  else()
+    find_package(
+      Python3 3.10...<3.99
+      COMPONENTS Interpreter Development.Module Development.Embed
+      REQUIRED
+    )
+  endif()
 endif()
 
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)

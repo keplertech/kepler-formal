@@ -35,7 +35,9 @@ jobs:
           - os: ubuntu-24.04
             platform: manylinux_2_28
             arch: x86_64
-          - os: macos-14
+          # Vendored Slang requires a newer AppleClang than Xcode 15.4 on the
+          # macos-14 image.  The repository's macOS build also uses latest.
+          - os: macos-latest
             platform: macOS
             arch: arm64
     runs-on: ${{ matrix.os }}

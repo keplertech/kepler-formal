@@ -12,6 +12,8 @@
 #include <sstream>
 #include <string>
 
+#include <spdlog/spdlog.h>
+
 #include "gtest/gtest.h"
 
 #include "BuildPrimaryOutputClauses.h"
@@ -1646,6 +1648,35 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsWithNoCommonOutputsIsVac
 
   MiterStrategy strategy(nullptr, nullptr, "compactSnapshotsNoCommonOutputs");
   EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
+}
+
+TEST_F(MiterStrategyStandaloneTests, CleanupProcessStateResetsLoggerAndLogPath) {
+  const auto tmpDir = makeUniqueTestTempDir();
+  const auto logPath = tmpDir / "miter.log";
+
+  MiterStrategy::CompactSnapshot snapshot0;
+  MiterStrategy::CompactSnapshot snapshot1;
+  MiterStrategy strategy(nullptr, nullptr, logPath.string());
+
+  EXPECT_TRUE(strategy.runCompactSnapshots(snapshot0, snapshot1));
+  EXPECT_EQ(logPath.string(), MiterStrategy::getActualLogFileName());
+  EXPECT_EQ(logPath.string(), MiterStrategy::logFileName_);
+  EXPECT_TRUE(std::filesystem::exists(logPath));
+  EXPECT_NE(nullptr, spdlog::get("miter_logger"));
+
+  MiterStrategy::cleanupProcessState();
+
+  EXPECT_TRUE(MiterStrategy::getActualLogFileName().empty());
+  EXPECT_TRUE(MiterStrategy::logFileName_.empty());
+  EXPECT_EQ(nullptr, spdlog::get("miter_logger"));
+  EXPECT_EQ(nullptr, spdlog::get("miter_logger_fallback"));
+
+  // Cleanup is part of an in-process run guard and must remain idempotent.
+  MiterStrategy::cleanupProcessState();
+  EXPECT_TRUE(MiterStrategy::getActualLogFileName().empty());
+  EXPECT_TRUE(MiterStrategy::logFileName_.empty());
+
+  std::filesystem::remove_all(tmpDir);
 }
 
 TEST_F(MiterTests, CompactRunEquivalentDesignsInSeparateDBsWritesCnf) {

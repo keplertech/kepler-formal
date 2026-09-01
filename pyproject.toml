@@ -38,6 +38,9 @@ build.targets = ["kepler_formal_native"]
 [tool.scikit-build.cmake.define]
 CMAKE_BUILD_TYPE = "Release"
 BUILD_KEPLER_PYTHON = "ON"
+# The wheel hosts CPython, so the primary Naja runtime must use Module rather
+# than Embed.  The separately nested NajaEDA runtime is configured likewise.
+BUILD_NAJA_PYTHON = "ON"
 ENABLE_UNIT_TESTS = "OFF"
 
 [tool.scikit-build.metadata.version]
