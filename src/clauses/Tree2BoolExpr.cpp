@@ -231,7 +231,10 @@ BoolExpr* buildTableSelectTruthTableExprRecursive(
 
   if (addressIndex == addressSize) {
     assert(prefix < depth);
-    return getChildFETS(addressSize + static_cast<uint32_t>(prefix));
+    // Dependencies are decoded in flattened model-term order. TABLE_SELECT
+    // declares DATA before ADDR, and DATA lane dependencies therefore arrive
+    // from the highest row down to row zero.
+    return getChildFETS(depth - 1 - static_cast<uint32_t>(prefix));
   }
 
   BoolExpr* low = buildTableSelectTruthTableExprRecursive(
@@ -242,7 +245,8 @@ BoolExpr* buildTableSelectTruthTableExprRecursive(
     return low;
   }
 
-  BoolExpr* addressBit = getChildFETS(addressIndex);
+  // The ADDR bits follow all DATA dependencies and arrive MSB first.
+  BoolExpr* addressBit = getChildFETS(depth + addressIndex);
   return BoolExpr::Or(
       BoolExpr::And(BoolExpr::Not(addressBit), low),
       BoolExpr::And(addressBit, high));

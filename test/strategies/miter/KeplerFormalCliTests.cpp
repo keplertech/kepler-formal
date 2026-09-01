@@ -3311,6 +3311,46 @@ TEST_F(KeplerFormalCliTests,
 }
 
 TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogVariableIndexMatchesExplicitMux) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module t(input [2:0] sel, input [7:0] d, output y);\n"
+      "  assign y = d[sel];\n"
+      "endmodule\n",
+      "module t(input [2:0] sel, input [7:0] d, output y);\n"
+      "  assign y = sel == 3'd0 ? d[0] : sel == 3'd1 ? d[1]\n"
+      "           : sel == 3'd2 ? d[2] : sel == 3'd3 ? d[3]\n"
+      "           : sel == 3'd4 ? d[4] : sel == 3'd5 ? d[5]\n"
+      "           : sel == 3'd6 ? d[6] : d[7];\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "variable_index_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string(),
+                     "--sv_design1_top",
+                     "t",
+                     "--sv_design2_top",
+                     "t",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr"}),
+        kSecProvedExitCode);
+  }
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
        CliSystemVerilogSecSharedDivModMatchesShiftAndMask) {
   const auto fixture = createDesignFixture(
       "sv",
