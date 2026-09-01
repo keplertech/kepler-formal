@@ -136,8 +136,13 @@ result = verify(
 print(result.status)
 ```
 
+The wheel also bundles an isolated editor API under
+`kepler_formal.najaeda`. Its live netlist universe is independent from the
+verifier; designs cross between them through Verilog, SystemVerilog, or Naja
+IF files.
+
 See the [Python API guide](docs/python-api.md) for SEC options, structured
-results, and in-process lifetime constraints.
+results, the nested NajaEDA editor, and in-process lifetime constraints.
 
 ### Custom Python Primitives
 

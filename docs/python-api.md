@@ -6,8 +6,9 @@ and returns an owning, structured result after each run.
 
 This is a direct, in-process binding. It does not start the command-line
 executable, use a subprocess, or communicate through MCP or another service.
-The first API is deliberately file-based; it is a verification interface, not
-a NajaEDA-style live netlist-editing interface.
+The verification API is deliberately file-based. The distribution also
+contains an opt-in, nested NajaEDA package for live netlist analysis and
+editing, with a separate native runtime and lifecycle.
 
 ## Build and install
 
@@ -20,6 +21,72 @@ python -m pip install .
 The build uses `scikit-build-core`, following NajaEDA's package layout. Native
 build dependencies are the same as for the CMake build. Linux and macOS are the
 initially supported platforms.
+
+## Bundled NajaEDA editor
+
+Import the bundled editor explicitly from Kepler Formal's namespace:
+
+```python
+from kepler_formal import najaeda
+from kepler_formal.najaeda import netlist
+
+print(najaeda.__version__)
+
+netlist.reset()
+top = netlist.load_verilog("candidate.v")
+top.get_net("old_name").set_name("new_name")
+netlist.dump_naja_if("candidate.najaif")
+```
+
+Importing `kepler_formal` does not load this editor runtime. It is initialized
+only by an explicit access such as `from kepler_formal import najaeda` or an
+import below `kepler_formal.najaeda`. The usual upstream high-level modules
+remain nested, for example:
+
+- `kepler_formal.najaeda.netlist` for loading, navigation, analysis, and edits;
+- `kepler_formal.najaeda.naja` for the expert raw SNL API;
+- `kepler_formal.najaeda.instance_visitor`, `stats`, and `primitives` for the
+  corresponding upstream helpers.
+
+Always use these fully nested names in application code. The package does not
+install or replace a `sys.modules["najaeda"]` alias, and its internal modules
+resolve one another through `kepler_formal.najaeda`. A separately installed
+top-level `najaeda` package is not used by the bundled editor. Prefer one API
+namespace consistently in an application so object ownership remains clear.
+
+### Two native runtimes
+
+The editor and verifier deliberately have independent native Naja runtimes:
+
+- `kepler_formal.najaeda` owns a persistent editing universe. Its live
+  `Instance`, `Net`, `Term`, and raw SNL objects remain valid until the editor
+  deletes them or `netlist.reset()` destroys that universe.
+- `verify()`, `run_config()`, and `run_cli()` use Kepler's private verification
+  universe. Each call creates and destroys its run state without destroying
+  the nested editor's universe.
+
+This separation allows a verification call while the nested editor has a live
+design, but native objects cannot cross the boundary. `Design.files` accepts
+path-like values only; it does not accept editor `Instance`, raw `SNLDesign`,
+or other NajaEDA objects. Results likewise contain no live Naja objects.
+
+Exchange a design through a file. Naja IF is the most direct snapshot format:
+
+```python
+from kepler_formal import Design, InputFormat, VerificationOptions, verify
+from kepler_formal.najaeda import netlist
+
+netlist.dump_naja_if("edited.najaif")
+result = verify(
+    Design("reference.najaif"),
+    Design("edited.najaif"),
+    options=VerificationOptions(input_format=InputFormat.NAJA_IF),
+)
+```
+
+Verilog and SystemVerilog files are also valid exchange formats under their
+normal input rules. Saving a path and then passing that path is intentional:
+the verifier never borrows the editor's in-memory universe.
 
 ## Compare two designs
 
@@ -217,13 +284,13 @@ set of covered-but-unproved outputs.
 ## Lifetime, global state, and concurrency
 
 Results contain only Python strings, integers, tuples, and enums. They remain
-valid after the call because the native Naja universe, miter state, expression
-caches, and run-owned objects are released before control returns to Python.
-The binding restores the Kepler solver/report settings and spdlog logger
-references that it changes.
+valid after the call because the verification runtime's native Naja universe,
+miter state, expression caches, and run-owned objects are released before
+control returns to Python. The binding restores the Kepler solver/report
+settings and spdlog logger references that it changes.
 
-Kepler and Naja still use process-global design, solver, and logging state. The
-binding therefore has these constraints:
+Within the private verification runtime, Kepler and Naja still use global
+design, solver, and logging state. The binding therefore has these constraints:
 
 - Verification calls are synchronous, serialized by a process-wide mutex, and
   not reentrant.
@@ -232,9 +299,10 @@ binding therefore has these constraints:
 - The API does not currently provide an in-process timeout or cancellation
   hook. A caller that needs hard cancellation or crash isolation should place
   the Python call in a separately managed process.
-- A call is rejected with `RuntimeError` if another live Naja universe exists.
-  In particular, do not invoke verification while a NajaEDA session owns live
-  netlist objects.
+- A call is rejected with `RuntimeError` if Kepler's private verification
+  runtime already contains an unexpected live universe. A universe owned by
+  the isolated `kepler_formal.najaeda` editor is independent and may remain
+  live across verification calls.
 - No `Design` or result field accepts or returns live Naja/SNL/NajaEDA objects.
   Pass files or snapshots and keep only the owning result values.
 - Kepler temporarily installs a process-global spdlog default/named logger and
@@ -245,10 +313,11 @@ binding therefore has these constraints:
 
 ## Python technology files
 
-`py_tech_files` are not supported by the in-process Python package. The native
-package driver deliberately excludes Naja's CPython technology loader to avoid
-mixing incompatible Python runtimes and live Naja object ownership. Liberty
-libraries are supported through `VerificationOptions.libraries`.
+`py_tech_files` are not supported by the in-process verification driver. The
+driver deliberately excludes Naja's CPython technology loader. This
+restriction applies even though the separate nested NajaEDA editor has its own
+primitive-loading facilities. Liberty libraries are supported through
+`VerificationOptions.libraries`.
 
 If a YAML/JSON configuration supplied to `run_config()` contains
 `py_tech_files`, the call returns `VerificationStatus.ERROR` with a nonzero

@@ -6,8 +6,8 @@ same LEC and SEC engine used by the Kepler Formal executable. Calls run directly
 in the current process: this package is not a subprocess wrapper and does not
 use MCP or another service.
 
-The initial API is file-based. It is intended for running verification and
-returning owning result values, not for editing live NajaEDA netlists.
+The verification API is file-based and returns owning result values. The wheel
+also bundles an opt-in NajaEDA editor under ``kepler_formal.najaeda``.
 
 Quick start
 -----------
@@ -40,6 +40,39 @@ Quick start
        print("proved equivalent")
    else:
        print(result.status.value, result.reason)
+
+Bundled NajaEDA editor
+----------------------
+
+Import the editor through its nested namespace:
+
+.. code-block:: python
+
+   from kepler_formal import najaeda
+   from kepler_formal.najaeda import netlist
+
+   print(najaeda.__version__)
+   netlist.reset()
+   top = netlist.load_verilog("candidate.v")
+   top.get_net("old_name").set_name("new_name")
+   netlist.dump_naja_if("candidate.najaif")
+
+Importing ``kepler_formal`` alone does not initialize the editor. Use fully
+nested imports; the package does not install or replace a top-level
+``najaeda`` alias. A separately installed top-level package is not used by the
+bundled editor. Prefer one namespace consistently so object ownership remains
+clear.
+
+The nested editor and Kepler verifier use independent native Naja runtimes.
+The editor's universe and live objects persist until deletion or
+``netlist.reset()``; each verification call creates and destroys only its own
+private run state. A live editor design can therefore remain open across
+``verify()``.
+
+Native objects do not cross this runtime boundary. Do not pass a NajaEDA
+``Instance`` or raw ``SNLDesign`` to ``verify()``. Dump Verilog, SystemVerilog,
+or Naja IF and pass the resulting path through ``Design`` instead. Verification
+results contain owning Python values, never live Naja objects.
 
 ``Design.files`` accepts one path or a sequence. Each design needs one or more
 files, a permitted SystemVerilog flist, or both:
@@ -100,22 +133,25 @@ neither launches the executable.
 Process constraints
 -------------------
 
-Kepler and Naja use process-global native state. Verification calls are
-synchronous, serialized, non-reentrant, and hold Python's GIL until the run
-finishes. A call raises ``RuntimeError`` if another live Naja universe exists,
-including one owned by a NajaEDA session. The API does not accept or return live
-Naja/SNL/NajaEDA objects. There is no in-process timeout or cancellation hook;
-callers that require hard cancellation or crash isolation should manage the
-Python invocation in a separate process.
+Kepler and Naja use global state inside the private verification runtime.
+Verification calls are synchronous, serialized, non-reentrant, and hold
+Python's GIL until the run finishes. A call raises ``RuntimeError`` if that
+runtime unexpectedly already has a live universe. The isolated nested editor
+universe is not that runtime and may remain alive. The verification API does
+not accept or return live Naja/SNL/NajaEDA objects. There is no in-process
+timeout or cancellation hook; callers that require hard cancellation or crash
+isolation should manage the Python invocation in a separate process.
 
 Run state and logger references are restored after each call, but Kepler
 temporarily replaces spdlog's process-global default logger. Unrelated native
 threads using that global logger must be coordinated, or verification should be
 run in an isolated process.
 
-Python technology files (``py_tech_files``) are not supported by this
-in-process package. A configuration containing them returns ``ERROR`` with a
-nonzero exit code and an explanatory reason. Liberty libraries are supported.
+Python technology files (``py_tech_files``) are not supported by the
+in-process verification driver, even though the separate nested editor has its
+own primitive loaders. A verification configuration containing them returns
+``ERROR`` with a nonzero exit code and an explanatory reason. Liberty libraries
+are supported.
 
 See ``docs/python-api.md`` in the source tree for the complete input rules,
 option table, result-field semantics, and lifecycle notes.

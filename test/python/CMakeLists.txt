@@ -6,6 +6,7 @@ add_test(NAME kepler-formal-python-tests-setup
     -DSRC=${PROJECT_SOURCE_DIR}/src/python/kepler_formal
     -DDST=${CMAKE_CURRENT_BINARY_DIR}/kepler_formal
     -DNATIVE=$<TARGET_FILE:kepler_formal_native>
+    -DNAJAEDA_SRC=${KEPLER_NESTED_NAJAEDA_PACKAGE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/setup_test_env.cmake
 )
 set_tests_properties(kepler-formal-python-tests-setup PROPERTIES

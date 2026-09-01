@@ -28,6 +28,9 @@ target_link_libraries(kepler_formal_native PRIVATE
   Python3::Module
 )
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/KeplerNestedNajaeda.cmake)
+kepler_add_nested_najaeda(kepler_formal_native)
+
 if(APPLE)
   set_target_properties(kepler_formal_native PROPERTIES INSTALL_RPATH "@loader_path")
 elseif(UNIX)
@@ -44,6 +47,22 @@ install(TARGETS
   RUNTIME DESTINATION kepler_formal COMPONENT python
   PUBLIC_HEADER DESTINATION kepler_formal/include
   COMPONENT python-headers
+)
+
+install(
+  DIRECTORY "${KEPLER_NESTED_NAJAEDA_PACKAGE_DIR}/"
+  DESTINATION kepler_formal/najaeda
+  COMPONENT python
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
+)
+
+install(
+  FILES
+    "${PROJECT_SOURCE_DIR}/thirdparty/naja/LICENSE"
+    "${PROJECT_SOURCE_DIR}/thirdparty/naja/AUTHORS"
+  DESTINATION kepler_formal/najaeda
+  COMPONENT python
 )
 
 install(
