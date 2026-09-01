@@ -1,0 +1,63 @@
+# Copyright 2024-2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Python wheels
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/python-wheels.yml
+      - pyproject.toml
+      - CMakeLists.txt
+      - LICENSE.rst
+      - src/**
+      - ci/check_kepler_wheel.py
+      - thirdparty/**
+      - .gitmodules
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-wheels-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: manylinux_2_28
+            arch: x86_64
+          - os: macos-14
+            platform: macOS
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify recursive submodules
+        run: git submodule status --recursive
+
+      - name: Build, repair, and test wheels
+        uses: pypa/cibuildwheel@v4.2.0
+        with:
+          package-dir: .
+          output-dir: wheelhouse
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kepler-formal-${{ matrix.platform }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error

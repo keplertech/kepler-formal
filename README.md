@@ -117,6 +117,28 @@ Additional notes and the BCR publication roadmap are tracked in
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
 
+### Python API
+
+Kepler Formal also provides a native, file-based Python API:
+
+```bash
+python -m pip install .
+```
+
+```python
+from kepler_formal import VerificationOptions, verify
+
+result = verify(
+    "reference.v",
+    "implementation.v",
+    options=VerificationOptions(log_file="verification.log"),
+)
+print(result.status)
+```
+
+See the [Python API guide](docs/python-api.md) for SEC options, structured
+results, and in-process lifetime constraints.
+
 ### Custom Python Primitives
 
 Custom technology primitives can be defined in Python and loaded through the
