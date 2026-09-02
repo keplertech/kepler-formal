@@ -2681,7 +2681,11 @@ constexpr size_t kDefaultDualRailPdrSingletonDecisionBudget =
 // CaDiCaL ticks count clause-cache-line work, bounding propagation-heavy
 // queries that can do little visible decision or conflict work.
 constexpr size_t kDefaultDualRailPdrSingletonTickBudget =
-    100 * 1000 * 1000;
+    500 * 1000 * 1000;
+// Treat multi-output runs as bounded scheduling probes. They may still prove
+// the whole conjunction, but a hard one is split into smaller exact properties
+// instead of monopolizing the complete PDR budget.
+constexpr size_t kDualRailPdrBatchPredecessorQueryLimit = 1000;
 
 PDRResult runPdrOutputBatch(const PDREngine& engine,
                             size_t maxFrames,
@@ -3160,11 +3164,19 @@ SequentialEquivalenceResult runPdrSecEngine(
     }
     PDRResult pdrResult;
     {
+      const size_t outputCount = endOutput - firstOutput;
+      const size_t predecessorQueryLimit =
+          problem.usesDualRailStateEncoding && outputCount > 1
+              ? kDualRailPdrBatchPredecessorQueryLimit
+              : 0;
       PDREngine pdrEngine(
-          exactBatchProblem, solverType, 0, exactInitCache);
+          exactBatchProblem,
+          solverType,
+          predecessorQueryLimit,
+          exactInitCache);
       pdrResult = runPdrOutputBatch(
           pdrEngine, maxK, exactBatchProblem.property,
-          endOutput - firstOutput,
+          outputCount,
           problem.usesDualRailStateEncoding);
     }
     releasePdrBatchAllocatorPages();
