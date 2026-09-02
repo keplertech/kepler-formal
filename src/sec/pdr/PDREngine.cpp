@@ -117,6 +117,10 @@ constexpr unsigned kDefaultDualRailBlockingDecisionLimit = 10 * 1000 * 1000;
 // original full limits below.
 constexpr unsigned kNarrowGeneralizationProbeConflictLimit = 10 * 1000;
 constexpr unsigned kNarrowGeneralizationProbeDecisionLimit = 150 * 1000;
+// A fresh exact solver only repays its construction cost when the retained
+// level solver is genuinely wide and the current cone removes useful work.
+constexpr size_t kMinNarrowGeneralizationSolverSymbols = 512;
+constexpr size_t kMinNarrowGeneralizationSymbolSavings = 64;
 // Reusable-invariant certification is optional strengthening, not an IC3
 // proof obligation. Bound both one query and the aggregate CaDiCaL work across
 // output batches so candidate reuse cannot dominate the exact PDR checks.
@@ -1469,6 +1473,7 @@ namespace {
 enum class PdrBudgetExhaustion {
   None,
   LocalQuery,
+  PredecessorQueryCount,
 };
 
 thread_local PdrBudgetExhaustion pdrBudgetExhaustion =
@@ -1509,6 +1514,11 @@ bool hasPdrBudgetExhaustion() {
   return pdrBudgetExhaustion != PdrBudgetExhaustion::None;
 }
 
+bool hasPdrPredecessorQueryCountExhaustion() {
+  return pdrBudgetExhaustion ==
+         PdrBudgetExhaustion::PredecessorQueryCount;
+}
+
 bool consumePdrPredecessorQueryBudget(size_t* remainingQueries) {
   if (remainingQueries == nullptr) {
     return true;
@@ -1519,7 +1529,8 @@ bool consumePdrPredecessorQueryBudget(size_t* remainingQueries) {
           "SEC PDR stats: predecessor query-count budget exhausted limit=",
           pdrPredecessorQueryLimit);
     }  // LCOV_EXCL_LINE
-    markPdrBudgetExhausted(PdrBudgetExhaustion::LocalQuery);  // LCOV_EXCL_LINE
+    markPdrBudgetExhausted(  // LCOV_EXCL_LINE
+        PdrBudgetExhaustion::PredecessorQueryCount);
     return false;  // LCOV_EXCL_LINE
   }
   --(*remainingQueries);
@@ -6295,11 +6306,17 @@ PredecessorQueryOutcome findPredecessorCube(
         " level=",
         level);
   }
+  const bool narrowGeneralizationMateriallySmaller =
+      cachedSolverSymbols.size() >= kMinNarrowGeneralizationSolverSymbols &&
+      solverSymbols.size() < cachedSolverSymbols.size() &&
+      cachedSolverSymbols.size() - solverSymbols.size() >=
+          kMinNarrowGeneralizationSymbolSavings;
   if (problem.usesDualRailStateEncoding &&
       purpose == PredecessorQueryPurpose::GeneralizeBlocker &&
       level > 0 &&
       solverCache != nullptr &&
-      narrowGeneralizationProbeCache != nullptr) {
+      narrowGeneralizationProbeCache != nullptr &&
+      narrowGeneralizationMateriallySmaller) {
     const std::vector<size_t>& narrowSolverSymbols =
         predecessorAssumptionCacheSymbols(
             transitionByState,
@@ -7393,6 +7410,15 @@ void propagateClauses(const KInductionProblem& problem,
           predecessorQueryBudget,
           supportCache);
       if (hasPdrBudgetExhaustion()) {
+        if (hasPdrPredecessorQueryCountExhaustion()) {
+          if (pdrStatsEnabled()) {
+            emitSecDiag(
+                "SEC PDR stats: propagation stopped after predecessor "
+                "query-count budget exhaustion level=",
+                level);
+          }
+          return;
+        }
         // Figure 9 propagation is opportunistic: only a proved-UNSAT query
         // moves the clause. UNKNOWN leaves this clause in its current frame;
         // it must not abort otherwise exact blocking work for the whole output.
