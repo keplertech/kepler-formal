@@ -406,6 +406,100 @@ struct DualRailStateSymbolMaps {
   std::unordered_map<size_t, DualRailSymbolPair> localState1BySymbol;
 };
 
+bool isBusBitName(const std::string& name, const std::string& base) {
+  return name.size() > base.size() + 2 &&
+         name.compare(0, base.size(), base) == 0 &&
+         name[base.size()] == '[' &&
+         name.back() == ']';
+}
+
+std::optional<std::string> resolveResetPortSymbol(
+    const SecResetPortSpec& port,
+    const AlignedSignals& alignedInputs,
+    const KInductionProblem& problem,
+    size_t& symbol) {
+  std::vector<size_t> exactMatches;
+  std::vector<size_t> bitMatches;
+  for (size_t i = 0; i < alignedInputs.names.size(); ++i) {
+    const std::string& inputName = alignedInputs.names[i];
+    if (inputName == port.name) {
+      exactMatches.push_back(i);
+    } else if (port.name.find('[') == std::string::npos &&
+               isBusBitName(inputName, port.name)) {
+      bitMatches.push_back(i);
+    }
+  }
+
+  if (exactMatches.size() == 1) {
+    symbol = problem.inputSymbols.at(exactMatches.front());
+    return std::nullopt;
+  }
+  if (exactMatches.size() > 1) {
+    // LCOV_EXCL_START
+    return "Reset bootstrap port `" + port.name +
+           "` matched multiple aligned top-level inputs";
+    // LCOV_EXCL_STOP
+  }
+  if (bitMatches.size() == 1 &&
+      alignedInputs.names[bitMatches.front()] == port.name + "[0]") {
+    symbol = problem.inputSymbols.at(bitMatches.front());
+    return std::nullopt;
+  }
+  if (!bitMatches.empty()) {
+    return "Reset bootstrap port `" + port.name +
+           "` matched multiple input bits; name each reset bit explicitly";
+  }
+  return "Reset bootstrap port `" + port.name +
+         "` was not found among aligned top-level inputs";
+}
+
+std::optional<std::string> applyResetBootstrapSpec(
+    const SecResetSpec& resetSpec,
+    const AlignedSignals& alignedInputs,
+    KInductionProblem& problem,
+    bool secDiagEnabled) {
+  if (!resetSpec.enabled()) {
+    return std::nullopt;
+  }
+  if (problem.inputSymbols.size() != alignedInputs.names.size()) {
+    // LCOV_EXCL_START
+    return "Internal SEC error while resolving reset bootstrap inputs";
+    // LCOV_EXCL_STOP
+  }
+
+  problem.resetBootstrapCycles = resetSpec.cycles;
+  problem.resetBootstrapInputs.clear();
+  problem.resetBootstrapInputs.reserve(resetSpec.ports.size());
+  std::unordered_set<size_t> resolvedSymbols;
+  for (const auto& port : resetSpec.ports) {
+    size_t symbol = 0;
+    if (auto error =
+            resolveResetPortSymbol(port, alignedInputs, problem, symbol)) {
+      return error;
+    }
+    if (!resolvedSymbols.insert(symbol).second) {
+      return "Reset bootstrap input `" + port.name +
+             "` resolves to the same top-level input as another reset port";
+    }
+    problem.resetBootstrapInputs.emplace_back(symbol, port.activeValue);
+  }
+  if (secDiagEnabled) {
+    fprintf(
+        stderr,
+        "SEC diag: reset bootstrap cycles=%zu ports=%zu\n",
+        problem.resetBootstrapCycles,
+        problem.resetBootstrapInputs.size());
+    fflush(stderr);
+  }
+  return std::nullopt;
+}
+
+void copyResetBootstrapSpec(const KInductionProblem& source,
+                            KInductionProblem& target) {
+  target.resetBootstrapCycles = source.resetBootstrapCycles;
+  target.resetBootstrapInputs = source.resetBootstrapInputs;
+}
+
 // LCOV_EXCL_START
 class SecDualRailVariableMapper final : public DualRailVariableMapper {
  public:
@@ -2587,7 +2681,11 @@ constexpr size_t kDefaultDualRailPdrSingletonDecisionBudget =
 // CaDiCaL ticks count clause-cache-line work, bounding propagation-heavy
 // queries that can do little visible decision or conflict work.
 constexpr size_t kDefaultDualRailPdrSingletonTickBudget =
-    100 * 1000 * 1000;
+    500 * 1000 * 1000;
+// Treat multi-output runs as bounded scheduling probes. They may still prove
+// the whole conjunction, but a hard one is split into smaller exact properties
+// instead of monopolizing the complete PDR budget.
+constexpr size_t kDualRailPdrBatchPredecessorQueryLimit = 1000;
 
 PDRResult runPdrOutputBatch(const PDREngine& engine,
                             size_t maxFrames,
@@ -3066,11 +3164,19 @@ SequentialEquivalenceResult runPdrSecEngine(
     }
     PDRResult pdrResult;
     {
+      const size_t outputCount = endOutput - firstOutput;
+      const size_t predecessorQueryLimit =
+          problem.usesDualRailStateEncoding && outputCount > 1
+              ? kDualRailPdrBatchPredecessorQueryLimit
+              : 0;
       PDREngine pdrEngine(
-          exactBatchProblem, solverType, 0, exactInitCache);
+          exactBatchProblem,
+          solverType,
+          predecessorQueryLimit,
+          exactInitCache);
       pdrResult = runPdrOutputBatch(
           pdrEngine, maxK, exactBatchProblem.property,
-          endOutput - firstOutput,
+          outputCount,
           problem.usesDualRailStateEncoding);
     }
     releasePdrBatchAllocatorPages();
@@ -3546,12 +3652,14 @@ SequentialEquivalenceStrategy::SequentialEquivalenceStrategy(
     naja::NL::SNLDesign* top1,
     KEPLER_FORMAL::Config::SolverType solverType,
     SecEngine secEngine,
-    SecEncoding encoding)
+    SecEncoding encoding,
+    SecResetSpec resetSpec)
     : top0_(top0),
       top1_(top1),
       solverType_(solverType),
       secEngine_(secEngine),
-      encoding_(encoding) {}
+      encoding_(encoding),
+      resetSpec_(std::move(resetSpec)) {}
 
 SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) const {
   const bool secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr;
@@ -3647,16 +3755,32 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       symbolSpace.state0Symbols,
       symbolSpace.state1Symbols,
       symbolSpace.problem);
+  if (auto resetError = applyResetBootstrapSpec(
+          resetSpec_, aligned.inputs, symbolSpace.problem, secDiagEnabled)) {
+    return makeSecResult(
+        SequentialEquivalenceStatus::Unsupported,
+        0,
+        *resetError,
+        aligned.outputCoverage,
+        extractedBoundaryReports);
+  }
   if (encoding_ == SecEncoding::Binary) {
-    const bool hasIncompleteInitialState =
-        model0.initialStateValueByKey.size() != model0.stateBits.size() ||
-        model1.initialStateValueByKey.size() != model1.stateBits.size();
-    filterOutputsRequiringUninitializedState(
-        model0,
-        model1,
-        hasIncompleteInitialState,
-        aligned,
-        secDiagEnabled);
+    if (symbolSpace.problem.hasResetBootstrap()) {
+      logSecDiagLine(
+          secDiagEnabled,
+          "SEC diag: reset bootstrap keeps reset-unanchored outputs in the "
+          "binary proof");
+    } else {
+      const bool hasIncompleteInitialState =
+          model0.initialStateValueByKey.size() != model0.stateBits.size() ||
+          model1.initialStateValueByKey.size() != model1.stateBits.size();
+      filterOutputsRequiringUninitializedState(
+          model0,
+          model1,
+          hasIncompleteInitialState,
+          aligned,
+          secDiagEnabled);
+    }
   } else {
     logSecDiagLine(
         secDiagEnabled,
@@ -3721,6 +3845,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         secDiagEnabled);
     proofProblem = symbolSpace.problem;
   }
+  copyResetBootstrapSpec(symbolSpace.problem, proofProblem);
 
   // Phase 4: hand the fully normalized SEC transition system to the requested
   // top-level engine. From here on, every engine sees the same problem and only

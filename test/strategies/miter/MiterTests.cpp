@@ -31,6 +31,7 @@
 #include "SNLDesignModeling.h"
 #include "SNLDesignModeling.h"
 #include "SNLBusNet.h"
+#include "SNLBusNetBit.h"
 #include "SNLBusTerm.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
@@ -322,7 +323,7 @@ void expectGenericGateMiterEquivalent(const char* gateName,
   EXPECT_TRUE(miterS.run());
 }
 
-void expectTableSelectMiterEquivalent() {
+void expectTableSelectMiterEquivalentToMuxTree() {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
@@ -330,37 +331,78 @@ void expectTableSelectMiterEquivalent() {
 
   NLDB0::TableSelectSignature signature;
   signature.width = 1;
-  signature.depth = 3;
-  signature.abits = 2;
+  signature.depth = 8;
+  signature.abits = 3;
   auto* tableSelect = NLDB0::getOrCreateTableSelect(signature);
   ASSERT_NE(tableSelect, nullptr);
+  auto* mux = NLDB0::getMux2();
+  ASSERT_NE(mux, nullptr);
 
-  auto buildTop = [&](const char* topName) {
+  auto buildTop = [&](const char* topName, bool useTableSelect) {
     auto* top =
         SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(topName));
     auto* data =
-        SNLBusTerm::create(top, SNLTerm::Direction::Input, 2, 0, NLName("data"));
+        SNLBusTerm::create(top, SNLTerm::Direction::Input, 7, 0, NLName("d"));
     auto* addr =
-        SNLBusTerm::create(top, SNLTerm::Direction::Input, 1, 0, NLName("addr"));
-    auto* y =
-        SNLBusTerm::create(top, SNLTerm::Direction::Output, 0, 0, NLName("y"));
+        SNLBusTerm::create(top, SNLTerm::Direction::Input, 2, 0, NLName("sel"));
+    auto* y = SNLScalarTerm::create(
+        top, SNLTerm::Direction::Output, NLName("y"));
 
-    auto* dataNet = SNLBusNet::create(top, 2, 0, NLName("data_net"));
-    auto* addrNet = SNLBusNet::create(top, 1, 0, NLName("addr_net"));
-    auto* yNet = SNLBusNet::create(top, 0, 0, NLName("y_net"));
+    auto* dataNet = SNLBusNet::create(top, 7, 0, NLName("d_net"));
+    auto* addrNet = SNLBusNet::create(top, 2, 0, NLName("sel_net"));
+    auto* yNet = SNLScalarNet::create(top, NLName("y_net"));
     data->setNet(dataNet);
     addr->setNet(addrNet);
     y->setNet(yNet);
 
-    auto* inst = SNLInstance::create(top, tableSelect, NLName("select0"));
-    inst->setTermNet(NLDB0::getTableSelectData(tableSelect), dataNet);
-    inst->setTermNet(NLDB0::getTableSelectAddress(tableSelect), addrNet);
-    inst->setTermNet(NLDB0::getTableSelectOutput(tableSelect), yNet);
+    if (useTableSelect) {
+      auto* inst = SNLInstance::create(top, tableSelect, NLName("select0"));
+      inst->setTermNet(NLDB0::getTableSelectData(tableSelect), dataNet);
+      inst->setTermNet(NLDB0::getTableSelectAddress(tableSelect), addrNet);
+      inst->getInstTerm(NLDB0::getTableSelectOutput(tableSelect)->getBit(0))
+          ->setNet(yNet);
+      return top;
+    }
+
+    std::vector<SNLNet*> level;
+    level.reserve(signature.depth);
+    for (size_t row = 0; row < signature.depth; ++row) {
+      level.push_back(dataNet->getBit(static_cast<NLID::Bit>(row)));
+    }
+    for (size_t bit = 0; bit < signature.abits; ++bit) {
+      std::vector<SNLNet*> nextLevel;
+      nextLevel.reserve(level.size() / 2);
+      for (size_t pair = 0; pair < level.size() / 2; ++pair) {
+        const bool isLastMux = level.size() == 2;
+        auto* outputNet = isLastMux
+                              ? static_cast<SNLNet*>(yNet)
+                              : static_cast<SNLNet*>(SNLScalarNet::create(
+                                    top,
+                                    NLName("mux_" + std::to_string(bit) + "_" +
+                                           std::to_string(pair))));
+        auto* muxInst = SNLInstance::create(
+            top,
+            mux,
+            NLName("mux_" + std::to_string(bit) + "_" +
+                   std::to_string(pair)));
+        muxInst->getInstTerm(NLDB0::getMux2InputA()->getBit(0))
+            ->setNet(level[2 * pair]);
+        muxInst->getInstTerm(NLDB0::getMux2InputB()->getBit(0))
+            ->setNet(level[2 * pair + 1]);
+        muxInst->getInstTerm(NLDB0::getMux2Select())
+            ->setNet(addrNet->getBit(static_cast<NLID::Bit>(bit)));
+        muxInst->getInstTerm(NLDB0::getMux2Output()->getBit(0))
+            ->setNet(outputNet);
+        nextLevel.push_back(outputNet);
+      }
+      level = std::move(nextLevel);
+    }
+    EXPECT_EQ(level.size(), 1u);
     return top;
   };
 
-  auto* top0 = buildTop("top0");
-  auto* top1 = buildTop("top1");
+  auto* top0 = buildTop("top0", true);
+  auto* top1 = buildTop("top1", false);
   KEPLER_FORMAL::MiterStrategy miterS(top0, top1);
   miterS.init();
   EXPECT_TRUE(miterS.run());
@@ -644,7 +686,7 @@ TEST_F(MiterTests, TestGenericXnorTruthTable) {
 }
 
 TEST_F(MiterTests, TestGenericTableSelectTruthTable) {
-  expectTableSelectMiterEquivalent();
+  expectTableSelectMiterEquivalentToMuxTree();
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesConstantTrueOutput) {
@@ -713,6 +755,47 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesConstantFalseOutput) {
   ASSERT_EQ(builder.getPOs().size(), 1u);
   ASSERT_NE(builder.getPOs()[0], nullptr);
   EXPECT_EQ(builder.getPOs()[0]->toString(), "0");
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesDirectConstantOutputs) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("primitives"));
+  NLLibrary* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  SNLDesign* top =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top"));
+  SNLDesign* dummy = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("DUMMY"));
+  univ->setTopDesign(top);
+
+  // Keep the top non-leaf so DNL materializes its driverless constant nets.
+  SNLInstance::create(top, dummy, NLName("dummy0"));
+  SNLInstance::create(top, dummy, NLName("dummy1"));
+
+  auto* falseOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("false_out"));
+  auto* trueOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("true_out"));
+  auto* falseNet = SNLScalarNet::create(top, NLName("false_net"));
+  auto* trueNet = SNLScalarNet::create(top, NLName("true_net"));
+  falseNet->setType(SNLNet::Type::Assign0);
+  trueNet->setType(SNLNet::Type::Assign1);
+  falseOut->setNet(falseNet);
+  trueOut->setNet(trueNet);
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 2u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  ASSERT_NE(builder.getPOs()[1], nullptr);
+  EXPECT_EQ(builder.getPOs()[0]->toString(), "0");
+  EXPECT_EQ(builder.getPOs()[1]->toString(), "1");
+  EXPECT_TRUE(builder.getSkippedOutputs().empty());
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs) {

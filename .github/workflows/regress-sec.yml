@@ -536,8 +536,8 @@ jobs:
           case_dir: kepler-formal-examples/sky130hd_gcd
           config_prefix: sv2v
           expectation: positive
-          # Corrected dual-rail IMC and KI have no strict output proof here.
-          pdr_dual_rail_expectation: allow-inconclusive
+          # Guard the resetless PDR path that previously exhausted the 6h job.
+          pdr_dual_rail_expectation: expect-full-coverage
         # TODO: Re-enable after SV2V example config is fixed in regress.
         # - name: sv2v_sky130hd_riscv32i
         #   case_dir: kepler-formal-examples/sky130hd_riscv32i

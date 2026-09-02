@@ -1694,31 +1694,52 @@ KInductionProblem buildLinearChainSecProblem(size_t logicalStateCount) {
   return problem;
 }
 
-KInductionProblem buildSharedPdrNarrowProbeProblem() {
+KInductionProblem buildSharedPdrNarrowProbeProblem(
+    size_t decoyPairCount = 1,
+    bool decoysReachable = true,
+    bool conjunctiveDecoyBad = false) {
   KInductionProblem problem = buildLinearChainSecProblem(4);
-  const size_t decoyFirst = problem.allSymbols.back() + 1;
-  const size_t decoyDelayed = decoyFirst + 1;
-  problem.state0Symbols.push_back(decoyFirst);
-  problem.state0Symbols.push_back(decoyDelayed);
-  problem.allSymbols.push_back(decoyFirst);
-  problem.allSymbols.push_back(decoyDelayed);
-  problem.transitions0.emplace_back(decoyFirst, BoolExpr::createTrue());
-  problem.transitions0.emplace_back(decoyDelayed, BoolExpr::Var(decoyFirst));
-  problem.initialCondition = BoolExpr::And(
-      problem.initialCondition,
-      BoolExpr::And(
-          BoolExpr::Not(BoolExpr::Var(decoyFirst)),
-          BoolExpr::Not(BoolExpr::Var(decoyDelayed))));
-  problem.initializedStateCount += 2;
-  problem.totalStateCount += 2;
+  size_t nextSymbol = problem.allSymbols.back() + 1;
+  BoolExpr* broadProperty = problem.property;
+  BoolExpr* decoyBad = BoolExpr::createTrue();
+  for (size_t pair = 0; pair < decoyPairCount; ++pair) {
+    const size_t decoyFirst = nextSymbol++;
+    const size_t decoyDelayed = nextSymbol++;
+    problem.state0Symbols.push_back(decoyFirst);
+    problem.state0Symbols.push_back(decoyDelayed);
+    problem.allSymbols.push_back(decoyFirst);
+    problem.allSymbols.push_back(decoyDelayed);
+    problem.transitions0.emplace_back(
+        decoyFirst,
+        decoysReachable ? BoolExpr::createTrue()
+                        : BoolExpr::createFalse());
+    problem.transitions0.emplace_back(decoyDelayed, BoolExpr::Var(decoyFirst));
+    problem.initialCondition = BoolExpr::And(
+        problem.initialCondition,
+        BoolExpr::And(
+            BoolExpr::Not(BoolExpr::Var(decoyFirst)),
+            BoolExpr::Not(BoolExpr::Var(decoyDelayed))));
+    if (conjunctiveDecoyBad) {
+      decoyBad = BoolExpr::And(decoyBad, BoolExpr::Var(decoyDelayed));
+    } else {
+      broadProperty = BoolExpr::And(
+          broadProperty, BoolExpr::Not(BoolExpr::Var(decoyDelayed)));
+    }
+  }
+  if (conjunctiveDecoyBad) {
+    broadProperty = BoolExpr::And(
+        broadProperty, BoolExpr::Not(BoolExpr::simplify(decoyBad)));
+  }
+  problem.initialCondition = BoolExpr::simplify(problem.initialCondition);
+  problem.initializedStateCount += 2 * decoyPairCount;
+  problem.totalStateCount += 2 * decoyPairCount;
   problem.usesDualRailStateEncoding = true;
   problem.usesStrictDualRailEqualityProperty = true;
 
-  // The broad parent fails when the independent two-cycle decoy rises. It
-  // populates the shared higher-frame context without certifying an invariant
-  // that could bypass the narrower child run.
-  problem.property = BoolExpr::And(
-      problem.property, BoolExpr::Not(BoolExpr::Var(decoyDelayed)));
+  // The default broad parent fails when its independent two-cycle decoy rises.
+  // The unreachable conjunctive variant instead creates a wide safe context
+  // for exercising the narrow-solver policy.
+  problem.property = BoolExpr::simplify(broadProperty);
   problem.bad = BoolExpr::Not(problem.property);
   problem.inductionProperty = problem.property;
   problem.inductionBad = problem.bad;
@@ -4484,7 +4505,7 @@ SNLDesign* createMultiClockDomainOutputTop(
 SNLDesign* createConstantDrivenDffTop(
     NLLibrary* library,
     const std::string& name,
-    SNLDesign* constantModel) {
+    SNLDesign* anchorModel) {
   auto* top =
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topClock =
@@ -4492,17 +4513,18 @@ SNLDesign* createConstantDrivenDffTop(
   auto* topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
 
-  auto* constant = SNLInstance::create(top, constantModel, NLName("tie0"));
+  // Keep a second harmless child so DNL materializes the driverless net below.
+  SNLInstance::create(top, anchorModel, NLName("dnl_anchor"));
   auto* ff = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
 
   auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
   auto* netConstant = SNLScalarNet::create(top, NLName("net_const"));
+  netConstant->setType(SNLNet::Type::Assign0);
   auto* netOut = SNLScalarNet::create(top, NLName("net_out"));
 
   topClock->setNet(netClock);
   topOut->setNet(netOut);
 
-  constant->getInstTerm(constantModel->getScalarTerm(NLName("LO")))->setNet(netConstant);
   ff->getInstTerm(NLDB0::getDFFData())->setNet(netConstant);
   ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
   ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netOut);
@@ -7053,7 +7075,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       PDREngineDualRailGeneralizationUsesNarrowExactSolver) {
+       PDREngineDualRailGeneralizationReusesSmallPersistentExactSolver) {
   const auto problem = buildSharedPdrNarrowProbeProblem();
   BoolExpr* narrowProperty = makeEqualityExpr(
       problem.observedOutputExprs0.front(),
@@ -7075,8 +7097,41 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   EXPECT_EQ(broadResult.status, PDRStatus::Different) << stderrOutput;
   EXPECT_EQ(narrowResult.status, PDRStatus::Equivalent) << stderrOutput;
-  // Once the level-local persistent solver has widened, Figure 7 keeps this
-  // cube's exact status-only queries in their own smaller SAT context.
+  // Rebuilding a local exact solver costs more than reusing this small
+  // level-local context, even though the current query has a narrower cone.
+  EXPECT_EQ(
+      stderrOutput.find("narrow_generalization_probe result="),
+      std::string::npos)
+      << stderrOutput;
+  EXPECT_NE(
+      stderrOutput.find(
+          "result=sat cached_assumptions=1 model_extracted=0 "
+          "purpose=generalize"),
+      std::string::npos)
+      << stderrOutput;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       PDREngineDualRailGeneralizationUsesNarrowExactSolverForWideContext) {
+  const auto problem = buildSharedPdrNarrowProbeProblem(
+      256,
+      /*decoysReachable=*/false,
+      /*conjunctiveDecoyBad=*/true);
+  auto exactInitCache = std::make_shared<PDRExactInitCache>(
+      problem, KEPLER_FORMAL::Config::SolverType::KISSAT);
+
+  const ScopedEnvVar pdrStats("KEPLER_SEC_PDR_STATS", "1");
+  const ScopedEnvVar pdrStatsInterval("KEPLER_SEC_PDR_STATS_INTERVAL", "1");
+  testing::internal::CaptureStderr();
+  PDREngine engine(
+      problem,
+      KEPLER_FORMAL::Config::SolverType::KISSAT,
+      /*maxPredecessorQueries=*/0,
+      exactInitCache);
+  const auto result = engine.run(3, problem.property);
+  const std::string stderrOutput = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result.status, PDRStatus::Equivalent) << stderrOutput;
   EXPECT_NE(
       stderrOutput.find("narrow_generalization_probe result="),
       std::string::npos)
@@ -7130,7 +7185,10 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
 TEST_F(SequentialEquivalenceStrategyTests,
        PDREngineNarrowGeneralizationUnknownFallsBackToPersistentSolver) {
-  const auto problem = buildSharedPdrNarrowProbeProblem();
+  const auto problem = buildSharedPdrNarrowProbeProblem(
+      256,
+      /*decoysReachable=*/false,
+      /*conjunctiveDecoyBad=*/true);
   BoolExpr* narrowProperty = makeEqualityExpr(
       problem.observedOutputExprs0.front(),
       problem.observedOutputExprs1.front());
@@ -7145,10 +7203,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       /*maxPredecessorQueries=*/0,
       exactInitCache);
-  const auto broadResult = engine.run(3, problem.property);
-  const auto narrowResult = engine.run(
+  // Prime the shared exact-query caches before exercising the bounded wide
+  // context and its narrow generalization fallback.
+  const auto primeResult = engine.run(3, narrowProperty);
+  const auto result = engine.run(
       3,
-      narrowProperty,
+      problem.property,
       PDRQueryLimits{
           /*predecessorConflictLimit=*/0,
           /*predecessorDecisionLimit=*/1,
@@ -7156,8 +7216,8 @@ TEST_F(SequentialEquivalenceStrategyTests,
           /*blockingDecisionLimit=*/10 * 1000 * 1000});
   const std::string stderrOutput = testing::internal::GetCapturedStderr();
 
-  EXPECT_EQ(broadResult.status, PDRStatus::Different) << stderrOutput;
-  EXPECT_EQ(narrowResult.status, PDRStatus::Inconclusive) << stderrOutput;
+  EXPECT_EQ(primeResult.status, PDRStatus::Equivalent) << stderrOutput;
+  EXPECT_EQ(result.status, PDRStatus::Inconclusive) << stderrOutput;
   // UNKNOWN from the bounded narrow attempt is not interpreted as blocked.
   // The same exact Q2 query must continue through the established solver path.
   EXPECT_NE(
@@ -15339,6 +15399,50 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       PDREnginePredecessorQueryCountStopsDuringPropagation) {
+  KInductionProblem problem;
+  constexpr size_t state = 2;
+  problem.usesDualRailStateEncoding = true;
+  problem.state0Symbols = {state};
+  problem.allSymbols = {state};
+  problem.totalStateCount = 1;
+  // Keep the seed-clause set empty so PDR first learns !state in F[1]. The
+  // first predecessor query blocks that bad cube; the next attempted query is
+  // Figure 9 propagation of the learned clause.
+  problem.initialCondition = BoolExpr::Not(BoolExpr::Var(state));
+  problem.transitions0 = {{state, BoolExpr::createFalse()}};
+  problem.bad = BoolExpr::Var(state);
+  problem.property = BoolExpr::Not(problem.bad);
+  problem.inductionProperty = problem.property;
+  problem.inductionBad = problem.bad;
+
+  const ScopedEnvVar pdrStats("KEPLER_SEC_PDR_STATS", "1");
+  const ScopedEnvVar pdrStatsInterval("KEPLER_SEC_PDR_STATS_INTERVAL", "1");
+  testing::internal::CaptureStderr();
+  PDREngine engine(
+      problem,
+      KEPLER_FORMAL::Config::SolverType::KISSAT,
+      /*maxPredecessorQueries=*/1);
+  const auto result = engine.run(3);
+  const std::string stderrOutput = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(result.status, PDRStatus::Inconclusive) << stderrOutput;
+  EXPECT_EQ(result.bound, 1u) << stderrOutput;
+  EXPECT_NE(
+      stderrOutput.find(
+          "propagation stopped after predecessor query-count budget "
+          "exhaustion"),
+      std::string::npos)
+      << stderrOutput;
+  EXPECT_EQ(
+      detail::countTextOccurrences(
+          stderrOutput,
+          "predecessor query-count budget exhausted limit=1"),
+      1u)
+      << stderrOutput;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        PDREngineDualRailAesSizedSatLeafUsesIncrementalPredecessor) {
   KInductionProblem problem;
   constexpr size_t targetState = 2;
@@ -16070,6 +16174,36 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_FALSE(extracted.stateBits.empty());
   EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractModelsConstantStructuredMemoryMask) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createSinglePortMemoryModel(primitives, "MEM_CONST_MASK");
+  auto* top = createSinglePortMemoryTop(library, "top", model);
+  auto* modelMask = model->getBusTerm(NLName("WMASK"));
+  auto* memory = top->getInstance(NLName("mem0"));
+  ASSERT_NE(modelMask, nullptr);
+  ASSERT_NE(memory, nullptr);
+
+  auto* constantOne = SNLScalarNet::create(top, NLName("mask_one"));
+  constantOne->setType(SNLNet::Type::Assign1);
+  for (int bit = 0; bit <= 3; ++bit) {
+    memory->getInstTerm(modelMask->getBit(bit))->setNet(constantOne);
+  }
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_FALSE(extracted.stateBits.empty());
+  EXPECT_FALSE(extracted.nextStateExprByStateKey.empty());
+  EXPECT_EQ(extracted.observedOutputs.size(), 4u);
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
@@ -17279,17 +17413,19 @@ TEST_F(SequentialEquivalenceStrategyTests,
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* constantModel = createConstantLowModel(primitives);
-  auto* top = createConstantDrivenDffTop(library, "top", constantModel);
+  auto* anchorModel = createConstantLowModel(primitives);
+  auto* top = createConstantDrivenDffTop(library, "top", anchorModel);
 
   const auto extracted = SequentialDesignModel::extract(top);
   expectAllExpressionSupportIsPublished(extracted);
 
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.nextStateExprByStateKey.size(), 1u);
+  EXPECT_EQ(extracted.nextStateExprByStateKey.begin()->second->toString(), "0");
   for (const auto& key : extracted.environmentInputs) {
     const auto nameIt = extracted.displayNameByKey.find(key);
     ASSERT_NE(nameIt, extracted.displayNameByKey.end());
-    EXPECT_NE(nameIt->second, "tie0.LO[0]");
+    EXPECT_NE(nameIt->second, "ff0.D[0]");
   }
 }
 
