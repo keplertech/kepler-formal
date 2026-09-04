@@ -28,6 +28,7 @@
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLDesignModeling.h"
+#include "SNLLibertyConstructor.h"
 #include "SNLBusNet.h"
 #include "SNLBusNetBit.h"
 #include "SNLBusTerm.h"
@@ -2039,6 +2040,79 @@ TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
     EXPECT_NE(message.find("TT arity=1"), std::string::npos);
     EXPECT_NE(message.find("model non-output term count=2"), std::string::npos);
   }
+}
+
+TEST_F(MiterTests, Asap7StateFunctionClockGateIsOpaque) {
+  const auto libertyPath = testTempPath("asap7_issue_228.lib");
+  {
+    std::ofstream liberty(libertyPath);
+    ASSERT_TRUE(liberty.good());
+    liberty << R"liberty(
+library (asap7_issue_228) {
+  cell (ICGx1_ASAP7_75t_R) {
+    clock_gating_integrated_cell : latch_posedge_precontrol;
+    statetable ("CLK ENA SE", "IQ") {
+      table : "L L L : - : L,
+               L L H : - : H,
+               L H L : - : H,
+               L H H : - : H,
+               H - - : - : N";
+    }
+    pin (IQ) {
+      direction : internal;
+      internal_node : "IQ";
+    }
+    pin (GCLK) {
+      direction : output;
+      state_function : "CLK & IQ";
+      timing () {
+        related_pin : "CLK";
+        timing_type : combinational_fall;
+      }
+    }
+    pin (CLK) {
+      direction : input;
+      clock : true;
+    }
+    pin (ENA) {
+      direction : input;
+    }
+    pin (SE) {
+      direction : input;
+    }
+  }
+}
+)liberty";
+  }
+
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* library = NLLibrary::create(
+      db, NLLibrary::Type::Primitives, NLName("asap7_issue_228"));
+  SNLLibertyConstructor constructor(library);
+  constructor.construct(libertyPath);
+
+  auto* icg = library->getSNLDesign(NLName("ICGx1_ASAP7_75t_R"));
+  ASSERT_NE(nullptr, icg);
+  auto* clk = icg->getScalarTerm(NLName("CLK"));
+  auto* gclk = icg->getScalarTerm(NLName("GCLK"));
+  ASSERT_NE(nullptr, clk);
+  ASSERT_NE(nullptr, gclk);
+
+  size_t inputCount = 0;
+  for (auto* term : icg->getBitTerms()) {
+    inputCount += term->getDirection() == SNLTerm::Direction::Input;
+  }
+  EXPECT_EQ(3u, inputCount);
+  EXPECT_EQ(0u, SNLDesignModeling::getTruthTableCount(icg));
+  EXPECT_FALSE(SNLDesignModeling::getTruthTable(icg).isInitialized());
+  EXPECT_FALSE(
+      SNLDesignModeling::getTruthTable(icg, gclk->getFlatID()).isInitialized());
+  EXPECT_FALSE(SNLDesignModeling::isConst0(icg));
+
+  const auto dependencies = SNLDesignModeling::getCombinatorialInputs(gclk);
+  ASSERT_EQ(1u, dependencies.size());
+  EXPECT_EQ(clk, *dependencies.begin());
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesDoesNotTreatWideMuxInputsAsPOs) {
