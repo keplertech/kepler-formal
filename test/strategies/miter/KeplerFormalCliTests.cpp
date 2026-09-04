@@ -3142,7 +3142,7 @@ TEST_F(KeplerFormalCliTests,
 }
 
 TEST_F(KeplerFormalCliTests,
-     SecClockGateWithArityMismatchIsSkippedAsOpaque) {
+     SecStatefulClockGateWithoutBehavioralModelIsSkippedAsOpaque) {
   const auto fixture = createDesignFixture(
       "v",
       "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
@@ -3185,7 +3185,13 @@ TEST_F(KeplerFormalCliTests,
             std::string::npos);
   EXPECT_NE(contents.find("q[0]: design0 opaque-internal"), std::string::npos);
   EXPECT_NE(contents.find("CLKGATE_X1"), std::string::npos);
-  EXPECT_NE(contents.find("combinational truth table arity does not match "
+  EXPECT_NE(contents.find("no initialized combinational truth table or usable "
+                          "sequential model"),
+            std::string::npos);
+  // Liberty `statetable`/`state_function` cells must remain opaque until their
+  // stateful behavior is modeled. In particular, the frontend must not invent
+  // the old zero-input truth table for GCK.
+  EXPECT_EQ(contents.find("combinational truth table arity does not match "
                           "instance inputs"),
             std::string::npos);
   EXPECT_EQ(contents.find("SNLLogicCloud arity mismatch"), std::string::npos);
