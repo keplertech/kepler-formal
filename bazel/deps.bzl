@@ -33,7 +33,7 @@ _FLEX_VERSION = "2.6.4"
 _CADICAL_COMMIT = "7b99c07f0bcab5824a5a3ce62c7066554017f641"
 _GLUCOSE_COMMIT = "7f887abba7cf13636a5ac2d28653668a20a91b25"
 _KISSAT_COMMIT = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
-_NAJA_COMMIT = "5f852b50dcdd3e6e7aba0b5670339e7ee0ce26bb"
+_NAJA_COMMIT = "eb2f6da09e1fde42780d5eb388d639c8ac4c4cd1"
 _NAJA_VERILOG_COMMIT = "5da040bb34f0e4e5bb8d67223b999a0132fb401f"
 _NAJA_IF_COMMIT = "099677d9f52c0db11b12c08d03e32543eebc7888"
 _SLANG_COMMIT = "512c327c209d3043aa98ecfd02d06a1b73fcd5fb"
@@ -156,7 +156,7 @@ def _deps_impl(_module_ctx):
     http_archive(
         name = "naja",
         url = "https://github.com/nanocoh/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
-        sha256 = "c56f5d7a21dd0bde7f32d6b919f34d653eafd4f4b19a72251e3ba81965a0ffaf",
+        sha256 = "5849ef050ce535968a88ec3064da831118c4dbe7a57cb9c6bce0c3c9d71f3f64",
         strip_prefix = "naja-{}".format(_NAJA_COMMIT),
         build_file = Label("//bazel:naja.BUILD.bazel"),
         patch_args = ["-p0", "-f"],
