@@ -4,11 +4,19 @@
 #include "SNLTruthTableTree.h"
 #include "SNLTruthTable.h"
 #include "SNLLogicCloud.h"
+#include "Tree2BoolExpr.h"
+#include "BoolExpr.h"
+#include "BoolExprCache.h"
 #include "DNL.h"
 #include "NLDB.h"
+#include "NLDB0.h"
 #include "NLLibrary.h"
 #include "NLName.h"
 #include "NLUniverse.h"
+#include "SNLBusNet.h"
+#include "SNLBusNetBit.h"
+#include "SNLBusTerm.h"
+#include "SNLBusTermBit.h"
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLInstance.h"
@@ -18,6 +26,7 @@
 #include <gtest/gtest.h>
 #include <bitset>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <stdexcept>
 
@@ -26,6 +35,16 @@ using namespace KEPLER_FORMAL;
 
 // alias the unified Node type
 using Node = SNLTruthTableTree::Node;
+
+BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
+BoolExpr* buildGenericTruthTableExpr(
+    const SNLTruthTable& tbl,
+    uint32_t k,
+    const SNLTruthTableTree::Node* node,
+    naja::DNL::DNLID isoID);
+void clearChildFETS();
+void reserveChildFETS(size_t n);
+void setChildFETS(size_t i, BoolExpr* expr);
 
 //------------------------------------------------------------------------------
 // Helpers
@@ -39,6 +58,14 @@ static SNLTruthTable makeMaskTable(uint32_t size, uint64_t mask) {
 // helper to evaluate a mask at index
 static bool maskEval(uint64_t mask, uint32_t idx) {
   return ((mask >> idx) & 1u) != 0;
+}
+
+static void setChildExpressions(const std::vector<BoolExpr*>& children) {
+  clearChildFETS();
+  reserveChildFETS(children.size());
+  for (size_t i = 0; i < children.size(); ++i) {
+    setChildFETS(i, children[i]);
+  }
 }
 
 static naja::DNL::DNLID findDNLTermIDByInstanceAndTerm(const char* instanceName,
@@ -55,6 +82,30 @@ static naja::DNL::DNLID findDNLTermIDByInstanceAndTerm(const char* instanceName,
     }
     if (instance->getName().getString() == instanceName &&
         term.getSnlBitTerm()->getName().getString() == termName) {
+      return id;
+    }
+  }
+  return naja::DNL::DNLID_MAX;
+}
+
+static naja::DNL::DNLID findDNLTermIDByInstanceTermAndBit(
+    const char* instanceName,
+    const char* termName,
+    naja::NL::NLID::Bit bit) {
+  auto* dnl = naja::DNL::get();
+  for (naja::DNL::DNLID id = 0; id <= dnl->getNBterms(); ++id) {
+    const auto& term = dnl->getDNLTerminalFromID(id);
+    if (term.isNull()) {
+      continue;
+    }
+    auto* instance = term.getDNLInstance().getSNLInstance();
+    if (instance == nullptr) {
+      continue;
+    }
+    const auto* bitTerm = term.getSnlBitTerm();
+    if (instance->getName().getString() == instanceName &&
+        bitTerm->getName().getString() == termName &&
+        bitTerm->getBit() == bit) {
       return id;
     }
   }
@@ -571,6 +622,30 @@ TEST(SNLTruthTableTreeApiTest,
   EXPECT_TRUE(loopTerms.empty());
 }
 
+TEST(SNLTruthTableTreeApiTest,
+     AncestorSearchRejectsReservedAndOutOfRangeParentEdges) {
+  SNLTruthTableTree tree(0, 0, Node::Type::P);
+  ASSERT_GT(tree.getBorderLeavesSize(), 0u);
+
+  auto target = makeManualTableNode(tree, 310);
+  tree.allocateNode(target);
+
+  auto root = tree.getRoot();
+  std::vector<naja::DNL::DNLID> loopTerms;
+
+  root->parentIds.clear();
+  root->parentIds.emplace_back(SNLTruthTableTree::kReservedId0);
+  EXPECT_FALSE(tree.findAncestorLoopForBorderLeaf(0, 310, loopTerms));
+  EXPECT_TRUE(loopTerms.empty());
+
+  root->parentIds.clear();
+  root->parentIds.emplace_back(
+      static_cast<uint32_t>(SNLTruthTableTree::kIdOffset +
+                            tree.getNumNodes()));
+  EXPECT_FALSE(tree.findAncestorLoopForBorderLeaf(0, 310, loopTerms));
+  EXPECT_TRUE(loopTerms.empty());
+}
+
 TEST(SNLTruthTableTreeApiTest, IsInitializedTraversesNestedTableChildren) {
   SNLTruthTableTree tree(0, 0, Node::Type::P);
 
@@ -776,6 +851,284 @@ TEST(SNLTruthTableTreeEval_Additions, EvaluatesNestedTableChild) {
   tree.allocateNode(parent);
 
   EXPECT_TRUE(parent->eval({}));
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, TableSelectCollapsesMatchingBranches) {
+  auto* address = BoolExpr::Var(10);
+  auto* sharedData = BoolExpr::Var(20);
+  // TABLE_SELECT dependencies arrive in flattened model-term order: DATA
+  // (highest row first), followed by ADDR (most-significant bit first).
+  setChildExpressions({sharedData, sharedData, address});
+
+  const auto table =
+      SNLTruthTable::TableSelect(1, 2, SNLTruthTable::fullDependencies(3));
+  auto* expr = buildGenericTruthTableExpr(table, 3);
+
+  EXPECT_EQ(expr, sharedData);
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, TableSelectPrunesWideOutOfRangePrefixes) {
+  std::vector<BoolExpr*> children;
+  children.reserve(65);
+  auto* data0 = BoolExpr::Var(200);
+  children.push_back(data0);
+  for (size_t i = 0; i < 64; ++i) {
+    children.push_back(BoolExpr::Var(100 + i));
+  }
+  setChildExpressions(children);
+
+  const auto table =
+      SNLTruthTable::TableSelect(64, 1, SNLTruthTable::fullDependencies(65));
+  auto* expr = buildGenericTruthTableExpr(table, 65);
+
+  EXPECT_NE(expr, nullptr);
+  EXPECT_NE(expr, BoolExpr::createFalse());
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, TableSelectUsesFlatModelTermOrder) {
+  constexpr uint32_t addressSize = 3;
+  constexpr uint32_t depth = 8;
+  constexpr size_t dataVarBase = 100;
+  constexpr size_t addressVarBase = 200;
+
+  std::vector<BoolExpr*> children;
+  children.reserve(addressSize + depth);
+  // DATA[7:0] precedes ADDR[2:0] in the DB0 model and both buses are
+  // flattened from MSB to LSB.
+  for (uint32_t row = depth; row-- > 0;) {
+    children.push_back(BoolExpr::Var(dataVarBase + row));
+  }
+  for (uint32_t bit = addressSize; bit-- > 0;) {
+    children.push_back(BoolExpr::Var(addressVarBase + bit));
+  }
+  setChildExpressions(children);
+
+  const auto table = SNLTruthTable::TableSelect(
+      addressSize,
+      depth,
+      SNLTruthTable::fullDependencies(addressSize + depth));
+  auto* expr = buildGenericTruthTableExpr(table, addressSize + depth);
+  ASSERT_NE(expr, nullptr);
+
+  for (uint32_t data = 0; data < (1u << depth); ++data) {
+    for (uint32_t address = 0; address < depth; ++address) {
+      SCOPED_TRACE(
+          ::testing::Message() << "data=" << data << " address=" << address);
+      std::unordered_map<size_t, bool> values;
+      for (uint32_t row = 0; row < depth; ++row) {
+        values.emplace(dataVarBase + row, (data & (1u << row)) != 0);
+      }
+      for (uint32_t bit = 0; bit < addressSize; ++bit) {
+        values.emplace(
+            addressVarBase + bit, (address & (1u << bit)) != 0);
+      }
+      EXPECT_EQ(expr->evaluate(values), (data & (1u << address)) != 0);
+    }
+  }
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, TableSelectArityMismatchThrows) {
+  setChildExpressions({BoolExpr::Var(10), BoolExpr::Var(20)});
+
+  const auto table =
+      SNLTruthTable::TableSelect(1, 2, SNLTruthTable::fullDependencies(3));
+  EXPECT_THROW(buildGenericTruthTableExpr(table, 2), std::runtime_error);
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, NoneGenericTypeThrows) {
+  setChildExpressions({BoolExpr::Var(10)});
+
+  EXPECT_THROW(buildGenericTruthTableExpr(SNLTruthTable(), 1), std::runtime_error);
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+class Tree2BoolExprDivModTest : public ::testing::Test {
+ protected:
+  void TearDown() override {
+    Tree2BoolExpr::iso2boolExpr_.clear();
+    clearChildFETS();
+    BoolExprCache::destroy();
+    naja::DNL::destroy();
+    if (auto* universe = NLUniverse::get()) {
+      universe->destroy();
+    }
+  }
+};
+
+TEST_F(Tree2BoolExprDivModTest, SignedFourBitExpressionsMatchArithmetic) {
+  constexpr int kWidth = 4;
+  constexpr size_t kDividendVar = 2;
+  constexpr size_t kDivisorVar = kDividendVar + kWidth;
+
+  auto* universe = NLUniverse::create();
+  ASSERT_NE(universe, nullptr);
+  auto* model = NLDB0::getOrCreateDivMod({kWidth, true});
+  ASSERT_NE(model, nullptr);
+
+  auto* db = NLDB::create(universe);
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* instance = SNLInstance::create(top, model, NLName("div0"));
+
+  for (auto* modelTerm : model->getBusTerms()) {
+    auto* topTerm = SNLBusTerm::create(
+        top,
+        modelTerm->getDirection(),
+        modelTerm->getMSB(),
+        modelTerm->getLSB(),
+        modelTerm->getName());
+    auto* net = SNLBusNet::create(
+        top,
+        modelTerm->getMSB(),
+        modelTerm->getLSB(),
+        NLName(modelTerm->getName().getString() + "_net"));
+    for (int bit = modelTerm->getLSB(); bit <= modelTerm->getMSB(); ++bit) {
+      topTerm->getBit(bit)->setNet(net->getBit(bit));
+      instance->getInstTerm(modelTerm->getBit(bit))->setNet(net->getBit(bit));
+    }
+  }
+
+  universe->setTopDesign(top);
+  naja::DNL::destroy();
+  auto* dnl = naja::DNL::get();
+  ASSERT_NE(dnl, nullptr);
+
+  std::vector<BoolExpr*> children;
+  children.reserve(kWidth * 2);
+  for (int bit = kWidth; bit-- > 0;) {
+    children.push_back(BoolExpr::Var(kDividendVar + bit));
+  }
+  for (int bit = kWidth; bit-- > 0;) {
+    children.push_back(BoolExpr::Var(kDivisorVar + bit));
+  }
+  setChildExpressions(children);
+
+  auto* quotientTerm = NLDB0::getDivModQuotient(model);
+  auto* remainderTerm = NLDB0::getDivModRemainder(model);
+  ASSERT_NE(quotientTerm, nullptr);
+  ASSERT_NE(remainderTerm, nullptr);
+
+  const auto quotient0ID = findDNLTermIDByInstanceTermAndBit(
+      "div0", quotientTerm->getName().getString().c_str(), 0);
+  ASSERT_NE(quotient0ID, naja::DNL::DNLID_MAX);
+  const auto& quotient0DNLTerm = dnl->getDNLTerminalFromID(quotient0ID);
+  ASSERT_NE(quotient0DNLTerm.getIsoID(), naja::DNL::DNLID_MAX);
+
+  SNLTruthTableTree quotientTree;
+  auto quotientNode = std::make_shared<Node>(0u, &quotientTree);
+  quotientNode->type = Node::Type::Table;
+  quotientNode->data.termid = quotient0ID;
+  const auto quotientTable = SNLDesignModeling::getTruthTable(
+      model, quotientTerm->getBit(0)->getOrderID());
+  ASSERT_NE(
+      buildGenericTruthTableExpr(
+          quotientTable,
+          quotientTable.size(),
+          quotientNode.get(),
+          quotient0DNLTerm.getIsoID()),
+      nullptr);
+
+  std::vector<BoolExpr*> quotient(kWidth);
+  std::vector<BoolExpr*> remainder(kWidth);
+  for (int bit = 0; bit < kWidth; ++bit) {
+    const auto quotientID = findDNLTermIDByInstanceTermAndBit(
+        "div0", quotientTerm->getName().getString().c_str(), bit);
+    const auto remainderID = findDNLTermIDByInstanceTermAndBit(
+        "div0", remainderTerm->getName().getString().c_str(), bit);
+    ASSERT_NE(quotientID, naja::DNL::DNLID_MAX);
+    ASSERT_NE(remainderID, naja::DNL::DNLID_MAX);
+
+    const auto quotientIsoID = dnl->getDNLTerminalFromID(quotientID).getIsoID();
+    const auto remainderIsoID = dnl->getDNLTerminalFromID(remainderID).getIsoID();
+    const auto quotientIt = Tree2BoolExpr::iso2boolExpr_.find(quotientIsoID);
+    const auto remainderIt = Tree2BoolExpr::iso2boolExpr_.find(remainderIsoID);
+    ASSERT_NE(quotientIt, Tree2BoolExpr::iso2boolExpr_.end());
+    ASSERT_NE(remainderIt, Tree2BoolExpr::iso2boolExpr_.end());
+    quotient[bit] = quotientIt->second;
+    remainder[bit] = remainderIt->second;
+  }
+
+  const auto remainder0ID = findDNLTermIDByInstanceTermAndBit(
+      "div0", remainderTerm->getName().getString().c_str(), 0);
+  ASSERT_NE(remainder0ID, naja::DNL::DNLID_MAX);
+  const auto& remainder0DNLTerm = dnl->getDNLTerminalFromID(remainder0ID);
+  SNLTruthTableTree remainderTree;
+  auto remainderNode = std::make_shared<Node>(0u, &remainderTree);
+  remainderNode->type = Node::Type::Table;
+  remainderNode->data.termid = remainder0ID;
+  const auto remainderTable = SNLDesignModeling::getTruthTable(
+      model, remainderTerm->getBit(0)->getOrderID());
+
+  EXPECT_EQ(
+      buildGenericTruthTableExpr(
+          remainderTable,
+          remainderTable.size(),
+          remainderNode.get(),
+          remainder0DNLTerm.getIsoID()),
+      remainder[0]);
+
+  Tree2BoolExpr::iso2boolExpr_.clear();
+  auto* selectedRemainder = buildGenericTruthTableExpr(
+      remainderTable,
+      remainderTable.size(),
+      remainderNode.get(),
+      naja::DNL::DNLID_MAX);
+  ASSERT_NE(selectedRemainder, nullptr);
+
+  for (int rawDividend = 0; rawDividend < (1 << kWidth); ++rawDividend) {
+    const int dividend =
+        (rawDividend & (1 << (kWidth - 1))) != 0
+            ? rawDividend - (1 << kWidth)
+            : rawDividend;
+    for (int rawDivisor = 0; rawDivisor < (1 << kWidth); ++rawDivisor) {
+      const int divisor =
+          (rawDivisor & (1 << (kWidth - 1))) != 0
+              ? rawDivisor - (1 << kWidth)
+              : rawDivisor;
+      if (divisor == 0) {
+        continue;
+      }
+
+      SCOPED_TRACE(
+          ::testing::Message() << "dividend=" << dividend
+                               << " divisor=" << divisor);
+      std::unordered_map<size_t, bool> values;
+      for (int bit = 0; bit < kWidth; ++bit) {
+        values.emplace(kDividendVar + bit, (rawDividend & (1 << bit)) != 0);
+        values.emplace(kDivisorVar + bit, (rawDivisor & (1 << bit)) != 0);
+      }
+
+      const auto expectedQuotient =
+          static_cast<unsigned>(dividend / divisor) & ((1u << kWidth) - 1);
+      const auto expectedRemainder =
+          static_cast<unsigned>(dividend % divisor) & ((1u << kWidth) - 1);
+      for (int bit = 0; bit < kWidth; ++bit) {
+        EXPECT_EQ(
+            quotient[bit]->evaluate(values),
+            (expectedQuotient & (1u << bit)) != 0);
+        EXPECT_EQ(
+            remainder[bit]->evaluate(values),
+            (expectedRemainder & (1u << bit)) != 0);
+      }
+      EXPECT_EQ(
+          selectedRemainder->evaluate(values),
+          (expectedRemainder & 1u) != 0);
+    }
+  }
 }
 
 TEST(SNLTruthTableTreeAddChild_Additions, AddChildIdRejectsInvalidId) {

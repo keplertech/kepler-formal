@@ -15,14 +15,6 @@
 
 namespace KEPLER_FORMAL::SEC {
 
-// Frame-local equality assumptions can be encoded more efficiently by making
-// both symbolic names point at the same SAT literal in that frame. This is a
-// quotienting of an assumption already present in the proof obligation, not a
-// structural shortcut: if the equality is not assumed for a frame, no alias is
-// installed for that frame.
-using FrameSymbolAliases =
-    std::vector<std::vector<std::pair<size_t, size_t>>>;
-
 // Owns the SAT literals that represent each symbolic SEC variable in each time
 // frame of the unrolled problem.
 class FrameVariableStore {
@@ -30,11 +22,9 @@ class FrameVariableStore {
   FrameVariableStore(SATSolverWrapper& solver,
                      const std::vector<size_t>& symbols,
                      size_t numFrames);
-  FrameVariableStore(SATSolverWrapper& solver,
-                     const std::vector<size_t>& symbols,
-                     size_t numFrames,
-                     const FrameSymbolAliases& aliasesByFrame);
 
+  void addSymbols(SATSolverWrapper& solver,
+                  const std::vector<size_t>& symbols);
   bool hasSymbol(size_t symbol) const;
   int getLiteral(size_t symbol, size_t frame) const;
   std::unordered_map<size_t, int> makeLeafLits(size_t frame) const;
@@ -47,6 +37,7 @@ class FrameVariableStore {
 
  private:
   std::unordered_map<size_t, std::vector<int>> symbolFrameLits_;
+  size_t numFrames_ = 0;
 };
 
 // Converts a BoolExpr DAG into SAT clauses over one specific frame using a
@@ -72,6 +63,8 @@ class FrameFormulaEncoder {
                       size_t expectedNodeHint);
 
   int encode(BoolExpr* expr);
+  int encode(BoolExpr* expr, const std::vector<BoolExpr*>& postorder);
+  void addLeafLiteral(size_t symbol, int literal);
   const std::unordered_map<size_t, int>& leafLits() const;
 
  private:
@@ -99,6 +92,7 @@ class FrameFormulaEncoder {
   void cacheEncodedLiteral(BoolExpr* node, int lit);
   int getConstLit(bool value);
   bool isConstLit(int lit, bool value);
+  void encodeReadyNode(BoolExpr* node);
 
   SATSolverWrapper& solver_;
   std::unordered_map<size_t, int> leafLits_;

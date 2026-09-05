@@ -1,0 +1,45 @@
+# Build kepler-formal as a downstream bzlmod dependency. The root-module CI
+# cannot see consumer-only breakage: canonical repo names differ between the
+# two contexts, so e.g. a hardcoded external/+deps+naja path resolves as root
+# and dangles in a consumer. This job builds from a minimal consumer
+# workspace (.github/consumer-test) that depends on the checkout via
+# local_path_override.
+name: consumer-smoke
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-as-dependency:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache Bazel outputs
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/bazel
+        key: bazel-consumer-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel') }}
+        restore-keys: |
+          bazel-consumer-${{ runner.os }}-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -yq \
+          build-essential pkg-config \
+          bison flex python3-dev
+
+    - name: Build kepler-formal as a dependency
+      working-directory: .github/consumer-test
+      run: bazelisk build @kepler-formal//src/bin:kepler-formal
+
+    - name: Dump rules_foreign_cc CMake log on failure
+      if: failure()
+      run: |
+        find .github/consumer-test/bazel-out -type f -name CMake.log -print -exec sed -n '1,260p' {} \; || true

@@ -28,3 +28,10 @@ else()
 endif()
 
 GTEST_DISCOVER_TESTS(secStrategyTests)
+
+add_test(
+    NAME SecRegressHelperTests.PartialProofExpectationModes
+    COMMAND bash
+            ${CMAKE_CURRENT_SOURCE_DIR}/RunSecStrategiesRegressTests.sh
+            ${PROJECT_SOURCE_DIR}/regress/run_sec_strategies_regress.sh
+)

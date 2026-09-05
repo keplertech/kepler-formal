@@ -1,17 +1,4 @@
-TBB_DEPS = select({
-    "@platforms//os:macos": ["@homebrew_tbb//:tbb"],
-    "//conditions:default": [],
-})
-
-TBB_LINKOPTS = select({
-    "@platforms//os:macos": [
-        "-L/opt/homebrew/lib",
-        "-L/usr/local/lib",
-        "-ltbb",
-        "-ltbbmalloc",
-    ],
-    "//conditions:default": [
-        "-ltbb",
-        "-ltbbmalloc",
-    ],
-})
+# oneTBB is provided hermetically by the cmake-built @onetbb repo on all
+# platforms (headers + shared libtbb/libtbbmalloc via CcInfo). No system
+# link flags: the libraries travel through Bazel's solib mechanism.
+TBB_DEPS = ["@onetbb"]

@@ -1,0 +1,137 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# Generated syntax files
+genrule(
+    name = "gen_syntax",
+    srcs = [
+        "scripts/syntax.txt",
+        "scripts/tokenkinds.txt",
+        "scripts/triviakinds.txt",
+        "scripts/systemnames.txt",
+        "scripts/syntax_gen.py",
+    ],
+    outs = [
+        "slang/syntax/AllSyntax.h",
+        "AllSyntax.cpp",
+        "SyntaxClone.cpp",
+        "slang/syntax/SyntaxKind.h",
+        "slang/syntax/SyntaxFwd.h",
+        "slang/syntax/CSTJsonVisitorGen.h",
+        "slang/parsing/TokenKind.h",
+        "slang/parsing/KnownSystemName.h",
+        "TokenKind.cpp",
+        "KnownSystemName.cpp",
+    ],
+    cmd = "python3 $(location scripts/syntax_gen.py) --dir $(@D) --syntax $(location scripts/syntax.txt)",
+)
+
+# Generated diagnostic files
+genrule(
+    name = "gen_diagnostics",
+    srcs = [
+        "scripts/diagnostics.txt",
+        "scripts/diagnostic_gen.py",
+        "source/CMakeLists.txt",
+        "include/slang/util/Util.h",
+    ],
+    outs = [
+        "slang/diagnostics/AllDiags.h",
+        "slang/diagnostics/AnalysisDiags.h",
+        "slang/diagnostics/CompilationDiags.h",
+        "slang/diagnostics/ConstEvalDiags.h",
+        "slang/diagnostics/DeclarationsDiags.h",
+        "slang/diagnostics/DriverDiags.h",
+        "slang/diagnostics/ExpressionsDiags.h",
+        "slang/diagnostics/GeneralDiags.h",
+        "slang/diagnostics/LexerDiags.h",
+        "slang/diagnostics/LookupDiags.h",
+        "slang/diagnostics/MetaDiags.h",
+        "slang/diagnostics/NumericDiags.h",
+        "slang/diagnostics/ParserDiags.h",
+        "slang/diagnostics/PreprocessorDiags.h",
+        "slang/diagnostics/StatementsDiags.h",
+        "slang/diagnostics/SysFuncsDiags.h",
+        "slang/diagnostics/TypesDiags.h",
+        "DiagCode.cpp",
+    ],
+    cmd = "python3 $(location scripts/diagnostic_gen.py) --outDir $(@D) --diagnostics $(location scripts/diagnostics.txt) --srcDir $$(dirname $(location source/CMakeLists.txt)) --incDir $$(dirname $(location include/slang/util/Util.h))/..",
+)
+
+# Generated VersionInfo.cpp
+genrule(
+    name = "gen_version_info",
+    srcs = ["source/util/VersionInfo.cpp.in"],
+    outs = ["VersionInfo.cpp"],
+    cmd = "sed -e 's/@SLANG_VERSION_MAJOR@/11/g' -e 's/@SLANG_VERSION_MINOR@/0/g' -e 's/@SLANG_VERSION_PATCH@/0/g' -e 's/@SLANG_VERSION_VERSION@/11.0.0/g' $< > $@",
+)
+
+# Generated slang_export.h
+genrule(
+    name = "gen_slang_export",
+    outs = ["slang/slang_export.h"],
+    cmd = "echo '#ifndef SLANG_EXPORT_H' > $@ && echo '#define SLANG_EXPORT_H' >> $@ && echo '#define SLANG_EXPORT' >> $@ && echo '#define SLANG_NO_EXPORT' >> $@ && echo '#endif' >> $@",
+)
+
+cc_library(
+    name = "slang_boost_shims",
+    hdrs = [
+        "external/boost_concurrent.hpp",
+        "external/boost_unordered.hpp",
+    ],
+    includes = ["external"],
+)
+
+cc_library(
+    name = "slang",
+    srcs = [
+        ":gen_diagnostics",
+        ":gen_syntax",
+        ":gen_version_info",
+    ] + glob([
+        "source/**/*.cpp",
+    ]),
+    hdrs = [
+        ":gen_diagnostics",
+        ":gen_syntax",
+        ":gen_slang_export",
+    ] + glob([
+        "include/**/*.h",
+        "external/**/*.h",
+        "external/**/*.hpp",
+        "source/**/*.h",
+    ]),
+    copts = [
+        "-std=c++20",
+        "-fPIC",
+        "-fvisibility=hidden",
+        "-fvisibility-inlines-hidden",
+        "-Wno-unknown-warning-option",
+    ],
+    defines = [
+        "SLANG_STATIC_DEFINE",
+        "SLANG_USE_THREADS",
+    ],
+    includes = [
+        ".",
+        "external",
+        "include",
+        "source",
+        "source/analysis",
+        "source/ast",
+        "source/diagnostics",
+        "source/driver",
+        "source/numeric",
+        "source/parsing",
+        "source/syntax",
+        "source/text",
+        "source/util",
+        "$(GENDIR)/external/slang",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":slang_boost_shims",
+        "@boost_headers//:boost",
+        "@fmt//:fmt",
+        "@tomlplusplus//:tomlplusplus",
+    ],
+)

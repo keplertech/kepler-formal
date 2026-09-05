@@ -57,10 +57,6 @@ public:
 
   // group 32-bit scalars first
   uint32_t nodeID   = std::numeric_limits<uint32_t>::max();
-  // Per-search visited marker for ancestor/path queries. It is mutable because
-  // those queries are logically const, but they stamp nodes with the current
-  // epoch to avoid allocating and clearing a visited set on every lookup.
-  mutable uint32_t ancestorVisitEpoch = 0;
   std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> parentIds; // for multiple parents support
 
   // put the 64-bit-aligned items next: union with 64-bit termid,
@@ -179,7 +175,6 @@ private:
   size_t lastID_ = 2;       // debug counter for nodeID assignment
   static const SNLTruthTable PtableHolder_;
   std::unordered_map<naja::DNL::DNLID, uint32_t> termid2nodeid_;
-  mutable uint32_t ancestorSearchEpoch_ = 0;
 };
 
 } // namespace KEPLER_FORMAL

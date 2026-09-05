@@ -1,5 +1,98 @@
 # Root BUILD file for kepler-formal
 
+load("//bazel:collect_headers.bzl", "collect_headers")
+load("//bazel:toolchain_cmake.bzl", "toolchain_cmake")
+
+# Full cmake install prefixes (bin/ include/ lib/ lib/cmake/) of the
+# hermetic dependency builds, for //:deps export.
+filegroup(
+    name = "capnproto_install",
+    srcs = ["@capnproto"],
+    output_group = "gen_dir",
+)
+
+filegroup(
+    name = "onetbb_install",
+    srcs = ["@onetbb"],
+    output_group = "gen_dir",
+)
+
+# Export the hermetic dependency install trees into <workspace>/deps/ so the
+# plain CMake flow needs no system-installed libraries (opt-in):
+#
+#   bazelisk run //:deps
+#   cmake -B build -DCMAKE_TOOLCHAIN_FILE=$PWD/deps/toolchain.cmake
+sh_binary(
+    name = "deps",
+    srcs = ["//bazel:export_deps.sh"],
+    args = [
+        "$(rootpath :capnproto_install)",
+        "$(rootpath :onetbb_install)",
+        "$(rootpath @boost_headers//:version_hdr)",
+        "$(rootpath @flex_src//:flexlexer_hdr)",
+    ] + select({
+        # macOS keeps the host toolchain: deps/toolchain.cmake stays
+        # dependency-resolution-only, no compiler export.
+        "@platforms//os:macos": ["NONE"],
+        "//conditions:default": ["$(rootpath :toolchain_fragment_file)"],
+    }) + [
+        "$(rootpaths @zlib//:z)",
+        "$(rootpaths :zlib_headers)",
+    ] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "$(rootpath @llvm//runtimes/libcxx:libcxx.static)",
+            "$(rootpath @llvm//runtimes/libcxx:libcxxabi.static)",
+            "$(rootpath @llvm//runtimes/libunwind:libunwind.static)",
+        ],
+    }),
+    data = [
+        ":capnproto_install",
+        ":onetbb_install",
+        ":zlib_headers",
+        "@boost_headers//:headers",
+        "@boost_headers//:version_hdr",
+        "@flex_src//:flexlexer_hdr",
+        "@zlib//:z",
+    ] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            ":toolchain_fragment",
+            ":toolchain_fragment_file",
+            # Materializes the compiler, resource dir, hermetic glibc/
+            # kernel headers, CRT objects and runtime archives in runfiles
+            # for export into deps/llvm/.
+            "@bazel_tools//tools/cpp:current_cc_toolchain",
+            "@llvm//runtimes/libcxx:libcxx.static",
+            "@llvm//runtimes/libcxx:libcxxabi.static",
+            "@llvm//runtimes/libunwind:libunwind.static",
+        ],
+    }),
+)
+
+toolchain_cmake(
+    name = "toolchain_fragment",
+)
+
+# Single-file view for $(rootpath); the sh_binary derives the wrapper
+# script paths as siblings of the fragment.
+filegroup(
+    name = "toolchain_fragment_file",
+    srcs = [":toolchain_fragment"],
+    output_group = "fragment",
+)
+
+# zlib's public headers are not visible as source targets in the BCR repo;
+# collect them from CcInfo instead.
+collect_headers(
+    name = "zlib_headers",
+    basenames = [
+        "zconf.h",
+        "zlib.h",
+    ],
+    deps = ["@zlib//:z"],
+)
+
 sh_binary(
     name = "release",
     srcs = ["tools/release.sh"],

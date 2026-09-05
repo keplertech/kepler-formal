@@ -188,20 +188,12 @@ InitialConstraintMode determineInitialConstraintMode(const KInductionProblem& pr
     return InitialConstraintMode::None;
   }
 
-  const bool hasInitialStateRelation =
-      KEPLER_FORMAL::Config::getSecInternalStateCorrespondence() &&
-      !problem.initialStateEqualityPairs.empty();
   if (problem.hasCompleteInitialState()) {
     return InitialConstraintMode::CompleteInit;
   }
 
   if (problem.hasExplicitInitialState()) {
-    return hasInitialStateRelation ? InitialConstraintMode::CompleteInit
-                                   : InitialConstraintMode::PartialInit;
-  }
-
-  if (hasInitialStateRelation) {
-    return InitialConstraintMode::CompleteInit;
+    return InitialConstraintMode::PartialInit;
   }
 
   return InitialConstraintMode::ObservationOnly;
@@ -301,14 +293,8 @@ struct ResetFrontierReachabilityContextData {
         initialMode(bootstrapFrames == 0 ? determineInitialConstraintMode(problem)
                                          : InitialConstraintMode::None),
         primaryByComplement(buildPrimaryByComplementSymbol(problem)),
-        initialEqualities(
-            KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()
-                ? problem.initialStateEqualityPairs
-                : emptySymbolPairs()),
-        bootstrapEqualities(
-            KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()
-                ? problem.bootstrapStateEqualityPairs
-                : emptySymbolPairs()) {}
+        initialEqualities(emptySymbolPairs()),
+        bootstrapEqualities(emptySymbolPairs()) {}
 
   const KInductionProblem& problem;
   const TransitionExprResolver& transitionByState;
@@ -482,92 +468,6 @@ bool isKInductionCoiDiagEnabled() {
   return std::getenv("KEPLER_SEC_KI_DIAG") != nullptr || isSecDiagEnabled();
 }
 
-void addEqualityAliasesForFrame(
-    FrameSymbolAliases& aliasesByFrame,
-    const std::vector<std::pair<size_t, size_t>>& equalityPairs,
-    const std::unordered_set<size_t>& solverSymbols,
-    size_t frame) {
-  if (frame >= aliasesByFrame.size()) {
-    return;  // LCOV_EXCL_LINE
-  }
-  // LCOV_EXCL_START
-  auto& frameAliases = aliasesByFrame[frame];
-  // LCOV_EXCL_STOP
-  for (const auto& [lhsSymbol, rhsSymbol] : equalityPairs) {
-    if (solverSymbols.find(lhsSymbol) == solverSymbols.end() ||
-        solverSymbols.find(rhsSymbol) == solverSymbols.end()) {
-      continue; // LCOV_EXCL_LINE
-    }
-    frameAliases.emplace_back(lhsSymbol, rhsSymbol);
-  }
-}
-
-FrameSymbolAliases buildBaseCaseFrameAliases(const KInductionProblem& problem,
-                                             const BaseCaseCoi& coi,
-                                             size_t numFrames,
-                                             size_t bootstrapFrames) {
-  // Initial/bootstrap equality pairs are assumptions about a specific time
-  // frame.  Encoding those assumptions as frame-local literal aliases gives the
-  // SAT engine the quotient system directly, instead of asking it to rediscover
-  // thousands of state correspondences through binary equivalence clauses.
-  FrameSymbolAliases aliasesByFrame(numFrames);
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return aliasesByFrame;
-  }
-  addEqualityAliasesForFrame(
-      aliasesByFrame, problem.initialStateEqualityPairs, coi.solverSymbolSet, 0);
-  if (bootstrapFrames != 0 && bootstrapFrames < numFrames) {
-    addEqualityAliasesForFrame(
-        aliasesByFrame,
-        problem.bootstrapStateEqualityPairs,
-        coi.solverSymbolSet,
-        bootstrapFrames);
-  }
-  // Do not alias inductive strengthening facts in the concrete base query.
-  // They are valid assumptions for the induction step, but BMC must search the
-  // actual initialized transition system so a finite counterexample cannot be
-  // hidden by an over-eager quotient.
-  return aliasesByFrame;
-}
-
-FrameSymbolAliases buildResetFrontierFrameAliases(
-    const ResetFrontierReachabilityContextData& context,
-    const BaseCaseCoi& coi,
-    size_t numFrames) {
-  // Reset-frontier CEGAR checks are tiny but very frequent. Use the cached
-  // equality indexes to emit only aliases reachable from this cube's COI
-  // instead of scanning all state-equality pairs every time.
-  FrameSymbolAliases aliasesByFrame(numFrames);
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return aliasesByFrame;
-  }
-  if (!aliasesByFrame.empty()) {
-    aliasesByFrame[0] =
-        context.initialEqualities.pairsWithin(coi.solverSymbolSet);
-  }
-  if (context.bootstrapFrames != 0 &&
-      context.bootstrapFrames < numFrames) { // LCOV_EXCL_LINE
-    aliasesByFrame[context.bootstrapFrames] = // LCOV_EXCL_LINE
-        context.bootstrapEqualities.pairsWithin(coi.solverSymbolSet); // LCOV_EXCL_LINE
-  } // LCOV_EXCL_LINE
-  return aliasesByFrame;
-}
-
-FrameSymbolAliases buildResetSummaryFrameAliases(
-    const ResetFrontierReachabilityContextData& context,
-    const BaseCaseCoi& coi,
-    size_t numFrames) {
-  FrameSymbolAliases aliasesByFrame(numFrames);
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return aliasesByFrame;
-  }
-  if (!aliasesByFrame.empty()) { // LCOV_EXCL_LINE
-    aliasesByFrame[0] = // LCOV_EXCL_LINE
-        context.bootstrapEqualities.pairsWithin(coi.solverSymbolSet); // LCOV_EXCL_LINE
-  } // LCOV_EXCL_LINE
-  return aliasesByFrame; // LCOV_EXCL_LINE
-}
-
 std::vector<size_t> expandTransitionTargets(
     const std::unordered_set<size_t>& requestedTargets,
     const TransitionExprResolver& transitionByState,
@@ -646,13 +546,12 @@ BaseCaseCoi buildBaseCaseCoi(const KInductionProblem& problem,
                              size_t firstBadFrame,
                              size_t internalK,
                              bool constrainPreviouslySafeFrames,
-                             bool closeStartupEqualityDependencies) {
+                             bool) {
   // Cone-of-influence reduction for the base query. The original formula is
   // still the same bounded counterexample check, but we avoid allocating and
   // constraining state bits that cannot influence any checked bad output.
-  // This matters for ASIC SEC where resetless memories can create hundreds of
-  // thousands of frame-0 equality pairs that are irrelevant for a given output
-  // cone.
+  // This matters for ASIC SEC where resetless memories and rail state can be
+  // much larger than a given output cone.
   const auto stateSymbols = buildStateSymbolSet(problem);
   const TransitionExprResolver transitionByState(problem);
   const auto primaryByComplement = buildPrimaryByComplementSymbol(problem);
@@ -706,13 +605,6 @@ BaseCaseCoi buildBaseCaseCoi(const KInductionProblem& problem,
 
   std::vector<std::vector<size_t>> transitionTargetsByFrame(internalK);
   for (size_t frame = internalK; frame > 0; --frame) {
-    if (KEPLER_FORMAL::Config::getSecInternalStateCorrespondence() &&
-        closeStartupEqualityDependencies &&
-        bootstrapFrames != 0 &&
-        frame == bootstrapFrames) {
-      closeFrameEqualityDependencies(
-          problem.bootstrapStateEqualityPairs, requiredStates[frame]);
-    }
     closeSameFrameStateEqualityDependencies(problem, requiredStates[frame]);
     auto targets = expandTransitionTargets(
         requiredStates[frame],
@@ -723,11 +615,6 @@ BaseCaseCoi buildBaseCaseCoi(const KInductionProblem& problem,
         targets, stateSymbols, requiredStates[frame - 1], solverSymbols);
   }
 
-  if (KEPLER_FORMAL::Config::getSecInternalStateCorrespondence() &&
-      closeStartupEqualityDependencies) {
-    closeFrameEqualityDependencies(
-        problem.initialStateEqualityPairs, requiredStates[0]);
-  }
   closeSameFrameStateEqualityDependencies(problem, requiredStates[0]);
 
   for (const auto& frameStates : requiredStates) {
@@ -802,11 +689,6 @@ BaseCaseCoi buildImcCachedBaseCaseCoi(
 
   std::vector<std::vector<size_t>> transitionTargetsByFrame(internalK);
   for (size_t frame = internalK; frame > 0; --frame) {
-    if (KEPLER_FORMAL::Config::getSecInternalStateCorrespondence() &&
-        bootstrapFrames != 0 && frame == bootstrapFrames) { // LCOV_EXCL_LINE
-      closeFrameEqualityDependencies( // LCOV_EXCL_LINE
-          problem.bootstrapStateEqualityPairs, requiredStates[frame]); // LCOV_EXCL_LINE
-    } // LCOV_EXCL_LINE
     cache.closeSameFrameStateEqualityDependencies(requiredStates[frame]);
     auto targets = expandTransitionTargets(
         requiredStates[frame],
@@ -817,10 +699,6 @@ BaseCaseCoi buildImcCachedBaseCaseCoi(
         targets, cache.stateSymbols, requiredStates[frame - 1], solverSymbols);
   }
 
-  if (KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    closeFrameEqualityDependencies( // LCOV_EXCL_LINE
-        problem.initialStateEqualityPairs, requiredStates[0]); // LCOV_EXCL_LINE
-  } // LCOV_EXCL_LINE
   cache.closeSameFrameStateEqualityDependencies(requiredStates[0]);
 
   for (const auto& frameStates : requiredStates) {
@@ -849,7 +727,7 @@ BaseCaseCoi buildStateCubeReachabilityCoiForTargetFrames(
     size_t targetFrame,
     const std::vector<std::pair<size_t, bool>>& cube,
     const std::vector<size_t>& targetFrames,
-    bool closeStartupEqualityDependencies) {
+    bool) {
   // This is the same bounded transition prefix as the normal base case, but
   // the target is a state cube rather than the SEC bad formula.  PDR calls this
   // when a level-0 obligation may be an artifact of the abstract bootstrap
@@ -896,10 +774,6 @@ BaseCaseCoi buildStateCubeReachabilityCoiForTargetFrames(
 
   std::vector<std::vector<size_t>> transitionTargetsByFrame(targetFrame);
   for (size_t frame = targetFrame; frame > 0; --frame) {
-    if (closeStartupEqualityDependencies &&
-        context.bootstrapFrames != 0 && frame == context.bootstrapFrames) {
-      context.bootstrapEqualities.close(requiredStates[frame]);
-    }
     closeSameFrameStateEqualityDependencies(problem, requiredStates[frame]);
     auto targets = expandTransitionTargets(
         requiredStates[frame],
@@ -910,9 +784,6 @@ BaseCaseCoi buildStateCubeReachabilityCoiForTargetFrames(
         targets, stateSymbols, requiredStates[frame - 1], solverSymbols);
   }
 
-  if (closeStartupEqualityDependencies) {
-    context.initialEqualities.close(requiredStates[0]);
-  }
   closeSameFrameStateEqualityDependencies(problem, requiredStates[0]);
 
   for (const auto& frameStates : requiredStates) {
@@ -1063,104 +934,6 @@ void addResetBootstrapConstraints(SATSolverWrapper& solver,
   }
 }
 
-void addBootstrapStateEqualities(SATSolverWrapper& solver,
-                                 const FrameVariableStore& variables,
-                                 const KInductionProblem& problem,
-                                 const std::unordered_set<size_t>& solverSymbols,
-                                 size_t frame) {
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return;
-  }
-  for (const auto& [lhsSymbol, rhsSymbol] : problem.bootstrapStateEqualityPairs) {
-    if (solverSymbols.find(lhsSymbol) == solverSymbols.end() ||
-        solverSymbols.find(rhsSymbol) == solverSymbols.end()) {
-      continue; // LCOV_EXCL_LINE
-    }
-    const int lhs = variables.getLiteral(lhsSymbol, frame);
-    const int rhs = variables.getLiteral(rhsSymbol, frame);
-    if (lhs == rhs) {
-      continue;
-    }
-    addLiteralEquivalence(  // LCOV_EXCL_LINE
-        solver,  // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        lhs,  // LCOV_EXCL_LINE
-        rhs);  // LCOV_EXCL_LINE
-  }
-}
-// LCOV_EXCL_STOP
-
-void addBootstrapStateEqualities(
-    SATSolverWrapper& solver,
-    const FrameVariableStore& variables,
-    const ResetFrontierReachabilityContextData& context,
-    const std::unordered_set<size_t>& solverSymbols,
-    size_t frame) {
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return;
-  }
-  for (const auto& [lhsSymbol, rhsSymbol] : // LCOV_EXCL_LINE
-       context.bootstrapEqualities.pairsWithin(solverSymbols)) { // LCOV_EXCL_LINE
-    const int lhs = variables.getLiteral(lhsSymbol, frame);  // LCOV_EXCL_LINE
-    const int rhs = variables.getLiteral(rhsSymbol, frame);  // LCOV_EXCL_LINE
-    // LCOV_EXCL_START
-    if (lhs == rhs) {  // LCOV_EXCL_LINE
-      continue;  // LCOV_EXCL_LINE
-    }
-    addLiteralEquivalence(solver, lhs, rhs);  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-// LCOV_EXCL_START
-}
-// LCOV_EXCL_STOP
-
-void addInitialStateEqualities(SATSolverWrapper& solver,
-                               const FrameVariableStore& variables,
-                               const KInductionProblem& problem,
-                               const std::unordered_set<size_t>& solverSymbols) {
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return;
-  }
-  for (const auto& [lhsSymbol, rhsSymbol] : problem.initialStateEqualityPairs) {
-    if (solverSymbols.find(lhsSymbol) == solverSymbols.end() ||
-        solverSymbols.find(rhsSymbol) == solverSymbols.end()) {
-      continue; // LCOV_EXCL_LINE
-    }
-    const int lhs = variables.getLiteral(lhsSymbol, 0);
-    const int rhs = variables.getLiteral(rhsSymbol, 0);
-    if (lhs == rhs) {
-      continue;
-    }
-    addLiteralEquivalence(  // LCOV_EXCL_LINE
-        solver,  // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        lhs,  // LCOV_EXCL_LINE
-        rhs);  // LCOV_EXCL_LINE
-  }
-}
-// LCOV_EXCL_STOP
-
-void addInitialStateEqualities(
-    SATSolverWrapper& solver,
-    const FrameVariableStore& variables,
-    const ResetFrontierReachabilityContextData& context,
-    const std::unordered_set<size_t>& solverSymbols) {
-  if (!KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-    return;
-  }
-  for (const auto& [lhsSymbol, rhsSymbol] :
-       context.initialEqualities.pairsWithin(solverSymbols)) {
-    const int lhs = variables.getLiteral(lhsSymbol, 0);
-    const int rhs = variables.getLiteral(rhsSymbol, 0);
-    if (lhs == rhs) {
-      continue;
-    }
-    addLiteralEquivalence(solver, lhs, rhs);  // LCOV_EXCL_LINE
-  }
-// LCOV_EXCL_START
-}
-// LCOV_EXCL_STOP
-
 size_t addInitialStateAssignments(
     SATSolverWrapper& solver,
     const FrameVariableStore& variables,
@@ -1288,8 +1061,6 @@ void emitBaseCaseCoiDiag(const KInductionProblem& problem,
       " solver_symbols=", coi.solverSymbols.size(),
       " transition_targets=", countTransitionTargets(coi.transitionTargetsByFrame),
       " bad_support=", problem.bad != nullptr ? problem.bad->getSupportVars().size() : 0,
-      " initial_equalities=", problem.initialStateEqualityPairs.size(),
-      " inductive_equalities=", problem.inductiveStateEqualityPairs.size(),
       " initial_assignments=", problem.initialStateAssignments.size(),
       " encoded_initial_assignments=",
       countMatchingAssignments(problem.initialStateAssignments, coi.solverSymbolSet),
@@ -1364,8 +1135,7 @@ void addDualRailStateValidity(
     const FrameVariableStore& variables,
     const std::vector<DualRailSymbolPair>& railPairs,
     const std::unordered_set<size_t>& solverSymbols,
-    size_t numFrames,
-    bool requireExactRails) {
+    size_t numFrames) {
   for (size_t frame = 0; frame < numFrames; ++frame) {
     for (const auto& rails : railPairs) {
       if (solverSymbols.find(rails.mayBeOne) == solverSymbols.end() ||
@@ -1379,22 +1149,8 @@ void addDualRailStateValidity(
       solver.addClause({
           variables.getLiteral(rails.mayBeOne, frame),
           variables.getLiteral(rails.mayBeZero, frame)});
-      if (requireExactRails) {
-        // Complete bootstrap/initial assignments are concrete Boolean states.
-        // For those problems, both rails true is only an abstraction artifact,
-        // so keep BMC in the same exact dual-rail state domain as induction.
-        solver.addClause({
-            -variables.getLiteral(rails.mayBeOne, frame),
-            -variables.getLiteral(rails.mayBeZero, frame)});
-      }
     }
   }
-}
-
-bool requiresConcreteDualRailStateDomain(const KInductionProblem& problem) {
-  return problem.usesDualRailStateEncoding &&
-         (problem.hasCompleteBootstrapStateAssignments() ||
-          problem.hasCompleteInitialState());
 }
 
 void addBlockedStateCubeClause(SATSolverWrapper& solver,
@@ -1897,8 +1653,6 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
       internalK,
       constrainPreviouslySafeFrames);
   const TransitionExprResolver transitionByState(problem);
-  const FrameSymbolAliases aliasesByFrame = buildBaseCaseFrameAliases(
-      problem, coi, internalK + 1, bootstrapFrames);
 
   SATSolverWrapper solver(solverType);
   if (solverProfile == BaseCaseSolverProfile::PdrValidation ||
@@ -1919,10 +1673,15 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
   } else {
     solver.configureForSecConeProof(coi.solverSymbols.size());  // LCOV_EXCL_LINE
   }
-  FrameVariableStore variables(
-      solver, coi.solverSymbols, internalK + 1, aliasesByFrame);
+  FrameVariableStore variables(solver, coi.solverSymbols, internalK + 1);
   addResetBootstrapConstraints(solver, variables, problem, internalK + 1);
   addInitialConstraints(solver, variables, problem, coi.solverSymbolSet, initialMode);
+  if (bootstrapFrames != 0 && problem.usesDualRailStateEncoding) {
+    // A reset prefix starts from the same exact ternary initialization as PDR;
+    // its final state is derived by transitions, not a per-register summary.
+    addInitialStateAssignments(
+        solver, variables, problem, coi.solverSymbolSet);
+  }
   if (resetBootstrapObservationFrontier) {
     addObservationPropertyConstraint(
         solver, variables, problem, bootstrapFrames);
@@ -1938,20 +1697,15 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
       solver, variables, problem, coi.solverSymbolSet, internalK + 1);
   addDualRailStateValidity(
       solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet,
-      internalK + 1, requiresConcreteDualRailStateDomain(problem));
-  addInitialStateEqualities(solver, variables, problem, coi.solverSymbolSet);
-
+      internalK + 1);
   for (size_t frame = 0; frame < internalK; ++frame) {
     addTransitionRelation(
         solver, variables, transitionByState, coi.transitionTargetsByFrame[frame], frame);
   }
-  if (bootstrapFrames != 0) {
+  if (bootstrapFrames != 0 && !problem.usesDualRailStateEncoding) {
     addBootstrapStateAssignments(
         solver, variables, problem, coi.solverSymbolSet, bootstrapFrames);
-    addBootstrapStateEqualities(
-        solver, variables, problem, coi.solverSymbolSet, bootstrapFrames);
   }
-
   if (constrainPreviouslySafeFrames) {
     for (size_t frame = bootstrapFrames; frame < firstBadFrame; ++frame) {
       FrameFormulaEncoder encoder(
@@ -2069,17 +1823,13 @@ findImcCachedBaseCounterexampleAtFrontierQuery(
       firstBadFrame,
       internalK,
       /*constrainPreviouslySafeFrames=*/false);
-  const FrameSymbolAliases aliasesByFrame = buildBaseCaseFrameAliases(
-      problem, coi, internalK + 1, bootstrapFrames);
-
   SATSolverWrapper solver(solverType);
   if (baseCaseValidationUsesLocalQueryProfile(solverType)) {
     solver.configureForSecPdrQuery(coi.solverSymbols.size());
   } else {
     solver.configureForSecConeProof(coi.solverSymbols.size());  // LCOV_EXCL_LINE
   }
-  FrameVariableStore variables(
-      solver, coi.solverSymbols, internalK + 1, aliasesByFrame);
+  FrameVariableStore variables(solver, coi.solverSymbols, internalK + 1);
   addResetBootstrapConstraints(solver, variables, problem, internalK + 1);
   addInitialConstraints(solver, variables, problem, coi.solverSymbolSet, initialMode);
   if (resetBootstrapObservationFrontier) {
@@ -2097,9 +1847,7 @@ findImcCachedBaseCounterexampleAtFrontierQuery(
       solver, variables, problem, coi.solverSymbolSet, internalK + 1);
   addDualRailStateValidity(
       solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet,
-      internalK + 1, requiresConcreteDualRailStateDomain(problem));
-  addInitialStateEqualities(solver, variables, problem, coi.solverSymbolSet);
-
+      internalK + 1);
   for (size_t frame = 0; frame < internalK; ++frame) {
     addTransitionRelation(
         solver,
@@ -2110,8 +1858,6 @@ findImcCachedBaseCounterexampleAtFrontierQuery(
   }
   if (bootstrapFrames != 0) {
     addBootstrapStateAssignments(
-        solver, variables, problem, coi.solverSymbolSet, bootstrapFrames);
-    addBootstrapStateEqualities(
         solver, variables, problem, coi.solverSymbolSet, bootstrapFrames);
   }
 
@@ -2202,9 +1948,6 @@ findImcAssumptionBaseCounterexampleAtFrontier( // LCOV_EXCL_LINE
       firstBadFrame, // LCOV_EXCL_LINE
       internalK, // LCOV_EXCL_LINE
       /*constrainPreviouslySafeFrames=*/false);
-  const FrameSymbolAliases aliasesByFrame = buildBaseCaseFrameAliases( // LCOV_EXCL_LINE
-      problem, coi, internalK + 1, bootstrapFrames); // LCOV_EXCL_LINE
-
   const auto assumptionSolverType = // LCOV_EXCL_LINE
       SATSolverWrapper::assumptionSolverTypeFor(solverType); // LCOV_EXCL_LINE
   SATSolverWrapper solver(assumptionSolverType); // LCOV_EXCL_LINE
@@ -2213,8 +1956,7 @@ findImcAssumptionBaseCounterexampleAtFrontier( // LCOV_EXCL_LINE
   // through solver assumptions; this keeps the engine IMC-only while avoiding a
   // full transition rebuild per output.
   solver.configureForSecLocalBooleanCheck(coi.solverSymbols.size()); // LCOV_EXCL_LINE
-  FrameVariableStore variables( // LCOV_EXCL_LINE
-      solver, coi.solverSymbols, internalK + 1, aliasesByFrame); // LCOV_EXCL_LINE
+  FrameVariableStore variables(solver, coi.solverSymbols, internalK + 1); // LCOV_EXCL_LINE
   addResetBootstrapConstraints(solver, variables, problem, internalK + 1); // LCOV_EXCL_LINE
   addInitialConstraints(solver, variables, problem, coi.solverSymbolSet, initialMode); // LCOV_EXCL_LINE
   if (resetBootstrapObservationFrontier) { // LCOV_EXCL_LINE
@@ -2232,9 +1974,7 @@ findImcAssumptionBaseCounterexampleAtFrontier( // LCOV_EXCL_LINE
       solver, variables, problem, coi.solverSymbolSet, internalK + 1); // LCOV_EXCL_LINE
   addDualRailStateValidity( // LCOV_EXCL_LINE
       solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet, // LCOV_EXCL_LINE
-      internalK + 1, requiresConcreteDualRailStateDomain(problem)); // LCOV_EXCL_LINE
-  addInitialStateEqualities(solver, variables, problem, coi.solverSymbolSet); // LCOV_EXCL_LINE
-
+      internalK + 1); // LCOV_EXCL_LINE
   for (size_t frame = 0; frame < internalK; ++frame) { // LCOV_EXCL_LINE
     addTransitionRelation( // LCOV_EXCL_LINE
         solver,
@@ -2245,8 +1985,6 @@ findImcAssumptionBaseCounterexampleAtFrontier( // LCOV_EXCL_LINE
   } // LCOV_EXCL_LINE
   if (bootstrapFrames != 0) { // LCOV_EXCL_LINE
     addBootstrapStateAssignments( // LCOV_EXCL_LINE
-        solver, variables, problem, coi.solverSymbolSet, bootstrapFrames); // LCOV_EXCL_LINE
-    addBootstrapStateEqualities( // LCOV_EXCL_LINE
         solver, variables, problem, coi.solverSymbolSet, bootstrapFrames); // LCOV_EXCL_LINE
   } // LCOV_EXCL_LINE
 
@@ -2864,11 +2602,7 @@ knownResetFrontierConflictCore(
   const auto& assignments = usesBootstrapFrontier
                                 ? data.problem.bootstrapStateAssignments
                                 : data.problem.initialStateAssignments;
-  const auto& equalities =
-      KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()
-          ? (usesBootstrapFrontier ? data.problem.bootstrapStateEqualityPairs
-                                   : data.problem.initialStateEqualityPairs) // LCOV_EXCL_LINE
-          : emptySymbolPairs();
+  const auto& equalities = emptySymbolPairs();
   if (assignments.empty() && equalities.empty() &&
       data.problem.complementedStatePairs0.empty() &&
       data.problem.complementedStatePairs1.empty() &&
@@ -3195,8 +2929,6 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolver(
   cached->targetFrame = targetFrame;
   cached->coi = buildStateCubeReachabilityCoi(
       data, targetFrame, cube, closeStartupEqualityDependencies);
-  const FrameSymbolAliases aliasesByFrame =
-      buildResetFrontierFrameAliases(data, cached->coi, targetFrame + 1);
 
   const auto& problem = data.problem;
   cached->solver = std::make_unique<SATSolverWrapper>(solverType);
@@ -3209,8 +2941,7 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolver(
   cached->variables = std::make_unique<FrameVariableStore>(
       *cached->solver,
       cached->coi.solverSymbols,
-      targetFrame + 1,
-      aliasesByFrame);
+      targetFrame + 1);
   addResetBootstrapConstraints(
       *cached->solver, *cached->variables, problem, targetFrame + 1);
   addInitialConstraints(
@@ -3242,10 +2973,7 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolver(
       *cached->variables,
       problem.dualRailStatePairs,
       cached->coi.solverSymbolSet,
-      targetFrame + 1,
-      requiresConcreteDualRailStateDomain(problem));
-  addInitialStateEqualities(
-      *cached->solver, *cached->variables, data, cached->coi.solverSymbolSet);
+      targetFrame + 1);
   addResetFrontierFrameInvariantConstraints(
       *cached->solver, *cached->variables, data, targetFrame);
 
@@ -3262,12 +2990,6 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolver(
         *cached->solver,
         *cached->variables,
         problem,
-        cached->coi.solverSymbolSet,
-        data.bootstrapFrames);
-    addBootstrapStateEqualities(
-        *cached->solver,
-        *cached->variables,
-        data,
         cached->coi.solverSymbolSet,
         data.bootstrapFrames);
   }
@@ -3313,8 +3035,6 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolverForCoi(  // L
   cached->solverType = solverType;  // LCOV_EXCL_LINE
   cached->targetFrame = targetFrame;  // LCOV_EXCL_LINE
   cached->coi = std::move(coi);  // LCOV_EXCL_LINE
-  const FrameSymbolAliases aliasesByFrame =
-      buildResetFrontierFrameAliases(data, cached->coi, targetFrame + 1);  // LCOV_EXCL_LINE
 
   const auto& problem = data.problem;  // LCOV_EXCL_LINE
   // LCOV_EXCL_STOP
@@ -3324,8 +3044,7 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolverForCoi(  // L
   cached->variables = std::make_unique<FrameVariableStore>(  // LCOV_EXCL_LINE
       *cached->solver,  // LCOV_EXCL_LINE
       cached->coi.solverSymbols,  // LCOV_EXCL_LINE
-      targetFrame + 1,  // LCOV_EXCL_LINE
-      aliasesByFrame);
+      targetFrame + 1);  // LCOV_EXCL_LINE
   addResetBootstrapConstraints(  // LCOV_EXCL_LINE
       *cached->solver, *cached->variables, problem, targetFrame + 1);  // LCOV_EXCL_LINE
   addInitialConstraints(  // LCOV_EXCL_LINE
@@ -3359,10 +3078,7 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolverForCoi(  // L
       // LCOV_EXCL_STOP
       cached->coi.solverSymbolSet,  // LCOV_EXCL_LINE
       // LCOV_EXCL_START
-      targetFrame + 1,  // LCOV_EXCL_LINE
-      requiresConcreteDualRailStateDomain(problem));  // LCOV_EXCL_LINE
-  addInitialStateEqualities(  // LCOV_EXCL_LINE
-      *cached->solver, *cached->variables, data, cached->coi.solverSymbolSet);  // LCOV_EXCL_LINE
+      targetFrame + 1);  // LCOV_EXCL_LINE
   addResetFrontierFrameInvariantConstraints(  // LCOV_EXCL_LINE
       *cached->solver, *cached->variables, data, targetFrame);  // LCOV_EXCL_LINE
 
@@ -3379,12 +3095,6 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolverForCoi(  // L
         *cached->solver,  // LCOV_EXCL_LINE
         *cached->variables,  // LCOV_EXCL_LINE
         problem,  // LCOV_EXCL_LINE
-        cached->coi.solverSymbolSet,  // LCOV_EXCL_LINE
-        data.bootstrapFrames);  // LCOV_EXCL_LINE
-    addBootstrapStateEqualities(  // LCOV_EXCL_LINE
-        *cached->solver,  // LCOV_EXCL_LINE
-        *cached->variables,  // LCOV_EXCL_LINE
-        data,  // LCOV_EXCL_LINE
         cached->coi.solverSymbolSet,  // LCOV_EXCL_LINE
         data.bootstrapFrames);  // LCOV_EXCL_LINE
   }  // LCOV_EXCL_LINE
@@ -3838,11 +3548,9 @@ bool resetSummaryPrecheckProvesUnreachable(
        ++refinement) {  // LCOV_EXCL_LINE
     SATSolverWrapper solver(solverType);
     solver.configureForSecPdrQuery(coi.solverSymbols.size());
-    const FrameSymbolAliases aliasesByFrame =
-        buildResetSummaryFrameAliases(data, coi, postBootstrapSteps + 1);
     FrameVariableStore variables(
         // LCOV_EXCL_START
-        solver, coi.solverSymbols, postBootstrapSteps + 1, aliasesByFrame);
+        solver, coi.solverSymbols, postBootstrapSteps + 1);
         // LCOV_EXCL_STOP
 
     for (const auto& [symbol, assertedValue] : problem.resetBootstrapInputs) {
@@ -3875,12 +3583,9 @@ bool resetSummaryPrecheckProvesUnreachable(
         variables,
         problem.dualRailStatePairs,
         coi.solverSymbolSet,
-        postBootstrapSteps + 1,
-        requiresConcreteDualRailStateDomain(problem));
+        postBootstrapSteps + 1);
     addBootstrapStateAssignments(
         solver, variables, problem, coi.solverSymbolSet, 0);
-    addBootstrapStateEqualities(
-        solver, variables, data, coi.solverSymbolSet, 0);
     for (const auto& blocker : frontierBlockers) {
       // Summary frame 0 is the already-validated concrete reset/bootstrap
       // LCOV_EXCL_START

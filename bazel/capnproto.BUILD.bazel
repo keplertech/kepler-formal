@@ -1,0 +1,64 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(["**"]),
+)
+
+# Cap'n Proto built once via cmake so that naja's find_package(CapnProto)
+# gets a real CMake package (lib/cmake/CapnProto/*.cmake) plus the capnp
+# compiler binaries, and the final link gets the same libcapnp.a/libkj.a
+# through CcInfo — the schema-compiler and link-time versions can never skew.
+CAPNPROTO_CMAKE_CACHE_ENTRIES = {
+    "BUILD_TESTING": "OFF",
+    "BUILD_SHARED_LIBS": "OFF",
+    "CMAKE_BUILD_TYPE": "Release",
+    # Static archives end up in a PIE binary and in naja test executables.
+    "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+    "WITH_OPENSSL": "OFF",
+    "WITH_ZLIB": "OFF",
+}
+
+cmake(
+    name = "capnproto",
+    cache_entries = select({
+        # rules_foreign_cc links executables with the C driver; the host
+        # (Xcode) toolchain needs the C++ runtime spelled out. The hermetic
+        # Linux toolchain links its own static libc++ and must not see
+        # -lstdc++.
+        "@platforms//os:macos": CAPNPROTO_CMAKE_CACHE_ENTRIES | {
+            "CMAKE_EXE_LINKER_FLAGS": "-lstdc++ -lm",
+        },
+        # See naja.BUILD.bazel: the hermetic toolchain's C++ runtime
+        # archives are Bazel link inputs rules_foreign_cc doesn't capture,
+        # and the -L'd search directories contain deliberate stubs.
+        "@kepler-formal//bazel:hermetic_runtime": CAPNPROTO_CMAKE_CACHE_ENTRIES | {
+            "CMAKE_CXX_STANDARD_LIBRARIES": " ".join([
+                "$${EXT_BUILD_DEPS}/lib/liblibcxx.static.a",
+                "$${EXT_BUILD_DEPS}/lib/liblibcxxabi.static.a",
+                "$${EXT_BUILD_DEPS}/lib/liblibunwind.static.a",
+                "-lm",
+            ]),
+        },
+        # Consumer toolchain (hermetic_cxx_runtime_enabled=False): use the
+        # consumer's own libc++; no hermetic archives.
+        "//conditions:default": CAPNPROTO_CMAKE_CACHE_ENTRIES,
+    }),
+    build_args = ["-j4"],
+    deps = select({
+        "@platforms//os:macos": [],
+        "@kepler-formal//bazel:hermetic_runtime": ["@kepler-formal//bazel:hermetic_cxx_runtime"],
+        "//conditions:default": [],
+    }),
+    lib_source = ":all_srcs",
+    out_binaries = [
+        "capnp",
+        "capnpc-c++",
+    ],
+    # Link order: capnp before kj.
+    out_static_libs = [
+        "libcapnp.a",
+        "libkj.a",
+    ],
+    visibility = ["//visibility:public"],
+)

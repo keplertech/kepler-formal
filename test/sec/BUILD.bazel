@@ -5,15 +5,16 @@ cc_test(
     name = "SequentialEquivalenceStrategyTests",
     srcs = ["SequentialEquivalenceStrategyTests.cpp"],
     data = [
-        "//example:testdata",
+        "//examples:testdata",
+        "@naja//:ff_scan_lib",
     ],
     env = {
+        "NAJA_FF_SCAN_LIB": "$(rootpath @naja//:ff_scan_lib)",
         "TEST_DATA_PREFIX": "",
     },
     size = "large",
     timeout = "long",
     copts = NAJA_HEADER_COPTS,
-    linkopts = ["-ltbb", "-ltbbmalloc", "-lz", "-lcapnp", "-lkj"],
     deps = [
         "//src/config:kepler_config",
         "//src/sec:kepler_sec",

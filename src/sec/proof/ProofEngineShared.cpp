@@ -14,10 +14,6 @@ namespace KEPLER_FORMAL::SEC {
 
 namespace {
 
-BoolExpr* buildEqualityFormula(size_t lhs, size_t rhs) { // LCOV_EXCL_LINE
-  return makeEqualityExpr(BoolExpr::Var(lhs), BoolExpr::Var(rhs)); // LCOV_EXCL_LINE
-}
-
 BoolExpr* appendStructuredAssignmentFacts(
     BoolExpr* init,
     const std::vector<std::pair<size_t, bool>>& assignments,
@@ -145,11 +141,15 @@ std::unordered_map<size_t, BoolExpr*> buildTransitionExprByStateSymbol(
     const KInductionProblem& problem) {
   std::unordered_map<size_t, BoolExpr*> transitionExprByStateSymbol;
   transitionExprByStateSymbol.reserve(
-      problem.transitions0.size() + problem.transitions1.size());
+      problem.transitions0.size() + problem.transitions1.size() +
+      problem.auxiliaryTransitions.size());
   for (const auto& [stateSymbol, expr] : problem.transitions0) {
     transitionExprByStateSymbol.emplace(stateSymbol, expr);
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    transitionExprByStateSymbol.emplace(stateSymbol, expr);
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     transitionExprByStateSymbol.emplace(stateSymbol, expr);
   }
   return transitionExprByStateSymbol;
@@ -175,9 +175,14 @@ std::unordered_map<size_t, size_t> buildComplementPrimaryByStateSymbol(
 std::unordered_set<size_t> buildCombinedStateSymbolSet(
     const KInductionProblem& problem) {
   std::unordered_set<size_t> stateSymbols;
-  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  stateSymbols.reserve(
+      problem.state0Symbols.size() + problem.state1Symbols.size() +
+      problem.auxiliaryStateSymbols.size());
   stateSymbols.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   stateSymbols.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  stateSymbols.insert(
+      problem.auxiliaryStateSymbols.begin(),
+      problem.auxiliaryStateSymbols.end());
   return stateSymbols;
 }
 
@@ -324,17 +329,7 @@ BoolExpr* buildProofInitFormula(const KInductionProblem& problem) {
           init, value ? BoolExpr::Var(symbol) : BoolExpr::Not(BoolExpr::Var(symbol)));
       hasConstraint = true;
     }
-    if (KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-      for (const auto& [lhsSymbol, rhsSymbol] :
-           problem.bootstrapStateEqualityPairs) {
-        init = BoolExpr::And(init, buildEqualityFormula(lhsSymbol, rhsSymbol)); // LCOV_EXCL_LINE
-        hasConstraint = true; // LCOV_EXCL_LINE
-      }
-    }
   } else {
-    const bool hasInitialStateRelation =
-        KEPLER_FORMAL::Config::getSecInternalStateCorrespondence() &&
-        !problem.initialStateEqualityPairs.empty();
     if (problem.initialCondition == BoolExpr::createTrue() &&
         !problem.initialStateAssignments.empty()) {
       // Dual-rail SEC keeps the boot rails as structured unit facts so PDR and
@@ -347,19 +342,11 @@ BoolExpr* buildProofInitFormula(const KInductionProblem& problem) {
       init = BoolExpr::And(init, problem.initialCondition);
       hasConstraint = true;
     }
-    if (KEPLER_FORMAL::Config::getSecInternalStateCorrespondence()) {
-      for (const auto& [lhsSymbol, rhsSymbol] :
-           problem.initialStateEqualityPairs) {
-        init = BoolExpr::And(init, buildEqualityFormula(lhsSymbol, rhsSymbol)); // LCOV_EXCL_LINE
-        hasConstraint = true; // LCOV_EXCL_LINE
-      }
-    }
     const bool needsObservationFrontier =
         problem.hasSequentialState() && problem.property != nullptr &&
-        ((!problem.hasExplicitInitialState() && !hasInitialStateRelation) ||
+        ((!problem.hasExplicitInitialState()) ||
          (problem.hasExplicitInitialState() &&
-          !problem.hasCompleteInitialState() &&
-          !hasInitialStateRelation));
+          !problem.hasCompleteInitialState()));
     if (needsObservationFrontier) {
       init = BoolExpr::And(init, problem.property);
       hasConstraint = true;
@@ -401,6 +388,11 @@ BoolExpr* buildOneStepTransitionFormula(
         makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    transition = BoolExpr::And(
+        transition,
+        makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     transition = BoolExpr::And(
         transition,
         makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));

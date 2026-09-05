@@ -9,6 +9,12 @@
 
 #include "strategy/SequentialEquivalenceStrategy.h"
 
+// Completed SEC verdicts use stable, distinct process exit codes.
+inline constexpr int kSecProvedExitCode = 0;
+inline constexpr int kSecPartiallyProvedExitCode = 1;
+inline constexpr int kSecInconclusiveExitCode = 2;
+inline constexpr int kSecCounterexampleExitCode = 3;
+
 // Shared helper for consistent filename handling.
 std::string sanitizeFileToken(const std::string& input);
 
@@ -21,5 +27,9 @@ void writeResetUnanchoredSkippedOutputsReport(
     const std::vector<std::string>& skippedOutputs);
 
 void writeMultiClockDomainSkippedOutputsReport(
+    const std::filesystem::path& reportPath,
+    const std::vector<std::string>& skippedOutputs);
+
+void writeOpaqueCellSkippedOutputsReport(
     const std::filesystem::path& reportPath,
     const std::vector<std::string>& skippedOutputs);

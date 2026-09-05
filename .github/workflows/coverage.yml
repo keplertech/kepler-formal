@@ -37,6 +37,10 @@ jobs:
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      env:
+        GIT_CONFIG_COUNT: "1"
+        GIT_CONFIG_KEY_0: core.abbrev
+        GIT_CONFIG_VALUE_0: "7"
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCODE_COVERAGE=ON -DLONG_TESTS=ON
 
     - name: Build
@@ -45,6 +49,19 @@ jobs:
       env:
         CC:   clang
         CXX:  clang++
+
+    - name: Generate Naja IF test inputs with the local Naja checkout
+      working-directory: ${{github.workspace}}/examples/tinyrocket
+      env:
+        GIT_CONFIG_COUNT: "1"
+        GIT_CONFIG_KEY_0: core.abbrev
+        GIT_CONFIG_VALUE_0: "7"
+      run: |
+        python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip install --no-build-isolation "${{github.workspace}}/thirdparty/naja"
+        python3 to_naja_if.py
+        python3 edit.py
 
     - name: Test
       working-directory: ${{github.workspace}}/build

@@ -76,6 +76,7 @@ const SNLTruthTable SNLTruthTableTree::PtableHolder_ = SNLTruthTable(1, 2, SNLTr
 
 namespace {
 std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
+    const naja::NL::SNLInstance* instance,
     const naja::NL::SNLDesign* design,
     size_t flatTermID);
 }
@@ -120,8 +121,10 @@ SNLTruthTableTree::Node::Node(SNLTruthTableTree* t,
   }
   if (type == Type::Table) {
     const auto& termInfo = naja::DNL::get()->getDNLTerminalFromID(data.termid);
+    const auto& instance = termInfo.getDNLInstance();
     truthTable.setShared(getSharedTruthTable(
-        termInfo.getDNLInstance().getSNLModel(),
+        instance.getSNLInstance(),
+        instance.getSNLModel(),
         termInfo.getSnlBitTerm()->getOrderID()));
   }
 }
@@ -160,25 +163,29 @@ static std::shared_ptr<SNLTruthTableTree::Node> nullNodePtr = nullptr;
 namespace {
 
 struct SharedTruthTableKey {
+  const naja::NL::SNLInstance* instance = nullptr;
   const naja::NL::SNLDesign* design = nullptr;
   uint32_t designNameID = 0;
   size_t flatTermID = 0;
 
   bool operator==(const SharedTruthTableKey& other) const {
-    return design == other.design && designNameID == other.designNameID &&
+    return instance == other.instance && design == other.design &&
+           designNameID == other.designNameID &&
            flatTermID == other.flatTermID;
   }
 };
 
 struct SharedTruthTableKeyHash {
   size_t operator()(const SharedTruthTableKey& key) const {
-    return std::hash<const naja::NL::SNLDesign*>{}(key.design) ^
-           (std::hash<uint32_t>{}(key.designNameID) << 1) ^
-           (std::hash<size_t>{}(key.flatTermID) << 2);
+    return std::hash<const naja::NL::SNLInstance*>{}(key.instance) ^
+           (std::hash<const naja::NL::SNLDesign*>{}(key.design) << 1) ^
+           (std::hash<uint32_t>{}(key.designNameID) << 2) ^
+           (std::hash<size_t>{}(key.flatTermID) << 3);
   }
 };
 
 std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
+    const naja::NL::SNLInstance* instance,
     const naja::NL::SNLDesign* design,
     size_t flatTermID) {
   static std::mutex cacheMutex;
@@ -191,8 +198,13 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
                                   SharedTruthTableKeyHash>
       localCache;
 
+  const bool usesInstanceTable =
+      SNLDesignModeling::hasTruthTableFromParameter(design, flatTermID);
   const SharedTruthTableKey key{
-      design, design ? design->getName().getID() : 0, flatTermID};
+      usesInstanceTable ? instance : nullptr,
+      design,
+      design ? design->getName().getID() : 0,
+      flatTermID};
   const auto localIt = localCache.find(key);
   if (localIt != localCache.end()) {
     return localIt->second;
@@ -207,7 +219,9 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
     }
   }
 
-  auto currentTable = SNLDesignModeling::getTruthTable(design, flatTermID);
+  auto currentTable = usesInstanceTable
+                          ? SNLDesignModeling::getTruthTable(instance, flatTermID)
+                          : SNLDesignModeling::getTruthTable(design, flatTermID);
   auto sharedTable = std::make_shared<SNLTruthTable>(std::move(currentTable));
   std::lock_guard<std::mutex> lock(cacheMutex);
   const auto [it, inserted] = cache.emplace(key, sharedTable);
@@ -513,18 +527,29 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
   const uint32_t targetId = termIt->second;
   const uint32_t startId = borderLeaves_[borderIndex].parentId;
 
-  thread_local std::vector<uint32_t> nodePath;
-  nodePath.clear();
+  auto getNode = [&](uint32_t id) -> const Node* {
+    if (id == kInvalidId || id < kIdOffset) {
+      return nullptr;
+    }
+    const size_t idx = static_cast<size_t>(id - kIdOffset);
+    if (idx >= nodes_.size()) {
+      return nullptr;
+    }
+    return nodes_[idx].get();
+  };
+
+  std::vector<uint32_t, tbb::tbb_allocator<uint32_t>> nodePath;
+  nodePath.reserve(16);
 
   auto appendLoopTerms = [&]() {
     for (auto it = nodePath.rbegin(); it != nodePath.rend(); ++it) {
-      const auto nodeSp = nodeFromId(*it);
-      if (!nodeSp || nodeSp->type == Node::Type::Input) {
+      const auto* node = getNode(*it);
+      if (node == nullptr || node->type == Node::Type::Input) {
         // LCOV_EXCL_START
         continue; // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
       }
-      loopTerms.push_back(nodeSp->data.termid);
+      loopTerms.push_back(node->data.termid);
     }
     loopTerms.push_back(termid);
   };
@@ -532,7 +557,6 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
   uint32_t nodeId = startId;
   while (true) {
     if (nodeId == kInvalidId) {
-      nodePath.clear();
       return false;
     }
     nodePath.push_back(nodeId);
@@ -540,9 +564,8 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
       appendLoopTerms();
       return true;
     }
-    auto* node = rawNodeFromId(nodeId);
+    const auto* node = getNode(nodeId);
     if (node == nullptr || node->parentIds.empty()) {
-      nodePath.clear();
       return false;
     }
     if (node->parentIds.size() != 1) {
@@ -555,49 +578,39 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
     uint32_t nodeId = kInvalidId;
     size_t nextParent = 0;
   };
-  thread_local std::vector<AncestorFrame> pendingAncestors;
-  pendingAncestors.clear();
+  std::vector<AncestorFrame, tbb::tbb_allocator<AncestorFrame>>
+      pendingAncestors;
+  pendingAncestors.reserve(16);
+  std::unordered_set<uint32_t> visitedAncestors;
+  visitedAncestors.reserve(16);
 
-  uint32_t epoch = ++ancestorSearchEpoch_;
-  // LCOV_EXCL_START
-  if (epoch == 0) {
-    // LCOV_DISABLED_START
-    for (const auto& node : nodes_) {
-      if (node) {
-        node->ancestorVisitEpoch = 0;
-      }
-      // LCOV_DISABLED_STOP
-    }
-    // LCOV_DISABLED_START
-    epoch = ++ancestorSearchEpoch_;
-  }
-  // LCOV_DISABLED_STOP
-  // LCOV_EXCL_STOP
-
-  auto* branchNode = rawNodeFromId(nodeId);
+  const auto* branchNode = getNode(nodeId);
   // LCOV_EXCL_START
   if (branchNode == nullptr) {
     // LCOV_DISABLED_START
-    nodePath.clear();
     return false;
     // LCOV_DISABLED_STOP
   }
   // LCOV_EXCL_STOP
-  branchNode->ancestorVisitEpoch = epoch;
+  visitedAncestors.insert(nodeId);
   pendingAncestors.push_back({nodeId, 0});
   while (!pendingAncestors.empty()) {
     auto& frame = pendingAncestors.back();
-    auto* node = rawNodeFromId(frame.nodeId);
+    const auto* node = getNode(frame.nodeId);
     if (node == nullptr) {
       // LCOV_EXCL_START
       pendingAncestors.pop_back(); // LCOV_EXCL_LINE
-      nodePath.pop_back(); // LCOV_EXCL_LINE
+      if (!nodePath.empty()) { // LCOV_EXCL_LINE
+        nodePath.pop_back(); // LCOV_EXCL_LINE
+      }
       continue; // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
     }
     if (frame.nextParent >= node->parentIds.size()) {
       pendingAncestors.pop_back();
-      nodePath.pop_back();
+      if (!nodePath.empty()) {
+        nodePath.pop_back();
+      }
       continue;
     }
 
@@ -610,16 +623,16 @@ bool SNLTruthTableTree::findAncestorLoopForBorderLeaf(
       appendLoopTerms();
       return true;
     }
-    auto* parent = rawNodeFromId(parentId);
-    if (parent == nullptr || parent->ancestorVisitEpoch == epoch) {
+    const auto* parent = getNode(parentId);
+    if (parent == nullptr ||
+        visitedAncestors.find(parentId) != visitedAncestors.end()) {
       nodePath.pop_back();
       continue;
     }
-    parent->ancestorVisitEpoch = epoch;
+    visitedAncestors.insert(parentId);
     pendingAncestors.push_back({parentId, 0});
   }
 
-  nodePath.clear();
   return false;
 }
 

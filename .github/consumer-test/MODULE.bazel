@@ -1,0 +1,36 @@
+# Minimal downstream consumer of kepler-formal.
+#
+# Builds the checker exactly the way an external module does: bazel_dep +
+# override, no dev_dependencies. This catches breakage that is invisible
+# when this repo is the root module, e.g. paths spelled with root-module
+# canonical repo names (the repo mapping renames extension repos in a
+# consumer context).
+#
+# The root module's hermetic-llvm toolchain *registration* is a
+# dev_dependency and does not propagate; the toolchain repo itself does.
+# A consumer that wants the same hermetic build just registers it, as
+# here — which also keeps this smoke test independent of the CI runner's
+# host compiler. (Declaring exec/target tags again would duplicate the
+# generated toolchain rules.)
+module(name = "kepler-formal-consumer-test")
+
+bazel_dep(name = "kepler-formal")
+local_path_override(
+    module_name = "kepler-formal",
+    path = "../..",
+)
+
+bazel_dep(name = "llvm", version = "0.8.11")
+
+llvm_toolchains = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+use_repo(llvm_toolchains, "llvm_toolchains")
+
+register_toolchains("@llvm_toolchains//:all")
+
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+
+register_toolchains(
+    "@rules_foreign_cc//toolchains:preinstalled_cmake_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_make_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
+)

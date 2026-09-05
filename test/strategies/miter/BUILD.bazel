@@ -1,19 +1,27 @@
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
+sh_test(
+    name = "BazelPythonPrimitivesTest",
+    srcs = ["BazelPythonPrimitivesTest.sh"],
+    data = [
+        "//examples:testdata",
+        "//src/bin:kepler-formal",
+    ],
+)
+
 cc_test(
     name = "MiterTests",
     srcs = ["MiterTests.cpp"],
     data = [
         "//src/bin:kepler-formal",
-        "//example:testdata",
+        "//examples:testdata",
     ] + glob(["*.yaml"]),
     env = {
         "KEPLER_BIN": "$(rootpath //src/bin:kepler-formal)",
         "TEST_DATA_PREFIX": "",
     },
     copts = NAJA_HEADER_COPTS,
-    linkopts = ["-ltbb", "-ltbbmalloc", "-lz", "-lcapnp", "-lkj"],
     deps = [
         "//src/clauses:kepler_clauses",
         "//src/config:kepler_config",

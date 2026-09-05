@@ -1,0 +1,27 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# Header-only boost slice. A single monolithic archive (not BCR boost.*
+# modules) keeps one pin serving both naja's cmake build (one
+# Boost_INCLUDE_DIR under $EXT_BUILD_DEPS/include) and Bazel compiles of
+# naja public headers (boost/intrusive, boost/dynamic_bitset).
+cc_library(
+    name = "boost",
+    hdrs = glob(["boost/**"]),
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+# Raw header tree for //:deps export into deps/include/boost.
+filegroup(
+    name = "headers",
+    srcs = glob(["boost/**"]),
+    visibility = ["//visibility:public"],
+)
+
+# Single-file sentinel so //:deps can locate the boost root without
+# expanding ~16k header paths into argv.
+filegroup(
+    name = "version_hdr",
+    srcs = ["boost/version.hpp"],
+    visibility = ["//visibility:public"],
+)

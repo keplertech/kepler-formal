@@ -10,7 +10,9 @@
 #include <optional>
 #include <cctype>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -31,6 +33,10 @@
 #include "SNLSVConstructor.h"
 #include "SNLVRLConstructor.h"
 #include "SNLVRLDumper.h"
+#include "SNLBusTerm.h"
+#include "SNLInstance.h"
+#include "SNLRTLInfos.h"
+#include "SNLTerm.h"
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
 #include "Config.h"
@@ -52,21 +58,75 @@ static const char* kSkippedResetUnanchoredPOReport =
     "skipped_reset_unanchored_pos.txt";
 static const char* kSkippedMultiClockDomainPOReport =
     "skipped_multi_clock_domain_pos.txt";
+static const char* kSkippedOpaqueCellPOReport =
+    "skipped_opaque_cells_pos.txt";
+
+static void addNajaPythonPath(const char* argv0) {
+  if (!argv0 || !*argv0) {
+    return;
+  }
+
+  std::filesystem::path executable(argv0);
+  std::error_code ec;
+  if (!executable.has_parent_path()) {
+    if (const char* path = std::getenv("PATH")) {
+      std::istringstream paths(path);
+      std::string directory;
+#ifdef _WIN32
+      constexpr char pathSeparator = ';';
+#else
+      constexpr char pathSeparator = ':';
+#endif
+      while (std::getline(paths, directory, pathSeparator)) {
+        auto candidate = std::filesystem::path(directory) / executable;
+        if (std::filesystem::exists(candidate, ec)) {
+          executable = std::move(candidate);
+          break;
+        }
+        ec.clear();
+      }
+    }
+  }
+
+  executable = std::filesystem::weakly_canonical(executable, ec);
+  if (ec || executable.parent_path().empty()) {
+    return;
+  }
+
+  std::string pythonPath = executable.parent_path().string();
+  if (const char* current = std::getenv("PYTHONPATH"); current && *current) {
+#ifdef _WIN32
+    pythonPath += ';';
+#else
+    pythonPath += ':';
+#endif
+    pythonPath += current;
+  }
+#ifdef _WIN32
+  if (_putenv_s("PYTHONPATH", pythonPath.c_str()) != 0) {
+#else
+  if (setenv("PYTHONPATH", pythonPath.c_str(), 1) != 0) {
+#endif
+    throw std::runtime_error("Cannot configure PYTHONPATH for Naja primitives");  // LCOV_EXCL_LINE
+  }
+}
 
 // LCOV_EXCL_START
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv> "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] <netlist1> <netlist2> [<library-file>...] | "
-      "<-naja_if/-verilog/-systemverilog/-sv> --design1 <file...> --design2 "
-      "<file...> [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
-      "[--sec-internal-state-correspondence] [--no-sec-uncomputable-seq-boundary] [--compact] "
+      "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
+      "<netlist1> <netlist2> [<library-file>...] | "
+      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <legacy|k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
-      "[--sec-internal-state-correspondence] [--no-sec-uncomputable-seq-boundary] [--compact] "
+      "[--allow-boundary-mismatch] [--compact] "
       "[--report-skipped-pos]",
       prog);
 // LCOV_EXCL_START
@@ -140,12 +200,6 @@ static bool parseSecEngineToken(const std::string& token,
                                 std::string& error) {
   // Keep the binary-level selector intentionally small for now so the
   // user-facing SEC modes stay explicit and predictable.
-  if (token == "legacy") {
-    // LCOV_EXCL_START
-    engine = KEPLER_FORMAL::SEC::SecEngine::Legacy;
-    return true;
-    // LCOV_EXCL_STOP
-  }
   if (token == "k_induction") {
     // LCOV_EXCL_START
     engine = KEPLER_FORMAL::SEC::SecEngine::KInduction;
@@ -163,7 +217,7 @@ static bool parseSecEngineToken(const std::string& token,
     return true;
   }
   // LCOV_EXCL_START
-  error = "expected legacy, k_induction, imc, or pdr, got `" + token + "`";
+  error = "expected k_induction, imc, or pdr, got `" + token + "`";
   return false;
   // LCOV_EXCL_STOP
 }
@@ -180,12 +234,9 @@ static const char* secEngineName(KEPLER_FORMAL::SEC::SecEngine engine) {
       // LCOV_EXCL_STOP
     case KEPLER_FORMAL::SEC::SecEngine::Pdr:
       return "pdr";
-    // LCOV_EXCL_START
-    case KEPLER_FORMAL::SEC::SecEngine::Legacy:
-    // LCOV_EXCL_STOP
     default:
       // LCOV_EXCL_START
-      return "legacy";
+      return "pdr";
       // LCOV_EXCL_STOP
   }
 }
@@ -297,33 +348,175 @@ static std::string configureMainLogger(const std::string& logLevel,
   return chosenLogFile;
 }
 
+static bool parseNonNegativeSizeToken(const std::string& token,
+                                      const char* optionName,
+                                      size_t& value,
+                                      std::string& error) {
+  if (token.empty()) {
+    error = std::string(optionName) + " must not be empty";
+    return false;
+  }
+  if (token.find_first_not_of("0123456789") != std::string::npos) {
+    error = std::string(optionName) + " must be a non-negative integer";
+    return false;
+  }
+  try {
+    value = static_cast<size_t>(std::stoull(token));
+  } catch (const std::exception&) {
+    error = std::string(optionName) + " is out of range";
+    return false;
+  }
+  return true;
+}
+
 // LCOV_EXCL_START
 static bool parseMaxKToken(const std::string& token,
 // LCOV_EXCL_STOP
                            size_t& maxK,
                            std::string& error) {
   // LCOV_EXCL_START
-  if (token.empty()) {
-    error = "max_k must not be empty";
-    return false;
-    // LCOV_EXCL_STOP
+  return parseNonNegativeSizeToken(token, "max_k", maxK, error);
+}
+// LCOV_EXCL_STOP
+
+static bool parseBooleanToken(const std::string& token,
+                              const std::string& optionName,
+                              bool& value,
+                              std::string& error) {
+  std::string lowered;
+  lowered.reserve(token.size());
+  for (unsigned char ch : token) {
+    lowered.push_back(static_cast<char>(std::tolower(ch)));
   }
-  // LCOV_EXCL_START
-  if (!std::all_of(token.begin(), token.end(), [](unsigned char ch) { return std::isdigit(ch); })) {
-    error = "max_k must be a non-negative integer";
-    return false;
-    // LCOV_EXCL_STOP
+  if (lowered == "1" || lowered == "true") {
+    value = true;
+    return true;
   }
-  try {
-    // LCOV_EXCL_START
-    maxK = static_cast<size_t>(std::stoull(token));
-  } catch (const std::exception&) {
-    error = "max_k is out of range";
+  if (lowered == "0" || lowered == "false") {
+    value = false;
+    return true;
+  }
+  error = optionName + " must be 0, 1, true, or false";
+  return false;
+}
+
+static bool appendSecResetPortSpec(
+    KEPLER_FORMAL::SEC::SecResetSpec& resetSpec,
+    const std::string& name,
+    bool activeValue,
+    std::string& error) {
+  if (name.empty()) {
+    error = "reset port name must not be empty";
+    return false;
+  }
+  for (const auto& port : resetSpec.ports) {
+    if (port.name == name) {
+      error = "duplicate reset port `" + name + "`";
+      return false;
+    }
+  }
+  resetSpec.ports.push_back({name, activeValue});
+  return true;
+}
+
+static bool parseSecResetPortToken(
+    const std::string& token,
+    KEPLER_FORMAL::SEC::SecResetSpec& resetSpec,
+    std::string& error) {
+  const auto separator = token.find('=');
+  if (separator == std::string::npos) {
+    error = "expected reset port as name=0 or name=1";
+    return false;
+  }
+  const std::string name = token.substr(0, separator);
+  const std::string valueToken = token.substr(separator + 1);
+  bool activeValue = true;
+  if (!parseBooleanToken(
+          valueToken, "--sec-reset-port active value", activeValue, error)) {
+    return false;
+  }
+  return appendSecResetPortSpec(resetSpec, name, activeValue, error);
+}
+
+static bool validateSecResetSpec(
+    const KEPLER_FORMAL::SEC::SecResetSpec& resetSpec,
+    std::string& error) {
+  if (resetSpec.cycles == 0) {
+    error = "reset bootstrap cycles must be greater than zero";
+    return false;
+  }
+  if (resetSpec.ports.empty()) {
+    error = "reset bootstrap must list at least one reset port";
     return false;
   }
   return true;
 }
-// LCOV_EXCL_STOP
+
+static bool parseSecResetConfigNode(
+    const YAML::Node& node,
+    KEPLER_FORMAL::SEC::SecResetSpec& resetSpec,
+    std::string& error) {
+  if (!node || !node.IsMap()) {
+    error = "sec_reset must be a map";
+    return false;
+  }
+  if (!node["cycles"] || !node["cycles"].IsScalar()) {
+    error = "sec_reset.cycles must be a scalar";
+    return false;
+  }
+  size_t cycles = 0;
+  if (!parseNonNegativeSizeToken(
+          node["cycles"].as<std::string>(), "sec_reset.cycles", cycles, error)) {
+    return false;
+  }
+
+  const YAML::Node ports = node["ports"];
+  if (!ports || !ports.IsSequence() || ports.size() == 0) {
+    error = "sec_reset.ports must be a non-empty sequence";
+    return false;
+  }
+
+  KEPLER_FORMAL::SEC::SecResetSpec parsed;
+  parsed.cycles = cycles;
+  for (size_t i = 0; i < ports.size(); ++i) {
+    const YAML::Node portNode = ports[i];
+    if (!portNode || !portNode.IsMap()) {
+      error = "sec_reset.ports entries must be maps";
+      return false;
+    }
+    if (!portNode["name"] || !portNode["name"].IsScalar()) {
+      error = "sec_reset.ports[" + std::to_string(i) +
+              "].name must be a scalar";
+      return false;
+    }
+    if (!portNode["active_value"] || !portNode["active_value"].IsScalar()) {
+      error = "sec_reset.ports[" + std::to_string(i) +
+              "].active_value must be a scalar";
+      return false;
+    }
+    bool activeValue = true;
+    if (!parseBooleanToken(
+            portNode["active_value"].as<std::string>(),
+            "sec_reset.ports[" + std::to_string(i) + "].active_value",
+            activeValue,
+            error)) {
+      return false;
+    }
+    if (!appendSecResetPortSpec(
+            parsed,
+            portNode["name"].as<std::string>(),
+            activeValue,
+            error)) {
+      return false;
+    }
+  }
+
+  if (!validateSecResetSpec(parsed, error)) {
+    return false;
+  }
+  resetSpec = std::move(parsed);
+  return true;
+}
 
 static bool validateConfigKeys(const YAML::Node& cfg) {
   if (!cfg || !cfg.IsMap()) {
@@ -337,8 +530,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "max_k",
       "sec_engine",
       "sec_encoding",
-      "sec_uncomputable_seq_as_boundary",
-      "sec_internal_state_correspondence",
+      "sec_reset",
+      "allow-boundary-mismatch",
       "input_paths",
       "liberty_files",
       "py_tech_files",
@@ -358,6 +551,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
+      "verilog_design1_top",
+      "verilog_design2_top",
       "sv_design1_top",
       "sv_design2_top",
   };
@@ -441,11 +636,7 @@ void writeBoundaryTermsReport(
   std::ofstream report(reportPath, std::ios::trunc);
   report << "# SEC boundary terms report\n";
   report << "# Categories:\n";
-  report << "# - top_input / top_output: original top-level interface terms.\n";
-  report << "# - opaque_internal_input / opaque_internal_output: internal leaf cut points\n";
-  report << "#   that SEC could not reconstruct combinationally and did not model as sequential.\n";
-  report << "# - abstracted_sequential_state / abstracted_sequential_observed: interface terms\n";
-  report << "#   exposed when an uncomputable sequential instance is abstracted as a SEC boundary.\n\n";
+  report << "# - top_input / top_output: original top-level interface terms.\n\n";
   for (size_t i = 0; i < reports.size(); ++i) {
     const auto& entry = reports[i];
     report << "- design: " << entry.design << "\n";
@@ -513,6 +704,23 @@ void writeMultiClockDomainSkippedOutputsReport(
 }
 // LCOV_EXCL_STOP
 
+void writeOpaqueCellSkippedOutputsReport(
+    const std::filesystem::path& reportPath,
+    const std::vector<std::string>& skippedOutputs) {
+  if (skippedOutputs.empty()) {
+    return;
+  }
+
+  std::ofstream report(reportPath, std::ios::trunc);
+  report << "# SEC opaque-cell skipped top-level outputs\n";
+  report << "# These outputs were not verified because backward cone traversal\n";
+  report << "# reached an internal cell or pin without usable semantics. No free\n";
+  report << "# or shared proof symbol was substituted for the opaque element.\n\n";
+  for (const auto& skippedOutput : skippedOutputs) {
+    report << "- " << skippedOutput << "\n";
+  }
+}
+
 struct DesignInputs {
   std::vector<std::string> design0;
   std::vector<std::string> design1;
@@ -526,6 +734,11 @@ struct SystemVerilogDesignOptions {
 struct SystemVerilogOptions {
   SystemVerilogDesignOptions design0;
   SystemVerilogDesignOptions design1;
+};
+
+struct VerilogTopOptions {
+  std::optional<std::string> design0;
+  std::optional<std::string> design1;
 };
 
 static bool parseConfigInputPaths(const YAML::Node& node,
@@ -704,20 +917,37 @@ static bool sameSystemVerilogDesignOptions(
 static bool sameCompactSecDesignSpec(
     bool isSystemVerilog,
     const DesignInputs& designInputs,
-    const SystemVerilogOptions& systemVerilogOptions) {
+    const SystemVerilogOptions& systemVerilogOptions,
+    const VerilogTopOptions& verilogTopOptions) {
   if (normalizeInputListForComparison(designInputs.design0) !=
       normalizeInputListForComparison(designInputs.design1)) {
     return false;
   }
   // LCOV_EXCL_START
   if (!isSystemVerilog) {
-    return true;
+    return verilogTopOptions.design0 == verilogTopOptions.design1;
     // LCOV_EXCL_STOP
   }
   // LCOV_EXCL_START
   return sameSystemVerilogDesignOptions(
       systemVerilogOptions.design0, systemVerilogOptions.design1);
       // LCOV_EXCL_STOP
+}
+
+static naja::NL::SNLDesign* selectTopDesign(
+    naja::NL::NLLibrary* library,
+    const std::optional<std::string>& requestedTop,
+    int designIndex) {
+  if (!requestedTop) {
+    return SNLUtils::findTop(library);
+  }
+  auto* top = library->getSNLDesign(NLName(*requestedTop));
+  if (!top) {
+    throw std::runtime_error(
+        "Top module `" + *requestedTop + "` was not found in design " +
+        std::to_string(designIndex + 1));
+  }
+  return top;
 }
 
 static bool applySystemVerilogConfigOption(const YAML::Node& cfg,
@@ -785,15 +1015,221 @@ static bool hasSystemVerilogSources(const std::vector<std::string>& designInputs
   // LCOV_EXCL_STOP
 }
 
+static bool isSimpleVerilogIdentifier(const std::string& name) {
+  if (name.empty()) {
+    return false;  // LCOV_EXCL_LINE
+  }
+  const auto isIdentifierChar = [](unsigned char c) {
+    return std::isalnum(c) || c == '_' || c == '$';
+  };
+  const unsigned char first = static_cast<unsigned char>(name.front());
+  if ((!std::isalpha(first) && first != '_') || first == '$') {
+    return false;
+  }
+  return std::all_of(name.begin(), name.end(), [&](char c) {
+    return isIdentifierChar(static_cast<unsigned char>(c));
+  });
+}
+
+static std::string dumpVerilogIdentifier(const std::string& name) {
+  if (isSimpleVerilogIdentifier(name)) {
+    return name;
+  }
+  return "\\" + name + " ";
+}
+
+static const char* getVerilogDirection(naja::NL::SNLTerm::Direction direction) {
+  switch (direction) {
+    case naja::NL::SNLTerm::Direction::Input:
+      return "input";
+    case naja::NL::SNLTerm::Direction::Output:
+      return "output";
+    case naja::NL::SNLTerm::Direction::InOut:
+    case naja::NL::SNLTerm::Direction::Undefined:
+      return "inout";
+  }
+  return "inout";  // LCOV_EXCL_LINE
+}
+
+static void appendPrimitiveStubModules(
+    naja::NL::NLLibrary* library,
+    std::ofstream& out,
+    std::unordered_set<std::string>& emittedNames,
+    size_t& emittedCount) {
+  if (library == nullptr) {
+    return;  // LCOV_EXCL_LINE
+  }
+
+  for (auto* design : library->getSNLDesigns()) {
+    if (design == nullptr || design->isUnnamed()) {
+      continue;
+    }
+    const std::string modelName = design->getName().getString();
+    if (modelName.empty() || !emittedNames.insert(modelName).second) {
+      continue;
+    }
+
+    std::vector<naja::NL::SNLTerm*> terms;
+    for (auto* term : design->getTerms()) {
+      if (term != nullptr && !term->isUnnamed()) {
+        terms.push_back(term);
+      }
+    }
+
+    out << "(* blackbox *) module " << dumpVerilogIdentifier(modelName) << "(";
+    for (size_t i = 0; i < terms.size(); ++i) {
+      if (i != 0) {
+        out << ", ";
+      }
+      out << dumpVerilogIdentifier(terms[i]->getName().getString());
+    }
+    out << ");\n";
+    for (auto* term : terms) {
+      out << "  " << getVerilogDirection(term->getDirection()) << " ";
+      if (auto* busTerm = dynamic_cast<naja::NL::SNLBusTerm*>(term)) {
+        out << "[" << busTerm->getMSB() << ":" << busTerm->getLSB() << "] ";
+      }
+      out << dumpVerilogIdentifier(term->getName().getString()) << ";\n";
+    }
+    out << "endmodule\n\n";
+    ++emittedCount;
+  }
+
+  for (auto* childLibrary : library->getLibraries()) {
+    appendPrimitiveStubModules(childLibrary, out, emittedNames, emittedCount);
+  }
+}
+
+static std::filesystem::path writeSystemVerilogPrimitiveStubs(
+    const std::vector<naja::NL::NLLibrary*>& primitiveLibraries,
+    std::vector<std::filesystem::path>& temporaryFiles) {
+  if (primitiveLibraries.empty()) {
+    return {};
+  }
+
+  const auto stubPath =
+      std::filesystem::temp_directory_path() /
+      std::filesystem::path(
+          "kepler_formal_sv2v_prims_" +
+          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+          ".sv");
+  std::ofstream stubs(stubPath, std::ios::out | std::ios::trunc);
+  if (!stubs) {
+    throw std::runtime_error(
+        "Failed to create temporary SystemVerilog primitive stub file: " +
+        stubPath.string());
+  }
+
+  std::unordered_set<std::string> emittedNames;
+  size_t emittedCount = 0;
+  for (auto* primitiveLibrary : primitiveLibraries) {
+    appendPrimitiveStubModules(primitiveLibrary, stubs, emittedNames, emittedCount);
+  }
+  stubs.close();
+
+  if (emittedCount == 0) {
+    std::error_code ec;
+    std::filesystem::remove(stubPath, ec);
+    return {};
+  }
+
+  temporaryFiles.push_back(stubPath);
+  return stubPath;
+}
+
+static naja::NL::SNLDesign* findPrimitiveDesignInLibrary(
+    naja::NL::NLLibrary* library,
+    const naja::NL::NLName& name) {
+  if (library == nullptr) {
+    return nullptr;  // LCOV_EXCL_LINE
+  }
+  if (auto* primitive = library->getSNLDesign(name)) {
+    return primitive;
+  }
+  for (auto* childLibrary : library->getLibraries()) {
+    if (auto* primitive = findPrimitiveDesignInLibrary(childLibrary, name)) {
+      return primitive;
+    }
+  }
+  return nullptr;
+}
+
+static naja::NL::SNLDesign* findPrimitiveDesign(
+    const std::vector<naja::NL::NLLibrary*>& primitiveLibraries,
+    const naja::NL::NLName& name) {
+  for (auto* primitiveLibrary : primitiveLibraries) {
+    if (auto* primitive = findPrimitiveDesignInLibrary(primitiveLibrary, name)) {
+      return primitive;
+    }
+  }
+  return nullptr;
+}
+
+static void reconnectGeneratedPrimitiveStubs(
+    naja::NL::NLLibrary* designLibrary,
+    const std::vector<naja::NL::NLLibrary*>& primitiveLibraries,
+    const std::filesystem::path& generatedStubPath) {
+  if (designLibrary == nullptr || primitiveLibraries.empty() ||
+      generatedStubPath.empty()) {
+    return;
+  }
+
+  const auto isGeneratedStub = [&](const naja::NL::SNLDesign* model) {
+    const auto* rtlInfos = model->getRTLInfos();
+    if (rtlInfos == nullptr || !rtlInfos->hasSourceLoc()) {
+      return false;
+    }
+    const auto& sourceLoc = *rtlInfos->getSourceLoc();
+    const std::filesystem::path sourcePath(sourceLoc.file.getString());
+    std::error_code ec;
+    return std::filesystem::equivalent(sourcePath, generatedStubPath, ec);
+  };
+
+  std::unordered_map<naja::NL::SNLDesign*, naja::NL::SNLDesign*> replacements;
+  for (auto* design : designLibrary->getSNLDesigns()) {
+    if (design == nullptr || design->isPrimitive()) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    for (auto* instance : design->getInstances()) {
+      auto* model = instance->getModel();
+      if (model == nullptr || model->isPrimitive() || model->isUnnamed()) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      auto [replacement, inserted] = replacements.try_emplace(model, nullptr);
+      if (inserted) {
+        auto* primitive =
+            findPrimitiveDesign(primitiveLibraries, model->getName());
+        if (primitive != nullptr && isGeneratedStub(model)) {
+          replacement->second = primitive;
+        }
+      }
+      if (replacement->second != nullptr) {
+        instance->setModel(replacement->second);
+      }
+    }
+  }
+}
+
 // LCOV_EXCL_START
 static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
 // LCOV_EXCL_STOP
     const std::vector<std::string>& designInputs,
     const SystemVerilogDesignOptions& designOptions,
-    std::vector<std::filesystem::path>& temporaryFiles) {
+    std::vector<std::filesystem::path>& temporaryFiles,
+    const std::vector<naja::NL::NLLibrary*>* primitiveLibraries = nullptr,
+    std::filesystem::path* generatedStubPath = nullptr) {
   // LCOV_EXCL_START
   std::vector<std::filesystem::path> svInputPaths = toPathVector(designInputs);
   // LCOV_EXCL_STOP
+
+  std::filesystem::path primitiveStubsPath;
+  if (primitiveLibraries != nullptr) {
+    primitiveStubsPath =
+        writeSystemVerilogPrimitiveStubs(*primitiveLibraries, temporaryFiles);
+    if (generatedStubPath != nullptr) {
+      *generatedStubPath = primitiveStubsPath;
+    }
+  }
 
   // LCOV_EXCL_START
   const auto quotePathForSlangCommandFile = [](const std::filesystem::path& path) {
@@ -814,7 +1250,10 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
   // LCOV_EXCL_STOP
 
   // LCOV_EXCL_START
-  if (designOptions.top) {
+  // Generated SV2V primitive stubs may be parsed with RTL that has no enclosing
+  // timescale, so force a Slang command file when stubs are present.
+  const bool addDefaultTimescale = primitiveLibraries != nullptr;
+  if (designOptions.top || addDefaultTimescale) {
   // LCOV_EXCL_STOP
     const auto temporaryTopFlistPath =
         // LCOV_EXCL_START
@@ -833,7 +1272,16 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
           // LCOV_EXCL_STOP
     }
     // LCOV_EXCL_START
-    topFlist << "--top " << *designOptions.top << "\n";
+    if (addDefaultTimescale) {
+      topFlist << "--timescale 1ns/1ps\n";
+    }
+    if (!primitiveStubsPath.empty()) {
+      // Keep earlier user definitions when the fallback stub library collides.
+      topFlist << "--allow-lib-module-redef\n";
+    }
+    if (designOptions.top) {
+      topFlist << "--top " << *designOptions.top << "\n";
+    }
     if (designOptions.flist) {
       topFlist << "-f "
                << quotePathForSlangCommandFile(std::filesystem::path(*designOptions.flist))
@@ -842,6 +1290,9 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
     for (const auto& svInputPath : svInputPaths) {
       topFlist << quotePathForSlangCommandFile(svInputPath) << "\n";
       // LCOV_EXCL_STOP
+    }
+    if (!primitiveStubsPath.empty()) {
+      topFlist << "-v " << quotePathForSlangCommandFile(primitiveStubsPath) << "\n";
     }
     // LCOV_EXCL_START
     topFlist.close();
@@ -865,9 +1316,11 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
 // LCOV_EXCL_START
 static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 // LCOV_EXCL_STOP
-    const KEPLER_FORMAL::BuildPrimaryOutputClauses& builder) {
+    const KEPLER_FORMAL::BuildPrimaryOutputClauses& builder,
+    std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey> boundaryInputs) {
   // LCOV_EXCL_START
   KEPLER_FORMAL::MiterStrategy::CompactSnapshot snapshot;
+  snapshot.boundaryInputs = std::move(boundaryInputs);
   snapshot.inputs.reserve(builder.getInputs().size());
   for (const auto input : builder.getInputs()) {
     snapshot.inputs.emplace_back(builder.getInputs2InputsIDs().at(input));
@@ -891,7 +1344,7 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 
 int KeplerFormalMain(int argc, char** argv) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, SYSTEMVERILOG, NAJA_IF };
+  enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, NAJA_IF };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
     naja::DNL::destroy();
@@ -909,19 +1362,20 @@ int KeplerFormalMain(int argc, char** argv) {
   FormatType inputFormatType = FormatType::VERILOG;
   DesignInputs designInputs;
   SystemVerilogOptions systemVerilogOptions;
+  VerilogTopOptions verilogTopOptions;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
   VerificationMode verificationMode = VerificationMode::LEC;
-  KEPLER_FORMAL::SEC::SecEngine secEngine = KEPLER_FORMAL::SEC::SecEngine::Legacy;
+  KEPLER_FORMAL::SEC::SecEngine secEngine = KEPLER_FORMAL::SEC::SecEngine::Pdr;
   KEPLER_FORMAL::SEC::SecEncoding secEncoding =
       KEPLER_FORMAL::SEC::SecEncoding::DualRailSteady;
+  KEPLER_FORMAL::SEC::SecResetSpec secResetSpec;
   bool secEngineExplicit = false;
   bool secEncodingExplicit = false;
+  bool secResetExplicit = false;
   size_t secMaxK = kDefaultSecMaxK;
   bool secMaxKExplicit = false;
-  bool secTreatUncomputableSeqAsBoundary = true;
-
   // Basic argument sanity
   if (argc < 2) {
     // LCOV_EXCL_START
@@ -930,7 +1384,7 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
   }
 
-  // Check for config mode (--config or -c). If present, YAML takes precedence.
+  // Config mode (--config or -c) is exclusive with other command-line options.
   bool usedConfig = false;
 
   std::string logFileName;
@@ -940,15 +1394,13 @@ int KeplerFormalMain(int argc, char** argv) {
   bool dumpCnf = false;
   bool dumpPoCnf = false;
   bool compactMode = false;
+  bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
   bool verilogPreprocessing = false;
-  bool secInternalStateCorrespondence = false;
   std::string dumpCnfPath;
   std::string dumpPoCnfPath;
 
   KEPLER_FORMAL::Config::setReportSkippedPOs(false);
-  KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(true);
-  KEPLER_FORMAL::Config::setSecInternalStateCorrespondence(false);
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -958,6 +1410,11 @@ int KeplerFormalMain(int argc, char** argv) {
         SPDLOG_CRITICAL("Missing config file after {}", a);  // LCOV_EXCL_LINE
         return EXIT_FAILURE;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
+      }
+      if (argc != 3) {
+        SPDLOG_CRITICAL(
+            "Config mode cannot be combined with other command-line options");
+        return EXIT_FAILURE;
       }
       const std::string cfgPath = argv[i + 1];
       try {
@@ -980,6 +1437,8 @@ int KeplerFormalMain(int argc, char** argv) {
           } else if (fmt == "systemverilog" || fmt == "sv") {
             // LCOV_EXCL_START
             inputFormatType = FormatType::SYSTEMVERILOG;
+          } else if (fmt == "sv2v") {
+            inputFormatType = FormatType::SV2V;
           } else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
@@ -1059,29 +1518,14 @@ int KeplerFormalMain(int argc, char** argv) {
           secEncodingExplicit = true;  // LCOV_EXCL_LINE
         }
 
-        if (cfg["sec_uncomputable_seq_as_boundary"]) {
-          // LCOV_EXCL_START
-          if (!cfg["sec_uncomputable_seq_as_boundary"].IsScalar()) {
-            SPDLOG_CRITICAL(
-            // LCOV_EXCL_STOP
-                "sec_uncomputable_seq_as_boundary must be a scalar");
-            // LCOV_EXCL_START
-            return EXIT_FAILURE;
-            // LCOV_EXCL_STOP
-          }
-          // LCOV_EXCL_START
-          secTreatUncomputableSeqAsBoundary =
-              cfg["sec_uncomputable_seq_as_boundary"].as<bool>();
-        }
-        // LCOV_EXCL_STOP
-
-        if (cfg["sec_internal_state_correspondence"]) {
-          if (!cfg["sec_internal_state_correspondence"].IsScalar()) {
-            SPDLOG_CRITICAL("sec_internal_state_correspondence must be a scalar");
+        if (cfg["sec_reset"]) {
+          std::string secResetError;
+          if (!parseSecResetConfigNode(
+                  cfg["sec_reset"], secResetSpec, secResetError)) {
+            SPDLOG_CRITICAL("Invalid sec_reset in config: {}", secResetError);
             return EXIT_FAILURE;
           }
-          secInternalStateCorrespondence =
-              cfg["sec_internal_state_correspondence"].as<bool>();
+          secResetExplicit = true;
         }
 
         // input_paths
@@ -1160,6 +1604,11 @@ int KeplerFormalMain(int argc, char** argv) {
           compactMode = cfg["compact_mode"].as<bool>();
         }
 
+        if (cfg["allow-boundary-mismatch"] &&
+            cfg["allow-boundary-mismatch"].IsScalar()) {
+          allowBoundaryMismatch = cfg["allow-boundary-mismatch"].as<bool>();
+        }
+
         // report_skipped_pos
         if (cfg["report_skipped_pos"] && cfg["report_skipped_pos"].IsScalar()) {
           // LCOV_EXCL_START
@@ -1201,9 +1650,13 @@ int KeplerFormalMain(int argc, char** argv) {
             !applySystemVerilogConfigOption(
                 cfg, "sv_design1_top", systemVerilogOptions.design0.top, svConfigError) ||
             !applySystemVerilogConfigOption(
-                cfg, "sv_design2_top", systemVerilogOptions.design1.top, svConfigError)) {
+                cfg, "sv_design2_top", systemVerilogOptions.design1.top, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "verilog_design1_top", verilogTopOptions.design0, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "verilog_design2_top", verilogTopOptions.design1, svConfigError)) {
           // LCOV_EXCL_START
-          SPDLOG_CRITICAL("Invalid SystemVerilog config option: {}", svConfigError);
+          SPDLOG_CRITICAL("Invalid design config option: {}", svConfigError);
           return EXIT_FAILURE;
           // LCOV_EXCL_STOP
         }
@@ -1303,26 +1756,41 @@ int KeplerFormalMain(int argc, char** argv) {
         parseStart += 2;
         continue;
       }
-      if (arg == "--sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = true;
-        ++parseStart;
+      if (arg == "--sec-reset-cycles") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing SEC reset cycle count after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string secResetError;
+        if (!parseNonNegativeSizeToken(
+                argv[parseStart + 1],
+                "--sec-reset-cycles",
+                secResetSpec.cycles,
+                secResetError)) {
+          SPDLOG_CRITICAL("Invalid SEC reset cycle count: {}", secResetError);
+          return EXIT_FAILURE;
+        }
+        secResetExplicit = true;
+        parseStart += 2;
         continue;
-        // LCOV_EXCL_STOP
       }
-      // LCOV_EXCL_START
-      if (arg == "--no-sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = false;
-        ++parseStart;
+      if (arg == "--sec-reset-port") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing SEC reset port after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string secResetError;
+        if (!parseSecResetPortToken(
+                argv[parseStart + 1], secResetSpec, secResetError)) {
+          SPDLOG_CRITICAL("Invalid SEC reset port: {}", secResetError);
+          return EXIT_FAILURE;
+        }
+        secResetExplicit = true;
+        parseStart += 2;
         continue;
-        // LCOV_EXCL_STOP
       }
-      if (arg == "--sec-internal-state-correspondence") {
-        secInternalStateCorrespondence = true;
-        ++parseStart;
-        continue;
-      }
-      if (arg == "--no-sec-internal-state-correspondence") {
-        secInternalStateCorrespondence = false;
+      if (arg == "--allow-boundary-mismatch") {
+        allowBoundaryMismatch = true;
         ++parseStart;
         continue;
       }
@@ -1349,6 +1817,12 @@ int KeplerFormalMain(int argc, char** argv) {
         formatFound = true;
         break;
         // LCOV_EXCL_STOP
+      }
+      if (arg == "-sv2v") {
+        inputFormatType = FormatType::SV2V;
+        ++parseStart;
+        formatFound = true;
+        break;
       }
       // LCOV_EXCL_START
       SPDLOG_CRITICAL("Unrecognized option before input format type: {}", arg);
@@ -1437,23 +1911,38 @@ int KeplerFormalMain(int argc, char** argv) {
         secEncodingExplicit = true;
         continue;
       }
-      if (arg == "--sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = true;
+      if (arg == "--sec-reset-cycles") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing SEC reset cycle count after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string secResetError;
+        if (!parseNonNegativeSizeToken(
+                argv[++i],
+                "--sec-reset-cycles",
+                secResetSpec.cycles,
+                secResetError)) {
+          SPDLOG_CRITICAL("Invalid SEC reset cycle count: {}", secResetError);
+          return EXIT_FAILURE;
+        }
+        secResetExplicit = true;
         continue;
-        // LCOV_EXCL_STOP
       }
-      // LCOV_EXCL_START
-      if (arg == "--no-sec-uncomputable-seq-boundary") {
-        secTreatUncomputableSeqAsBoundary = false;
+      if (arg == "--sec-reset-port") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing SEC reset port after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string secResetError;
+        if (!parseSecResetPortToken(argv[++i], secResetSpec, secResetError)) {
+          SPDLOG_CRITICAL("Invalid SEC reset port: {}", secResetError);
+          return EXIT_FAILURE;
+        }
+        secResetExplicit = true;
         continue;
-        // LCOV_EXCL_STOP
       }
-      if (arg == "--sec-internal-state-correspondence") {
-        secInternalStateCorrespondence = true;
-        continue;
-      }
-      if (arg == "--no-sec-internal-state-correspondence") {
-        secInternalStateCorrespondence = false;
+      if (arg == "--allow-boundary-mismatch") {
+        allowBoundaryMismatch = true;
         continue;
       }
       // LCOV_EXCL_START
@@ -1500,6 +1989,7 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
+          arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
           arg == "--sv_design1_top" || arg == "--sv_design2_top") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
@@ -1520,8 +2010,12 @@ int KeplerFormalMain(int argc, char** argv) {
           systemVerilogOptions.design1.flist = value;
         } else if (arg == "--sv_design1_top") {
           systemVerilogOptions.design0.top = value;
-        } else {
+        } else if (arg == "--sv_design2_top") {
           systemVerilogOptions.design1.top = value;
+        } else if (arg == "--verilog_design1_top") {
+          verilogTopOptions.design0 = value;
+        } else {
+          verilogTopOptions.design1 = value;
           // LCOV_EXCL_STOP
         }
         // LCOV_EXCL_START
@@ -1592,6 +2086,9 @@ int KeplerFormalMain(int argc, char** argv) {
     inputFormatName = "SYSTEMVERILOG";
   }
   // LCOV_EXCL_STOP
+  if (inputFormatType == FormatType::SV2V) {
+    inputFormatName = "SV2V";
+  }
   SPDLOG_INFO("Input format: {}", inputFormatName);
   if (!runLogFilePath.empty()) {
     SPDLOG_INFO("Run log: {}", runLogFilePath);
@@ -1612,6 +2109,18 @@ int KeplerFormalMain(int argc, char** argv) {
       return EXIT_FAILURE;
       // LCOV_EXCL_STOP
     }
+  } else if (inputFormatType == FormatType::SV2V) {
+    if (!hasSystemVerilogSources(designInputs.design0, systemVerilogOptions.design0)) {
+      SPDLOG_CRITICAL(
+          "Need SystemVerilog input sources for design 1 (files and/or flist)");
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+    if (designInputs.design1.empty()) {
+      SPDLOG_CRITICAL("Need Verilog input sources for design 2");
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
   } else if (designInputs.design0.empty() || designInputs.design1.empty()) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL("Need two input netlist paths (one per design)");
@@ -1625,6 +2134,13 @@ int KeplerFormalMain(int argc, char** argv) {
     SPDLOG_CRITICAL("SNL input only supports one file per design");
     return EXIT_FAILURE;
     // LCOV_EXCL_STOP
+  }
+  if ((inputFormatType == FormatType::SYSTEMVERILOG ||
+       inputFormatType == FormatType::SV2V) &&
+      verificationMode != VerificationMode::SEC) {
+    SPDLOG_CRITICAL(
+        "SystemVerilog input formats require SEC verification (-v sec or verification: sec)");
+    return EXIT_FAILURE;
   }
   if (verificationMode == VerificationMode::LEC && secMaxKExplicit) {
     // LCOV_EXCL_START
@@ -1643,6 +2159,17 @@ int KeplerFormalMain(int argc, char** argv) {
     SPDLOG_CRITICAL("sec_encoding/--sec-encoding is only supported with SEC verification");  // LCOV_EXCL_LINE
     return EXIT_FAILURE;  // LCOV_EXCL_LINE
     // LCOV_EXCL_STOP
+  }
+  if (verificationMode == VerificationMode::LEC && secResetExplicit) {
+    SPDLOG_CRITICAL("sec_reset/--sec-reset-* is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (secResetExplicit) {
+    std::string secResetError;
+    if (!validateSecResetSpec(secResetSpec, secResetError)) {
+      SPDLOG_CRITICAL("Invalid SEC reset bootstrap: {}", secResetError);
+      return EXIT_FAILURE;
+    }
   }
   if (verificationMode == VerificationMode::SEC) {
     if (useScopes || cleanScopes) {
@@ -1672,12 +2199,34 @@ int KeplerFormalMain(int argc, char** argv) {
     }
   }
   if (inputFormatType != FormatType::SYSTEMVERILOG &&
+      inputFormatType != FormatType::SV2V &&
       (systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
        systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
     // LCOV_EXCL_START
-    SPDLOG_CRITICAL("SystemVerilog design options are only valid with -systemverilog/-sv input");
+    SPDLOG_CRITICAL(
+        "SystemVerilog design options are only valid with -systemverilog/-sv/-sv2v input");
     return EXIT_FAILURE;
     // LCOV_EXCL_STOP
+  }
+  if (inputFormatType == FormatType::SV2V &&
+      (systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
+    SPDLOG_CRITICAL(
+        "sv2v format only accepts SystemVerilog options for design 1; "
+        "design 2 is parsed as Verilog");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType != FormatType::VERILOG &&
+      inputFormatType != FormatType::SV2V &&
+      (verilogTopOptions.design0 || verilogTopOptions.design1)) {
+    SPDLOG_CRITICAL(
+        "Verilog top options are only valid with -verilog/-sv2v input");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType == FormatType::SV2V && verilogTopOptions.design0) {
+    SPDLOG_CRITICAL(
+        "sv2v format only accepts a Verilog top option for design 2; "
+        "design 1 is parsed as SystemVerilog");
+    return EXIT_FAILURE;
   }
   std::string svValidationError;
   if (!validateSystemVerilogOptions(systemVerilogOptions, svValidationError)) {
@@ -1693,10 +2242,6 @@ int KeplerFormalMain(int argc, char** argv) {
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
-  KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(
-      secTreatUncomputableSeqAsBoundary);
-  KEPLER_FORMAL::Config::setSecInternalStateCorrespondence(
-      secInternalStateCorrespondence);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -1711,13 +2256,15 @@ int KeplerFormalMain(int argc, char** argv) {
     SPDLOG_INFO("SEC max_k: {}", secMaxK);
     SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
     SPDLOG_INFO("SEC encoding: {}", secEncodingName(secEncoding));
-    SPDLOG_INFO(
-        "SEC uncomputable sequentials: {}",
-        secTreatUncomputableSeqAsBoundary ? "boundary abstraction"
-                                          : "strict failure");
-    SPDLOG_INFO(
-        "SEC internal state correspondence: {}",
-        secInternalStateCorrespondence ? "enabled" : "disabled");
+    if (secResetSpec.enabled()) {
+      SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
+      for (const auto& port : secResetSpec.ports) {
+        SPDLOG_INFO(
+            "SEC reset bootstrap port: {} active={}",
+            port.name,
+            port.activeValue ? 1 : 0);
+      }
+    }
   }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
@@ -1726,12 +2273,19 @@ int KeplerFormalMain(int argc, char** argv) {
   }
   if (!pythonFiles.empty()) {
     // LCOV_EXCL_START
+    addNajaPythonPath(argv[0]);
     for (const auto& pf : pythonFiles) SPDLOG_INFO("Python library: {}", pf);
   }
   // LCOV_EXCL_STOP
 
   auto emitSecResult =
       [&](const KEPLER_FORMAL::SEC::SequentialEquivalenceResult& result) {
+        // Naja creates its logger lazily and may replace spdlog's default
+        // logger while loading SystemVerilog. Restore the run logger before
+        // reporting the result so the requested SEC log remains complete.
+        if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
+          spdlog::set_default_logger(mainLogger);
+        }
         if (result.totalOutputs != 0) {
           SPDLOG_INFO(
               "SEC checked-output coverage: {:.2f}% ({}/{} covered/existing outputs).",
@@ -1770,24 +2324,6 @@ int KeplerFormalMain(int argc, char** argv) {
         // LCOV_EXCL_START
         }
         // LCOV_EXCL_STOP
-        // LCOV_EXCL_START
-        if (!result.abstractedSequentialBoundaries.empty()) {
-          // LCOV_DISABLED_START
-          std::ostringstream abstractedBoundaries;
-          for (const auto& abstractedBoundary :
-               result.abstractedSequentialBoundaries) {
-            abstractedBoundaries << "  - " << abstractedBoundary << "\n";
-            // LCOV_DISABLED_STOP
-          }
-          // LCOV_DISABLED_START
-          SPDLOG_INFO(
-          // LCOV_DISABLED_STOP
-              "SEC abstracted uncomputable sequential interfaces as "
-              "boundaries:\n{}",
-              abstractedBoundaries.str());
-        // LCOV_DISABLED_START
-        }
-        // LCOV_DISABLED_STOP
         // LCOV_EXCL_STOP
         if (reportSkippedPOs) {
           // LCOV_EXCL_START
@@ -1799,14 +2335,44 @@ int KeplerFormalMain(int argc, char** argv) {
           writeMultiClockDomainSkippedOutputsReport(
               kSkippedMultiClockDomainPOReport,
               result.multiClockDomainSkippedOutputs);
+          writeOpaqueCellSkippedOutputsReport(
+              kSkippedOpaqueCellPOReport,
+              result.opaqueCellSkippedOutputs);
         }
         // LCOV_EXCL_STOP
         switch (result.status) {
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Equivalent:
+            if (secEncoding ==
+                KEPLER_FORMAL::SEC::SecEncoding::DualRailSteady) {
+              SPDLOG_INFO(
+                  "No binary-defined difference was found. SEC proved "
+                  "equivalence under the dual-rail steady-state abstraction "
+                  "at k = {}.",
+                  result.bound);
+            } else {
+              SPDLOG_INFO(
+                  "No difference was found. SEC proved equivalence at k = {}.",
+                  result.bound);
+            }
+            return kSecProvedExitCode;
+          case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::PartiallyProved: {
+            const size_t provedOutputs = result.proofProgress.has_value()
+                                             ? result.proofProgress->provenOutputs
+                                             : result.coveredOutputs;
+            const size_t totalOutputs = result.totalOutputs;
             SPDLOG_INFO(
-                "No difference was found. SEC proved equivalence at k = {}.",
-                result.bound);
-            return EXIT_SUCCESS;
+                "SEC partially proved equivalence at k = {}: {}/{} outputs "
+                "proved; remaining outputs are inconclusive.",
+                result.bound,
+                provedOutputs,
+                totalOutputs);
+            SPDLOG_WARN(
+                "SEC verification did not prove all observed outputs.");
+            if (!result.reason.empty()) {
+              SPDLOG_INFO("SEC partial-proof details: {}", result.reason);
+            }
+            return kSecPartiallyProvedExitCode;
+          }
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Different:
             // LCOV_EXCL_START
             SPDLOG_INFO(
@@ -1817,22 +2383,24 @@ int KeplerFormalMain(int argc, char** argv) {
             if (!result.reason.empty()) {
               SPDLOG_INFO("SEC counterexample details:\n{}", result.reason);
             }
-            return EXIT_SUCCESS;
+            return kSecCounterexampleExitCode;
             // LCOV_EXCL_STOP
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Inconclusive:
             // LCOV_EXCL_START
             if (secInconclusiveStoppedBeforeMaxK(result.reason)) {
-              SPDLOG_CRITICAL(
+              SPDLOG_INFO(
                   "SEC was inconclusive before completing max_k = {}: {}",
                   secMaxK,
                   result.reason);
             } else {
-              SPDLOG_CRITICAL(
+              SPDLOG_INFO(
                   "SEC was inconclusive up to max_k = {}: {}",
                   secMaxK,
                   result.reason);
             }
-            return EXIT_FAILURE;
+            SPDLOG_WARN(
+                "SEC verification did not produce a proof or counterexample.");
+            return kSecInconclusiveExitCode;
             // LCOV_EXCL_STOP
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Unsupported:
           // LCOV_DISABLED_STOP
@@ -1842,7 +2410,7 @@ int KeplerFormalMain(int argc, char** argv) {
             // LCOV_EXCL_STOP
                 "SEC cannot run on this design pair: {}", result.reason);
             // LCOV_EXCL_START
-            return EXIT_FAILURE;
+            return kSecInconclusiveExitCode;
             // LCOV_EXCL_STOP
         }
       };
@@ -1857,7 +2425,8 @@ int KeplerFormalMain(int argc, char** argv) {
     NLDB* db0 = nullptr;
     bool primitivesAreLoaded = false;
 
-    auto loadLibraries = [&](NLDB* db) -> bool {
+    auto loadLibraries = [&](NLDB* db,
+                             std::vector<NLLibrary*>* primitiveLibraries = nullptr) -> bool {
       if (libertyFiles.empty() && pythonFiles.empty()) {
         // LCOV_EXCL_START
         // LCOV_DISABLED_START
@@ -1867,6 +2436,9 @@ int KeplerFormalMain(int argc, char** argv) {
       }
       auto primitivesLibrary =
           NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+      if (primitiveLibraries != nullptr) {
+        primitiveLibraries->push_back(primitivesLibrary);
+      }
       for (const auto& libraryFile : libertyFiles) {
         std::filesystem::path libraryPath(libraryFile);
         SPDLOG_INFO("Loading library file: {}", libraryFile);
@@ -1883,16 +2455,28 @@ int KeplerFormalMain(int argc, char** argv) {
       return true;
     };
 
+    const auto isHdlFormat = [&]() {
+      return inputFormatType == FormatType::VERILOG ||
+             inputFormatType == FormatType::SYSTEMVERILOG ||
+             inputFormatType == FormatType::SV2V;
+    };
+
+    const auto designUsesSystemVerilog = [&](int designIndex) {
+      return inputFormatType == FormatType::SYSTEMVERILOG ||
+             (inputFormatType == FormatType::SV2V && designIndex == 0);
+    };
+
     auto loadOneDesign = [&](const std::vector<std::string>& designPaths,
                              const SystemVerilogDesignOptions& designOptions,
                              int designIndex,
                              int dbID) -> NLDB* {
       NLDB* db = nullptr;
       bool primitivesLoadedForDesign = false;
+      std::vector<NLLibrary*> primitiveLibraries;
 
       if (!libertyFiles.empty() || !pythonFiles.empty()) {
         db = NLDB::create(NLUniverse::get());
-        primitivesLoadedForDesign = loadLibraries(db);
+        primitivesLoadedForDesign = loadLibraries(db, &primitiveLibraries);
         if (!primitivesLoadedForDesign) {
           // LCOV_EXCL_START
           throw std::runtime_error("Failed to load library files");
@@ -1900,46 +2484,58 @@ int KeplerFormalMain(int argc, char** argv) {
         }
       }
 
-      if (inputFormatType == FormatType::VERILOG ||
-          // LCOV_EXCL_START
-          inputFormatType == FormatType::SYSTEMVERILOG) {
-          // LCOV_EXCL_STOP
+      if (isHdlFormat()) {
         if (!db) {
           // LCOV_EXCL_START
           db = NLDB::create(NLUniverse::get());
         }
         // LCOV_EXCL_STOP
         db->setID(dbID);
+        const bool useSystemVerilog = designUsesSystemVerilog(designIndex);
         SPDLOG_INFO("Parsing {} file(s) for design {}",
-                    inputFormatType == FormatType::SYSTEMVERILOG ? "systemverilog" : "verilog",
+                    useSystemVerilog ? "systemverilog" : "verilog",
                     designIndex + 1);
         auto designLibrary = NLLibrary::create(db, NLName("DESIGN"));
-        if (inputFormatType == FormatType::SYSTEMVERILOG) {
+        if (useSystemVerilog) {
           // LCOV_EXCL_START
           SNLSVConstructor constructor(designLibrary);
           std::vector<std::filesystem::path> temporaryFiles;
           // LCOV_EXCL_STOP
-	          const auto svInputPaths =
-	              // LCOV_EXCL_START
-	              buildSystemVerilogInputPaths(designPaths, designOptions, temporaryFiles);
-	              // LCOV_EXCL_STOP
-	          try {
-	            // LCOV_EXCL_START
-	            constructor.construct(svInputPaths);
-	            // LCOV_EXCL_STOP
+          const auto* sv2vPrimitiveLibraries =
+              (inputFormatType == FormatType::SV2V && designIndex == 0)
+                  ? &primitiveLibraries
+                  : nullptr;
+          std::filesystem::path generatedStubPath;
+          const auto svInputPaths =
               // LCOV_EXCL_START
-	          // LCOV_DISABLED_START
-	          } catch (...) {
-	            for (const auto& temporaryFile : temporaryFiles) {
-	              std::error_code ec;
-	              std::filesystem::remove(temporaryFile, ec);
-	              // LCOV_DISABLED_STOP
-	            }
-	            // LCOV_DISABLED_START
-	            throw;
-	          }
-	          // LCOV_DISABLED_STOP
+              buildSystemVerilogInputPaths(
+                  designPaths,
+                  designOptions,
+                  temporaryFiles,
+                  sv2vPrimitiveLibraries,
+                  &generatedStubPath);
               // LCOV_EXCL_STOP
+          try {
+            // LCOV_EXCL_START
+            constructor.construct(svInputPaths);
+            if (sv2vPrimitiveLibraries != nullptr) {
+              reconnectGeneratedPrimitiveStubs(
+                  designLibrary, *sv2vPrimitiveLibraries, generatedStubPath);
+            }
+            // LCOV_EXCL_STOP
+            // LCOV_EXCL_START
+            // LCOV_DISABLED_START
+          } catch (...) {
+            for (const auto& temporaryFile : temporaryFiles) {
+              std::error_code ec;
+              std::filesystem::remove(temporaryFile, ec);
+              // LCOV_DISABLED_STOP
+            }
+            // LCOV_DISABLED_START
+            throw;
+          }
+          // LCOV_DISABLED_STOP
+          // LCOV_EXCL_STOP
           // LCOV_EXCL_START
           for (const auto& temporaryFile : temporaryFiles) {
             std::error_code ec;
@@ -1953,14 +2549,20 @@ int KeplerFormalMain(int argc, char** argv) {
           constructor.config_.preprocessEnabled_ = verilogPreprocessing;
           constructor.construct(toPathVector(designPaths));
         }
-	        auto top = SNLUtils::findTop(designLibrary);
-	        if (!top) {
+        auto top = useSystemVerilog
+                       ? SNLUtils::findTop(designLibrary)
+                       : selectTopDesign(
+                             designLibrary,
+                             designIndex == 0 ? verilogTopOptions.design0
+                                              : verilogTopOptions.design1,
+                             designIndex);
+        if (!top) {
             // LCOV_EXCL_START
-	          // LCOV_DISABLED_START
-	          throw std::runtime_error("No top design was found after parsing input");
-	          // LCOV_DISABLED_STOP
+          // LCOV_DISABLED_START
+          throw std::runtime_error("No top design was found after parsing input");
+          // LCOV_DISABLED_STOP
             // LCOV_EXCL_STOP
-	        }
+        }
         db->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
       } else {
@@ -2011,12 +2613,17 @@ int KeplerFormalMain(int argc, char** argv) {
           builder.collect();
           SPDLOG_INFO("Collected {} PIs for {}", builder.getInputs().size(), designLabel);
           SPDLOG_INFO("Collected {} POs for {}", builder.getOutputs().size(), designLabel);
+          std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey>
+              boundaryInputs;
+          if (!allowBoundaryMismatch) {
+            boundaryInputs = builder.getLecBoundaryInputs();
+          }
           auto inputs = builder.getInputs();
           auto outputs = builder.getOutputs();
           builder.setInputs(inputs);
           builder.setOutputs(outputs);
           builder.build();
-          return captureCompactSnapshot(builder);
+          return captureCompactSnapshot(builder, std::move(boundaryInputs));
         };
         // LCOV_EXCL_STOP
 
@@ -2044,6 +2651,7 @@ int KeplerFormalMain(int argc, char** argv) {
       try {
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterS(nullptr, nullptr, logFileName);
+        MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
         if (dumpCnf) {
           const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
           MiterS.setCnfDump(true, outPath);
@@ -2129,10 +2737,12 @@ int KeplerFormalMain(int argc, char** argv) {
             0,
             2,
             "design 1");
-        if (sameCompactSecDesignSpec(
+        if (inputFormatType != FormatType::SV2V &&
+            sameCompactSecDesignSpec(
                 inputFormatType == FormatType::SYSTEMVERILOG,
                 designInputs,
-                systemVerilogOptions)) {
+                systemVerilogOptions,
+                verilogTopOptions)) {
           // CVA6-style smoke runs often compare a design against itself. In
           // compact SEC, extracting that identical second side would require
           // holding the already extracted value model while elaborating the
@@ -2145,7 +2755,12 @@ int KeplerFormalMain(int argc, char** argv) {
               "identical design 2 input");
           // LCOV_EXCL_START
           KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-              nullptr, nullptr, solverType, secEngine, secEncoding);
+              nullptr,
+              nullptr,
+              solverType,
+              secEngine,
+              secEncoding,
+              secResetSpec);
           return emitSecResult(
               strategy.runExtractedModels(model0, model0, secMaxK));
               // LCOV_EXCL_STOP
@@ -2161,7 +2776,12 @@ int KeplerFormalMain(int argc, char** argv) {
             "design 2");
 
         KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-            nullptr, nullptr, solverType, secEngine, secEncoding);
+            nullptr,
+            nullptr,
+            solverType,
+            secEngine,
+            secEncoding,
+            secResetSpec);
         return emitSecResult(
             strategy.runExtractedModels(model0, model1, secMaxK));
       // LCOV_EXCL_START
@@ -2177,9 +2797,10 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
 
     // LCOV_EXCL_START
+    std::vector<NLLibrary*> db0PrimitiveLibraries;
     if (!libertyFiles.empty() || !pythonFiles.empty()) {
       db0 = NLDB::create(NLUniverse::get());
-      primitivesAreLoaded = loadLibraries(db0);
+      primitivesAreLoaded = loadLibraries(db0, &db0PrimitiveLibraries);
       if (!primitivesAreLoaded) {
         return EXIT_FAILURE;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
@@ -2189,26 +2810,37 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
 
     // LCOV_EXCL_START
-    if (inputFormatType == FormatType::VERILOG ||
-        inputFormatType == FormatType::SYSTEMVERILOG) {
+    if (isHdlFormat()) {
       if (!db0) {
         db0 = NLDB::create(NLUniverse::get());
       }
       const auto design0Paths = toPathVector(designInputs.design0);
+      const bool design0UsesSystemVerilog = designUsesSystemVerilog(0);
       SPDLOG_INFO("Parsing {} file(s) for design 1",
       // LCOV_EXCL_STOP
-                  inputFormatType == FormatType::SYSTEMVERILOG ? "systemverilog" : "verilog");
+                  design0UsesSystemVerilog ? "systemverilog" : "verilog");
       // LCOV_EXCL_START
       auto designLibrary = NLLibrary::create(db0, NLName("DESIGN"));
-      if (inputFormatType == FormatType::SYSTEMVERILOG) {
+      if (design0UsesSystemVerilog) {
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
+        const auto* sv2vPrimitiveLibraries =
+            inputFormatType == FormatType::SV2V ? &db0PrimitiveLibraries : nullptr;
+        std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
-            designInputs.design0, systemVerilogOptions.design0, temporaryFiles);
+            designInputs.design0,
+            systemVerilogOptions.design0,
+            temporaryFiles,
+            sv2vPrimitiveLibraries,
+            &generatedStubPath);
             // LCOV_EXCL_STOP
         try {
           // LCOV_EXCL_START
           constructor.construct(svInputPaths);
+          if (sv2vPrimitiveLibraries != nullptr) {
+            reconnectGeneratedPrimitiveStubs(
+                designLibrary, *sv2vPrimitiveLibraries, generatedStubPath);
+          }
         } catch (...) {
           for (const auto& temporaryFile : temporaryFiles) {
             std::error_code ec;
@@ -2229,7 +2861,9 @@ int KeplerFormalMain(int argc, char** argv) {
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
         constructor.construct(design0Paths);
       }
-      auto top = SNLUtils::findTop(designLibrary);
+      auto top = design0UsesSystemVerilog
+                     ? SNLUtils::findTop(designLibrary)
+                     : selectTopDesign(designLibrary, verilogTopOptions.design0, 0);
       if (top) {
         db0->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
@@ -2298,18 +2932,18 @@ int KeplerFormalMain(int argc, char** argv) {
     // LCOV_EXCL_STOP
 
     // LCOV_EXCL_START
-    if (inputFormatType == FormatType::VERILOG ||
-        inputFormatType == FormatType::SYSTEMVERILOG) {
+    if (isHdlFormat()) {
       if (!db1) {
         db1 = NLDB::create(NLUniverse::get());
       }
       const auto design1Paths = toPathVector(designInputs.design1);
+      const bool design1UsesSystemVerilog = designUsesSystemVerilog(1);
       SPDLOG_INFO("Parsing {} file(s) for design 2",
       // LCOV_EXCL_STOP
-                  inputFormatType == FormatType::SYSTEMVERILOG ? "systemverilog" : "verilog");
+                  design1UsesSystemVerilog ? "systemverilog" : "verilog");
       // LCOV_EXCL_START
       auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
-      if (inputFormatType == FormatType::SYSTEMVERILOG) {
+      if (design1UsesSystemVerilog) {
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto svInputPaths = buildSystemVerilogInputPaths(
@@ -2338,7 +2972,9 @@ int KeplerFormalMain(int argc, char** argv) {
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
         constructor.construct(design1Paths);
       }
-      auto top = SNLUtils::findTop(designLibrary);
+      auto top = design1UsesSystemVerilog
+                     ? SNLUtils::findTop(designLibrary)
+                     : selectTopDesign(designLibrary, verilogTopOptions.design1, 1);
       if (top) {
         db1->setTopDesign(top);
         SPDLOG_INFO("Found top design: {}", top->getString());
@@ -2397,7 +3033,12 @@ int KeplerFormalMain(int argc, char** argv) {
     try {
       // LCOV_EXCL_START
       KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-          top0, top1, solverType, secEngine, secEncoding);
+          top0,
+          top1,
+          solverType,
+          secEngine,
+          secEncoding,
+          secResetSpec);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP
     // LCOV_EXCL_START
@@ -2411,6 +3052,7 @@ int KeplerFormalMain(int argc, char** argv) {
   // LCOV_EXCL_START
   } else if (inputFormatType == FormatType::NAJA_IF && useScopes) {
     KEPLER_FORMAL::MiterStrategy MiterS(top0, top1);
+    MiterS.setAllowBoundaryMismatch(true);
     MiterS.init(false);
     ScopeExtraction extractor(top0, top1);
     extractor.collectVerificationScopes();
@@ -2426,6 +3068,7 @@ int KeplerFormalMain(int argc, char** argv) {
       try {
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterScope(scopes.first, scopes.second, logFileName);
+        MiterScope.setAllowBoundaryMismatch(allowBoundaryMismatch);
         if (dumpCnf) {
           std::string scopeName = sanitizeFileToken(scopes.first->getName().getString());
           std::string outPath = dumpCnfPath.empty()
@@ -2475,6 +3118,7 @@ int KeplerFormalMain(int argc, char** argv) {
     try {
       // LCOV_EXCL_START
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
+      MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
         MiterS.setCnfDump(true, outPath);

@@ -1,0 +1,20 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# FlexLexer.h only (the flex *binary* stays a host tool). naja-verilog's
+# scanner does '#include <FlexLexer.h>' and FindFLEX would otherwise add
+# -I/usr/include for it — hoisting the entire host header tree ahead of
+# hermetic headers. Pinned to flex 2.6.4 to match the ubuntu/homebrew flex
+# that generates the scanner source.
+cc_library(
+    name = "flexlexer",
+    hdrs = ["src/FlexLexer.h"],
+    strip_include_prefix = "src",
+    visibility = ["//visibility:public"],
+)
+
+# For //:deps export into deps/include.
+filegroup(
+    name = "flexlexer_hdr",
+    srcs = ["src/FlexLexer.h"],
+    visibility = ["//visibility:public"],
+)

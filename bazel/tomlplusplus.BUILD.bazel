@@ -1,0 +1,9 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "tomlplusplus",
+    srcs = ["src/toml.cpp"],
+    hdrs = glob(["include/toml++/**"]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)

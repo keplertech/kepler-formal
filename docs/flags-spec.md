@@ -16,6 +16,7 @@ The SEC-specific flag surface is documented separately in
 | `lec` | Gate-level combinational equivalence checking | Verilog or Naja IF netlists plus Liberty/Python primitive libraries as needed. |
 | `sec` | Gate-level sequential equivalence checking | Sequential Verilog/SystemVerilog netlists plus Liberty/Python primitive libraries as needed. |
 | `sec` | RTL-level sequential equivalence checking | RTL Verilog/SystemVerilog sources, including SystemVerilog flists with explicit tops. |
+| `sec` | SystemVerilog-to-Verilog RTL-vs-gate checking (`sv2v`) | SystemVerilog design 1 and Verilog design 2, plus Liberty/Python primitive libraries as needed. |
 
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 `verification: sec` in YAML.
@@ -24,25 +25,40 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 
 | Flag | Meaning |
 | --- | --- |
+| `--verification <lec\|sec>`, `-v <lec\|sec>` | Select LEC or SEC. Defaults to `lec`. |
+| `--max-k <n>`, `-k <n>` | Set the SEC proof/search bound. Defaults to `32`; SEC only. |
+| `--sec-engine <k_induction\|imc\|pdr>` | Select the SEC engine. Defaults to `pdr`; SEC only. |
+| `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
+| `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
+| `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
+| `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
 | `-verilog` | Use Verilog Format. |
-| `-systemverilog`, `-sv` | Use SystemVerilog format. |
 | `-naja_if` | Use naja-if format. |
-| `-v <mode>`, `--verification <mode>` | Select verification mode. Supported values: `lec`, `sec`. If omitted, the implementation defaults to `lec`. |
+| `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
+| `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
 | `--help`, `-h` | Print usage and exit. |
 | `--config <file>`, `-c <file>` | Load a YAML config file. If present anywhere on the CLI, YAML parsing takes precedence over the rest of the arguments. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
-| `--compact` | Per-PO analysis is skipped in case the design is different. |
+| `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
+| `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
+| `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 
 ## YAML config flags
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Input format. Supported values: `verilog`, `v`, `systemverilog`, `sv`, and `naja_if`. If omitted, the implementation defaults to `verilog`. |
-| `verification` | string | Verification mode. Supported values: `lec`, `sec`. If omitted, the implementation defaults to `lec`. |
+| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. If omitted, the implementation defaults to `verilog`. |
+| `verification` | string | `lec` or `sec`. Defaults to `lec`. |
+| `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
+| `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
+| `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
+| `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
+| `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
@@ -57,12 +73,16 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
-| `solver` | string | SAT solver selection. Supported values: `kissat`, `glucose`. If omitted, the implementation defaults to `kissat`. |
+| `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
+| `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `verilog_design1_top`, `verilog_design2_top` | string | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
+| `solver` | string | SAT solver selection: `kissat`, `glucose`, or `cadical`. Defaults to `kissat`. |
 
 Example:
 
 ```yaml
 format: verilog
+verification: lec
 input_paths:
   - [design0_part1.v, design0_part2.v]
   - [design1_part1.v, design1_part2.v]
@@ -79,4 +99,22 @@ cnf_export: true
 cnf_export_path: ./miter.cnf
 po_cnf_export: true
 po_cnf_export_path: ./po_cnfs
+```
+
+SEC `sv2v` example:
+
+```yaml
+format: sv2v
+verification: sec
+max_k: 32
+sec_engine: pdr
+sec_encoding: dual_rail_steady
+input_paths:
+  - [rtl_pkg.sv, rtl_top.sv]
+  - [gate_top.v]
+liberty_files:
+  - stdcells.lib
+solver: kissat
+compact_mode: true
+report_skipped_pos: true
 ```

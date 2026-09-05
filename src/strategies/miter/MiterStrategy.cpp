@@ -658,6 +658,20 @@ void MiterStrategy::setPoCnfDump(bool enabled, const std::string& path) {
   dumpPoCnfPath_ = path;
 }
 
+static void checkBoundaryMatch(size_t commonCount,
+                               size_t design0Count,
+                               size_t design1Count) {
+  if (commonCount == design0Count && commonCount == design1Count) {
+    return;
+  }
+  throw std::runtime_error(
+      "LEC boundary mismatch: design1 has " + std::to_string(design0Count) +
+      " boundary inputs, design2 has " + std::to_string(design1Count) +
+      ", and " + std::to_string(commonCount) +
+      " match by name. Use --allow-boundary-mismatch or "
+      "allow-boundary-mismatch: true to continue.");
+}
+
 size_t MiterStrategy::normalizeInputs(
     std::vector<naja::DNL::DNLID>& inputs0,
     std::vector<naja::DNL::DNLID>& inputs1,
@@ -837,6 +851,10 @@ void MiterStrategy::init(bool enableLogging) {
     logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
   }
   builder0_.collect();
+  std::vector<BuildPrimaryOutputClauses::PathKey> boundaryInputs0;
+  if (!allowBoundaryMismatch_) {
+    boundaryInputs0 = builder0_.getLecBoundaryInputs();
+  }
   if (enableLogging) {
     logger->info("Collected {} PIs for design 0\n", builder0_.getInputs().size());
     logger->info("Collected {} POs for design 0\n", builder0_.getOutputs().size());
@@ -850,6 +868,13 @@ void MiterStrategy::init(bool enableLogging) {
     logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
   }
   builder1_.collect();
+  if (!allowBoundaryMismatch_) {
+    auto boundaryInputs1 = builder1_.getLecBoundaryInputs();
+    const size_t commonBoundarySize =
+        normalizeCompactInputs(boundaryInputs0, boundaryInputs1);
+    checkBoundaryMatch(commonBoundarySize, boundaryInputs0.size(),
+                       boundaryInputs1.size());
+  }
   if (enableLogging) {
     logger->info("Collected {} PIs for design 1\n", builder1_.getInputs().size());
     logger->info("Collected {} POs for design 1\n", builder1_.getOutputs().size());
@@ -1235,6 +1260,14 @@ bool MiterStrategy::runCompactSnapshots(const CompactSnapshot& snapshot0,
   auto inputs0 = snapshot0.inputs;
   auto inputs1 = snapshot1.inputs;
   const size_t commonSize = normalizeCompactInputs(inputs0, inputs1);
+  if (!allowBoundaryMismatch_) {
+    auto boundaryInputs0 = snapshot0.boundaryInputs;
+    auto boundaryInputs1 = snapshot1.boundaryInputs;
+    const size_t commonBoundarySize =
+        normalizeCompactInputs(boundaryInputs0, boundaryInputs1);
+    checkBoundaryMatch(commonBoundarySize, boundaryInputs0.size(),
+                       boundaryInputs1.size());
+  }
   lastCommonVarID_ = commonSize > 0 ? (commonSize - 1) + 2 : 1;
 
   auto outputs0 = snapshot0.outputs;

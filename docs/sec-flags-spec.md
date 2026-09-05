@@ -13,6 +13,11 @@ library, logging, solver, CNF export, and LEC flags remain documented in
 [flags-spec.md](flags-spec.md).
 SEC clock extraction and multi-clock-domain coverage handling are documented in
 [sec-clock-handling.md](sec-clock-handling.md).
+User-driven reset sequences are documented in
+[sec-reset-bootstrap.md](sec-reset-bootstrap.md).
+
+Sequential primitive support and latch opacity are documented in
+[sec-sequential-models.md](sec-sequential-models.md).
 
 Supported SEC flows:
 
@@ -20,6 +25,7 @@ Supported SEC flows:
 | --- | --- |
 | Gate-level SEC | Sequential gate-level Verilog/SystemVerilog netlists with Liberty/Python primitive libraries as needed. |
 | RTL-level SEC | RTL Verilog/SystemVerilog sources, including SystemVerilog flists with explicit tops. |
+| SystemVerilog-to-Verilog SEC (`sv2v`) | SystemVerilog design 1 and Verilog design 2 for RTL-vs-gate comparison. |
 
 ## CLI Shape
 
@@ -32,7 +38,6 @@ kepler-formal -verilog \
   -k 4 \
   --sec-engine pdr \
   --sec-encoding dual_rail_steady \
-  --sec-uncomputable-seq-boundary \
   --report-skipped-pos \
   design0.v design1.v library.lib
 ```
@@ -58,6 +63,20 @@ kepler-formal -sv \
   -k 32
 ```
 
+For RTL-vs-gate runs where design 1 is SystemVerilog and design 2 is Verilog,
+use `-sv2v`:
+
+```sh
+kepler-formal -sv2v \
+  --design1 rtl_pkg.sv rtl_top.sv \
+  --design2 gate_top.v \
+  -v sec \
+  -k 32 \
+  --sec-engine pdr \
+  --sec-encoding dual_rail_steady \
+  --liberty stdcells.lib
+```
+
 ## YAML Shape
 
 When `--config` or `-c` is present, YAML config mode takes precedence over the
@@ -69,7 +88,6 @@ verification: sec
 sec_engine: pdr
 sec_encoding: dual_rail_steady
 max_k: 32
-sec_uncomputable_seq_as_boundary: true
 compact_mode: true
 report_skipped_pos: true
 solver: kissat
@@ -85,12 +103,12 @@ liberty_files:
 
 | CLI flag | YAML key | Default | Values | Effect |
 | --- | --- | --- | --- | --- |
-| `-v sec`, `--verification sec` | `verification: sec` | `lec` | `lec`, `sec` | Selects SEC instead of combinational LEC. Values are lowercase. |
-| `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the maximum SEC proof/search bound used by the selected engine. `0` is valid and only permits zero-bound checks. |
-| `--sec-engine <engine>` | `sec_engine: <engine>` | `legacy` | `legacy`, `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
+| `-v <lec\|sec>`, `--verification <lec\|sec>` | `verification: <lec\|sec>` | `lec` | `lec`, `sec` | Selects combinational LEC or sequential SEC. Values are lowercase. |
+| `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the SEC proof/search bound. |
+| `--sec-engine <engine>` | `sec_engine: <engine>` | `pdr` | `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
-| `--sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: true` | `true` | boolean | Abstracts unsupported sequential instances as SEC boundaries instead of failing immediately. |
-| `--no-sec-uncomputable-seq-boundary` | `sec_uncomputable_seq_as_boundary: false` | `true` | boolean | Uses strict mode: unsupported sequential interfaces cause SEC to fail as unsupported. |
+| `--sec-reset-cycles <n>` | `sec_reset.cycles: <n>` | omitted | Positive integer | Holds user-listed reset ports active for the first `n` SEC cycles. |
+| `--sec-reset-port <name=0\|1>` | `sec_reset.ports` | omitted | Repeatable reset port assignment | Adds a top-level reset input and asserted value. Repeat for multiple reset ports. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 
@@ -98,7 +116,6 @@ Accepted values for `sec_engine`:
 
 | Engine | Accepted value |
 | --- | --- |
-| `legacy` | `legacy` |
 | `k_induction` | `k_induction` |
 | `imc` | `imc` |
 | `pdr` | `pdr` |
@@ -115,14 +132,17 @@ There is no `default` token for `sec_encoding`. To use the default, omit
 flows that require stable behavior should always spell out either `binary` or
 `dual_rail_steady` explicitly.
 
+Reset bootstrap is optional. When enabled, both `cycles` and at least one reset
+port are required. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md) for the
+full YAML shape and CLI examples.
+
 ## Engine Semantics
 
 | Engine | Current behavior |
 | --- | --- |
-| `legacy` | Historical SEC flow. It derives an exact one-step reachable-state strengthening when possible, then runs the shared k-induction engine. |
 | `k_induction` | Explicit classic k-induction flow: bounded base-case search followed by induction-step proof over the extracted SEC transition system. |
 | `imc` | Interpolation-Based Model Checking flow over the same extracted SEC problem. It uses the shared base-case search and exact interpolant strengthening where applicable. |
-| `pdr` | Property Directed Reachability flow over the extracted SEC transition system. It first accepts immediate zero-bound k-induction results, then runs PDR frames up to `max_k`. |
+| `pdr` | Property Directed Reachability flow over the extracted SEC transition system. |
 
 All engines use the same extracted SEC model: aligned environment inputs,
 state bits, observed outputs, next-state formulas, initial-state information,
@@ -134,18 +154,34 @@ cross-design equivalence assumption. Internal names may still be used inside a
 single extracted design for diagnostics, state updates, and local recovery
 heuristics.
 
+Opaque internal elements always use strict per-output handling. If backward
+cone construction reaches any internal cell or pin without usable SEC
+semantics, traversal for that top-level output stops and the entire output is
+removed from the proof surface. SEC never substitutes a free, shared, or
+design-local proof symbol for that element. Other modeled outputs remain
+eligible for proof, so the result is partial when only some outputs are skipped
+and unsupported when no aligned verifiable output remains.
+
 ## Bounds And Results
 
 `max_k` is parsed as a non-negative integer.
+
+In `dual_rail_steady`, `01` represents binary zero, `10` represents binary one,
+and `11` represents X. All three engines prove the same steady-state property:
+a bad state exists only when both designs' outputs are binary-defined and
+opposite. Cycles where either output is X are outside this property. A proof in
+this encoding therefore establishes equivalence under the steady-state
+abstraction; it does not establish that either output becomes binary-defined.
 
 SEC result handling is currently:
 
 | Result | Exit code | Meaning |
 | --- | --- | --- |
-| Equivalent | `0` | SEC proved equivalence at the reported bound. |
-| Different | `0` | SEC found a concrete counterexample at the reported bound. |
-| Inconclusive | non-zero | The selected engine reached `max_k` without a proof or counterexample. |
-| Unsupported | non-zero | The extracted model was incomplete or unsupported for SEC. |
+| Proved | `0` | All checked outputs were proved equivalent. |
+| Partially proved | `1` | Some outputs were proved; all remaining outputs are inconclusive. |
+| Inconclusive | `2` | SEC produced neither a proof nor a counterexample. |
+| Counterexample found | `3` | SEC found a definitive mismatch. |
+| Unsupported | `2` | The extracted model was incomplete or unsupported for SEC. |
 
 The log always prints:
 
@@ -153,7 +189,6 @@ The log always prints:
 SEC max_k: <n>
 SEC engine: <engine>
 SEC encoding: binary|dual_rail_steady
-SEC uncomputable sequentials: boundary abstraction|strict failure
 Compact mode: enabled|disabled
 Skipped PO reports: enabled|disabled
 ```
@@ -165,12 +200,13 @@ write the following files in the current working directory:
 
 | File | Producer | Contents |
 | --- | --- | --- |
-| `boundary_terms.txt` | SEC | Extracted SEC boundary surface. Includes top inputs, top outputs, opaque internal cut points, abstracted sequential state terms, abstracted sequential observed terms, and connectivity-skip annotations when present. |
+| `boundary_terms.txt` | SEC | Top-level SEC input/output surface and skip annotations when present. |
 | `skipped_no_driver_pos.txt` | shared cone builder | Outputs skipped because the relevant iso has no driver. |
 | `skipped_multi_driver_pos.txt` | shared cone builder | Outputs skipped because the relevant iso has multiple drivers. |
 | `skipped_logical_loop_pos.txt` | shared cone builder | Outputs skipped because the relevant cone contains a logical loop. |
 | `skipped_reset_unanchored_pos.txt` | SEC | Outputs skipped in binary SEC because their cones depend on reset-unanchored internal state. |
 | `skipped_multi_clock_domain_pos.txt` | SEC clock model | Outputs skipped because the observed output cone spans multiple extracted clock domains. |
+| `skipped_opaque_cells_pos.txt` | SEC | One entry per ignored top-level output whose backward cone reached an opaque internal cell or pin. Each entry names the output, cell, pin, and reason. |
 
 `boundary_terms.txt` starts with a category legend. Current categories are:
 
@@ -178,14 +214,10 @@ write the following files in the current working directory:
 | --- | --- |
 | `top_input` | Original top-level input term. |
 | `top_output` | Original top-level output term. |
-| `opaque_internal_input` | Internal cut-point input that SEC could not reconstruct combinationally and did not model as sequential. |
-| `opaque_internal_output` | Internal cut-point output paired with an opaque internal boundary. |
-| `abstracted_sequential_state` | State-facing term exposed when an uncomputable sequential instance is abstracted as a SEC boundary. |
-| `abstracted_sequential_observed` | Observed-output-facing term exposed when an uncomputable sequential instance is abstracted as a SEC boundary. |
 
-Connectivity skipped outputs are also summarized in the main run log, including
-no-driver, multi-driver, logical-loop, reset-unanchored, and multi-clock-domain
-skips.
+Skipped outputs are also summarized in the main run log, including no-driver,
+multi-driver, logical-loop, reset-unanchored, multi-clock-domain, and opaque
+internal skips.
 
 ## Compact SEC
 
@@ -222,18 +254,21 @@ SEC still depends on the normal front-end and library flags:
 | --- | --- |
 | `-verilog`, `format: verilog` | Verilog SEC input mode. |
 | `-sv`, `-systemverilog`, `format: systemverilog` | SystemVerilog SEC input mode. |
+| `-sv2v`, `format: sv2v` | Mixed SEC input mode: design 1 is SystemVerilog RTL and design 2 is Verilog gate-level netlist. |
 | `--design1`, `--design2`, `input_paths` | Source lists for the two compared designs. |
-| `--sv_design1_flist`, `--sv_design2_flist` | Per-design SystemVerilog file lists. |
-| `--sv_design1_top`, `--sv_design2_top` | Per-design SystemVerilog top names. |
+| `--sv_design1_flist`, `--sv_design2_flist` | Per-design SystemVerilog file lists. In `sv2v` mode, only `--sv_design1_flist` is accepted. |
+| `--sv_design1_top`, `--sv_design2_top` | Per-design SystemVerilog top names. In `sv2v` mode, only `--sv_design1_top` is accepted. |
+| `--verilog_design1_top`, `--verilog_design2_top` | Per-design Verilog top names. In `sv2v` mode, only `--verilog_design2_top` is accepted. |
 | `--liberty`, `--lib`, `liberty_files` | Liberty primitives, including structured memory information used during SEC extraction. |
 | `py_tech_files` | Python primitive loaders. Must be provided through YAML, not through `--liberty`. |
-| `solver: kissat|glucose` | SAT solver used by the selected SEC engine. |
+| `solver: kissat|glucose|cadical` | SAT solver used by the selected SEC engine. This selector is YAML-only. |
 | `log_file` | Run log path. SEC defaults to `miter_log_<n>.txt` when no path is provided. |
 
 ## Known Construction Notes
 
-- `legacy` remains the default for compatibility, but new SEC work should choose
-  an explicit engine (`k_induction`, `imc`, or `pdr`) when comparing behavior.
+- `pdr` is the default SEC engine. Tests, scripts, and regression flows can
+  still choose an explicit engine (`k_induction`, `imc`, or `pdr`) when
+  comparing behavior.
 - `dual_rail_steady` is the default SEC encoding. New tests and regressions should
   still set `sec_encoding` explicitly when they depend on a specific mode.
 - `report_skipped_pos` still has historical LEC naming even though SEC also uses

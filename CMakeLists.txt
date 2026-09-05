@@ -79,7 +79,11 @@ ExternalProject_Add(kissat_external
     # `--ultimate`: it implies `--no-options`, which compiles out runtime
     # option storage and prevents SEC from selecting a SAT profile for its
     # cone-of-influence proof obligations.
-    CONFIGURE_COMMAND ./configure --compact --quiet --no-proofs
+    # Honor the configured compiler (e.g. a CMAKE_TOOLCHAIN_FILE such as
+    # deps/toolchain.cmake); kissat's configure defaults to host cc.
+    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
+        "CC=${CMAKE_C_COMPILER}"
+        ./configure --compact --quiet --no-proofs
     BUILD_COMMAND make
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
@@ -106,7 +110,11 @@ add_dependencies(kissat kissat_external)
 
 ExternalProject_Add(cadical_external
     SOURCE_DIR ${CADICAL_ROOT}
+    # CC/CXX: honor the configured compiler (e.g. a CMAKE_TOOLCHAIN_FILE
+    # such as deps/toolchain.cmake); cadical's configure defaults to host g++.
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
+        "CC=${CMAKE_C_COMPILER}"
+        "CXX=${CMAKE_CXX_COMPILER}"
         "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
         "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
         ./configure -q --no-tracing --no-contrib
@@ -129,6 +137,16 @@ add_dependencies(cadical cadical_external)
 
 add_subdirectory(src)
 add_subdirectory(thirdparty)
+
+if(TARGET slang_slang)
+  # fmt 12 no longer exposes fmt::format through <fmt/core.h>. Keep vendored
+  # slang sources untouched and provide the full formatting declarations here.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(slang_slang PRIVATE -include fmt/format.h)
+  elseif(MSVC)
+    target_compile_options(slang_slang PRIVATE /FIfmt/format.h)
+  endif()
+endif()
 
 option(ENABLE_UNIT_TESTS "Enable unit tests" ON)
 if(ENABLE_UNIT_TESTS)

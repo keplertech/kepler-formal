@@ -7,7 +7,7 @@ Files: src/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
 
-Files: example/* .github/workflows/* .gitmodules README.md docs/*
+Files: examples/* .github/workflows/* .github/consumer-test/* .gitmodules README.md docs/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 
@@ -25,6 +25,10 @@ License: GPL-3.0-only
 
 Files: tools/*
 Copyright: 2025 keplertech.io
+License: GPL-3.0-only
+
+Files: mcp/*
+Copyright: 2026 keplertech.io
 License: GPL-3.0-only
 
 Files: regress/*/miter.cnf regress/*/miter.cnf.tar.gz regress/*/po_cnfs.tar.gz

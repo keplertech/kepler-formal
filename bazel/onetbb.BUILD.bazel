@@ -1,0 +1,64 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(["**"]),
+)
+
+# oneTBB built via cmake (not the BCR onetbb module) so that naja's
+# find_package(TBB) gets TBBConfig.cmake and — crucially — the naja shared
+# libraries and the kepler-formal binary share one libtbb.so.12 runtime
+# (TBB scheduler singletons; two runtimes in one process is a bug).
+# TBB is shared by design (no static libs); bundled in the release tarball.
+ONETBB_CMAKE_CACHE_ENTRIES = {
+    "CMAKE_BUILD_TYPE": "Release",
+    # Don't let -Werror break builds under newer compilers.
+    "TBB_STRICT": "OFF",
+    "TBB_TEST": "OFF",
+    "TBB_EXAMPLES": "OFF",
+}
+
+cmake(
+    name = "onetbb",
+    cache_entries = select({
+        "@platforms//os:macos": ONETBB_CMAKE_CACHE_ENTRIES,
+        # tbbmalloc's linker version script assigns symbols that are only
+        # defined when ITT is enabled; GNU ld ignores that, ld.lld (the
+        # hermetic toolchain's linker) errors without --undefined-version.
+        "@kepler-formal//bazel:hermetic_runtime": ONETBB_CMAKE_CACHE_ENTRIES | {
+            "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--undefined-version",
+            # See naja.BUILD.bazel: link the hermetic C++ runtime into the
+            # shared libraries so their libc++ symbols resolve at load time.
+            "CMAKE_CXX_STANDARD_LIBRARIES": " ".join([
+                "$${EXT_BUILD_DEPS}/lib/liblibcxx.static.a",
+                "$${EXT_BUILD_DEPS}/lib/liblibcxxabi.static.a",
+                "$${EXT_BUILD_DEPS}/lib/liblibunwind.static.a",
+                "-lm",
+            ]),
+        },
+        # Consumer toolchain (hermetic_cxx_runtime_enabled=False): the consumer's
+        # own libc++ is used; do not inject the hermetic archives. Keep
+        # --undefined-version (ld.lld, incl. consumers using lld).
+        "//conditions:default": ONETBB_CMAKE_CACHE_ENTRIES | {
+            "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--undefined-version",
+        },
+    }),
+    deps = select({
+        "@platforms//os:macos": [],
+        "@kepler-formal//bazel:hermetic_runtime": ["@kepler-formal//bazel:hermetic_cxx_runtime"],
+        "//conditions:default": [],
+    }),
+    build_args = ["-j4"],
+    lib_source = ":all_srcs",
+    out_shared_libs = select({
+        "@platforms//os:macos": [
+            "libtbb.12.dylib",
+            "libtbbmalloc.2.dylib",
+        ],
+        "//conditions:default": [
+            "libtbb.so.12",
+            "libtbbmalloc.so.2",
+        ],
+    }),
+    visibility = ["//visibility:public"],
+)

@@ -1,6 +1,13 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
+genrule(
+    name = "naja_python_module",
+    srcs = ["@naja//src/nl/python/naja_wrapping:naja.so"],
+    outs = ["naja.so"],
+    cmd = "cp $(location @naja//src/nl/python/naja_wrapping:naja.so) $@",
+)
+
 cc_binary(
     name = "kepler-formal",
     srcs = [
@@ -8,34 +15,12 @@ cc_binary(
         "KeplerFormalUtils.h",
     ],
     copts = NAJA_HEADER_COPTS,
-    linkopts = select({
-        "@platforms//os:macos": [
-            "-L/opt/homebrew/lib",
-            "-L/usr/local/lib",
-            "-lcapnp",
-            "-lkj",
-            "-ltbb",
-            "-ltbbmalloc",
-            "-lz",
-        ],
-        "//conditions:default": [
-            # Statically link what we can for portable release binaries.
-            # Cap'n Proto and libstdc++/libgcc are linked statically.
-            # TBB has no static libs (by design) — bundled in release tarball.
-            # Naja .so files are also bundled (see release workflow).
-            "-static-libstdc++",
-            "-static-libgcc",
-            "-Wl,-Bstatic",
-            "-lcapnp",
-            "-lkj",
-            "-Wl,-Bdynamic",
-            "-ltbb",
-            "-ltbbmalloc",
-            "-lz",
-            "-lpthread",
-            "-ldl",
-        ],
-    }),
+    data = [":naja_python_module"],
+    dynamic_deps = ["@naja//src/nl/python/naja_wrapping:naja_runtime"],
+    # capnp/kj (static), TBB (shared, bundled in the release tarball) and
+    # zlib arrive transitively through @naja's cmake deps — no system -l
+    # flags. The hermetic toolchain links libc++ statically by default,
+    # which supersedes the former -static-libstdc++/-static-libgcc.
     visibility = ["//visibility:public"],
     deps = [
         "//src/config:kepler_config",

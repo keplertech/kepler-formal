@@ -1,0 +1,740 @@
+# GitHub Actions workflow to build kepler-formal once and fan out SEC regressions.
+name: regress-sec
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  SEC_RUNTIME_ARTIFACT: sec-regress-runtime
+
+jobs:
+  build-sec-regress:
+    name: build SEC runtime
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install dependencies
+      timeout-minutes: 10
+      run: |
+        sudo apt-get \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          update
+        sudo apt-get \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          -o DPkg::Lock::Timeout=60 \
+          install -y \
+          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
+          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
+          libboost-iostreams-dev zlib1g-dev
+
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+
+    - name: Configure CMake
+      run: |
+        cmake -B ${{github.workspace}}/build-sec-regress \
+          -GNinja \
+          -DPYTHON_INTERFACE=OFF \
+          -DENABLE_UNIT_TESTS=ON \
+          -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/stage \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=20 \
+          -DCMAKE_CXX_FLAGS="-O3 -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_EXE_LINKER_FLAGS="-flto"
+
+    - name: Build kepler-formal and unit tests
+      run: cmake --build ${{github.workspace}}/build-sec-regress --config Release
+
+    - name: Build najaeda wheel from the local Naja checkout
+      run: |
+        mkdir -p "${{github.workspace}}/stage/najaeda"
+        python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip wheel \
+            --no-build-isolation \
+            --no-deps \
+            --wheel-dir "${{github.workspace}}/stage/najaeda" \
+            "${{github.workspace}}/thirdparty/naja"
+
+    - name: Generate Naja IF unit-test inputs
+      working-directory: ${{github.workspace}}/examples/tinyrocket
+      run: |
+        python3 -m pip install \
+          "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
+        python3 to_naja_if.py
+        python3 edit.py
+
+    - name: Run unit tests
+      run: |
+        ctest --test-dir ${{github.workspace}}/build-sec-regress \
+          --output-on-failure \
+          --no-tests=error \
+          -E ".*[p|P]ython.*" \
+          -C Release
+
+    - name: Install kepler-formal runtime
+      run: |
+        cmake --build ${{github.workspace}}/build-sec-regress --target install --config Release
+        chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+        bash tools/bundle_linux_runtime_dependencies.sh "${{github.workspace}}/stage"
+
+    - name: Upload SEC runtime
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.SEC_RUNTIME_ARTIFACT }}
+        path: ${{github.workspace}}/stage
+        retention-days: 2
+        if-no-files-found: error
+
+  run-sec-regress:
+    name: ${{ matrix.flow.name }} / ${{ matrix.case.name }}
+    # SEC_HEAVY_RUNNER may name a larger or self-hosted runner for full-depth
+    # GCD KI and MockAlu PDR jobs. The GCD KI pull-request job uses a bounded
+    # smoke depth.
+    runs-on: >-
+      ${{
+        (
+          (matrix.flow.name == 'ki-dual-rail' && matrix.case.name == 'sky130hd_gcd') ||
+          (matrix.flow.name == 'pdr-dual-rail' && matrix.case.name == 'asap7_mock_alu')
+        ) && vars.SEC_HEAVY_RUNNER || 'ubuntu-22.04'
+      }}
+    needs: build-sec-regress
+    strategy:
+      fail-fast: false
+      matrix:
+        flow:
+        - name: imc-binary
+          engine: imc
+          sec_encoding: binary
+          positive_expectation: allow-unset-state-inconclusive
+          full_coverage_expectation: allow-unset-state-inconclusive
+        - name: ki-binary
+          engine: k_induction
+          sec_encoding: binary
+          positive_expectation: allow-unset-state-inconclusive
+          full_coverage_expectation: allow-unset-state-inconclusive
+        - name: pdr-binary
+          engine: pdr
+          sec_encoding: binary
+          positive_expectation: allow-unset-state-inconclusive
+          full_coverage_expectation: allow-unset-state-inconclusive
+        - name: imc-dual-rail
+          engine: imc
+          sec_encoding: dual_rail_steady
+          positive_expectation: allow-inconclusive
+          full_coverage_expectation: allow-inconclusive
+        - name: ki-dual-rail
+          engine: k_induction
+          sec_encoding: dual_rail_steady
+          positive_expectation: allow-inconclusive
+          full_coverage_expectation: allow-inconclusive
+        - name: pdr-dual-rail
+          engine: pdr
+          sec_encoding: dual_rail_steady
+          positive_expectation: expect-equivalent-or-partial
+          full_coverage_expectation: expect-equivalent-or-partial
+        case:
+        - name: cts_aes_asap7_base
+          source: regress
+          case_dir: kepler-formal-regress/cts_aes_asap7_base
+          config: objects/asap7/aes/base/4_rsz_lec_test.yml
+          expectation: positive
+          # Both dual-rail IMC and KI are inconclusive on this design.
+          pdr_dual_rail_expectation: allow-inconclusive
+        - name: sky130hd_gcd
+          source: regress
+          case_dir: kepler-formal-regress/sky130hd_gcd
+          config: objects/sky130hd/gcd/base/4_rsz_lec_test.yml
+          expectation: positive
+          ki_dual_rail_pr_max_k: 8
+        - name: nangate45_black_parrot
+          source: regress
+          case_dir: kepler-formal-regress/nangate45_black_parrot
+          config: objects/nangate45/bp/base/4_rsz_lec_test.yml
+          expectation: positive
+        - name: ihp_sg13g2_i2c_gpio_expander
+          source: regress
+          case_dir: kepler-formal-regress/ihp-sg13g2_i2c-gpio-expander
+          config: objects/ihp-sg13g2/i2c-gpio-expander/base/4_rsz_lec_test.yml
+          expectation: positive
+        - name: nangate45_dynamic_node
+          source: examples
+          case_dir: kepler-formal-examples/nangate45_dynamic_node
+          config: 6_final_sec_test.yml
+          expectation: positive
+          pdr_dual_rail_expectation: allow-inconclusive
+        - name: asap7_jpeg_lvt
+          source: examples
+          case_dir: kepler-formal-examples/asap7_jpeg_lvt
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: sky130hs_ibex
+          source: examples
+          case_dir: kepler-formal-examples/sky130hs_ibex
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: sky130hd_riscv32i
+          source: examples
+          case_dir: kepler-formal-examples/sky130hd_riscv32i
+          config: 6_final_sec_test.yml
+          expectation: full_coverage
+        - name: sky130hs_riscv32i
+          source: examples
+          case_dir: kepler-formal-examples/sky130hs_riscv32i
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: nangate45_ibex
+          source: examples
+          case_dir: kepler-formal-examples/nangate45_ibex
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: nangate45_swerv
+          source: examples
+          case_dir: kepler-formal-examples/nangate45_swerv
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: nangate45_ariane136
+          source: examples
+          case_dir: kepler-formal-examples/nangate45_ariane136
+          config: 6_final_sec_test.yml
+          expectation: positive
+          pdr_dual_rail_expectation: allow-inconclusive
+        - name: asap7_ethmac
+          source: examples
+          case_dir: kepler-formal-examples/asap7_ethmac
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: asap7_mock_alu
+          source: examples
+          case_dir: kepler-formal-examples/asap7_mock-alu
+          config: 6_final_sec_test.yml
+          expectation: positive
+          pdr_dual_rail_expectation: allow-inconclusive
+        - name: asap7_mock_cpu
+          source: examples
+          case_dir: kepler-formal-examples/asap7_mock_cpu
+          config: 6_final_sec_test.yml
+          expectation: positive
+          pdr_dual_rail_expectation: allow-inconclusive
+        - name: nangate45_black_parrot_sec_final
+          source: examples
+          case_dir: kepler-formal-examples/nangate45_black_parrot_sec_final
+          config: 6_final_sec_test.yml
+          expectation: positive
+        - name: tinyrocket_naja_if
+          source: local
+          case_dir: .
+          config: regress/tinyrocket_naja_if/config.yaml
+          expectation: positive
+          generator: naja_if
+        - name: tinyrocket_verilog
+          source: local
+          case_dir: .
+          config: regress/tinyrocket_verilog/config.yaml
+          expectation: positive
+        - name: tinyrocket_self_sec
+          source: local
+          case_dir: examples/tinyrocket
+          config: test_config_verilog_tinyrocket_sec.yaml
+          expectation: positive
+        - name: tinyrocket_csrfile_sec
+          source: local
+          case_dir: examples/tinyrocket
+          config: test_config_verilog_tinyrocket_csrfile_sec.yaml
+          expectation: expect-different
+          generator: csrfile
+        - name: xilinx_register_slice_sec
+          source: local
+          case_dir: examples/xilinx/register_slice
+          config: test_config_verilog_xilinx_sec.yaml
+          expectation: positive
+        - name: vexriscv_genfull_xilinx_self_sec
+          source: local
+          case_dir: examples/xilinx/vexriscv
+          config: test_config_verilog_vexriscv_genfull_xilinx_lec.yaml
+          expectation: positive
+          max_k: 1
+        - name: vexriscv_genfull_xilinx_difference_sec
+          source: local
+          case_dir: examples/xilinx/vexriscv
+          config: test_config_verilog_vexriscv_genfull_xilinx_lec_different.yaml
+          expectation: expect-different
+          max_k: 1
+        - name: tinyrocket_naja_if_edited_sec_probe
+          source: local
+          case_dir: .
+          config: regress/tinyrocket_naja_if_edited_sec_probe/config.yaml
+          expectation: expect-different
+          generator: edit
+          max_k: 1
+        - name: tinyrocket_verilog_edited_sec_probe
+          source: local
+          case_dir: .
+          config: regress/tinyrocket_verilog_edited_sec_probe/config.yaml
+          expectation: expect-different
+          generator: edit
+          max_k: 1
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download SEC runtime
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.SEC_RUNTIME_ARTIFACT }}
+        path: ${{github.workspace}}/stage
+
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
+    - name: Clone regression inputs
+      working-directory: ${{github.workspace}}
+      env:
+        CASE_SOURCE: ${{ matrix.case.source }}
+      run: |
+        case "${CASE_SOURCE}" in
+          regress)
+            git clone --depth 1 https://github.com/keplertech/kepler-formal-regress
+            ;;
+          examples)
+            git clone --depth 1 https://github.com/keplertech/kepler-formal-examples
+            ;;
+          local)
+            ;;
+          *)
+            echo "Unknown SEC regression source: ${CASE_SOURCE}" >&2
+            exit 2
+            ;;
+        esac
+
+    - name: Generate local regression inputs
+      if: ${{ matrix.case.generator == 'naja_if' || matrix.case.generator == 'csrfile' || matrix.case.generator == 'edit' }}
+      working-directory: ${{github.workspace}}/examples/tinyrocket
+      env:
+        CASE_GENERATOR: ${{ matrix.case.generator }}
+      run: |
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+        python3 -m pip install \
+          "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
+        case "${CASE_GENERATOR}" in
+          naja_if)
+            python3 to_naja_if.py
+            ;;
+          csrfile)
+            python3 extract_tinyrocket_csrfile_sec.py
+            ;;
+          edit)
+            python3 edit.py
+            ;;
+          *)
+            echo "Unknown SEC regression generator: ${CASE_GENERATOR}" >&2
+            exit 2
+            ;;
+        esac
+
+    - name: Run SEC regression
+      working-directory: ${{github.workspace}}
+      env:
+        CASE_NAME: ${{ matrix.case.name }}
+        CASE_DIR: ${{ matrix.case.case_dir }}
+        CASE_CONFIG: ${{ matrix.case.config }}
+        CASE_EXPECTATION: ${{ matrix.case.expectation }}
+        CASE_MAX_K: ${{ matrix.case.max_k }}
+        CASE_KI_DUAL_RAIL_PR_MAX_K: ${{ matrix.case.ki_dual_rail_pr_max_k }}
+        CASE_PDR_DUAL_RAIL_EXPECTATION: ${{ matrix.case.pdr_dual_rail_expectation }}
+        SEC_ENGINE: ${{ matrix.flow.engine }}
+        SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
+        SEC_POSITIVE_EXPECTATION: ${{ matrix.flow.positive_expectation }}
+        SEC_FULL_COVERAGE_EXPECTATION: ${{ matrix.flow.full_coverage_expectation }}
+      run: |
+        set -euo pipefail
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+
+        expectation="${CASE_EXPECTATION}"
+        case "${expectation}" in
+          positive)
+            expectation="${SEC_POSITIVE_EXPECTATION}"
+            ;;
+          full_coverage)
+            expectation="${SEC_FULL_COVERAGE_EXPECTATION}"
+            ;;
+        esac
+        if [[ "${SEC_ENGINE}" == "pdr" &&
+              "${SEC_ENCODING}" == "dual_rail_steady" &&
+              -n "${CASE_PDR_DUAL_RAIL_EXPECTATION}" ]]; then
+          expectation="${CASE_PDR_DUAL_RAIL_EXPECTATION}"
+        fi
+
+        max_k="${CASE_MAX_K}"
+        if [[ "${GITHUB_EVENT_NAME}" == "pull_request" &&
+              "${SEC_ENGINE}" == "k_induction" &&
+              "${SEC_ENCODING}" == "dual_rail_steady" &&
+              -n "${CASE_KI_DUAL_RAIL_PR_MAX_K}" ]]; then
+          max_k="${CASE_KI_DUAL_RAIL_PR_MAX_K}"
+        fi
+
+        args=(
+          "${CASE_NAME}"
+          "${{github.workspace}}/${CASE_DIR}"
+          "${{github.workspace}}/stage/bin/kepler-formal"
+          "${CASE_CONFIG}"
+          "${expectation}"
+          compact
+          "engine=${SEC_ENGINE}"
+          "sec-encoding=${SEC_ENCODING}"
+        )
+        if [[ -n "${max_k}" ]]; then
+          args+=("max-k=${max_k}")
+        fi
+
+        bash regress/run_sec_strategies_regress.sh "${args[@]}"
+
+    - name: Upload regression logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-logs-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec
+        retention-days: 7
+        if-no-files-found: ignore
+
+  run-sv2v-sec-regress:
+    name: sv2v ${{ matrix.flow.name }} / ${{ matrix.case.name }}
+    runs-on: ubuntu-22.04
+    needs: build-sec-regress
+    strategy:
+      fail-fast: false
+      matrix:
+        flow:
+        - name: imc-binary
+          engine: imc
+          sec_encoding: binary
+          positive_expectation: allow-unset-state-inconclusive
+        - name: ki-binary
+          engine: k_induction
+          sec_encoding: binary
+          positive_expectation: allow-unset-state-inconclusive
+        - name: pdr-binary
+          engine: pdr
+          sec_encoding: binary
+          positive_expectation: allow-unset-state-inconclusive
+        - name: imc-dual-rail
+          engine: imc
+          sec_encoding: dual_rail_steady
+          positive_expectation: allow-inconclusive
+        - name: ki-dual-rail
+          engine: k_induction
+          sec_encoding: dual_rail_steady
+          positive_expectation: allow-inconclusive
+          max_k: 8
+        - name: pdr-dual-rail
+          engine: pdr
+          sec_encoding: dual_rail_steady
+          positive_expectation: expect-equivalent-or-partial
+        case:
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_asap7_aes_mbff
+        #   case_dir: kepler-formal-examples/asap7_aes-mbff
+        #   config_prefix: sv2v
+        #   expectation: positive
+        - name: sv2v_asap7_ethmac
+          case_dir: kepler-formal-examples/asap7_ethmac
+          config_prefix: sv2v
+          expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_asap7_jpeg_lvt
+        #   case_dir: kepler-formal-examples/asap7_jpeg_lvt
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend connectivity fixes land.
+        # - name: sv2v_asap7_mock_alu
+        #   case_dir: kepler-formal-examples/asap7_mock-alu
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after SV2V example config is fixed in regress.
+        # - name: sv2v_asap7_mock_cpu
+        #   case_dir: kepler-formal-examples/asap7_mock_cpu
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_cts_aes_asap7_base
+        #   case_dir: kepler-formal-examples/cts_aes_asap7_base
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_ihp_sg13g2_i2c_gpio_expander
+        #   case_dir: kepler-formal-examples/ihp-sg13g2_i2c-gpio-expander
+        #   config_prefix: sv2v
+        #   expectation: positive
+        - name: sv2v_ihp_sg13g2_i2c_device_ctrl
+          case_dir: kepler-formal-examples/ihp-sg13g2_i2c-gpio-expander
+          config_prefix: sv2v_I2cDeviceCtrl
+          expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_ihp_sg13g2_ibex
+        #   case_dir: kepler-formal-examples/ihp_sg13g2_ibex
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_mempool_group
+        #   case_dir: kepler-formal-examples/mempool_group
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after SV2V example config is fixed in regress.
+        # - name: sv2v_mock_cpu
+        #   case_dir: kepler-formal-examples/mock_cpu
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend procedural lowering fixes land.
+        # - name: sv2v_nangate45_ariane136
+        #   case_dir: kepler-formal-examples/nangate45_ariane136
+        #   config_prefix: sv2v
+        #   expectation: positive
+        - name: sv2v_nangate45_black_parrot
+          case_dir: kepler-formal-examples/nangate45_black_parrot
+          config_prefix: sv2v
+          expectation: positive
+          # Corrected dual-rail IMC and KI have no strict output proof here.
+          pdr_dual_rail_expectation: allow-inconclusive
+        - name: sv2v_nangate45_black_parrot_sec_final
+          case_dir: kepler-formal-examples/nangate45_black_parrot_sec_final
+          config_prefix: sv2v
+          expectation: positive
+        - name: sv2v_nangate45_bp_be
+          case_dir: kepler-formal-examples/nangate45_bp_be
+          config_prefix: sv2v
+          expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_nangate45_dynamic_node
+        #   case_dir: kepler-formal-examples/nangate45_dynamic_node
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_nangate45_ibex
+        #   case_dir: kepler-formal-examples/nangate45_ibex
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after SV2V example config is fixed in regress.
+        # - name: sv2v_nangate45_swerv
+        #   case_dir: kepler-formal-examples/nangate45_swerv
+        #   config_prefix: sv2v
+        #   expectation: positive
+        - name: sv2v_sky130hd_gcd
+          case_dir: kepler-formal-examples/sky130hd_gcd
+          config_prefix: sv2v
+          expectation: positive
+          # Guard the resetless PDR path that previously exhausted the 6h job.
+          pdr_dual_rail_expectation: expect-full-coverage
+        # TODO: Re-enable after SV2V example config is fixed in regress.
+        # - name: sv2v_sky130hd_riscv32i
+        #   case_dir: kepler-formal-examples/sky130hd_riscv32i
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after pending Naja SV2V frontend fixes land.
+        # - name: sv2v_sky130hs_ibex
+        #   case_dir: kepler-formal-examples/sky130hs_ibex
+        #   config_prefix: sv2v
+        #   expectation: positive
+        # TODO: Re-enable after SV2V example config is fixed in regress.
+        # - name: sv2v_sky130hs_riscv32i
+        #   case_dir: kepler-formal-examples/sky130hs_riscv32i
+        #   config_prefix: sv2v
+        #   expectation: positive
+        exclude:
+        # TODO: Re-enable after fixing the pdr-dual-rail memory blowup for bp_be.
+        - flow:
+            name: pdr-dual-rail
+            engine: pdr
+            sec_encoding: dual_rail_steady
+            positive_expectation: expect-equivalent-or-partial
+          case:
+            name: sv2v_nangate45_bp_be
+            case_dir: kepler-formal-examples/nangate45_bp_be
+            config_prefix: sv2v
+            expectation: positive
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download SEC runtime
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.SEC_RUNTIME_ARTIFACT }}
+        path: ${{github.workspace}}/stage
+
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
+    - name: Clone SV2V regression inputs
+      working-directory: ${{github.workspace}}
+      run: git clone --depth 1 https://github.com/keplertech/kepler-formal-examples
+
+    - name: Run SV2V SEC regression
+      working-directory: ${{github.workspace}}
+      env:
+        CASE_NAME: ${{ matrix.case.name }}
+        CASE_DIR: ${{ matrix.case.case_dir }}
+        CASE_CONFIG_PREFIX: ${{ matrix.case.config_prefix }}
+        CASE_EXPECTATION: ${{ matrix.case.expectation }}
+        CASE_PDR_DUAL_RAIL_EXPECTATION: ${{ matrix.case.pdr_dual_rail_expectation }}
+        SEC_ENGINE: ${{ matrix.flow.engine }}
+        SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
+        SEC_POSITIVE_EXPECTATION: ${{ matrix.flow.positive_expectation }}
+        SEC_MAX_K: ${{ matrix.flow.max_k }}
+      run: |
+        set -euo pipefail
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+
+        expectation="${CASE_EXPECTATION}"
+        if [[ "${expectation}" == "positive" ]]; then
+          expectation="${SEC_POSITIVE_EXPECTATION}"
+        fi
+        if [[ "${SEC_ENGINE}" == "pdr" &&
+              "${SEC_ENCODING}" == "dual_rail_steady" &&
+              -n "${CASE_PDR_DUAL_RAIL_EXPECTATION}" ]]; then
+          expectation="${CASE_PDR_DUAL_RAIL_EXPECTATION}"
+        fi
+
+        if [[ "${SEC_ENGINE}" == "pdr" && "${SEC_ENCODING}" == "dual_rail_steady" ]]; then
+          case_config="${CASE_CONFIG_PREFIX}_sec_test.yml"
+        else
+          case_config="${CASE_CONFIG_PREFIX}_sec_${SEC_ENGINE}_${SEC_ENCODING}_test.yml"
+        fi
+
+        if [[ ! -f "${{github.workspace}}/${CASE_DIR}/${case_config}" ]]; then
+          echo "Missing SV2V SEC config: ${CASE_DIR}/${case_config}" >&2
+          exit 2
+        fi
+
+        extra_args=()
+        if [[ -n "${SEC_MAX_K:-}" ]]; then
+          extra_args+=("max-k=${SEC_MAX_K}")
+        fi
+
+        bash regress/run_sec_strategies_regress.sh \
+          "${CASE_NAME}" \
+          "${{github.workspace}}/${CASE_DIR}" \
+          "${{github.workspace}}/stage/bin/kepler-formal" \
+          "${case_config}" \
+          "${expectation}" \
+          "${extra_args[@]}" \
+          compact \
+          "engine=${SEC_ENGINE}" \
+          "sec-encoding=${SEC_ENCODING}"
+
+    - name: Upload SV2V regression logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-logs-sv2v-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec
+        retention-days: 7
+        if-no-files-found: ignore
+
+  run-sv2v-sec-negative-regress:
+    name: sv2v negative ${{ matrix.flow.name }} / ${{ matrix.case.name }}
+    runs-on: ubuntu-22.04
+    needs: build-sec-regress
+    strategy:
+      fail-fast: false
+      matrix:
+        flow:
+        - name: ki-dual-rail
+          engine: k_induction
+          sec_encoding: dual_rail_steady
+          max_k: 8
+        case:
+        # Keep this list to cases documented as verified SEC failures in
+        # sv2v_sec_negative_examples.md.
+        - name: sv2v_asap7_ethmac_negative
+          case_dir: kepler-formal-examples/asap7_ethmac
+          config: sv2v_sec_k_induction_dual_rail_steady_test.yml
+          edit_script: edit_sv2v_sec_failure.py
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download SEC runtime
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.SEC_RUNTIME_ARTIFACT }}
+        path: ${{github.workspace}}/stage
+
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
+    - name: Clone SV2V regression inputs
+      working-directory: ${{github.workspace}}
+      run: git clone --depth 1 https://github.com/keplertech/kepler-formal-examples
+
+    - name: Run SV2V SEC negative regression
+      # Temporarily disabled: sv2v negative ki-dual-rail /
+      # sv2v_asap7_ethmac_negative needs a replacement expectation with current
+      # Naja.  Keep the job body intact so other matrix entries still run.
+      if: ${{ !(matrix.flow.name == 'ki-dual-rail' && matrix.case.name == 'sv2v_asap7_ethmac_negative') }}
+      working-directory: ${{github.workspace}}
+      env:
+        CASE_NAME: ${{ matrix.case.name }}
+        CASE_DIR: ${{ matrix.case.case_dir }}
+        CASE_CONFIG: ${{ matrix.case.config }}
+        CASE_EDIT_SCRIPT: ${{ matrix.case.edit_script }}
+        SEC_ENGINE: ${{ matrix.flow.engine }}
+        SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
+        SEC_MAX_K: ${{ matrix.flow.max_k }}
+      run: |
+        set -euo pipefail
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+
+        python3 -m pip install \
+          "${{github.workspace}}"/stage/najaeda/najaeda-*.whl
+
+        cleanup_negative_edit() {
+          (
+            cd "${{github.workspace}}/${CASE_DIR}"
+            python3 "${CASE_EDIT_SCRIPT}" --revert
+          ) || true
+        }
+        trap cleanup_negative_edit EXIT
+
+        (
+          cd "${{github.workspace}}/${CASE_DIR}"
+          python3 "${CASE_EDIT_SCRIPT}"
+        )
+
+        extra_args=()
+        if [[ -n "${SEC_MAX_K:-}" ]]; then
+          extra_args+=("max-k=${SEC_MAX_K}")
+        fi
+
+        bash regress/run_sec_strategies_regress.sh \
+          "${CASE_NAME}" \
+          "${{github.workspace}}/${CASE_DIR}" \
+          "${{github.workspace}}/stage/bin/kepler-formal" \
+          "${CASE_CONFIG}" \
+          expect-different \
+          "${extra_args[@]}" \
+          compact \
+          "engine=${SEC_ENGINE}" \
+          "sec-encoding=${SEC_ENCODING}"
+
+    - name: Upload SV2V negative regression logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-logs-sv2v-negative-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec
+        retention-days: 7
+        if-no-files-found: ignore

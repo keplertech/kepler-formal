@@ -371,7 +371,6 @@ void applyDualRailSplitHypothesis(
   // introduced.
   batchProblem.inductionProperty = hypothesis.property;
   batchProblem.inductionBad = batchProblem.bad;
-  batchProblem.inductionPropertyAssumesInductiveStateEqualities = false;
   if (isKInductionDiagEnabled()) {
     emitSecDiag(
         "SEC diag: k-induction dual-rail public conjunction hypothesis range [",
@@ -456,9 +455,6 @@ void emitKInductionProblemDiag(const KInductionProblem& problem,
       problem.observedOutputExprs0.size(),
       " state0=", problem.state0Symbols.size(),
       " state1=", problem.state1Symbols.size(),
-      " initial_equalities=", problem.initialStateEqualityPairs.size(),
-      " bootstrap_equalities=", problem.bootstrapStateEqualityPairs.size(),
-      " inductive_equalities=", problem.inductiveStateEqualityPairs.size(),
       " reset_bootstrap_cycles=", problem.resetBootstrapCycles,
       " max_k=", maxK);
 }

@@ -7,3 +7,14 @@ regress-output/
 bazel-*
 MODULE.bazel.lock
 .vscode/
+
+# bazel run //:deps output (hermetic CMake-flow dependencies)
+/deps/
+
+# Optional Python MCP add-on
+__pycache__/
+*.py[cod]
+mcp/.venv/
+mcp/build/
+mcp/dist/
+mcp/src/*.egg-info/

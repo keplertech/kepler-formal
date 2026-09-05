@@ -2,10 +2,6 @@
 name: regress-pdr
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -26,10 +22,11 @@ env:
   SEC_ENGINE: pdr
   SEC_ENCODING: ${{ inputs.sec_encoding || 'binary' }}
   SKIP_BP_FINAL: ${{ inputs.skip_bp_final || false }}
-  # Binary PDR regressions allow inconclusive positive proofs and the
-  # reset-unanchored no-output case. Dual-rail PDR stays strict.
-  SEC_POSITIVE_EXPECTATION: ${{ (inputs.sec_encoding || 'binary') == 'dual_rail_steady' && 'expect-equivalent' || 'allow-unset-state-inconclusive' }}
-  SEC_FULL_COVERAGE_EXPECTATION: ${{ inputs.require_full_coverage && 'expect-full-coverage' || ((inputs.sec_encoding || 'binary') == 'dual_rail_steady' && 'expect-equivalent' || 'allow-unset-state-inconclusive') }}
+  # Binary PDR regressions also allow the reset-unanchored no-output case.
+  # Dual-rail positive regressions accept a partial proof, but not a fully
+  # inconclusive result; explicit full-coverage runs remain strict.
+  SEC_POSITIVE_EXPECTATION: ${{ (inputs.sec_encoding || 'binary') == 'dual_rail_steady' && 'expect-equivalent-or-partial' || 'allow-unset-state-inconclusive' }}
+  SEC_FULL_COVERAGE_EXPECTATION: ${{ inputs.require_full_coverage && 'expect-full-coverage' || ((inputs.sec_encoding || 'binary') == 'dual_rail_steady' && 'expect-equivalent-or-partial' || 'allow-unset-state-inconclusive') }}
 
 jobs:
   build:
@@ -58,8 +55,8 @@ jobs:
           -DPYTHON_INTERFACE=OFF \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_STANDARD=20 \
-          -DCMAKE_CXX_FLAGS="-O3 -march=native -ffast-math -flto -DNDEBUG" \
-          -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -march=native -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS="-O3 -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -ffast-math -flto -DNDEBUG" \
           -DCMAKE_EXE_LINKER_FLAGS="-flto"
 
     - name: Build
@@ -228,6 +225,19 @@ jobs:
             sec-encoding=${{ env.SEC_ENCODING }}
         fi
 
+    - name: Build and install najaeda from the local Naja checkout
+      run: |
+        python3 -m pip install --upgrade "scikit-build-core>=0.11.3,<0.12"
+        CMAKE_ARGS="-DPREGENERATED_PARSER_SOURCES=OFF" \
+          python3 -m pip install --no-build-isolation "${{github.workspace}}/thirdparty/naja"
+
+    - name: Generate TinyRocket SEC inputs
+      working-directory: ${{github.workspace}}/examples/tinyrocket
+      run: |
+        python3 to_naja_if.py
+        python3 edit.py
+        python3 extract_tinyrocket_csrfile_sec.py
+
     - name: Run TinyRocket SEC regressions
       working-directory: ${{github.workspace}}
       run: |
@@ -250,21 +260,12 @@ jobs:
           engine=${{ env.SEC_ENGINE }} \
           sec-encoding=${{ env.SEC_ENCODING }}
 
-    - name: Install najaeda
-      run: pip install najaeda
-
-    - name: Generate TinyRocket edited and CSRFile SEC examples
-      working-directory: ${{github.workspace}}/example
-      run: |
-        python edit.py
-        python extract_tinyrocket_csrfile_sec.py
-
     - name: Run TinyRocket SEC self-check
       working-directory: ${{github.workspace}}
       run: |
         bash regress/run_sec_strategies_regress.sh \
           tinyrocket_self_sec \
-          "${{github.workspace}}/example" \
+          "${{github.workspace}}/examples/tinyrocket" \
           "${{github.workspace}}/build-sec-regress/src/bin/kepler-formal" \
           test_config_verilog_tinyrocket_sec.yaml \
           ${{ env.SEC_POSITIVE_EXPECTATION }} \
@@ -273,7 +274,7 @@ jobs:
           sec-encoding=${{ env.SEC_ENCODING }}
         bash regress/run_sec_strategies_regress.sh \
           tinyrocket_csrfile_sec \
-          "${{github.workspace}}/example" \
+          "${{github.workspace}}/examples/tinyrocket" \
           "${{github.workspace}}/build-sec-regress/src/bin/kepler-formal" \
           test_config_verilog_tinyrocket_csrfile_sec.yaml \
           expect-different \

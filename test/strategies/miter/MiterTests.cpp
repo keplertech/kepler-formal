@@ -28,11 +28,15 @@
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLDesignModeling.h"
+#include "SNLLibertyConstructor.h"
+#include "SNLBusNet.h"
+#include "SNLBusNetBit.h"
 #include "SNLBusTerm.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "SNLPath.h"
 #include "SNLCapnP.h"
+#include "SNLDumpManifest.h"
 #include "DNL.h"
 #include "Tree2BoolExpr.h"
 
@@ -318,6 +322,91 @@ void expectGenericGateMiterEquivalent(const char* gateName,
   EXPECT_TRUE(miterS.run());
 }
 
+void expectTableSelectMiterEquivalentToMuxTree() {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* library =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+
+  NLDB0::TableSelectSignature signature;
+  signature.width = 1;
+  signature.depth = 8;
+  signature.abits = 3;
+  auto* tableSelect = NLDB0::getOrCreateTableSelect(signature);
+  ASSERT_NE(tableSelect, nullptr);
+  auto* mux = NLDB0::getMux2();
+  ASSERT_NE(mux, nullptr);
+
+  auto buildTop = [&](const char* topName, bool useTableSelect) {
+    auto* top =
+        SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(topName));
+    auto* data =
+        SNLBusTerm::create(top, SNLTerm::Direction::Input, 7, 0, NLName("d"));
+    auto* addr =
+        SNLBusTerm::create(top, SNLTerm::Direction::Input, 2, 0, NLName("sel"));
+    auto* y = SNLScalarTerm::create(
+        top, SNLTerm::Direction::Output, NLName("y"));
+
+    auto* dataNet = SNLBusNet::create(top, 7, 0, NLName("d_net"));
+    auto* addrNet = SNLBusNet::create(top, 2, 0, NLName("sel_net"));
+    auto* yNet = SNLScalarNet::create(top, NLName("y_net"));
+    data->setNet(dataNet);
+    addr->setNet(addrNet);
+    y->setNet(yNet);
+
+    if (useTableSelect) {
+      auto* inst = SNLInstance::create(top, tableSelect, NLName("select0"));
+      inst->setTermNet(NLDB0::getTableSelectData(tableSelect), dataNet);
+      inst->setTermNet(NLDB0::getTableSelectAddress(tableSelect), addrNet);
+      inst->getInstTerm(NLDB0::getTableSelectOutput(tableSelect)->getBit(0))
+          ->setNet(yNet);
+      return top;
+    }
+
+    std::vector<SNLNet*> level;
+    level.reserve(signature.depth);
+    for (size_t row = 0; row < signature.depth; ++row) {
+      level.push_back(dataNet->getBit(static_cast<NLID::Bit>(row)));
+    }
+    for (size_t bit = 0; bit < signature.abits; ++bit) {
+      std::vector<SNLNet*> nextLevel;
+      nextLevel.reserve(level.size() / 2);
+      for (size_t pair = 0; pair < level.size() / 2; ++pair) {
+        const bool isLastMux = level.size() == 2;
+        auto* outputNet = isLastMux
+                              ? static_cast<SNLNet*>(yNet)
+                              : static_cast<SNLNet*>(SNLScalarNet::create(
+                                    top,
+                                    NLName("mux_" + std::to_string(bit) + "_" +
+                                           std::to_string(pair))));
+        auto* muxInst = SNLInstance::create(
+            top,
+            mux,
+            NLName("mux_" + std::to_string(bit) + "_" +
+                   std::to_string(pair)));
+        muxInst->getInstTerm(NLDB0::getMux2InputA()->getBit(0))
+            ->setNet(level[2 * pair]);
+        muxInst->getInstTerm(NLDB0::getMux2InputB()->getBit(0))
+            ->setNet(level[2 * pair + 1]);
+        muxInst->getInstTerm(NLDB0::getMux2Select())
+            ->setNet(addrNet->getBit(static_cast<NLID::Bit>(bit)));
+        muxInst->getInstTerm(NLDB0::getMux2Output()->getBit(0))
+            ->setNet(outputNet);
+        nextLevel.push_back(outputNet);
+      }
+      level = std::move(nextLevel);
+    }
+    EXPECT_EQ(level.size(), 1u);
+    return top;
+  };
+
+  auto* top0 = buildTop("top0", true);
+  auto* top1 = buildTop("top1", false);
+  KEPLER_FORMAL::MiterStrategy miterS(top0, top1);
+  miterS.init();
+  EXPECT_TRUE(miterS.run());
+}
+
 }  // namespace
 
 class MiterTests : public ::testing::Test {
@@ -595,6 +684,10 @@ TEST_F(MiterTests, TestGenericXnorTruthTable) {
   expectGenericGateMiterEquivalent("XNOR_GENERIC", SNLTruthTable::GenericType::XNOR);
 }
 
+TEST_F(MiterTests, TestGenericTableSelectTruthTable) {
+  expectTableSelectMiterEquivalentToMuxTree();
+}
+
 TEST_F(MiterTests, BuildPrimaryOutputClausesConstantTrueOutput) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
@@ -661,6 +754,47 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesConstantFalseOutput) {
   ASSERT_EQ(builder.getPOs().size(), 1u);
   ASSERT_NE(builder.getPOs()[0], nullptr);
   EXPECT_EQ(builder.getPOs()[0]->toString(), "0");
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesDirectConstantOutputs) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("primitives"));
+  NLLibrary* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  SNLDesign* top =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top"));
+  SNLDesign* dummy = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("DUMMY"));
+  univ->setTopDesign(top);
+
+  // Keep the top non-leaf so DNL materializes its driverless constant nets.
+  SNLInstance::create(top, dummy, NLName("dummy0"));
+  SNLInstance::create(top, dummy, NLName("dummy1"));
+
+  auto* falseOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("false_out"));
+  auto* trueOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("true_out"));
+  auto* falseNet = SNLScalarNet::create(top, NLName("false_net"));
+  auto* trueNet = SNLScalarNet::create(top, NLName("true_net"));
+  falseNet->setType(SNLNet::Type::Assign0);
+  trueNet->setType(SNLNet::Type::Assign1);
+  falseOut->setNet(falseNet);
+  trueOut->setNet(trueNet);
+
+  naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  builder.build();
+
+  ASSERT_EQ(builder.getPOs().size(), 2u);
+  ASSERT_NE(builder.getPOs()[0], nullptr);
+  ASSERT_NE(builder.getPOs()[1], nullptr);
+  EXPECT_EQ(builder.getPOs()[0]->toString(), "0");
+  EXPECT_EQ(builder.getPOs()[1]->toString(), "1");
+  EXPECT_TRUE(builder.getSkippedOutputs().empty());
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs) {
@@ -1454,6 +1588,7 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWr
 
   MiterStrategy::CompactSnapshot snapshot0;
   snapshot0.inputs = {a, b, only0};
+  snapshot0.boundaryInputs = {a, b, only0};
   snapshot0.outputs = {logicOut, constOut, drop0};
   auto shared0 = BoolExpr::And(BoolExpr::Var(2), BoolExpr::Var(3));
   snapshot0.POs.emplace_back(
@@ -1464,6 +1599,7 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWr
 
   MiterStrategy::CompactSnapshot snapshot1;
   snapshot1.inputs = {b, a, only1};
+  snapshot1.boundaryInputs = {b, a, only1};
   snapshot1.outputs = {constOut, logicOut, drop1};
   auto shared1 = BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(2));
   snapshot1.POs.emplace_back(BoolExpr::createTrue());
@@ -1480,6 +1616,11 @@ TEST_F(MiterStrategyStandaloneTests, RunCompactSnapshotsAlignsInputsOutputsAndWr
 
   MiterStrategy strategy(nullptr, nullptr,
                          (tmpDir / "compact_snapshot.log").string());
+  strategy.setAllowBoundaryMismatch(false);
+  EXPECT_THROW(strategy.runCompactSnapshots(snapshot0, snapshot1),
+               std::runtime_error);
+  snapshot0.boundaryInputs = {a, b};
+  snapshot1.boundaryInputs = {b, a};
   strategy.setCnfDump(true, cnfPath.string());
   strategy.setPoCnfDump(true, poCnfDir.string());
 
@@ -1899,6 +2040,79 @@ TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
     EXPECT_NE(message.find("TT arity=1"), std::string::npos);
     EXPECT_NE(message.find("model non-output term count=2"), std::string::npos);
   }
+}
+
+TEST_F(MiterTests, Asap7StateFunctionClockGateIsOpaque) {
+  const auto libertyPath = testTempPath("asap7_issue_228.lib");
+  {
+    std::ofstream liberty(libertyPath);
+    ASSERT_TRUE(liberty.good());
+    liberty << R"liberty(
+library (asap7_issue_228) {
+  cell (ICGx1_ASAP7_75t_R) {
+    clock_gating_integrated_cell : latch_posedge_precontrol;
+    statetable ("CLK ENA SE", "IQ") {
+      table : "L L L : - : L,
+               L L H : - : H,
+               L H L : - : H,
+               L H H : - : H,
+               H - - : - : N";
+    }
+    pin (IQ) {
+      direction : internal;
+      internal_node : "IQ";
+    }
+    pin (GCLK) {
+      direction : output;
+      state_function : "CLK & IQ";
+      timing () {
+        related_pin : "CLK";
+        timing_type : combinational_fall;
+      }
+    }
+    pin (CLK) {
+      direction : input;
+      clock : true;
+    }
+    pin (ENA) {
+      direction : input;
+    }
+    pin (SE) {
+      direction : input;
+    }
+  }
+}
+)liberty";
+  }
+
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* library = NLLibrary::create(
+      db, NLLibrary::Type::Primitives, NLName("asap7_issue_228"));
+  SNLLibertyConstructor constructor(library);
+  constructor.construct(libertyPath);
+
+  auto* icg = library->getSNLDesign(NLName("ICGx1_ASAP7_75t_R"));
+  ASSERT_NE(nullptr, icg);
+  auto* clk = icg->getScalarTerm(NLName("CLK"));
+  auto* gclk = icg->getScalarTerm(NLName("GCLK"));
+  ASSERT_NE(nullptr, clk);
+  ASSERT_NE(nullptr, gclk);
+
+  size_t inputCount = 0;
+  for (auto* term : icg->getBitTerms()) {
+    inputCount += term->getDirection() == SNLTerm::Direction::Input;
+  }
+  EXPECT_EQ(3u, inputCount);
+  EXPECT_EQ(0u, SNLDesignModeling::getTruthTableCount(icg));
+  EXPECT_FALSE(SNLDesignModeling::getTruthTable(icg).isInitialized());
+  EXPECT_FALSE(
+      SNLDesignModeling::getTruthTable(icg, gclk->getFlatID()).isInitialized());
+  EXPECT_FALSE(SNLDesignModeling::isConst0(icg));
+
+  const auto dependencies = SNLDesignModeling::getCombinatorialInputs(gclk);
+  ASSERT_EQ(1u, dependencies.size());
+  EXPECT_EQ(clk, *dependencies.begin());
 }
 
 TEST_F(MiterTests, BuildPrimaryOutputClausesDoesNotTreatWideMuxInputsAsPOs) {
@@ -2404,17 +2618,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     std::filesystem::path outputPath("top.capnp");
     SNLCapnP::dump(db, outputPath);
   }
-  // Dump visual
-  {
-    std::string dotFileName("beforeEdit.dot");
-    std::string svgFileName("beforeEdit.svg");
-    SnlVisualiser snl(top);
-    snl.process();
-    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-                               std::string(" -o ") + svgFileName)
-                       .c_str());
-  }
   // clone the top design
   SNLDesign* topClone = top->clone(NLName("topClone"));
   // create an inverter instance in the clone
@@ -2427,18 +2630,6 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
   SNLNet* net5 = SNLScalarNet::create(top, NLName("top_output_net_clone"));
   instInv->getInstTerm(invOut)->setNet(net5);
   topOut->setNet(net5);
-
-  // dump visual
-  {
-    std::string dotFileName("afterEdit.dot");
-    std::string svgFileName("afterEdit.svg");
-    SnlVisualiser snl(top);
-    snl.process();
-    snl.getNetlistGraph().dumpDotFile(dotFileName.c_str());
-    executeCommand(std::string(std::string("dot -Tsvg ") + dotFileName +
-                               std::string(" -o ") + svgFileName)
-                       .c_str());
-  }
 
   // test the miter strategy
   {
@@ -3176,12 +3367,12 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
 
   std::string pfx = get_test_data_prefix();
   int rc = run_kepler_cli_with_args({"-verilog",
-                                         pfx + "example/tinyrocket.v",
-                                         pfx + "example/tinyrocket_edited.v",
-                                         pfx + "example/NangateOpenCellLibrary_typical.lib",
-                                         pfx + "example/fakeram45_64x15.lib",
-                                         pfx + "example/fakeram45_64x32.lib",
-                                         pfx + "example/fakeram45_1024x32.lib"});
+                                         pfx + "examples/tinyrocket/tinyrocket.v",
+                                         pfx + "examples/tinyrocket/tinyrocket_edited.v",
+                                         pfx + "examples/tinyrocket/NangateOpenCellLibrary_typical.lib",
+                                         pfx + "examples/tinyrocket/fakeram45_64x15.lib",
+                                         pfx + "examples/tinyrocket/fakeram45_64x32.lib",
+                                         pfx + "examples/tinyrocket/fakeram45_1024x32.lib"});
   EXPECT_EQ(rc, EXIT_SUCCESS);
 }
 
@@ -3191,12 +3382,46 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
     GTEST_SKIP() << "kepler-formal binary missing";
   }
 
-  std::string config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se.yaml";
-  if (std::getenv("TEST_DATA_PREFIX")) {
-    config = get_test_data_prefix() + "test/strategies/miter/test_config_naja_if_with_se_bazel.yaml";
-  }
-  int rc = run_kepler_cli_with_args({"--config", config});
+  const auto tempDir = makeUniqueTestTempDir();
+  const auto dataRoot = std::filesystem::path(get_test_data_prefix());
+  const auto design0 = tempDir / "tinyrocket_naja.if";
+  const auto design1 = tempDir / "tinyrocket_naja_edited.if";
+  std::filesystem::copy(
+      dataRoot / "examples/tinyrocket/tinyrocket_naja.if", design0,
+      std::filesystem::copy_options::recursive);
+  std::filesystem::copy(
+      dataRoot / "examples/tinyrocket/tinyrocket_naja_edited.if", design1,
+      std::filesystem::copy_options::recursive);
+  // Keep the checked-in payloads while normalizing short-hash metadata to the
+  // exact Naja revision linked into this test binary and CLI subprocess.
+  naja::NL::SNLDumpManifest::dump(design0);
+  naja::NL::SNLDumpManifest::dump(design1);
+
+  const auto config = tempDir / "config.yaml";
+  std::ofstream configFile(config);
+  configFile
+      << "format: naja_if\n"
+      << "input_paths:\n"
+      << "  - " << design0.string() << "\n"
+      << "  - " << design1.string() << "\n"
+      << "liberty_files:\n"
+      << "  - "
+      << (dataRoot / "examples/tinyrocket/NangateOpenCellLibrary_typical.lib").string()
+      << "\n"
+      << "  - " << (dataRoot / "examples/tinyrocket/fakeram45_1024x32.lib").string()
+      << "\n"
+      << "  - " << (dataRoot / "examples/tinyrocket/fakeram45_64x32.lib").string()
+      << "\n"
+      << "log_level: info\n"
+      << "use_scopes: true\n"
+      << "clean_scopes: true\n"
+      << "solver: glucose\n"
+      << "cnf_export: true\n";
+  configFile.close();
+
+  int rc = run_kepler_cli_with_args({"--config", config.string()});
   EXPECT_EQ(rc, EXIT_SUCCESS);
+  std::filesystem::remove_all(tempDir);
 }
 
 // test failure with test_config_failure.yaml
@@ -3231,13 +3456,13 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
     std::ofstream cfg(configPath);
     cfg << "format: verilog\n";
     cfg << "input_paths:\n";
-    cfg << "  - " << (root / "example/tinyrocket.v").string() << "\n";
-    cfg << "  - " << (root / "example/tinyrocket_edited.v").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/tinyrocket.v").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/tinyrocket_edited.v").string() << "\n";
     cfg << "liberty_files:\n";
-    cfg << "  - " << (root / "example/NangateOpenCellLibrary_typical.lib").string() << "\n";
-    cfg << "  - " << (root / "example/fakeram45_1024x32.lib").string() << "\n";
-    cfg << "  - " << (root / "example/fakeram45_64x32.lib").string() << "\n";
-    cfg << "  - " << (root / "example/fakeram45_64x15.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/NangateOpenCellLibrary_typical.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/fakeram45_1024x32.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/fakeram45_64x32.lib").string() << "\n";
+    cfg << "  - " << (root / "examples/tinyrocket/fakeram45_64x15.lib").string() << "\n";
     cfg << "log_file: " << logPath.string() << "\n";
   }
 

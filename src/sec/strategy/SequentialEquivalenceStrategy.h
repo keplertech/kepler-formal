@@ -17,7 +17,6 @@ class SNLDesign;
 namespace KEPLER_FORMAL::SEC {
 
 enum class SecEngine {
-  Legacy,
   KInduction,
   Imc,
   Pdr,
@@ -30,9 +29,24 @@ enum class SecEncoding {
 
 enum class SequentialEquivalenceStatus {
   Equivalent,
+  PartiallyProved,
   Different,
   Inconclusive,
   Unsupported,
+};
+
+struct SecResetPortSpec {
+  std::string name;
+  bool activeValue = true;
+};
+
+struct SecResetSpec {
+  size_t cycles = 0;
+  std::vector<SecResetPortSpec> ports;
+
+  bool enabled() const {
+    return cycles != 0 && !ports.empty();
+  }
 };
 
 struct ExtractedBoundaryReportEntry {  // LCOV_EXCL_LINE
@@ -64,7 +78,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
   std::vector<std::string> skippedObservedOutputs;
   std::vector<std::string> resetUnanchoredSkippedOutputs;
   std::vector<std::string> multiClockDomainSkippedOutputs;
-  std::vector<std::string> abstractedSequentialBoundaries;
+  std::vector<std::string> opaqueCellSkippedOutputs;
   std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
 
   double outputCoveragePercent() const {
@@ -81,9 +95,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
 struct SequentialDesignModel;
 
 // Builds a combined SEC problem from two sequential designs and discharges it
-// with the selected SEC proof engine. "Legacy" preserves the historical hybrid
-// path, while K_INDUCTION, IMC, and PDR expose distinct top-level engines over
-// the same extracted transition system.
+// with the selected SEC proof engine over the extracted transition system.
 class SequentialEquivalenceStrategy {
  public:
   SequentialEquivalenceStrategy(
@@ -91,8 +103,9 @@ class SequentialEquivalenceStrategy {
       naja::NL::SNLDesign* top1,
       KEPLER_FORMAL::Config::SolverType solverType =
           KEPLER_FORMAL::Config::getSolverType(),
-      SecEngine secEngine = SecEngine::Legacy,
-      SecEncoding encoding = SecEncoding::DualRailSteady);
+      SecEngine secEngine = SecEngine::Pdr,
+      SecEncoding encoding = SecEncoding::DualRailSteady,
+      SecResetSpec resetSpec = {});
 
   SequentialEquivalenceResult run(size_t maxK) const;
   SequentialEquivalenceResult runExtractedModels(
@@ -106,14 +119,10 @@ class SequentialEquivalenceStrategy {
   KEPLER_FORMAL::Config::SolverType solverType_;
   SecEngine secEngine_;
   SecEncoding encoding_;
+  SecResetSpec resetSpec_;
 };
 
 namespace detail {
-
-constexpr size_t kMinPdrDualRailFrameZeroValidationOutputs = 256;
-constexpr size_t kMaxPdrDualRailFrameZeroValidationOutputs = 384;
-constexpr size_t kMaxPdrDualRailFrameZeroValidationStateSymbols = 1000000;
-constexpr size_t kMaxDualRailGlobalBootstrapEqualityOutputs = 384;
 
 SequentialEquivalenceProofProgress buildSecEngineProofProgress(
     const std::string& engineLabel,
@@ -126,30 +135,6 @@ std::vector<std::string> buildSecEngineProofProgressDiagLines(
     const std::vector<std::string>& observedOutputNames,
     size_t totalOutputCount,
     size_t provenOutputCount);
-
-inline bool shouldSkipDualRailGlobalBootstrapEqualityMining( // LCOV_EXCL_LINE
-    SecEngine secEngine,
-    SecEncoding encoding,
-    size_t observedOutputSurface) {
-  return (secEngine == SecEngine::KInduction || // LCOV_EXCL_LINE
-          secEngine == SecEngine::Imc) && // LCOV_EXCL_LINE
-         encoding == SecEncoding::DualRailSteady && // LCOV_EXCL_LINE
-         observedOutputSurface > kMaxDualRailGlobalBootstrapEqualityOutputs; // LCOV_EXCL_LINE
-}
-
-inline bool shouldDeferPdrDualRailFrameZeroValidation( // LCOV_EXCL_LINE
-    size_t observedOutputSurface,
-    size_t railStateSymbolSurface) {
-  if (observedOutputSurface > kMaxPdrDualRailFrameZeroValidationOutputs) { // LCOV_EXCL_LINE
-    return true; // LCOV_EXCL_LINE
-  }
-  // A mid-wide output bus can still be too expensive when compact extraction
-  // expands the rail state into a very large surface.  Keep small probe designs
-  // on the exact validation path, but let PDR own huge SoC surfaces directly.
-  return observedOutputSurface >= kMinPdrDualRailFrameZeroValidationOutputs && // LCOV_EXCL_LINE
-         railStateSymbolSurface > // LCOV_EXCL_LINE
-             kMaxPdrDualRailFrameZeroValidationStateSymbols;
-} // LCOV_EXCL_LINE
 
 }  // namespace detail
 

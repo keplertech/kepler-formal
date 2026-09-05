@@ -9,6 +9,7 @@ add_library(kepler_sec STATIC
     imc/IMCEngine.cpp
     kinduction/KInductionEngine.cpp
     kinduction/OutputBatching.cpp
+    model/SecNetlistChecks.cpp
     model/SequentialDesignModel.cpp
     pdr/PDREngine.cpp
     proof/DualRailEncoding.cpp
@@ -17,8 +18,6 @@ add_library(kepler_sec STATIC
     kinduction/BaseCaseSolver.cpp
     kinduction/InductionStepSolver.cpp
     kinduction/SatEncoding.cpp
-    strategy/ReachableStateInvariant.cpp
-    strategy/StructuralStateInvariant.cpp
     strategy/SequentialEquivalenceStrategy.cpp
 )
 

@@ -1,5 +1,5 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:tbb.bzl", "TBB_DEPS", "TBB_LINKOPTS")
+load("//bazel:tbb.bzl", "TBB_DEPS")
 
 cc_library(
     name = "formal_structures",
@@ -16,5 +16,4 @@ cc_library(
     includes = ["."],
     visibility = ["//visibility:public"],
     deps = TBB_DEPS,
-    linkopts = TBB_LINKOPTS,
 )
