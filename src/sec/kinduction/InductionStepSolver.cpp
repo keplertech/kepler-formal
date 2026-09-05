@@ -204,12 +204,6 @@ bool isWideDualRailResidualSurface(const KInductionProblem& problem) { // LCOV_E
          kMinOriginalOutputsForCompactDualRailProfile;
 }
 
-bool requiresConcreteDualRailStateDomain(const KInductionProblem& problem) {
-  return problem.usesDualRailStateEncoding &&
-         (problem.hasCompleteBootstrapStateAssignments() ||
-          problem.hasCompleteInitialState());
-}
-
 size_t directDualRailProofProfileSymbols(const KInductionProblem& problem,
                                          size_t solverSymbols) {
   if (problem.deferBaseCaseChecks) {
@@ -734,8 +728,7 @@ void addDualRailStateValidity(
     const FrameVariableStore& variables,
     const std::vector<DualRailSymbolPair>& railPairs,
     const std::unordered_set<size_t>& solverSymbols,
-    size_t numFrames,
-    bool requireExactRails) {
+    size_t numFrames) {
   for (size_t frame = 0; frame < numFrames; ++frame) {
     for (const auto& rails : railPairs) {
       if (solverSymbols.find(rails.mayBeOne) == solverSymbols.end() ||
@@ -748,16 +741,6 @@ void addDualRailStateValidity(
       solver.addClause({
           variables.getLiteral(rails.mayBeOne, frame),
           variables.getLiteral(rails.mayBeZero, frame)});
-      if (requireExactRails) {
-        // Complete bootstrap/initial assignments describe concrete Boolean
-        // states, not an unknown value set.  Even deferred output slices owe
-        // the same shared concrete base prefix, so keep strict KI inside the
-        // per-design exact rail domain instead of proving over synthetic
-        // unknown rails.
-        solver.addClause({
-            -variables.getLiteral(rails.mayBeOne, frame),
-            -variables.getLiteral(rails.mayBeZero, frame)});
-      }
     }
   }
 }
@@ -879,8 +862,7 @@ InductionProofStatus proveByInductionStatus(
       variables,
       problem.dualRailStatePairs,
       coi.solverSymbolSet,
-      k + 1,
-      requiresConcreteDualRailStateDomain(problem));
+      k + 1);
   addPostBootstrapResetInputConstraints(solver, variables, problem, k + 1);
 
   for (size_t frame = 0; frame < k; ++frame) {

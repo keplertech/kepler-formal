@@ -25,6 +25,7 @@ class TransitionExprResolver {
   BoolExpr* at(size_t stateSymbol) const;
   TransitionExprView expressionView(size_t stateSymbol) const;
   const std::set<size_t>& support(size_t stateSymbol) const;
+  const std::vector<BoolExpr*>& encodingPostorder(size_t stateSymbol) const;
   void collectSupportForTargets(
       const std::vector<size_t>& stateSymbols,
       const std::unordered_set<size_t>& knownStateSymbols,
@@ -38,6 +39,8 @@ class TransitionExprResolver {
   const KInductionProblem& problem_;
   std::unordered_map<size_t, BoolExpr*> eagerByStateSymbol_;
   mutable std::unordered_map<size_t, std::set<size_t>> supportByStateSymbol_;
+  mutable std::unordered_map<BoolExpr*, std::vector<BoolExpr*>>
+      encodingPostorderByExpr_;
   mutable std::unordered_map<size_t, size_t> nodeCountByStateSymbol_;
   mutable std::unordered_set<size_t> stateSymbols_;
   mutable std::unordered_map<size_t, size_t> primaryByComplement_;

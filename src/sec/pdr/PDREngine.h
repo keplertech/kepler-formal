@@ -7,8 +7,11 @@
 #include "kinduction/KInductionProblem.h"
 
 #include <algorithm>
-#include <functional>
+#include <cstdint>
 #include <iterator>
+#include <list>
+#include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -26,14 +29,48 @@ struct PDRResult {
   size_t bound = 0;
 };
 
-namespace detail {
+struct PDRQueryLimits {
+  unsigned predecessorConflictLimit = 0;
+  unsigned predecessorDecisionLimit = 0;
+  // Blocking is the mandatory relative-induction query in IC3/PDR. A caller
+  // may give it a deeper allowance while keeping optional generalization and
+  // propagation queries inexpensive. Two-field aggregate initializers retain
+  // one uniform limit for every query role.
+  unsigned blockingConflictLimit = predecessorConflictLimit;
+  unsigned blockingDecisionLimit = predecessorDecisionLimit;
+  // Broad probes can bound transition-size estimation and return UNKNOWN so
+  // the caller splits the exact property. Zero retains the engine defaults.
+  size_t predecessorEncodingNodeLimit = 0;
+  size_t predecessorNodeHintTargetLimit = 0;
+  // Negative retains the deterministic default. This cumulative limit spans
+  // optional invariant certification across every output batch sharing one
+  // SEC model; it never limits an IC3/PDR property query.
+  int64_t invariantCertificationTotalTickLimit = -1;
+};
 
-bool pdrResetBootstrapPrecheckTooLarge(bool usesDualRailStateEncoding,
-                                       size_t observedOutputCount,
-                                       size_t originalObservedOutputCount,
-                                       size_t transitionSources,
-                                       size_t transitionSourceLimit,
-                                       size_t outputLimit = 128);
+// Output batches from one SEC problem have the same immutable transition and
+// startup model. This serial, scoped cache keeps exact model preparation, F[0]
+// work, and certified inductive clauses across PDR runs. Property-specific
+// bad-state searches and proof obligations remain local to each engine.
+class PDRExactInitCache {
+ public:
+  struct Impl;
+
+  PDRExactInitCache(
+      const KInductionProblem& sourceProblem,
+      KEPLER_FORMAL::Config::SolverType solverType);
+  ~PDRExactInitCache();
+
+  PDRExactInitCache(const PDRExactInitCache&) = delete;
+  PDRExactInitCache& operator=(const PDRExactInitCache&) = delete;
+
+ private:
+  std::unique_ptr<Impl> impl_;
+
+  friend class PDREngine;
+};
+
+namespace detail {
 
 std::vector<size_t> makeDeterministicPdrWorklist(
     const std::unordered_set<size_t>& symbols);
@@ -47,31 +84,10 @@ bool pdrCubeAssignmentOrderLess(
     const std::vector<std::pair<size_t, bool>>& lhs,
     const std::vector<std::pair<size_t, bool>>& rhs);
 
-inline void mixPdrClauseFingerprintValue(size_t& seed, size_t value) { // LCOV_EXCL_LINE
-  seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2); // LCOV_EXCL_LINE
-} // LCOV_EXCL_LINE
-
-template <typename ClauseRange>
-size_t pdrOrderedClauseFingerprint(const ClauseRange& clauses) { // LCOV_EXCL_LINE
-  if (clauses.empty()) { // LCOV_EXCL_LINE
-    return 0; // LCOV_EXCL_LINE
-  }
-  // This is used for cache identity only. Keep order in the hash so two retry
-  // clause vectors with the same clauses in different order do not require
-  // normalization on the hot predecessor path.
-  size_t seed = std::hash<size_t>()(clauses.size()); // LCOV_EXCL_LINE
-  for (const auto& clause : clauses) { // LCOV_EXCL_LINE
-    size_t clauseSeed = 0x517cc1b727220a95ULL; // LCOV_EXCL_LINE
-    for (const auto& literal : clause) { // LCOV_EXCL_LINE
-      mixPdrClauseFingerprintValue( // LCOV_EXCL_LINE
-          clauseSeed, std::hash<size_t>()(literal.symbol)); // LCOV_EXCL_LINE
-      mixPdrClauseFingerprintValue( // LCOV_EXCL_LINE
-          clauseSeed, std::hash<bool>()(literal.positive)); // LCOV_EXCL_LINE
-    }
-    mixPdrClauseFingerprintValue(seed, clauseSeed); // LCOV_EXCL_LINE
-  }
-  return seed; // LCOV_EXCL_LINE
-} // LCOV_EXCL_LINE
+bool pdrProofObligationPriorityLess(size_t lhsLevel,
+                                    size_t lhsSequence,
+                                    size_t rhsLevel,
+                                    size_t rhsSequence);
 
 inline std::vector<size_t> mergeSortedPdrSymbolVectors( // LCOV_EXCL_LINE
     const std::vector<size_t>& lhs,
@@ -104,176 +120,121 @@ inline bool widenSortedPdrSymbolSurface( // LCOV_EXCL_LINE
   return true; // LCOV_EXCL_LINE
 } // LCOV_EXCL_LINE
 
-inline bool shouldUseStableLocalPredecessorCacheSurface(
-    bool hasLocalDualRailLeafRepairSurface,
-    bool exactFrameClauses,
-    size_t level) {
-  // Stable local-leaf caches are a startup/frontier optimization. Higher PDR
-  // levels already carry learned-frame context; keeping those queries on their
-  // exact local surface avoids turning a small predecessor retry into a broad
-  // SAT instance.
-  return hasLocalDualRailLeafRepairSurface && exactFrameClauses && level == 0;
-}
+class PdrFrameSymbolSurfaceCache {
+ public:
+  const std::vector<size_t>& widen(
+      const void* modelIdentity,
+      size_t level,
+      const std::vector<size_t>& requestedSurface,
+      bool* widened = nullptr) {
+    if (modelIdentity_ != modelIdentity) {
+      // Symbol numbers belong to one transition model. A new model must not
+      // inherit a surface from the previous PDR run.
+      surfacesByLevel_.clear();
+      modelIdentity_ = modelIdentity;
+    }
+    auto& stableSurface = surfacesByLevel_[level];
+    const bool surfaceWidened =
+        widenSortedPdrSymbolSurface(stableSurface, requestedSurface);
+    if (widened != nullptr) {
+      *widened = surfaceWidened;
+    }
+    return stableSurface;
+  }
 
-inline bool isBroadDualRailResidualOutputSurface(
-    bool usesDualRailStateEncoding,
-    size_t observedOutputCount,
-    size_t originalObservedOutputCount,
-    size_t broadOutputLimit) {
-  // A one-output residual leaf split from a broad public bus may use the local
-  // memory/perf shortcuts. AES-sized leaves also have one output after
-  // splitting, but keep the reference PDR repair route.
-  return usesDualRailStateEncoding &&
-         observedOutputCount == 1 && // LCOV_EXCL_LINE
-         originalObservedOutputCount > broadOutputLimit; // LCOV_EXCL_LINE
-}
+ private:
+  const void* modelIdentity_ = nullptr;
+  // IC3 keeps a distinct incremental SAT context for every frame. Preserve
+  // each context's monotonic symbol surface when queries move between frames.
+  std::unordered_map<size_t, std::vector<size_t>> surfacesByLevel_;
+};
 
-inline bool shouldUseResidualDualRailPredecessorBudget( // LCOV_EXCL_LINE
-    bool usesDualRailStateEncoding,
-    size_t observedOutputCount,
-    size_t level,
-    size_t targetCubeSize,
-    size_t solverSymbolCount) {
-  constexpr size_t kMaxOriginalResidualTargetCubeLiterals = 16; // LCOV_EXCL_LINE
-  constexpr size_t kMaxOriginalResidualSolverSymbols = 8192; // LCOV_EXCL_LINE
-  constexpr size_t kMaxResidualTargetCubeLiterals = 32; // LCOV_EXCL_LINE
-  constexpr size_t kMaxResidualSolverSymbols = 16 * 1024; // LCOV_EXCL_LINE
-  // Residual one-output dual-rail leaves are still local proof obligations even
-  // when a rail-expanded output predicate reaches 28-32 literals. Keep broad
-  // batches on the cheap limit, but let these local leaves spend the intended
-  // residual predecessor budget instead of splitting on the 10k retry cap. The
-  // wider Swerv shape is startup-only; higher PDR levels can enumerate many
-  // sibling cubes, so they keep the historical small residual guard.
-  const bool originalSmallResidualShape = // LCOV_EXCL_LINE
-      targetCubeSize <= kMaxOriginalResidualTargetCubeLiterals && // LCOV_EXCL_LINE
-      solverSymbolCount <= kMaxOriginalResidualSolverSymbols; // LCOV_EXCL_LINE
-  const bool localStartupResidualShape = // LCOV_EXCL_LINE
-      level == 0 && // LCOV_EXCL_LINE
-      targetCubeSize <= kMaxResidualTargetCubeLiterals && // LCOV_EXCL_LINE
-      solverSymbolCount <= kMaxResidualSolverSymbols; // LCOV_EXCL_LINE
-  return usesDualRailStateEncoding && // LCOV_EXCL_LINE
-         observedOutputCount == 1 && // LCOV_EXCL_LINE
-         targetCubeSize != 0 && // LCOV_EXCL_LINE
-         (originalSmallResidualShape || localStartupResidualShape); // LCOV_EXCL_LINE
+template <typename Key, typename Value, typename Hash>
+class PdrWeightedLruCache {
+ public:
+  struct InsertResult {
+    Value* value = nullptr;
+    size_t evictedEntries = 0;
+  };
+
+  explicit PdrWeightedLruCache(size_t maxWeight) : maxWeight_(maxWeight) {}
+
+  PdrWeightedLruCache(const PdrWeightedLruCache&) = delete;
+  PdrWeightedLruCache& operator=(const PdrWeightedLruCache&) = delete;
+
+  Value* find(const Key& key) {
+    const auto existing = entries_.find(key);
+    if (existing == entries_.end()) {
+      return nullptr;
+    }
+    recency_.splice(recency_.begin(), recency_, existing->second.recency);
+    return &existing->second.value;
+  }
+
+  InsertResult insert(Key key, Value value, size_t weight) {
+    if (weight > maxWeight_) {
+      return {};
+    }
+    if (Value* existing = find(key); existing != nullptr) {
+      return {existing, 0};
+    }
+
+    size_t evictedEntries = 0;
+    while (!entries_.empty() && weight > maxWeight_ - retainedWeight_) {
+      evictLeastRecent();
+      ++evictedEntries;
+    }
+
+    auto [inserted, insertedNew] = entries_.emplace(
+        std::move(key), Entry{std::move(value), weight, {}});
+    (void)insertedNew;
+    recency_.push_front(&inserted->first);
+    inserted->second.recency = recency_.begin();
+    retainedWeight_ += weight;
+    return {&inserted->second.value, evictedEntries};
+  }
+
+  size_t size() const { return entries_.size(); }
+  size_t retainedWeight() const { return retainedWeight_; }
+
+ private:
+  struct Entry {
+    Value value;
+    size_t weight = 0;
+    typename std::list<const Key*>::iterator recency;
+  };
+
+  void evictLeastRecent() {
+    const Key* key = recency_.back();
+    const auto existing = entries_.find(*key);
+    retainedWeight_ -= existing->second.weight;
+    recency_.pop_back();
+    entries_.erase(existing);
+  }
+
+  size_t maxWeight_ = 0;
+  size_t retainedWeight_ = 0;
+  // Unordered-map references survive rehashing, so recency nodes can point at
+  // map keys without storing a second ASIC-sized cube.
+  std::list<const Key*> recency_;
+  std::unordered_map<Key, Entry, Hash> entries_;
+};
+
+inline bool shouldResetPdrStableUnsatCache(size_t stableUnsatEntries,
+                                           size_t maxEntries) {
+  // Exact query results use a separate LRU. Stable UNSAT facts remain valid
+  // across frame strengthening and therefore expire only at their own bound.
+  return stableUnsatEntries >= maxEntries;
 }
 
 inline bool shouldSharePredecessorUnsatCore( // LCOV_EXCL_LINE
     size_t frameFingerprint,
-    size_t extraFrameFingerprint,
     bool excludeTargetOnCurrentFrame) {
   // A predecessor core is reusable for stronger target cubes only in the base
-  // PDR context.  Do not share proofs that may have depended on selector
-  // assumptions or one-off projected retry clauses.
+  // PDR context. Do not share proofs that depended on the Q2 cube-exclusion
+  // selector.
   return frameFingerprint == 0 && // LCOV_EXCL_LINE
-         extraFrameFingerprint == 0 && // LCOV_EXCL_LINE
          !excludeTargetOnCurrentFrame; // LCOV_EXCL_LINE
-}
-
-inline bool shouldRetryLargeDualRailPredecessorWithResetFrontier( // LCOV_EXCL_LINE
-    bool usesDualRailStateEncoding,
-    bool exactResetFrontierChecksEnabled,
-    size_t observedOutputCount,
-    size_t level,
-    size_t targetCubeSize,
-    size_t transitionSupportSize,
-    size_t exactResetPrecheckSupportLimit) {
-  constexpr size_t kMaxRetryTargetCubeLiterals = 32; // LCOV_EXCL_LINE
-  // This exact proof is a local repair for hard one-output dual-rail leaves.
-  // Keep the broad reset-frontier path off for batches and higher frames; the
-  // caller may use it either before the expensive predecessor SAT attempt or as
-  // a last-chance proof after a resource-limited SAT query returns unknown.
-  return usesDualRailStateEncoding && // LCOV_EXCL_LINE
-         !exactResetFrontierChecksEnabled && // LCOV_EXCL_LINE
-         observedOutputCount == 1 && // LCOV_EXCL_LINE
-         level == 0 && // LCOV_EXCL_LINE
-         targetCubeSize != 0 && // LCOV_EXCL_LINE
-         targetCubeSize <= kMaxRetryTargetCubeLiterals && // LCOV_EXCL_LINE
-         transitionSupportSize <= exactResetPrecheckSupportLimit; // LCOV_EXCL_LINE
-}
-
-inline bool shouldPrecheckLargeDualRailPredecessorWithResetFrontier(
-    bool usesDualRailStateEncoding,
-    bool exactResetFrontierChecksEnabled,
-    size_t observedOutputCount,
-    size_t level,
-    size_t targetCubeSize,
-    size_t transitionSupportSize,
-    size_t exactResetPrecheckSupportLimit) {
-  constexpr size_t kMinPrecheckTargetCubeLiterals = 28;
-  constexpr size_t kMinPrecheckTransitionSupport = 4000;
-  // Small local cubes are usually cheaper as ordinary predecessor SAT queries.
-  // Spend the exact reset-frontier query up front only on the residual cube
-  // shape that otherwise burns the restored predecessor budget first.
-  return targetCubeSize >= kMinPrecheckTargetCubeLiterals &&
-         transitionSupportSize >= kMinPrecheckTransitionSupport && // LCOV_EXCL_LINE
-         shouldRetryLargeDualRailPredecessorWithResetFrontier( // LCOV_EXCL_LINE
-             usesDualRailStateEncoding, // LCOV_EXCL_LINE
-             exactResetFrontierChecksEnabled, // LCOV_EXCL_LINE
-             observedOutputCount, // LCOV_EXCL_LINE
-             level, // LCOV_EXCL_LINE
-             targetCubeSize, // LCOV_EXCL_LINE
-             transitionSupportSize, // LCOV_EXCL_LINE
-             exactResetPrecheckSupportLimit); // LCOV_EXCL_LINE
-}
-
-inline bool shouldUseOneShotLargeDualRailResetFrontierPredecessor( // LCOV_EXCL_LINE
-    bool hasLargeDualRailResetFrontierSurface,
-    bool hasLocalDualRailLeafRepairSurface) {
-  // If an exact reset-frontier query runs on a huge non-local leaf, avoid
-  // pinning the reset-prefix SAT solver that can dominate top MEM there.
-  return hasLargeDualRailResetFrontierSurface && // LCOV_EXCL_LINE
-         !hasLocalDualRailLeafRepairSurface; // LCOV_EXCL_LINE
-}
-
-inline bool shouldRunLargeDualRailResetFrontierQuery( // LCOV_EXCL_LINE
-    bool resetFrontierQueryAllowed,
-    bool hasLargeDualRailResetFrontierSurface,
-    bool hasLocalDualRailLeafRepairSurface) {
-  // The exact reset-frontier query is an optional PDR accelerator used before
-  // or after the local predecessor query.  On huge non-local leaves, one-shot
-  // mode protects memory but rebuilding the reset transition dominates runtime;
-  // keep the exact query for cached/local repair and let ordinary PDR splitting
-  // handle the non-local hot path.
-  return resetFrontierQueryAllowed && // LCOV_EXCL_LINE
-         !shouldUseOneShotLargeDualRailResetFrontierPredecessor( // LCOV_EXCL_LINE
-             hasLargeDualRailResetFrontierSurface, // LCOV_EXCL_LINE
-             hasLocalDualRailLeafRepairSurface); // LCOV_EXCL_LINE
-}
-
-inline size_t effectiveLocalDualRailExactResetPrecheckSupportLimit(
-    bool hasLocalDualRailLeafRepairSurface,
-    size_t observedOutputCount,
-    size_t level,
-    size_t targetCubeSize,
-    size_t configuredSupportLimit,
-    size_t localSupportLimit) {
-  constexpr size_t kMinLocalPrecheckTargetCubeLiterals = 28;
-  constexpr size_t kMaxLocalPrecheckTargetCubeLiterals = 32;
-  if (configuredSupportLimit == 0) {
-    return 0; // LCOV_EXCL_LINE
-  }
-  // Local final dual-rail leaves may exceed the broad reset-precheck support
-  // cap by a small amount.  Let the exact reset proof run before building the
-  // ordinary wide predecessor SAT instance, but keep batches and non-F0 queries
-  // on the global cap.
-  if (!hasLocalDualRailLeafRepairSurface ||
-      observedOutputCount != 1 || // LCOV_EXCL_LINE
-      level != 0 || // LCOV_EXCL_LINE
-      targetCubeSize < kMinLocalPrecheckTargetCubeLiterals || // LCOV_EXCL_LINE
-      targetCubeSize > kMaxLocalPrecheckTargetCubeLiterals) { // LCOV_EXCL_LINE
-    return configuredSupportLimit;
-  }
-  return std::max(configuredSupportLimit, localSupportLimit); // LCOV_EXCL_LINE
-}
-
-inline bool shouldSeedExactResetPredecessorSiblingCores( // LCOV_EXCL_LINE
-    size_t cubeSize,
-    size_t knownCoreSize) {
-  constexpr size_t kMaxSiblingSeedCubeLiterals = 32; // LCOV_EXCL_LINE
-  // Seeding singleton siblings is a bounded reuse of an already-built exact
-  // reset-frontier context.  Keep it aligned with the PDR bad-cube cap so
-  // whole-chip rail surfaces cannot trigger an unbounded sweep.
-  return cubeSize <= kMaxSiblingSeedCubeLiterals && knownCoreSize == 1; // LCOV_EXCL_LINE
 }
 
 }  // namespace detail
@@ -283,68 +244,29 @@ inline bool shouldSeedExactResetPredecessorSiblingCores( // LCOV_EXCL_LINE
 // SEC transition system.
 class PDREngine {
  public:
-  static constexpr size_t kDefaultPredecessorProjectionLimit = 32;
-  static constexpr size_t kDefaultPreciseBadCubeStateLimit = 32;
-  static constexpr size_t kDefaultBoundedRootGeneralizationAttempts = 16;
-
   PDREngine(const KInductionProblem& problem,
             KEPLER_FORMAL::Config::SolverType solverType,
-            size_t predecessorProjectionLimit =
-                kDefaultPredecessorProjectionLimit,
-            size_t preciseBadCubeStateLimit =
-                kDefaultPreciseBadCubeStateLimit,
-            bool useExactFrameClauses = false,
             size_t maxPredecessorQueries = 0,
-            bool refineProjectedCounterexamples = true,
-            size_t maxBoundedRootGeneralizationAttempts =
-                kDefaultBoundedRootGeneralizationAttempts,
-            bool learnValidatedBadFormulaClauses = false,
-            bool useExactResetFrontierChecks = true,
-            size_t maxProjectedCounterexampleRefinements = 0);
+            std::shared_ptr<PDRExactInitCache> exactInitCache = nullptr);
 
-  PDRResult run(size_t maxFrames, bool resetBootstrapFrameCheckedSafe = false) const;
+  PDRResult run(size_t maxFrames) const;
+  // Run the same transition system against an alternate safety property.
+  // The target is deliberately separate from the model so it cannot alter
+  // exact F[0]; the corresponding bad predicate is derived internally.
+  PDRResult run(size_t maxFrames, BoolExpr* property) const;
+  PDRResult run(size_t maxFrames,
+                BoolExpr* property,
+                const PDRQueryLimits& queryLimits) const;
 
  private:
+  PDRResult runWithQueryLimits(size_t maxFrames,
+                               BoolExpr* property,
+                               const PDRQueryLimits* queryLimits) const;
+
   const KInductionProblem& problem_;
   KEPLER_FORMAL::Config::SolverType solverType_;
-  size_t predecessorProjectionLimit_ = kDefaultPredecessorProjectionLimit;
-  // Exact learned-frame encoding and predecessor-cube projection are separate
-  // knobs. Large SEC PDR runs may need the full learned frame to avoid stale
-  // abstract predecessors, while still carrying compact predecessor cubes so
-  // blocking does not enumerate thousands of full SAT models.
-  bool useExactFrameClauses_ = false;
-  // Limits the precise state support used for the first bad obligation. SEC
-  // can set this to the same width as predecessor projection so the first PDR
-  // query does not start wider than later obligations.
-  size_t preciseBadCubeStateLimit_ = kDefaultPreciseBadCubeStateLimit;
-  // Projected SEC/PDR retries are intentionally approximate and can sometimes
-  // enumerate abstract SAT predecessors without strengthening the proof. A
-  // zero value is unlimited; non-zero budgets let those projected stages
-  // return inconclusive and hand off to a stronger exact-frame retry.
   size_t maxPredecessorQueries_ = 0;
-  // When true, a projected init-reaching obligation is validated internally
-  // against the concrete bounded prefix and refined if it is abstract-only.
-  // SEC strategy retry stages can disable this because they already validate
-  // every PDR difference with the top-level concrete BMC checker before
-  // accepting it.
-  bool refineProjectedCounterexamples_ = true;
-  // Literal-dropping on rejected abstract root cubes is sound but can be very
-  // expensive on ASIC one-output cones. The final SEC retry may set this to
-  // zero to learn the exact unreachable root cube directly after validation.
-  size_t maxBoundedRootGeneralizationAttempts_ =
-      kDefaultBoundedRootGeneralizationAttempts;
-  // Optional final-stage CEGAR refinement: after exact BMC rejects an abstract
-  // bad trace, learn the small state-only bad formula's CNF clauses in the PDR
-  // frames. This blocks every valuation of that bad predicate at once.
-  bool learnValidatedBadFormulaClauses_ = false;
-  // Projected SEC/PDR stages are followed by concrete BMC validation in the
-  // strategy. They can skip expensive exact reset-frontier SAT prechecks and
-  // escalate on an abstract trace, while final self-refining PDR keeps them.
-  bool useExactResetFrontierChecks_ = true;
-  // Zero is unlimited. SEC uses a finite budget for dual-rail final batches so
-  // an abstract-only root loop can be split or skipped instead of monopolizing
-  // the run.
-  size_t maxProjectedCounterexampleRefinements_ = 0;
+  std::shared_ptr<PDRExactInitCache> exactInitCache_;
 };
 
 }  // namespace KEPLER_FORMAL::SEC

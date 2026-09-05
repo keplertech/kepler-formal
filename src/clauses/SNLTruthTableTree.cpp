@@ -76,6 +76,7 @@ const SNLTruthTable SNLTruthTableTree::PtableHolder_ = SNLTruthTable(1, 2, SNLTr
 
 namespace {
 std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
+    const naja::NL::SNLInstance* instance,
     const naja::NL::SNLDesign* design,
     size_t flatTermID);
 }
@@ -120,8 +121,10 @@ SNLTruthTableTree::Node::Node(SNLTruthTableTree* t,
   }
   if (type == Type::Table) {
     const auto& termInfo = naja::DNL::get()->getDNLTerminalFromID(data.termid);
+    const auto& instance = termInfo.getDNLInstance();
     truthTable.setShared(getSharedTruthTable(
-        termInfo.getDNLInstance().getSNLModel(),
+        instance.getSNLInstance(),
+        instance.getSNLModel(),
         termInfo.getSnlBitTerm()->getOrderID()));
   }
 }
@@ -160,25 +163,29 @@ static std::shared_ptr<SNLTruthTableTree::Node> nullNodePtr = nullptr;
 namespace {
 
 struct SharedTruthTableKey {
+  const naja::NL::SNLInstance* instance = nullptr;
   const naja::NL::SNLDesign* design = nullptr;
   uint32_t designNameID = 0;
   size_t flatTermID = 0;
 
   bool operator==(const SharedTruthTableKey& other) const {
-    return design == other.design && designNameID == other.designNameID &&
+    return instance == other.instance && design == other.design &&
+           designNameID == other.designNameID &&
            flatTermID == other.flatTermID;
   }
 };
 
 struct SharedTruthTableKeyHash {
   size_t operator()(const SharedTruthTableKey& key) const {
-    return std::hash<const naja::NL::SNLDesign*>{}(key.design) ^
-           (std::hash<uint32_t>{}(key.designNameID) << 1) ^
-           (std::hash<size_t>{}(key.flatTermID) << 2);
+    return std::hash<const naja::NL::SNLInstance*>{}(key.instance) ^
+           (std::hash<const naja::NL::SNLDesign*>{}(key.design) << 1) ^
+           (std::hash<uint32_t>{}(key.designNameID) << 2) ^
+           (std::hash<size_t>{}(key.flatTermID) << 3);
   }
 };
 
 std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
+    const naja::NL::SNLInstance* instance,
     const naja::NL::SNLDesign* design,
     size_t flatTermID) {
   static std::mutex cacheMutex;
@@ -191,8 +198,13 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
                                   SharedTruthTableKeyHash>
       localCache;
 
+  const bool usesInstanceTable =
+      SNLDesignModeling::hasTruthTableFromParameter(design, flatTermID);
   const SharedTruthTableKey key{
-      design, design ? design->getName().getID() : 0, flatTermID};
+      usesInstanceTable ? instance : nullptr,
+      design,
+      design ? design->getName().getID() : 0,
+      flatTermID};
   const auto localIt = localCache.find(key);
   if (localIt != localCache.end()) {
     return localIt->second;
@@ -207,7 +219,9 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
     }
   }
 
-  auto currentTable = SNLDesignModeling::getTruthTable(design, flatTermID);
+  auto currentTable = usesInstanceTable
+                          ? SNLDesignModeling::getTruthTable(instance, flatTermID)
+                          : SNLDesignModeling::getTruthTable(design, flatTermID);
   auto sharedTable = std::make_shared<SNLTruthTable>(std::move(currentTable));
   std::lock_guard<std::mutex> lock(cacheMutex);
   const auto [it, inserted] = cache.emplace(key, sharedTable);

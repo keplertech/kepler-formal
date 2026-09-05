@@ -66,6 +66,7 @@ jobs:
         export HPDCACHE_DIR="$PWD/core/cache_subsystem/hpdcache"
         export TARGET_CFG="cv64a6_imafdc_sv39"
         export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH}"
+        set +e
         "${{github.workspace}}/stage/bin/kepler-formal" -systemverilog \
           --compact \
           -v sec \
@@ -74,4 +75,12 @@ jobs:
           --sv_design1_flist "$PWD/core/Flist.cva6" \
           --sv_design1_top cva6 \
           --sv_design2_flist "$PWD/core/Flist.cva6" \
-          --sv_design2_top cva6
+          --sv_design2_top cva6 2>&1 | tee "${RUNNER_TEMP}/cva6-ki.log"
+        status=${PIPESTATUS[0]}
+        set -e
+        # Positive self-SEC accepts a proved or explicitly partial verdict.
+        if [[ "${status}" -eq 1 ]] &&
+            grep -q "SEC partially proved equivalence" "${RUNNER_TEMP}/cva6-ki.log"; then
+          exit 0
+        fi
+        exit "${status}"

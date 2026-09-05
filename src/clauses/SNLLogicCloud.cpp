@@ -72,17 +72,20 @@ struct ModelInputLayout {
 
 struct TruthTableKey {
   const SNLDesign* design = nullptr;
+  const naja::NL::SNLInstance* instance = nullptr;
   size_t flatTermID = 0;
 
   bool operator==(const TruthTableKey& other) const {
-    return design == other.design && flatTermID == other.flatTermID;
+    return design == other.design && instance == other.instance &&
+           flatTermID == other.flatTermID;
   }
 };
 
 struct TruthTableKeyHash {
   size_t operator()(const TruthTableKey& key) const {
     return std::hash<const SNLDesign*>{}(key.design) ^
-           (std::hash<size_t>{}(key.flatTermID) << 1);
+           (std::hash<const naja::NL::SNLInstance*>{}(key.instance) << 1) ^
+           (std::hash<size_t>{}(key.flatTermID) << 2);
   }
 };
 
@@ -273,7 +276,7 @@ const ModelInputLayout& getModelInputLayout(const DNLFull& dnl,
 }
 
 size_t getTruthTableCountCached(const SNLDesign* model) {
-  const TruthTableKey key{model, InvalidFlatTermID};
+  const TruthTableKey key{model, nullptr, InvalidFlatTermID};
   auto it = truthTableCountCache.find(key);
   if (it != truthTableCountCache.end()) {
     return it->second;
@@ -284,13 +287,19 @@ size_t getTruthTableCountCached(const SNLDesign* model) {
 }
 
 const SNLTruthTable& getTruthTableCached(const SNLDesign* model,
+                                         const naja::NL::SNLInstance* instance,
                                          size_t flatTermID) {
-  const TruthTableKey key{model, flatTermID};
+  const bool usesInstanceTable =
+      SNLDesignModeling::hasTruthTableFromParameter(model, flatTermID);
+  const TruthTableKey key{
+      model, usesInstanceTable ? instance : nullptr, flatTermID};
   const auto& it = truthTableCache.find(key);
   if (it != truthTableCache.end()) {
     return it->second;
   }
-  auto tt = SNLDesignModeling::getTruthTable(model, flatTermID);
+  auto tt = usesInstanceTable
+                ? SNLDesignModeling::getTruthTable(instance, flatTermID)
+                : SNLDesignModeling::getTruthTable(model, flatTermID);
   const auto& entry = truthTableCache.emplace(key, std::move(tt));
   return entry.first->second;
 }
@@ -817,7 +826,9 @@ size_t SNLLogicCloud::getRelevantInstanceInputCount(
   if (layout.isTableSelect) {
     const auto* model = inst.getSNLModel();
     const auto& tt = getTruthTableCached(
-        model, dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
+        model,
+        inst.getSNLInstance(),
+        dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
     return naja::NL::NLBitDependencies::countBitsForVector(
         tt.getDependencies());
   }
@@ -833,7 +844,7 @@ void SNLLogicCloud::appendRelevantInstanceInputs(
   const auto& layout = getModelInputLayout(dnl_, model);
   if (layout.isTableSelect) {
     const auto& tt = getTruthTableCached(
-        model, driverTerm.getSnlBitTerm()->getOrderID());
+        model, inst.getSNLInstance(), driverTerm.getSnlBitTerm()->getOrderID());
     const auto deps = naja::NL::NLBitDependencies::decodeBits(
         tt.getDependencies());
     for (size_t flatTermID : deps) {
@@ -910,7 +921,9 @@ void SNLLogicCloud::throwIfTruthTableArityMismatch(
     // LCOV_EXCL_STOP
   }
   const auto& tt = getTruthTableCached(
-      model, dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
+      model,
+      inst.getSNLInstance(),
+      dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
   if (!tt.isInitialized()) {
     // LCOV_EXCL_START
     return;  // LCOV_EXCL_LINE
@@ -1227,6 +1240,83 @@ naja::DNL::DNLID SNLLogicCloud::resolveTransparentLoopTarget(
   return currentTermID;
 }
 
+bool SNLLogicCloud::rejectOpaqueInternalOutput(naja::DNL::DNLID termID) {
+  if (!stopAtOpaqueInternalOutputs_ || isInput(termID)) {
+    return false;
+  }
+
+  const auto& term = dnl_.getDNLTerminalFromID(termID);
+  if (term.isNull() || term.isTopPort() ||
+      term.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Output) {
+    return false;  // LCOV_EXCL_LINE - callers pass an internal iso driver.
+  }
+  const auto truthTable = SNLDesignModeling::getTruthTable(
+      term.getDNLInstance().getSNLInstance(),
+      term.getSnlBitTerm()->getOrderID());
+
+  std::string reason =
+      "no initialized combinational truth table or usable sequential model";
+  if (truthTable.isInitialized()) {
+    const auto& layout =
+        getModelInputLayout(dnl_, term.getDNLInstance().getSNLModel());
+    const size_t expectedInputCount =
+        layout.isMux2 ? size_t{3} : truthTable.size();
+    const size_t actualInputCount = getRelevantInstanceInputCount(termID);
+    if (expectedInputCount == actualInputCount) {
+      return false;
+    }
+
+    std::ostringstream arityReason;
+    arityReason
+        << "combinational truth table arity does not match instance inputs "
+        << "(TT arity=" << truthTable.size()
+        << ", instance input count=" << actualInputCount << ")";
+    reason = arityReason.str();
+  } else {
+    const auto relatedClocks =
+        SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm());
+    if (!relatedClocks.empty()) {
+      const auto* model = term.getDNLInstance().getSNLModel();
+      if (model == nullptr || !SNLDesignModeling::hasSequentialModel(model)) {
+        reason = "Missing Naja sequential model";
+      } else if (SNLDesignModeling::getSequentialModel(model).kind ==
+                 SNLDesignModeling::SequentialModel::Kind::Latch) {
+        reason = "Naja latch sequential models are not supported by SEC";
+      } else {
+        reason = "the sequential output has no usable SEC model";
+      }
+    } else {
+      const auto* model = term.getDNLInstance().getSNLModel();
+      if (model != nullptr && SNLDesignModeling::hasSequentialModel(model)) {
+        reason = "the sequential output has no usable SEC model";
+      }
+    }
+  }
+
+  std::string instance = term.getDNLInstance().getFullPath();
+  while (!instance.empty() &&
+         (instance.back() == '/' || instance.back() == '.')) {
+    instance.pop_back();
+  }
+  if (instance.empty()) {
+    // DNL uses the instance ID when an SNL instance has no name.
+    instance = "<unnamed internal instance>";  // LCOV_EXCL_LINE
+  }
+  std::ostringstream detail;
+  detail << "opaque internal cell `" << instance << "`";
+  if (const auto* model = term.getDNLInstance().getSNLModel()) {
+    detail << " (model `" << model->getName().getString() << "`)";
+  }
+  detail << " pin `" << term.getSnlBitTerm()->getName().getString() << "["
+         << term.getSnlBitTerm()->getBit() << "]`: " << reason;
+
+  skipReason_ = SkipReason::OpaqueInternal;
+  skipReasonText_ = detail.str();
+  opaqueInternalTerm_ = termID;
+  table_ = SNLTruthTableTree();
+  return true;
+}
+
 void SNLLogicCloud::compute() {
   refreshPerDnlCaches(dnl_);
   clearNewIterationInputsTL();
@@ -1273,6 +1363,9 @@ void SNLLogicCloud::compute() {
     // LCOV_EXCL_STOP
     const auto& driver = iso.getDrivers().front();
     auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
+    if (rejectOpaqueInternalOutput(driver)) {
+      return;
+    }
     if (isInput(driver)) {
       currentIterationInputs.emplace_back(driver);
       table_ = SNLTruthTableTree(inst.getID(), driver,
@@ -1287,9 +1380,13 @@ void SNLLogicCloud::compute() {
               inst.getSNLModel()->getName().getString().c_str());
     table_ = SNLTruthTableTree(inst.getID(), driver);
     auto* model = inst.getSNLModel();
-    assert(SNLDesignModeling::getTruthTable(model, 
-                dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID())
-            .isInitialized() &&
+    assert(getTruthTableCached(
+               model,
+               inst.getSNLInstance(),
+               dnl_.getDNLTerminalFromID(driver)
+                   .getSnlBitTerm()
+                   ->getOrderID())
+               .isInitialized() &&
         "Truth table is not initialized");
     assert(table_.isInitialized() &&
            "Truth table for seed output term is not initialized");
@@ -1451,7 +1548,9 @@ void SNLLogicCloud::compute() {
         // LCOV_EXCL_STOP
       }
       const auto& driver = iso.getDrivers().front();
-      
+      if (rejectOpaqueInternalOutput(driver)) {
+        return;
+      }
       if (isInput(driver) || canUseCachedIsoShortcut(iso, driver)) {
         newIterationInputs.emplace_back(driver);
         DEBUG_LOG(

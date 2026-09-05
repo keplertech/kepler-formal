@@ -183,6 +183,14 @@ void configureOutputBatchProblem(KInductionProblem& batch,
   batch.observedOutputExprs1.assign(
       source.observedOutputExprs1.begin() + firstOutput,
       source.observedOutputExprs1.begin() + endOutput);
+  if (source.dualRailOutputStrictEqualityExprs.size() ==
+      source.observedOutputExprs0.size()) {
+    batch.dualRailOutputStrictEqualityExprs.assign(
+        source.dualRailOutputStrictEqualityExprs.begin() + firstOutput,
+        source.dualRailOutputStrictEqualityExprs.begin() + endOutput);
+  } else {
+    batch.dualRailOutputStrictEqualityExprs.clear();
+  }
   if (source.dualRailOutputSkipReasons.size() ==
       source.observedOutputExprs0.size()) {
     batch.dualRailOutputSkipReasons.assign(
@@ -191,8 +199,9 @@ void configureOutputBatchProblem(KInductionProblem& batch,
   } else {
     batch.dualRailOutputSkipReasons.clear();
   }
-  batch.sameFrameStateEqualityPairs0 = source.sameFrameStateEqualityPairs0;
-  batch.sameFrameStateEqualityPairs1 = source.sameFrameStateEqualityPairs1;
+  // Every caller creates the reusable batch from `source` before selecting an
+  // output range.  Same-design state relations are immutable model data, so
+  // leave those vectors in place instead of copying the whole design per range.
 
   // SEC output equality is a conjunction. Proving smaller conjunctions and
   // combining the results is logically equivalent to one monolithic property,

@@ -1,218 +1,31 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
-NAJA_CMAKE_CACHE_ENTRIES = {
-    "CMAKE_CXX_STANDARD": "20",
-    # Match the producer identity embedded by the 0.7.15 PyPI wheels. Naja's
-    # default Git %h is repository-size dependent and is not stable across
-    # shallow and full-history checkouts.
-    "NAJA_GIT_HASH": "e1a649e",
-    "BUILD_NAJA_PYTHON": "OFF",
-    "BUILD_ONLY_DOC": "OFF",
-    "BUILD_BENCHMARKS": "OFF",
-    "CODE_COVERAGE": "OFF",
-    "ENABLE_SANITIZERS": "OFF",
-    # Pin dependency discovery into the sandbox (EXT_BUILD_DEPS holds the
-    # install trees of the cmake() deps below plus symlinked cc_library
-    # headers/libs). CapnProto and TBB resolve by themselves via the
-    # CMAKE_PREFIX_PATH entries rules_foreign_cc adds per cmake() dep.
-    # ($$ is make-variable escaping; the wrapper script expands
-    # ${EXT_BUILD_DEPS} at build time.)
-    "Boost_INCLUDE_DIR": "$${EXT_BUILD_DEPS}/include",
-    # Without this, FindFLEX sets FLEX_INCLUDE_DIR=/usr/include and
-    # naja-verilog adds all of /usr/include as -I for FlexLexer.h.
-    "FLEX_INCLUDE_DIR": "$${EXT_BUILD_DEPS}/include",
-    # Force the static archive: FindZLIB would otherwise pick libz.so and
-    # bake its absolute sandbox path into libnaja_python.so's DT_NEEDED.
-    "ZLIB_INCLUDE_DIR": "$${EXT_BUILD_DEPS}/include",
-    "ZLIB_LIBRARY": "$${EXT_BUILD_DEPS}/lib/libz.a",
-}
-
-# The hermetic toolchain's captured link flags carry -nostdlib++ and
-# --unwindlib=none; the C++ runtime archives are Bazel link inputs that
-# rules_foreign_cc does not capture, and the -L search directories in the
-# captured flags contain deliberate stubs. Link the real archives (exposed
-# by @kepler-formal//bazel:hermetic_cxx_runtime, symlinked into
-# $EXT_BUILD_DEPS/lib) by explicit path, appended via
-# CMAKE_CXX_STANDARD_LIBRARIES so they land after the objects on every C++
-# link line (executables and shared libraries). The archives are PIC.
-HERMETIC_LLVM_CXX_STANDARD_LIBRARIES = {
-    "CMAKE_CXX_STANDARD_LIBRARIES": " ".join([
-        "$${EXT_BUILD_DEPS}/lib/liblibcxx.static.a",
-        "$${EXT_BUILD_DEPS}/lib/liblibcxxabi.static.a",
-        "$${EXT_BUILD_DEPS}/lib/liblibunwind.static.a",
-        "-lm",
-    ]),
-    # Python3 is the one deliberate host dependency (naja probes for it
-    # unconditionally; libnaja_python.so links system libpython). Debian's
-    # multiarch pyconfig.h includes "x86_64-linux-gnu/python3.X/pyconfig.h"
-    # relative to /usr/include, which the zero-sysroot toolchain no longer
-    # searches. -idirafter ranks last, so all hermetic -isystem headers
-    # still win over host headers.
-    "CMAKE_CXX_FLAGS": "-idirafter /usr/include",
-}
-
-HERMETIC_CXX_RUNTIME_DEPS = select({
-    "@platforms//os:macos": [],
-    "@kepler-formal//bazel:hermetic_runtime": ["@kepler-formal//bazel:hermetic_cxx_runtime"],
-    # Consumer toolchain (hermetic_cxx_runtime_enabled=False): its own libc++.
-    "//conditions:default": [],
-})
-
-NAJA_MACOS_CMAKE_CACHE_ENTRIES = dict(
-    NAJA_CMAKE_CACHE_ENTRIES,
-    BISON_EXECUTABLE = "/opt/homebrew/opt/bison/bin/bison",
-    FLEX_EXECUTABLE = "/opt/homebrew/opt/flex/bin/flex",
-    # rules_foreign_cc links executables with the C driver; the host (Xcode)
-    # toolchain needs the C++ runtime spelled out. The hermetic Linux
-    # toolchain must NOT get -lstdc++: zero-sysroot clang links its own
-    # (static) libc++ and has no libstdc++ at all.
-    CMAKE_EXE_LINKER_FLAGS = "-lstdc++ -lm",
+# Compatibility target for Kepler's existing @naja dependency. The actual
+# implementation is Naja's native Bazel target graph.
+cc_library(
+    name = "naja",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/dnl:naja_dnl",
+        "//src/nl/formats/liberty:naja_snl_liberty",
+        "//src/nl/formats/systemverilog:naja_snl_systemverilog",
+        "//src/nl/formats/verilog:naja_snl_verilog",
+        "//src/nl/netlist:naja_nl",
+        "//src/nl/netlist:naja_snl_visual",
+        "//src/nl/netlist/serialization/capnp:naja_nl_dump",
+        "//src/nl/python/pyloader:naja_snl_pyloader",
+        "//src/optimization:naja_opt",
+    ],
 )
 
-NAJA_SHARED_LIB_NAMES = [
-    "naja_nl",
-    "naja_dnl",
-    "naja_bne",
-    "naja_opt",
-    "naja_metrics",
-    "naja_python",
-    "naja_snl_pyloader",
-]
+alias(
+    name = "naja_extra_headers",
+    actual = ":naja",
+    visibility = ["//visibility:public"],
+)
 
 filegroup(
-    name = "all_srcs",
-    srcs = glob(["src/**"]),
-)
-
-cmake(
-    name = "naja",
-    # All naja sources including nested submodules (under src/ symlink)
-    lib_source = ":all_srcs",
-    # Naja builds these 5 as explicitly SHARED — cannot be made static.
-    # The release tarball bundles them alongside the binary with RPATH.
-    out_shared_libs = select({
-        "@platforms//os:macos": [
-            "lib{}.dylib".format(name)
-            for name in NAJA_SHARED_LIB_NAMES
-        ],
-        "//conditions:default": [
-            "lib{}.so".format(name)
-            for name in NAJA_SHARED_LIB_NAMES
-        ],
-    }),
-    # Output static libraries
-    out_static_libs = [
-        "libnaja_core.a",
-        "libnaja_snl_visual.a",
-        "libnaja_snl_verilog.a",
-        "libnaja_snl_systemverilog.a",
-        "libsvlang.a",
-        "libnaja_snl_liberty.a",
-        "libnaja_lefdef.a",
-        "libnaja_nl_dump.a",
-        "libnaja_verilog.a",
-        "libyosys_liberty.a",
-    ],
-    build_args = ["-j2"],
-    cache_entries = select({
-        "@platforms//os:macos": NAJA_MACOS_CMAKE_CACHE_ENTRIES,
-        "@kepler-formal//bazel:hermetic_runtime": NAJA_CMAKE_CACHE_ENTRIES |
-                                                  HERMETIC_LLVM_CXX_STANDARD_LIBRARIES,
-        # Consumer toolchain (hermetic_cxx_runtime_enabled=False): use the
-        # consumer's own libc++; keep only the /usr/include fallback that lets
-        # naja find the host Python headers, drop the hermetic archives.
-        "//conditions:default": NAJA_CMAKE_CACHE_ENTRIES | {
-            "CMAKE_CXX_FLAGS": "-idirafter /usr/include",
-        },
-    }),
-    # Copy static libs that cmake builds but doesn't install
-    # (naja_nl_dump has no install() command; naja_verilog's is guarded by PROJECT_IS_TOP_LEVEL)
-    postfix_script = " && ".join([
-        "cp src/nl/netlist/serialization/capnp/libnaja_nl_dump.a $$INSTALLDIR/lib/",
-        "cp thirdparty/naja-verilog/src/libnaja_verilog.a $$INSTALLDIR/lib/",
-        "cp thirdparty/slang/lib/libsvlang.a $$INSTALLDIR/lib/",
-    ]),
-    # Boost, CapnProto (package + capnp compiler), TBB, zlib and FlexLexer.h
-    # are provided hermetically through Bazel. Python3 is still found on the
-    # system (naja's cmake probes for it unconditionally); the network tag
-    # remains for slang's FetchContent of fmt.
-    deps = [
-        "@boost_headers//:boost",
-        "@capnproto",
-        "@flex_src//:flexlexer",
-        "@onetbb",
-        "@zlib",
-    ] + HERMETIC_CXX_RUNTIME_DEPS,
-    tags = ["requires-network"],
+    name = "ff_scan_lib",
+    srcs = ["//test/nl/formats/liberty:benchmarks/tests/FF_scan.lib"],
     visibility = ["//visibility:public"],
-)
-
-# Headers that naja's cmake doesn't install but kepler-formal needs.
-# Naja's cmake only installs "public API" headers; many internal headers
-# (used transitively) are missing. Expose all source headers directly.
-cc_library(
-    name = "cpptrace",
-    srcs = glob([
-        "src/thirdparty/cpptrace/src/**/*.cpp",
-    ]),
-    hdrs = glob([
-        "src/thirdparty/cpptrace/include/**/*.h",
-        "src/thirdparty/cpptrace/include/**/*.hpp",
-        "src/thirdparty/cpptrace/src/**/*.hpp",
-    ]),
-    copts = [
-        "-DCPPTRACE_STATIC_DEFINE",
-        "-DCPPTRACE_GET_SYMBOLS_WITH_NOTHING",
-        "-DCPPTRACE_UNWIND_WITH_NOTHING",
-        "-DCPPTRACE_DEMANGLE_WITH_CXXABI",
-        "-DCPPTRACE_NO_STD_FORMAT",
-    ],
-    includes = [
-        "src/thirdparty/cpptrace/include",
-        "src/thirdparty/cpptrace/src",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "naja_extra_headers",
-    hdrs = glob([
-        "src/src/**/*.h",
-        "src/thirdparty/cpptrace/include/**/*.hpp",
-        "src/thirdparty/naja-verilog/src/**/*.h",
-        "src/thirdparty/yosys-liberty/src/**/*.h",
-        "src/thirdparty/lefdef/src/**/*.h",
-    ]),
-    includes = [
-        "src/src/core",
-        "src/src/bne",
-        "src/src/dnl",
-        "src/src/metrics",
-        "src/src/nl/formats/lefdef",
-        "src/src/nl/formats/liberty",
-        "src/src/nl/formats/systemverilog/frontend",
-        "src/src/nl/formats/verilog/backend",
-        "src/src/nl/formats/verilog/frontend",
-        "src/src/nl/netlist/core",
-        "src/src/nl/netlist/decorators",
-        "src/src/nl/netlist/pnl",
-        "src/src/nl/netlist/serialization/capnp",
-        "src/src/nl/netlist/snl",
-        "src/src/nl/netlist/visual",
-        "src/src/nl/python/pyloader",
-        "src/src/optimization",
-        "src/thirdparty/cpptrace/include",
-        "src/thirdparty/naja-verilog/src",
-        "src/thirdparty/yosys-liberty/src",
-        "src/thirdparty/lefdef/src/def/def",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":cpptrace",
-        ":naja",
-        # naja public headers include boost/intrusive/set.hpp etc.; without
-        # this, Bazel compiles of those headers silently lean on /usr/include.
-        "@boost_headers//:boost",
-    ],
 )

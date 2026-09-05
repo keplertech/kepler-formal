@@ -29,6 +29,85 @@ public:
     Unknown,
   };
 
+  // One PDR output can use several incremental CaDiCaL instances.  Share this
+  // counter across them so many individually bounded queries cannot make the
+  // output's total SAT work unbounded.
+  class CadicalWorkBudget {
+   public:
+    CadicalWorkBudget(uint64_t conflictLimit,
+                      uint64_t decisionLimit,
+                      uint64_t tickLimit)
+        : conflictLimit_(conflictLimit),
+          decisionLimit_(decisionLimit),
+          tickLimit_(tickLimit) {}
+
+    uint64_t conflictLimit() const { return conflictLimit_; }
+    uint64_t decisionLimit() const { return decisionLimit_; }
+    uint64_t tickLimit() const { return tickLimit_; }
+    uint64_t conflictsUsed() const { return conflictsUsed_; }
+    uint64_t decisionsUsed() const { return decisionsUsed_; }
+    uint64_t ticksUsed() const { return ticksUsed_; }
+
+    uint64_t remainingConflicts() const {
+      return conflictsUsed_ >= conflictLimit_
+                 ? 0
+                 : conflictLimit_ - conflictsUsed_;
+    }
+
+    uint64_t remainingDecisions() const {
+      return decisionsUsed_ >= decisionLimit_
+                 ? 0
+                 : decisionLimit_ - decisionsUsed_;
+    }
+
+    uint64_t remainingTicks() const {
+      return ticksUsed_ >= tickLimit_ ? 0 : tickLimit_ - ticksUsed_;
+    }
+
+    bool exhausted() const {
+      return remainingConflicts() == 0 ||
+             remainingDecisions() == 0 ||
+             remainingTicks() == 0;
+    }
+
+   private:
+    void consume(uint64_t conflicts, uint64_t decisions, uint64_t ticks) {
+      conflictsUsed_ += std::min(conflicts, remainingConflicts());
+      decisionsUsed_ += std::min(decisions, remainingDecisions());
+      ticksUsed_ += std::min(ticks, remainingTicks());
+    }
+
+    uint64_t conflictLimit_ = 0;
+    uint64_t decisionLimit_ = 0;
+    uint64_t tickLimit_ = 0;
+    uint64_t conflictsUsed_ = 0;
+    uint64_t decisionsUsed_ = 0;
+    uint64_t ticksUsed_ = 0;
+
+    friend class SATSolverWrapper;
+  };
+
+  // PDR is currently serial per output.  A thread-local scope lets every
+  // property-local CaDiCaL solver charge the same output budget without
+  // coupling the generic SAT API to the SEC problem classes.
+  class ScopedCadicalWorkBudget {
+   public:
+    explicit ScopedCadicalWorkBudget(CadicalWorkBudget& budget)
+        : previous_(activeCadicalWorkBudget_) {
+      activeCadicalWorkBudget_ = &budget;
+    }
+
+    ~ScopedCadicalWorkBudget() {
+      activeCadicalWorkBudget_ = previous_;
+    }
+
+    ScopedCadicalWorkBudget(const ScopedCadicalWorkBudget&) = delete;
+    ScopedCadicalWorkBudget& operator=(const ScopedCadicalWorkBudget&) = delete;
+
+   private:
+    CadicalWorkBudget* previous_ = nullptr;
+  };
+
   enum class CraigVariablePartition {
     ALocal,
     BLocal,
@@ -384,18 +463,11 @@ public:
     } else if (solverType_ == KEPLER_FORMAL::Config::SolverType::CADICAL) {  // LCOV_EXCL_LINE
       lastAssumptionSolveStatus_ = SolveStatus::Unknown;  // LCOV_EXCL_LINE
       lastAssumptions_.clear();  // LCOV_EXCL_LINE
-      const int res = cadicalSolver_->solve();  // LCOV_EXCL_LINE
-      if (res == 10) { // 10 = SAT LCOV_EXCL_LINE
-        return SolveStatus::Sat;  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      }
-      // LCOV_EXCL_START
-      if (res == 20) { // 20 = UNSAT LCOV_EXCL_LINE
-        return SolveStatus::Unsat;  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      }
-      // LCOV_EXCL_START
-      return SolveStatus::Unknown;  // LCOV_EXCL_LINE
+      return solveCadicalWithResourceLimits(
+          /*conflictLimit=*/-1,
+          /*decisionLimit=*/-1,
+          /*tickLimit=*/-1,
+          /*useCumulativeBudget=*/false);
       // LCOV_EXCL_STOP
     }
     // LCOV_EXCL_START
@@ -440,23 +512,17 @@ public:
     }
     // LCOV_EXCL_START
     if (solverType_ == KEPLER_FORMAL::Config::SolverType::CADICAL) {
-      if (conflictLimit != std::numeric_limits<unsigned>::max()) {
-        cadicalSolver_->limit(
-        // LCOV_EXCL_STOP
-            "conflicts",
-            // LCOV_EXCL_START
-            static_cast<int>(std::min<unsigned>(
-                conflictLimit, static_cast<unsigned>(std::numeric_limits<int>::max()))));
-      }
-      if (decisionLimit != std::numeric_limits<unsigned>::max()) {
-        cadicalSolver_->limit(
-        // LCOV_EXCL_STOP
-            "decisions",
-            // LCOV_EXCL_START
-            static_cast<int>(std::min<unsigned>(
-                decisionLimit, static_cast<unsigned>(std::numeric_limits<int>::max()))));
-      }
-      return solveStatus();
+      lastAssumptionSolveStatus_ = SolveStatus::Unknown;
+      lastAssumptions_.clear();
+      return solveCadicalWithResourceLimits(
+          conflictLimit == std::numeric_limits<unsigned>::max()
+              ? -1
+              : static_cast<int64_t>(conflictLimit),
+          decisionLimit == std::numeric_limits<unsigned>::max()
+              ? -1
+              : static_cast<int64_t>(decisionLimit),
+          /*tickLimit=*/-1,
+          /*useCumulativeBudget=*/true);
       // LCOV_EXCL_STOP
     }
     // LCOV_EXCL_START
@@ -504,7 +570,8 @@ public:
   SolveStatus solveWithAssumptionsStatus( // LCOV_EXCL_LINE
       const std::vector<int>& assumptions,
       int64_t conflictLimit = -1,
-      int64_t propagationLimit = -1) {
+      int64_t propagationLimit = -1,
+      int64_t tickLimit = -1) {
     if (solverType_ == KEPLER_FORMAL::Config::SolverType::GLUCOSE) { // LCOV_EXCL_LINE
       // LCOV_EXCL_START
       Glucose::vec<Glucose::Lit> glucoseAssumptions;  // LCOV_EXCL_LINE
@@ -589,8 +656,18 @@ public:
       throw std::runtime_error("Kissat assumptions are not available in this build");  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
     } else if (solverType_ == KEPLER_FORMAL::Config::SolverType::CADICAL) { // LCOV_EXCL_LINE
+      const bool useCumulativeBudget =
+          conflictLimit >= 0 || propagationLimit >= 0 || tickLimit >= 0;
       lastAssumptions_ = assumptions; // LCOV_EXCL_LINE
       lastAssumptionSolveStatus_ = SolveStatus::Unknown; // LCOV_EXCL_LINE
+      // Do not enqueue assumptions if this output has no SAT work left.
+      // CaDiCaL consumes assumptions only on solve(), so an early return after
+      // assume() would otherwise leak them into the next output's shared solver.
+      if (useCumulativeBudget && activeCadicalWorkBudget_ != nullptr &&
+          activeCadicalWorkBudget_->exhausted()) {
+        lastAssumptions_.clear();
+        return lastAssumptionSolveStatus_;
+      }
       for (int lit : assumptions) { // LCOV_EXCL_LINE
         if (lit == 0 || lit == 1) { // LCOV_EXCL_LINE
           // LCOV_EXCL_START
@@ -615,30 +692,13 @@ public:
         // LCOV_EXCL_STOP
         cadicalSolver_->assume(lit > 0 ? var + 1 : -(var + 1)); // LCOV_EXCL_LINE
       }
-      if (conflictLimit >= 0) { // LCOV_EXCL_LINE
-        cadicalSolver_->limit( // LCOV_EXCL_LINE
-            "conflicts",
-            static_cast<int>(
-                std::min<int64_t>(conflictLimit, std::numeric_limits<int>::max()))); // LCOV_EXCL_LINE
-      } // LCOV_EXCL_LINE
-      if (propagationLimit >= 0) { // LCOV_EXCL_LINE
-        // CaDiCaL does not expose a propagation budget. Use a decision budget
-        // as the closest available solve limiter for callers that pass both.
-        cadicalSolver_->limit( // LCOV_EXCL_LINE
-            "decisions",
-            static_cast<int>(
-                std::min<int64_t>(propagationLimit, std::numeric_limits<int>::max()))); // LCOV_EXCL_LINE
-      } // LCOV_EXCL_LINE
-      const int res = cadicalSolver_->solve(); // LCOV_EXCL_LINE
-      if (res == 10) { // LCOV_EXCL_LINE
-        lastAssumptionSolveStatus_ = SolveStatus::Sat; // LCOV_EXCL_LINE
-      } else if (res == 20) { // LCOV_EXCL_LINE
-        lastAssumptionSolveStatus_ = SolveStatus::Unsat; // LCOV_EXCL_LINE
-      } else { // LCOV_EXCL_LINE
-        // LCOV_EXCL_START
-        lastAssumptionSolveStatus_ = SolveStatus::Unknown;  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-      }
+      lastAssumptionSolveStatus_ = solveCadicalWithResourceLimits(
+          conflictLimit,
+          // CaDiCaL has no propagation budget. Use its decision budget as the
+          // closest deterministic limiter for callers that pass both.
+          propagationLimit,
+          tickLimit,
+          useCumulativeBudget);
       if (lastAssumptionSolveStatus_ != SolveStatus::Unsat) { // LCOV_EXCL_LINE
         lastAssumptions_.clear(); // LCOV_EXCL_LINE
       } // LCOV_EXCL_LINE
@@ -840,10 +900,9 @@ public:
       auto* solver = cadicalSolver_.get();
       // LCOV_EXCL_STOP
       // CaDiCaL is the default local solver for assumption-capable validation
-      // queries.  These SEC/PDR validators are rebuilt from scratch and only
-      // need a quick SAT/UNSAT answer, so avoid expensive inprocessing and
-      // recursive clause polishing that samples showed dominating deeper
-      // sky130hs_ibex frontier checks.
+      // queries. Short-lived callers only need a quick SAT/UNSAT answer, so
+      // avoid expensive inprocessing and recursive clause polishing that
+      // samples showed dominating deeper sky130hs_ibex frontier checks.
       // LCOV_EXCL_START
       setCadicalOptionIfSupported(solver, "inprocessing", 0);
       setCadicalOptionIfSupported(solver, "compact", 0);
@@ -917,6 +976,20 @@ public:
     setKissatOptionOrThrow(solver, "probeinit", 0);
     setKissatOptionOrThrow(solver, "eliminate", 0);
     setKissatOptionOrThrow(solver, "eliminateinit", 0);
+  }
+
+  void configureForSecPdrPersistentQuery(size_t coneSymbols = 0) {
+    configureForSecPdrQuery(coneSymbols);
+    if (solverType_ != KEPLER_FORMAL::Config::SolverType::CADICAL) {
+      return;  // LCOV_EXCL_LINE
+    }
+    // A shared PDR solver receives permanent units that retire old property
+    // selectors. Re-enable CaDiCaL's exact clause/variable compaction so those
+    // satisfied contexts do not accumulate across output batches. All other
+    // PDR query settings and every logical clause remain unchanged.
+    auto* solver = cadicalSolver_.get();
+    setCadicalOptionIfSupported(solver, "compact", 1);
+    setCadicalOptionIfSupported(solver, "arenacompact", 1);
   }
 
   void configureForSecLocalBooleanCheck(size_t coneSymbols = 0) {
@@ -1073,6 +1146,89 @@ private:
     return CaDiCaL::Solver::is_valid_option(name) && solver->set(name, value); // LCOV_EXCL_LINE
   }
 
+  static int64_t effectiveCadicalLimit(int64_t queryLimit,
+                                       uint64_t remainingBudget) {
+    const int64_t boundedRemaining = static_cast<int64_t>(
+        std::min<uint64_t>(
+            remainingBudget,
+            static_cast<uint64_t>(std::numeric_limits<int>::max())));
+    return queryLimit < 0
+               ? boundedRemaining
+               : std::min(queryLimit, boundedRemaining);
+  }
+
+  static int cadicalApiLimit(int64_t limit) {
+    return limit < 0
+               ? -1
+               : static_cast<int>(
+                     std::min<int64_t>(
+                         limit, std::numeric_limits<int>::max()));
+  }
+
+  SolveStatus solveCadicalWithResourceLimits(
+      int64_t conflictLimit,
+      int64_t decisionLimit,
+      int64_t tickLimit,
+      bool useCumulativeBudget) {
+    CadicalWorkBudget* budget =
+        useCumulativeBudget ? activeCadicalWorkBudget_ : nullptr;
+    if (budget != nullptr) {
+      if (budget->exhausted()) {
+        return SolveStatus::Unknown;
+      }
+      conflictLimit =
+          effectiveCadicalLimit(conflictLimit, budget->remainingConflicts());
+      decisionLimit =
+          effectiveCadicalLimit(decisionLimit, budget->remainingDecisions());
+      tickLimit =
+          effectiveCadicalLimit(tickLimit, budget->remainingTicks());
+    }
+
+    // CaDiCaL retains incremental limits. Set all three on every solve so an
+    // exact query cannot inherit a previous resource-aware query's limits.
+    cadicalSolver_->limit("conflicts", cadicalApiLimit(conflictLimit));
+    cadicalSolver_->limit("decisions", cadicalApiLimit(decisionLimit));
+    cadicalSolver_->limit("ticks", cadicalApiLimit(tickLimit));
+
+    int64_t conflictsBefore = 0;
+    int64_t decisionsBefore = 0;
+    int64_t ticksBefore = 0;
+    if (budget != nullptr) {
+      conflictsBefore = cadicalSolver_->get_statistic_value("conflicts");
+      decisionsBefore = cadicalSolver_->get_statistic_value("decisions");
+      ticksBefore = cadicalSolver_->get_statistic_value("ticks");
+    }
+    const int result = cadicalSolver_->solve();
+    if (budget != nullptr) {
+      const int64_t conflictsAfter =
+          cadicalSolver_->get_statistic_value("conflicts");
+      const int64_t decisionsAfter =
+          cadicalSolver_->get_statistic_value("decisions");
+      const int64_t ticksAfter =
+          cadicalSolver_->get_statistic_value("ticks");
+      budget->consume(
+          conflictsAfter > conflictsBefore
+              ? static_cast<uint64_t>(conflictsAfter - conflictsBefore)
+              : 0,
+          decisionsAfter > decisionsBefore
+              ? static_cast<uint64_t>(decisionsAfter - decisionsBefore)
+              : 0,
+          ticksAfter > ticksBefore
+              ? static_cast<uint64_t>(ticksAfter - ticksBefore)
+              : 0);
+    }
+
+    if (result == 10) {
+      return SolveStatus::Sat;
+    }
+    if (result == 20) {
+      return SolveStatus::Unsat;
+    }
+    return SolveStatus::Unknown;
+  }
+
+  inline static thread_local CadicalWorkBudget* activeCadicalWorkBudget_ =
+      nullptr;
   KEPLER_FORMAL::Config::SolverType solverType_;
   std::unique_ptr<Glucose::SimpSolver> glucoseSolver_;
   std::unique_ptr<CaDiCaL::Solver> cadicalSolver_;
