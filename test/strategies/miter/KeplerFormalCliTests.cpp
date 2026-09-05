@@ -3357,6 +3357,60 @@ TEST_F(KeplerFormalCliTests,
 }
 
 TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogAutomaticVariableDynamicIndexMatchesModuleVariable) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module t(input [2:0] sel, input [7:0] flat, output logic q);\n"
+      "  always_comb begin\n"
+      "    automatic logic [7:0] tbl = flat;\n"
+      "    q = tbl[sel];\n"
+      "  end\n"
+      "endmodule\n",
+      "module t(input [2:0] sel, input [7:0] flat, output logic q);\n"
+      "  logic [7:0] tbl;\n"
+      "  always_comb begin\n"
+      "    tbl = flat;\n"
+      "    q = tbl[sel];\n"
+      "  end\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "automatic_variable_index_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string(),
+                     "--sv_design1_top",
+                     "t",
+                     "--sv_design2_top",
+                     "t",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr"}),
+        kSecProvedExitCode);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(
+        contents.find(
+            "SEC checked-output coverage: 100.00% "
+            "(1/1 covered/existing outputs)."),
+        std::string::npos);
+    EXPECT_EQ(contents.find("no-driver connectivity"), std::string::npos);
+  }
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
        CliSystemVerilogSecSharedDivModMatchesShiftAndMask) {
   const auto fixture = createDesignFixture(
       "sv",
