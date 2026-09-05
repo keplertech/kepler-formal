@@ -78,22 +78,46 @@ export PATH="/opt/homebrew/opt/flex/bin:/opt/homebrew/opt/bison/bin:$PATH"
 ```bash
 git clone --recurse-submodules https://github.com/keplertech/kepler-formal.git
 cd kepler-formal
-mkdir build
-cd build
-cmake ..
-make
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
-For best runtime performance:
+Release builds are portable by default: kepler-formal does not add a
+CPU-specific `-march` or `-mcpu` option. For a local build or benchmark tuned
+for the current machine, explicitly select the `native` CPU target:
 
 ```bash
-cmake .. \
+cmake -B build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_STANDARD=20 \
-  -DCMAKE_CXX_FLAGS="-O3 -march=native -ffast-math -flto -DNDEBUG" \
-  -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -march=native -ffast-math -flto -DNDEBUG" \
-  -DCMAKE_EXE_LINKER_FLAGS="-flto"
+  -DKEPLER_CPU_TARGET=native \
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
 ```
+
+`native` is only for local builds and benchmarks. Do not use it for release
+binaries, packages, or Docker images that may run on another machine.
+
+On x86-64, a fixed AVX2-capable baseline is available with:
+
+```bash
+cmake -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DKEPLER_CPU_TARGET=x86-64-v3
+```
+
+The `x86-64-v3` target is invalid on Apple Silicon and excludes x86 CPUs that
+do not support AVX2. Portable macOS universal binaries can be built with:
+
+```bash
+cmake -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DKEPLER_CPU_TARGET=portable \
+  -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+```
+
+`KEPLER_CPU_TARGET=portable` controls only the CPU flags added by
+kepler-formal. Callers must not separately inject `-march=native` or
+`-mcpu=native` through `CMAKE_CXX_FLAGS` or configuration-specific variants;
+CMake warns when those global flags contradict the portable selection.
 
 ### Bazel (experimental)
 
