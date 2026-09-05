@@ -6,7 +6,6 @@ cc_library(
     name = "sec_common_headers",
     hdrs = [
         "common/AlignedSignals.h",
-        "common/PrivateProofSymbol.h",
         "common/SignalKey.h",
     ],
     includes = [
@@ -31,6 +30,7 @@ cc_library(
         "kinduction/KInductionEngine.cpp",
         "kinduction/OutputBatching.cpp",
         "kinduction/SatEncoding.cpp",
+        "model/SecNetlistChecks.cpp",
         "model/SequentialDesignModel.cpp",
         "pdr/PDREngine.cpp",
         "proof/DualRailEncoding.cpp",
@@ -41,7 +41,6 @@ cc_library(
     hdrs = [
         "common/AlignedSignals.h",
         "common/BoolExprUtils.h",
-        "common/PrivateProofSymbol.h",
         "common/ProofProblemDebug.h",
         "common/SecDiag.h",
         "common/SignalKey.h",
@@ -54,6 +53,7 @@ cc_library(
         "kinduction/KInductionProblem.h",
         "kinduction/OutputBatching.h",
         "kinduction/SatEncoding.h",
+        "model/SecNetlistChecks.h",
         "model/SequentialDesignModel.h",
         "pdr/PDREngine.h",
         "proof/DualRailEncoding.h",

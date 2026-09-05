@@ -52,7 +52,11 @@ else()
     target_link_libraries(keplerFormalCliTests ${GTEST_LIBRARIES})
 endif()
 
-GTEST_DISCOVER_TESTS(keplerFormalCliTests)
+add_dependencies(keplerFormalCliTests kepler-formal)
+GTEST_DISCOVER_TESTS(
+    keplerFormalCliTests
+    PROPERTIES ENVIRONMENT "KEPLER_BIN=$<TARGET_FILE:kepler-formal>"
+)
 
 # TinyRocket is an intentionally large end-to-end SEC test.  Remove CTest's
 # global timeout for this test alone so slower runners can reach its verdict.

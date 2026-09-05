@@ -1,17 +1,21 @@
 # Package marker for bazel/ overlay directory
 
-exports_files(["export_deps.sh"])
+exports_files([
+    "export_deps.sh",
+    "naja_cc_library.bzl",
+    "naja_ff_scan.patch",
+    "naja_verilog_bazel9.patch",
+])
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 # When kepler-formal is the root module its hermetic clang toolchain compiles
-# the rules_foreign_cc cmake deps (naja/capnproto/onetbb), so those builds must
-# link the hermetic static libc++/libc++abi/libunwind archives. A downstream
-# consumer that builds kepler-formal's deps with its OWN toolchain must NOT get
-# those archives (mismatched, non-PIC static libc++abi cannot link into naja's
-# and TBB's shared libs). Consumers set this flag False.
+# the rules_foreign_cc CMake deps (Cap'n Proto, oneTBB, and Slang), so those
+# builds must link the hermetic static libc++/libc++abi/libunwind archives. A
+# downstream consumer that builds kepler-formal's deps with its own toolchain
+# must not get those archives. Consumers set this flag false.
 bool_flag(
     name = "hermetic_cxx_runtime_enabled",
     build_setting_default = True,
@@ -26,10 +30,9 @@ config_setting(
 
 # The hermetic-llvm toolchain passes libc++/libc++abi/libunwind to linker
 # actions as Bazel link inputs; its -L "library search directories" contain
-# deliberate empty stubs so a stray -lc++ is a no-op. cmake builds under
+# deliberate empty stubs so a stray -lc++ is a no-op. CMake builds under
 # rules_foreign_cc never see the real archives, so re-export them here and
-# let the cmake overlays link them by explicit $EXT_BUILD_DEPS path (see
-# bazel/naja.BUILD.bazel).
+# let the CMake overlays link them by explicit $EXT_BUILD_DEPS path.
 cc_import(
     name = "hermetic_libcxx",
     static_library = "@llvm//runtimes/libcxx:libcxx.static",

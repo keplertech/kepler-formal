@@ -46,11 +46,13 @@ build/src/bin/kepler-formal -systemverilog -v sec \
 # RTL SystemVerilog vs gate-level Verilog for SEC
 build/src/bin/kepler-formal -sv2v -v sec \
   --design1 <rtl.sv...> --design2 <gate.v...> \
-  [--sv_design1_top <name>] [--liberty <library-file>...]
+  [--sv_design1_top <name>] [--verilog_design2_top <name>] \
+  [--liberty <library-file>...]
 
 # RTL SystemVerilog flist vs gate-level Verilog for SEC
 build/src/bin/kepler-formal -sv2v -v sec \
   --sv_design1_flist <file> [--sv_design1_top <name>] --design2 <gate.v...> \
+  [--verilog_design2_top <name>] \
   [--liberty <library-file>...]
 ```
 
@@ -82,8 +84,7 @@ Only design 1 accepts SystemVerilog options:
 - `sv_design1_flist`
 - `sv_design1_top`
 
-Design 2 is parsed through the Verilog path, so do not set `sv_design2_flist`
-or `sv_design2_top` with `sv2v`.
+Design 2 is parsed as Verilog. Use `verilog_design2_top` to select its top.
 
 ## YAML examples
 
@@ -131,6 +132,8 @@ sec_encoding: dual_rail_steady
 input_paths:
   - [rtl_pkg.sv, rtl_top.sv]
   - [gate_top.v]
+sv_design1_top: rtl_top
+verilog_design2_top: gate_top
 liberty_files:
   - stdcells.lib.gz
 ```

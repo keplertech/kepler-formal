@@ -247,8 +247,9 @@ bool containsDependencyBit(const std::vector<uint64_t>& deps, uint64_t orderID) 
 
 BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
     BuildPrimaryOutputClauses::SkippedOutputReason reason,
-    std::string detail) {
-  return {reason, std::move(detail)};
+    std::string detail,
+    DNLID opaqueTerm = DNLID_MAX) {
+  return {reason, std::move(detail), opaqueTerm};
 }
 
 void reportSkippedPO(const DNLFull* dnl,
@@ -453,8 +454,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input) {
-          const auto tt = SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getDesign(), 
-              term.getSnlBitTerm()->getOrderID());
+          const auto tt = SNLDesignModeling::getTruthTable(
+              instance.getSNLInstance(), term.getSnlBitTerm()->getOrderID());
           if (!tt.isInitialized()) {
             assert(termId < naja::DNL::get()->getDNLTerms().size());
             inputs.emplace_back(termId);
@@ -660,8 +661,10 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    if (term.getIsoID() != DNLID_MAX && 
-      dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().empty()) {
+    const auto& iso =
+        dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+    if (!iso.isConstant0() && !iso.isConstant1() &&
+        iso.getDrivers().empty()) {
       skippedOutputs_[out] = makeSkippedOutputInfo(
           SkippedOutputReason::NoDriver, "its iso has no drivers");
       reportSkippedPO(
@@ -675,8 +678,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    if (term.getIsoID() != DNLID_MAX && 
-      dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().size() > 1) {
+    if (iso.getDrivers().size() > 1) {
       skippedOutputs_[out] = makeSkippedOutputInfo(
           SkippedOutputReason::MultiDriver, "its iso has multiple drivers");
       reportSkippedPO(
@@ -741,8 +743,9 @@ void BuildPrimaryOutputClauses::initVarNames() {
     // If direction is input, skip
     if (!tTerm.isTopPort() &&
         tTerm.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
-      const auto tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
-      tTerm.getSnlBitTerm()->getOrderID());
+      const auto tt = SNLDesignModeling::getTruthTable(
+          tTerm.getDNLInstance().getSNLInstance(),
+          tTerm.getSnlBitTerm()->getOrderID());
       if (tt.isInitialized()) {
         if (tt.all0()) {
           termDNLID2varID_[inputs_[i]] = 0;
@@ -813,7 +816,6 @@ void BuildPrimaryOutputClauses::build() {
     // LCOV_EXCL_STOP
     IsPOs_[po] = true;
   }
-
   std::vector<size_t> representativeForOutput(outputs_.size());
   std::vector<size_t> representativeOutputs;
   representativeOutputs.reserve(outputs_.size());
@@ -847,6 +849,17 @@ void BuildPrimaryOutputClauses::build() {
 
     DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
     DEBUG_LOG("isoID: %zu\n", isoID);
+    if (isoID != DNLID_MAX) {
+      const auto& iso = get()->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      if (iso.isConstant0()) {
+        POs_[i] = BoolExpr::createFalse();
+        return;
+      }
+      if (iso.isConstant1()) {
+        POs_[i] = BoolExpr::createTrue();
+        return;
+      }
+    }
     auto cachedIt = Tree2BoolExpr::iso2boolExpr_.find(isoID);
     if (isoID != DNLID_MAX &&
         cachedIt != Tree2BoolExpr::iso2boolExpr_.end() &&
@@ -868,7 +881,11 @@ void BuildPrimaryOutputClauses::build() {
       return;
     }
     
-    SNLLogicCloud cloud(out, IsPIs_, IsPOs_);
+    SNLLogicCloud cloud(
+        out,
+        IsPIs_,
+        IsPOs_,
+        stopAtOpaqueInternalOutputs_);
     #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
     #endif
@@ -971,6 +988,9 @@ void BuildPrimaryOutputClauses::build() {
         case SNLLogicCloud::SkipReason::LogicalLoop:
           skipReason = SkippedOutputReason::LogicalLoop;
           break;
+        case SNLLogicCloud::SkipReason::OpaqueInternal:
+          skipReason = SkippedOutputReason::OpaqueInternal;
+          break;
         // LCOV_EXCL_START
         case SNLLogicCloud::SkipReason::None:  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
@@ -982,7 +1002,11 @@ void BuildPrimaryOutputClauses::build() {
       if (skipReason != SkippedOutputReason::None) {
         std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
         skippedOutputs_[out] = makeSkippedOutputInfo(
-            skipReason, cloud.getSkipReasonText());
+            skipReason,
+            cloud.getSkipReasonText(),
+            skipReason == SkippedOutputReason::OpaqueInternal
+                ? cloud.getOpaqueInternalTerm()
+                : DNLID_MAX);
       }
     }
     #ifdef DEBUG_CHECKS

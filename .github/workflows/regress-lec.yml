@@ -42,7 +42,7 @@ jobs:
           python3 -m pip install --no-build-isolation "${{github.workspace}}/thirdparty/naja"
 
     - name: Generate TinyRocket Naja IF inputs
-      working-directory: ${{github.workspace}}/example
+      working-directory: ${{github.workspace}}/examples/tinyrocket
       run: |
         python3 to_naja_if.py
         python3 edit.py

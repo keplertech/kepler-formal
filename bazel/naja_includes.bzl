@@ -8,35 +8,32 @@ The -iquote prefix is derived from @naja's repo mapping instead of a
 hardcoded canonical repo name: as the root module the repo materializes at
 external/+deps+naja, but in a downstream consumer it is
 external/<module>++deps+naja — a hardcoded path dangles there, quoted
-includes fall through to the transitive system paths, and headers resolve
-through two physical copies (source tree + cmake install), which #pragma
-once cannot deduplicate.
+includes fall through to the transitive system paths, and a host-installed
+Naja can be selected instead.
 """
 
 _NAJA_ROOT = Label("@naja//:BUILD").workspace_root
 
 _NAJA_QUOTE_INCLUDE_DIRS = [
-    "src/src/dnl",
-    "src/src/nl/netlist/core",
-    "src/src/nl/netlist/snl",
-    "src/src/core",
-    "src/src/bne",
-    "src/src/metrics",
-    "src/src/nl/netlist/decorators",
-    "src/src/nl/netlist/pnl",
-    "src/src/nl/netlist/visual",
-    "src/src/nl/netlist/serialization/capnp",
-    "src/src/nl/formats/lefdef",
-    "src/src/nl/formats/liberty",
-    "src/src/nl/formats/systemverilog/frontend",
-    "src/src/nl/formats/verilog/backend",
-    "src/src/nl/formats/verilog/frontend",
-    "src/src/nl/python/pyloader",
-    "src/src/optimization",
-    "src/thirdparty/cpptrace/include",
-    "src/thirdparty/naja-verilog/src",
-    "src/thirdparty/yosys-liberty/src",
-    "src/thirdparty/lefdef/src/def/def",
+    "src/dnl",
+    "src/nl/netlist/core",
+    "src/nl/netlist/snl",
+    "src/core",
+    "src/bne",
+    "src/metrics",
+    "src/nl/netlist/decorators",
+    "src/nl/netlist/pnl",
+    "src/nl/netlist/visual",
+    "src/nl/netlist/serialization/capnp",
+    "src/nl/formats/lefdef",
+    "src/nl/formats/liberty",
+    "src/nl/formats/systemverilog/frontend",
+    "src/nl/formats/verilog/backend",
+    "src/nl/formats/verilog/frontend",
+    "src/nl/python/pyloader",
+    "src/optimization",
+    "thirdparty/yosys-liberty/src",
+    "thirdparty/lefdef/src/def/def",
 ]
 
 NAJA_HEADER_COPTS = [
