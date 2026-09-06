@@ -19,6 +19,31 @@ project(kepler-formal
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 
+include(GNUInstallDirs)
+
+option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
+set(KEPLER_EXTERNAL_PIC_ARG "")
+if(BUILD_KEPLER_PYTHON)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+  set(KEPLER_EXTERNAL_PIC_ARG -fPIC)
+  if(BUILD_NAJA_PYTHON)
+    # Wheel builds use Naja's hosted-Python mode and must not require or link
+    # an embeddable libpython.  manylinux CPython intentionally provides only
+    # the extension-module development surface.
+    find_package(
+      Python3 3.10...<3.99
+      COMPONENTS Interpreter Development.Module
+      REQUIRED
+    )
+  else()
+    find_package(
+      Python3 3.10...<3.99
+      COMPONENTS Interpreter Development.Module Development.Embed
+      REQUIRED
+    )
+  endif()
+endif()
+
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard" FORCE)
@@ -83,7 +108,7 @@ ExternalProject_Add(kissat_external
     # deps/toolchain.cmake); kissat's configure defaults to host cc.
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
-        ./configure --compact --quiet --no-proofs
+        ./configure --compact --quiet --no-proofs ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
@@ -117,7 +142,7 @@ ExternalProject_Add(cadical_external
         "CXX=${CMAKE_CXX_COMPILER}"
         "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
         "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
-        ./configure -q --no-tracing --no-contrib
+        ./configure -q --no-tracing --no-contrib ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make -C build libcadical.a
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
@@ -137,6 +162,10 @@ add_dependencies(cadical cadical_external)
 
 add_subdirectory(src)
 add_subdirectory(thirdparty)
+
+if(BUILD_KEPLER_PYTHON)
+  add_subdirectory(src/python)
+endif()
 
 if(TARGET slang_slang)
   # fmt 12 no longer exposes fmt::format through <fmt/core.h>. Keep vendored

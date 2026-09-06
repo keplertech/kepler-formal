@@ -46,6 +46,7 @@ std::string MiterStrategy::logFileName_ = "";
 namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
+static std::string actualLogFileName;
 
 void resetLogger() {
   if (logger) {
@@ -363,6 +364,8 @@ void ensureLoggerInitialized() {
     return;
   }
 
+  actualLogFileName.clear();
+
   try {
     // 1) Choose a default file name in the current working directory
     int logIndex = 0;
@@ -409,6 +412,7 @@ void ensureLoggerInitialized() {
     try {
       auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(chosenLogFile, true);
       logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+      actualLogFileName = chosenLogFile;
     } catch (const spdlog::spdlog_ex& ex) {
       // LCOV_EXCL_START
       // Try a safe fallback: temp directory
@@ -422,6 +426,7 @@ void ensureLoggerInitialized() {
           // LCOV_DISABLED_START
           auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(fallback.string(), true);
           logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+          actualLogFileName = fallback.string();
         } catch (...) {
         // LCOV_DISABLED_STOP
           // Final fallback to stdout sink
@@ -647,6 +652,18 @@ int tseitinEncode(
     top1_ = top1;
     logFileName_ = logFileName;
   }
+
+std::string MiterStrategy::getActualLogFileName() {
+  return actualLogFileName;
+}
+
+void MiterStrategy::cleanupProcessState() {
+  resetLogger();
+  actualLogFileName.clear();
+  logFileName_.clear();
+  top0_ = nullptr;
+  top1_ = nullptr;
+}
 
 void MiterStrategy::setCnfDump(bool enabled, const std::string& path) {
   dumpCnf_ = enabled;

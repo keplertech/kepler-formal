@@ -38,6 +38,9 @@ class MiterStrategy {
   void setPoCnfDump(bool enabled, const std::string& path = "");
   void setAllowBoundaryMismatch(bool allow) { allowBoundaryMismatch_ = allow; }
 
+  static std::string getActualLogFileName();
+  static void cleanupProcessState();
+
   size_t normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
                         const std::unordered_map<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey, naja::DNL::DNLID, KEPLER_FORMAL::BuildPrimaryOutputClauses::KeyHash>& inputs0Map,
