@@ -292,9 +292,6 @@ void exportSecBtor2(const KInductionProblem& problem,
     bad = writer.logicalAnd(writer.logicalNot(timeline.before(firstBadFrame)), bad);
   }
   writer.bad(bad, "equivalence_mismatch");
-  if (!output) {
-    throw std::runtime_error("Failed writing BTOR2 export");
-  }
 }
 
 void exportSecBtor2File(const KInductionProblem& problem,

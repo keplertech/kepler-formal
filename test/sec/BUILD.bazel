@@ -3,14 +3,20 @@ load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
 cc_test(
     name = "SecBtor2ExporterTests",
-    srcs = ["SecBtor2ExporterTests.cpp"],
+    srcs = [
+        "SecBtor2ExporterTests.cpp",
+        "SecBtor2ExportValidationTests.cpp",
+    ],
     copts = NAJA_HEADER_COPTS,
     deps = ["//src/sec:kepler_sec", "//src/formal:formal_structures", "@googletest//:gtest_main"],
 )
 
 cc_test(
     name = "SequentialEquivalenceStrategyTests",
-    srcs = ["SequentialEquivalenceStrategyTests.cpp"],
+    srcs = [
+        "SequentialEquivalenceStrategyTests.cpp",
+        "Btor2ExportStrategyTests.cpp",
+    ],
     data = [
         "//examples:testdata",
         "@naja//:ff_scan_lib",
