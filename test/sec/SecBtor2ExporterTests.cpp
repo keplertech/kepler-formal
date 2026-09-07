@@ -17,11 +17,17 @@
 #include <vector>
 
 #include "BoolExpr.h"
+#include "BoolExprCache.h"
 #include "export/SecBtor2Exporter.h"
 #include "kinduction/KInductionProblem.h"
 
 namespace KEPLER_FORMAL::SEC {
 namespace {
+
+class SecBtor2ExporterTests : public ::testing::Test {
+ protected:
+  void TearDown() override { BoolExprCache::destroy(); }
+};
 
 // An independent exhaustive evaluator for the small bit-vector transition
 // systems used below. Tests inspect reachable behavior, without depending on
@@ -261,7 +267,7 @@ KInductionProblem stateProblem(BoolExpr* next, bool initialized = true) {
   return problem;
 }
 
-TEST(SecBtor2ExporterTests, CombinationalIdenticalAndDifferentOutputs) {
+TEST_F(SecBtor2ExporterTests, CombinationalIdenticalAndDifferentOutputs) {
   KInductionProblem problem;
   problem.inputSymbols = {2};
   problem.allSymbols = {2};
@@ -274,7 +280,7 @@ TEST(SecBtor2ExporterTests, CombinationalIdenticalAndDifferentOutputs) {
             std::vector<bool>({true}));
 }
 
-TEST(SecBtor2ExporterTests, ExplicitInitializationAllowsFrameZeroViolation) {
+TEST_F(SecBtor2ExporterTests, ExplicitInitializationAllowsFrameZeroViolation) {
   auto problem = stateProblem(BoolExpr::createFalse());
   problem.initialStateAssignments = {{2, true}};
   problem.initialCondition = BoolExpr::Var(2);
@@ -282,13 +288,13 @@ TEST(SecBtor2ExporterTests, ExplicitInitializationAllowsFrameZeroViolation) {
             std::vector<bool>({true, false, false}));
 }
 
-TEST(SecBtor2ExporterTests, EagerTransitionsPreserveSequentialDivergence) {
+TEST_F(SecBtor2ExporterTests, EagerTransitionsPreserveSequentialDivergence) {
   auto problem = stateProblem(BoolExpr::Not(BoolExpr::Var(2)));
   EXPECT_EQ(TinyBtor2Model(dump(problem)).explore(4).bad,
             std::vector<bool>({false, true, false, true}));
 }
 
-TEST(SecBtor2ExporterTests, UninitializedObservationAssumesEqualityAtFrameZero) {
+TEST_F(SecBtor2ExporterTests, UninitializedObservationAssumesEqualityAtFrameZero) {
   auto problem = stateProblem(BoolExpr::Var(2), false);
   const auto behavior = TinyBtor2Model(dump(problem)).explore(3);
   EXPECT_EQ(behavior.bad, std::vector<bool>({false, false, false}));
@@ -298,7 +304,7 @@ TEST(SecBtor2ExporterTests, UninitializedObservationAssumesEqualityAtFrameZero) 
             std::vector<bool>({false, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, PartialInitializationPreservesKnownBitAndObservation) {
+TEST_F(SecBtor2ExporterTests, PartialInitializationPreservesKnownBitAndObservation) {
   auto problem = stateProblem(BoolExpr::Var(2));
   problem.state1Symbols = {3};
   problem.allSymbols.push_back(3);
@@ -310,7 +316,7 @@ TEST(SecBtor2ExporterTests, PartialInitializationPreservesKnownBitAndObservation
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, LazyTransitionsUseCombinedSymbolRemapping) {
+TEST_F(SecBtor2ExporterTests, LazyTransitionsUseCombinedSymbolRemapping) {
   auto problem = stateProblem(BoolExpr::createFalse());
   problem.transitions0.clear();
   problem.inputSymbols = {3};
@@ -324,7 +330,7 @@ TEST(SecBtor2ExporterTests, LazyTransitionsUseCombinedSymbolRemapping) {
             std::vector<bool>({false, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, ComplementedStateWithoutIndependentNextIsPreserved) {
+TEST_F(SecBtor2ExporterTests, ComplementedStateWithoutIndependentNextIsPreserved) {
   auto problem = stateProblem(BoolExpr::Not(BoolExpr::Var(2)));
   problem.state0Symbols.push_back(3);
   problem.allSymbols.push_back(3);
@@ -339,7 +345,7 @@ TEST(SecBtor2ExporterTests, ComplementedStateWithoutIndependentNextIsPreserved) 
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, SameFrameEqualityConstrainsBothDesignStates) {
+TEST_F(SecBtor2ExporterTests, SameFrameEqualityConstrainsBothDesignStates) {
   auto problem = stateProblem(BoolExpr::Var(2));
   problem.state1Symbols = {3};
   problem.allSymbols.push_back(3);
@@ -354,7 +360,7 @@ TEST(SecBtor2ExporterTests, SameFrameEqualityConstrainsBothDesignStates) {
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, DualRailValidityExcludesEmptyRailValue) {
+TEST_F(SecBtor2ExporterTests, DualRailValidityExcludesEmptyRailValue) {
   auto problem = stateProblem(BoolExpr::Var(2));
   problem.state0Symbols.push_back(3);
   problem.allSymbols.push_back(3);
@@ -370,7 +376,7 @@ TEST(SecBtor2ExporterTests, DualRailValidityExcludesEmptyRailValue) {
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, ResetPrefixIsForcedThenPermanentlyDeasserted) {
+TEST_F(SecBtor2ExporterTests, ResetPrefixIsForcedThenPermanentlyDeasserted) {
   auto problem = stateProblem(BoolExpr::Var(3), false);
   problem.inputSymbols = {3};
   problem.allSymbols.push_back(3);
@@ -390,7 +396,7 @@ TEST(SecBtor2ExporterTests, ResetPrefixIsForcedThenPermanentlyDeasserted) {
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, true, true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, IncompleteResetUsesSafeObservationFrontier) {
+TEST_F(SecBtor2ExporterTests, IncompleteResetUsesSafeObservationFrontier) {
   auto problem = stateProblem(BoolExpr::Not(BoolExpr::Var(3)), false);
   problem.inputSymbols = {3};
   problem.allSymbols.push_back(3);
@@ -406,7 +412,7 @@ TEST(SecBtor2ExporterTests, IncompleteResetUsesSafeObservationFrontier) {
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, false, false, false}));
 }
 
-TEST(SecBtor2ExporterTests, DualRailResetChecksFirstPostResetFrame) {
+TEST_F(SecBtor2ExporterTests, DualRailResetChecksFirstPostResetFrame) {
   auto problem = stateProblem(BoolExpr::Var(3));
   problem.state0Symbols.push_back(4);
   problem.inputSymbols = {3};
@@ -429,7 +435,7 @@ TEST(SecBtor2ExporterTests, DualRailResetChecksFirstPostResetFrame) {
   EXPECT_EQ(TinyBtor2Model(dump(problem)).explore(4).bad, behavior.bad);
 }
 
-TEST(SecBtor2ExporterTests, CompleteBinaryInitializationBypassesResetBootstrap) {
+TEST_F(SecBtor2ExporterTests, CompleteBinaryInitializationBypassesResetBootstrap) {
   auto problem = stateProblem(BoolExpr::Var(3));
   problem.inputSymbols = {3};
   problem.allSymbols.push_back(3);
@@ -440,7 +446,7 @@ TEST(SecBtor2ExporterTests, CompleteBinaryInitializationBypassesResetBootstrap) 
             std::vector<bool>({true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, RelationalInitialConditionOnlyConstrainsInitialFrame) {
+TEST_F(SecBtor2ExporterTests, RelationalInitialConditionOnlyConstrainsInitialFrame) {
   auto problem = stateProblem(BoolExpr::createTrue());
   problem.state1Symbols = {3};
   problem.allSymbols.push_back(3);
@@ -454,7 +460,7 @@ TEST(SecBtor2ExporterTests, RelationalInitialConditionOnlyConstrainsInitialFrame
   EXPECT_EQ(behavior.legal, std::vector<bool>({true, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, AuxiliaryStateTransitionIsIncluded) {
+TEST_F(SecBtor2ExporterTests, AuxiliaryStateTransitionIsIncluded) {
   auto problem = stateProblem(BoolExpr::createFalse());
   problem.auxiliaryStateSymbols = {3};
   problem.auxiliaryTransitions = {{3, BoolExpr::createTrue()}};
@@ -468,7 +474,7 @@ TEST(SecBtor2ExporterTests, AuxiliaryStateTransitionIsIncluded) {
             std::vector<bool>({false, true, true}));
 }
 
-TEST(SecBtor2ExporterTests, RejectsUndeclaredSymbolsAndMissingStateTransitions) {
+TEST_F(SecBtor2ExporterTests, RejectsUndeclaredSymbolsAndMissingStateTransitions) {
   auto problem = stateProblem(BoolExpr::Var(999));
   EXPECT_THROW(dump(problem), std::exception);
   problem.transitions0.clear();
@@ -481,7 +487,7 @@ TEST(SecBtor2ExporterTests, RejectsUndeclaredSymbolsAndMissingStateTransitions) 
   EXPECT_THROW(dump(problem), std::exception);
 }
 
-TEST(SecBtor2ExporterTests, RepeatedLazyExportIsByteForByteDeterministic) {
+TEST_F(SecBtor2ExporterTests, RepeatedLazyExportIsByteForByteDeterministic) {
   auto problem = stateProblem(BoolExpr::createFalse());
   problem.transitions0.clear();
   problem.inputSymbols = {3};
@@ -496,7 +502,7 @@ TEST(SecBtor2ExporterTests, RepeatedLazyExportIsByteForByteDeterministic) {
   EXPECT_EQ(first, dump(problem));
 }
 
-TEST(SecBtor2ExporterTests, FileReplacementPreservesDestinationOnFailure) {
+TEST_F(SecBtor2ExporterTests, FileReplacementPreservesDestinationOnFailure) {
   struct TemporaryDirectory {
     std::filesystem::path path;
     TemporaryDirectory() {
