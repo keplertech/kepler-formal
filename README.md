@@ -117,6 +117,12 @@ Additional notes and the BCR publication roadmap are tracked in
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
 
+To export KF's prepared SEC equivalence problem before solving, use
+`--dump-btor2 equivalence.btor2`. Add `--dump-only` to stop after export.
+The YAML equivalents are `btor2_export: true`,
+`btor2_export_path: equivalence.btor2`, and `dump_only: true`.
+See [BTOR2 export](docs/btor2-export.md) for examples and model semantics.
+
 ### Custom Python Primitives
 
 Custom technology primitives can be defined in Python and loaded through the
@@ -132,9 +138,10 @@ and the [Xilinx FPGA example](examples/xilinx) for the use model.
 | Partially proved | `1` | Some outputs were proved; all remaining outputs are inconclusive. |
 | Inconclusive | `2` | SEC produced neither a proof nor a counterexample. |
 | Counterexample found | `3` | A definitive mismatch was found. |
+| Exported (`dump_only`) | `0` | BTOR2 was written; proof was not run. |
 
-These codes describe completed SEC verdicts. Configuration, input, or runtime
-errors are execution failures rather than SEC verdicts.
+The export-only result is not an equivalence verdict. Configuration, input,
+or runtime errors are execution failures rather than SEC verdicts.
 
 ### Binary Flags
 
@@ -158,8 +165,10 @@ build/src/bin/kepler-formal -sv -v sec \
 | Flag | Meaning |
 | --- | --- |
 | `--help`, `-h` | Print usage. |
-| `--config <file>`, `-c <file>` | Load a YAML config. If present, the YAML file takes precedence over the rest of the CLI. |
+| `--config <file>`, `-c <file>` | Load a YAML config. Config mode cannot be combined with other CLI options. |
 | `--verification <lec\|sec>`, `-v <lec\|sec>` | Select combinational LEC or sequential SEC. Defaults to `lec`. |
+| `--dump-btor2 <file>` | Export the prepared SEC equivalence problem as BTOR2 before solving. |
+| `--dump-only` | Stop after BTOR2 export without a proof verdict; requires `--dump-btor2`. |
 | `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. By default, such a mismatch stops the run before SAT solving. |
 | `-verilog` | Parse both designs as Verilog. |
 | `-naja_if` | Parse both designs as Naja IF. |
@@ -190,6 +199,9 @@ build/src/bin/kepler-formal --config <file.yaml>
 | --- | --- | --- |
 | `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
+| `btor2_export` | bool | Enable BTOR2 export before solving; SEC only. Defaults to `false`. |
+| `btor2_export_path` | string | BTOR2 destination; defaults to `miter.btor2` when enabled. Requires `btor2_export: true`. |
+| `dump_only` | bool | Stop after export without solving. Defaults to `false`; requires `btor2_export: true`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `verilog_design1_top`, `verilog_design2_top` | string | Select the top module for each Verilog design. In `sv2v` mode, only `verilog_design2_top` is valid. |

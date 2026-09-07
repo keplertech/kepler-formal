@@ -29,6 +29,10 @@ endif()
 
 GTEST_DISCOVER_TESTS(secStrategyTests)
 
+add_executable(SecBtor2ExporterTests SecBtor2ExporterTests.cpp)
+target_link_libraries(SecBtor2ExporterTests kepler_sec GTest::gtest_main)
+GTEST_DISCOVER_TESTS(SecBtor2ExporterTests)
+
 add_test(
     NAME SecRegressHelperTests.PartialProofExpectationModes
     COMMAND bash

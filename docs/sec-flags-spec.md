@@ -15,6 +15,8 @@ SEC clock extraction and multi-clock-domain coverage handling are documented in
 [sec-clock-handling.md](sec-clock-handling.md).
 User-driven reset sequences are documented in
 [sec-reset-bootstrap.md](sec-reset-bootstrap.md).
+Prepared equivalence-model export is documented in
+[btor2-export.md](btor2-export.md).
 
 Sequential primitive support and latch opacity are documented in
 [sec-sequential-models.md](sec-sequential-models.md).
@@ -79,8 +81,8 @@ kepler-formal -sv2v \
 
 ## YAML Shape
 
-When `--config` or `-c` is present, YAML config mode takes precedence over the
-rest of the command line.
+When `--config` or `-c` is present, YAML config mode is exclusive with other
+command-line options.
 
 ```yaml
 format: systemverilog
@@ -109,6 +111,8 @@ liberty_files:
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
 | `--sec-reset-cycles <n>` | `sec_reset.cycles: <n>` | omitted | Positive integer | Holds user-listed reset ports active for the first `n` SEC cycles. |
 | `--sec-reset-port <name=0\|1>` | `sec_reset.ports` | omitted | Repeatable reset port assignment | Adds a top-level reset input and asserted value. Repeat for multiple reset ports. |
+| `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
+| `--dump-only` | `dump_only: true` | `false` | boolean | Stops after BTOR2 export. Requires export to be enabled. Success is an export result, not a proof verdict. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 
@@ -182,6 +186,7 @@ SEC result handling is currently:
 | Inconclusive | `2` | SEC produced neither a proof nor a counterexample. |
 | Counterexample found | `3` | SEC found a definitive mismatch. |
 | Unsupported | `2` | The extracted model was incomplete or unsupported for SEC. |
+| Exported (`dump_only`) | `0` | BTOR2 was written; no proof engine ran. The log reports the path and output coverage. |
 
 The log always prints:
 

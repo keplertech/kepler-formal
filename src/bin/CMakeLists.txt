@@ -1,7 +1,7 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: GPL-3.0-only
 
-add_executable(kepler-formal KeplerFormal.cpp)
+add_executable(kepler-formal KeplerFormal.cpp Btor2ExportConfig.cpp)
 target_include_directories(kepler-formal SYSTEM BEFORE PUBLIC ${Boost_INCLUDE_DIR})
 target_include_directories(kepler-formal PUBLIC ${ARGPARSE_DIR})
 
