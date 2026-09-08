@@ -83,12 +83,14 @@ def run_cli(arguments: Sequence[PathLike]) -> VerificationResult:
     Calls are synchronous, serialized, and hold the GIL for the duration of
     the native run. Normal non-equivalence, partial, inconclusive, and
     unsupported verdicts are returned rather than raised.
+    Arguments are forwarded verbatim, without path normalization or tilde
+    expansion. Path-like objects contribute their ``os.fspath()`` string.
     """
 
     if isinstance(arguments, (str, bytes, os.PathLike)):
         raise TypeError("arguments must be a sequence, not a single path")
     native_result = _native.run(
-        [_raw_path(argument, f"arguments[{index}]", resolve=False)
+        [_argument_string(argument, f"arguments[{index}]")
          for index, argument in enumerate(arguments)]
     )
     return VerificationResult._from_native(native_result)
@@ -127,17 +129,21 @@ def _enum_value(value: _EnumType | str, enum_type: type[_EnumType], label: str) 
         raise ValueError(f"{label} must be one of: {choices}") from error
 
 
-def _raw_path(value: PathLike, label: str, *, resolve: bool = True) -> str:
+def _argument_string(value: PathLike, label: str) -> str:
     try:
         raw = os.fspath(value)
     except TypeError as error:
         raise TypeError(f"{label} must be a string or path-like object") from error
     if not isinstance(raw, str):
-        raise TypeError(f"{label} must resolve to a string path")
+        raise TypeError(f"{label} must resolve to a string")
+    return raw
+
+
+def _raw_path(value: PathLike, label: str) -> str:
+    raw = _argument_string(value, label)
     if not raw:
         raise ValueError(f"{label} must not be empty")
-    path = Path(raw).expanduser()
-    return str(path.resolve()) if resolve else str(path)
+    return str(Path(raw).expanduser().resolve())
 
 
 def _paths(value: PathLike | Sequence[PathLike], label: str) -> list[str]:

@@ -3,6 +3,7 @@
 
 include_guard(GLOBAL)
 include(ExternalProject)
+include(FetchContent)
 
 function(kepler_add_nested_najaeda consumer_target)
   if(NOT TARGET "${consumer_target}")
@@ -16,19 +17,9 @@ function(kepler_add_nested_najaeda consumer_target)
   set(external_install_dir "${CMAKE_CURRENT_BINARY_DIR}/kepler_nested_najaeda-install")
   set(package_dir "${CMAKE_CURRENT_BINARY_DIR}/kepler_nested_najaeda-package")
   set(package_stamp "${CMAKE_CURRENT_BINARY_DIR}/kepler_nested_najaeda-package.stamp")
-  set(project_include "${CMAKE_CURRENT_LIST_DIR}/KeplerNestedNajaedaProject.cmake")
-  set(stage_script "${CMAKE_CURRENT_LIST_DIR}/StageKeplerNestedNajaeda.cmake")
+  set(project_include "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/KeplerNestedNajaedaProject.cmake")
+  set(stage_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/StageKeplerNestedNajaeda.cmake")
   set(isolated_library_prefix "libkepler_najaeda_")
-
-  set(fmt_source_dir "${FETCHCONTENT_BASE_DIR}/fmt-src")
-  set(tomlplusplus_source_dir "${FETCHCONTENT_BASE_DIR}/tomlplusplus-src")
-  foreach(fetched_source IN ITEMS "${fmt_source_dir}" "${tomlplusplus_source_dir}")
-    if(NOT IS_DIRECTORY "${fetched_source}")
-      message(FATAL_ERROR
-        "The nested NajaEDA build requires the parent-fetched source directory "
-        "${fetched_source}")
-    endif()
-  endforeach()
 
   set(external_cmake_args
     "-DCMAKE_BUILD_TYPE:STRING=Release"
@@ -44,9 +35,28 @@ function(kepler_add_nested_najaeda consumer_target)
     "-DENABLE_SANITIZERS:BOOL=OFF"
     "-DENABLE_THREAD_SANITIZER:BOOL=OFF"
     "-DPython3_EXECUTABLE:FILEPATH=${Python3_EXECUTABLE}"
-    "-DFETCHCONTENT_SOURCE_DIR_FMT:PATH=${fmt_source_dir}"
-    "-DFETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS:PATH=${tomlplusplus_source_dir}"
   )
+
+  foreach(dependency IN ITEMS fmt tomlplusplus)
+    # FetchContent records the actual location globally, including SOURCE_DIR
+    # declarations and FETCHCONTENT_SOURCE_DIR_* overrides in Naja's scope.
+    # A dependency satisfied by find_package() has no populated source tree;
+    # let the separate build find that same package instead of inventing one.
+    # GetProperties leaves its output unchanged when the property is absent.
+    set(dependency_source_dir "")
+    FetchContent_GetProperties("${dependency}" SOURCE_DIR dependency_source_dir)
+    string(TOUPPER "${dependency}" dependency_upper)
+    set(dependency_package_dir "")
+    if(NOT dependency_source_dir AND IS_DIRECTORY "${${dependency}_DIR}")
+      set(dependency_package_dir "${${dependency}_DIR}")
+    endif()
+    # Pass empty values too, so reconfiguring from sources to an installed
+    # package (or back) cannot retain the previous nested build's cache hints.
+    list(APPEND external_cmake_args
+      "-DFETCHCONTENT_SOURCE_DIR_${dependency_upper}:PATH=${dependency_source_dir}"
+      "-D${dependency}_DIR:PATH=${dependency_package_dir}"
+    )
+  endforeach()
 
   foreach(compiler_variable IN ITEMS CMAKE_C_COMPILER CMAKE_CXX_COMPILER)
     if(DEFINED ${compiler_variable} AND NOT "${${compiler_variable}}" STREQUAL "")
