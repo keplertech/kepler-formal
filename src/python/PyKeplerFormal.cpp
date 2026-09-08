@@ -122,6 +122,34 @@ bool appendArgument(PyObject *value, std::vector<std::string> &arguments) {
 }
 
 PyObject *run(PyObject *, PyObject *args) {
+#ifdef Py_GIL_DISABLED
+  // Importing this GIL-requiring module normally enables the GIL, but an
+  // explicit PYTHON_GIL=0 / -X gil=0 overrides that protection. Reject such
+  // calls before inspecting borrowed argument references or native state.
+  OwnedPyObject sys(PyImport_ImportModule("sys"));
+  if (sys == nullptr) {
+    return nullptr;
+  }
+  OwnedPyObject isGilEnabled(PyObject_GetAttrString(sys.get(), "_is_gil_enabled"));
+  if (isGilEnabled == nullptr) {
+    return nullptr;
+  }
+  OwnedPyObject gilEnabled(PyObject_CallNoArgs(isGilEnabled.get()));
+  if (gilEnabled == nullptr) {
+    return nullptr;
+  }
+  const int hasGil = PyObject_IsTrue(gilEnabled.get());
+  if (hasGil < 0) {
+    return nullptr;
+  }
+  if (!hasGil) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "Kepler Formal requires Python's GIL; use PYTHON_GIL=1 "
+                    "or -X gil=1 for verification");
+    return nullptr;
+  }
+#endif
+
   PyObject *suppliedArguments = nullptr;
   if (!PyArg_ParseTuple(args, "O:run", &suppliedArguments)) {
     return nullptr;

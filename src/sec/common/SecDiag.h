@@ -7,7 +7,13 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#ifdef _WIN32
+#include <climits>
+#include <cstdio>
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 namespace KEPLER_FORMAL::SEC {
 
@@ -61,7 +67,13 @@ inline void emitSecDiag(Args&&... args) {
   const char* data = message.data();
   size_t remaining = message.size();
   while (remaining > 0) {
+#ifdef _WIN32
+    const auto count = static_cast<unsigned int>(
+        remaining > INT_MAX ? INT_MAX : remaining);
+    const int written = ::_write(::_fileno(stderr), data, count);
+#else
     const ssize_t written = ::write(STDERR_FILENO, data, remaining);
+#endif
     if (written <= 0) {
       // LCOV_DISABLED_START
       break;  // LCOV_EXCL_LINE

@@ -5,6 +5,17 @@ name: Python wheels
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish tested wheels to PyPI (main only; requires pypi environment approval)
+        type: boolean
+        required: false
+        default: false
+      version:
+        description: Confirm the version in CMakeLists.txt when publishing (does not override it)
+        type: string
+        required: false
+        default: ''
   pull_request:
     paths:
       - .github/workflows/python-wheels.yml
@@ -12,7 +23,8 @@ on:
       - CMakeLists.txt
       - LICENSE.rst
       - src/**
-      - ci/check_kepler_wheel.py
+      - ci/**
+      - test/python/**
       - thirdparty/**
       - .gitmodules
   push:
@@ -26,8 +38,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  generate-parser:
+    name: Generate portable Verilog parser sources
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Check wheel coverage against NajaEDA
+        run: |
+          python -m pip install cibuildwheel==4.2.0 PyYAML
+          python ci/check_wheel_matrix.py
+      - name: Install parser generators
+        run: sudo apt-get update && sudo apt-get install -y bison flex libfl-dev
+      - name: Generate parser sources for Windows
+        run: |
+          cmake -S thirdparty/naja/thirdparty/naja-verilog -B parser-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build parser-build --target naja_verilog --parallel 2
+          mkdir -p generated-parser
+          cp parser-build/src/VerilogParser.cpp parser-build/src/VerilogParser.hpp parser-build/src/VerilogScanner.cpp generated-parser/
+          cp parser-build/src/*.hh /usr/include/FlexLexer.h generated-parser/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kepler-verilog-parser
+          path: generated-parser/*
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.platform }} / ${{ matrix.arch }}
+    needs: generate-parser
     strategy:
       fail-fast: false
       matrix:
@@ -35,11 +78,17 @@ jobs:
           - os: ubuntu-24.04
             platform: manylinux_2_28
             arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: manylinux_2_28
+            arch: aarch64
           # Vendored Slang requires a newer AppleClang than Xcode 15.4 on the
           # macos-14 image.  The repository's macOS build also uses latest.
           - os: macos-latest
             platform: macOS
             arch: arm64
+          - os: windows-latest
+            platform: Windows
+            arch: AMD64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -47,12 +96,67 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install Windows wheel repair tool
+        if: runner.os == 'Windows'
+        run: python -m pip install delvewheel
+
+      - name: Set up Windows SDK and MSVC environment for clang-cl
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Validate Python release request
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          if (os.environ["GITHUB_REPOSITORY"] != "keplertech/kepler-formal"
+                  or os.environ["GITHUB_REF"] != "refs/heads/main"):
+              sys.exit("PyPI publishing is only allowed from keplertech/kepler-formal main.")
+
+          match = re.search(
+              r"project\(kepler-formal\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)",
+              Path("CMakeLists.txt").read_text(encoding="utf-8"),
+          )
+          if match is None:
+              sys.exit("Cannot read the Python package version from CMakeLists.txt.")
+          version = match.group(1)
+          if os.environ["RELEASE_VERSION"] != version:
+              sys.exit(f"To publish, confirm version {version} in the workflow's version input.")
+          summary = f"Release request: kepler-formal {version} from {os.environ['GITHUB_SHA']}\n"
+          print(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(summary)
+          PY
 
       - name: Verify recursive submodules
         run: git submodule status --recursive
 
+      - name: Download generated parser for Windows
+        if: runner.os == 'Windows'
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-verilog-parser
+          path: thirdparty/naja/thirdparty/naja-verilog/src/generated
+
       - name: Build, repair, and test wheels
         uses: pypa/cibuildwheel@v4.2.0
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
         with:
           package-dir: .
           output-dir: wheelhouse
@@ -63,3 +167,53 @@ jobs:
           name: kepler-formal-${{ matrix.platform }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
           if-no-files-found: error
+
+  publish:
+    name: Publish kepler-formal ${{ inputs.version }} to PyPI
+    needs: build
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.publish &&
+      github.repository == 'keplertech/kepler-formal' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Configure required reviewers and restrict this environment to main
+    # before enabling its matching PyPI Trusted Publisher.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kepler-formal/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Download only this run's four tested wheel artifacts. An absent
+      # artifact is an error; never publish a partial platform matrix.
+      - name: Download Linux wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-manylinux_2_28-x86_64
+          path: dist/
+
+      - name: Download macOS wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-macOS-arm64
+          path: dist/
+
+      - name: Download Linux ARM64 wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-manylinux_2_28-aarch64
+          path: dist/
+
+      - name: Download Windows wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-Windows-AMD64
+          path: dist/
+
+      - name: Publish to PyPI using Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true

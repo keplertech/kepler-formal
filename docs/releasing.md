@@ -2,6 +2,9 @@
 
 This document explains how to set up and perform binary releases.
 
+For the Python package on PyPI, use the separate manual
+[Python release workflow](python-release.md); it does not require a release tag.
+
 ## How it works
 
 1. A maintainer runs `bazelisk run //:release` locally.

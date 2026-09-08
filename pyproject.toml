@@ -19,11 +19,13 @@ classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
@@ -32,6 +34,9 @@ Homepage = "https://github.com/keplertech/kepler-formal"
 Repository = "https://github.com/keplertech/kepler-formal"
 
 [tool.scikit-build]
+# The separate nested build needs FindPython3's free-threaded ABI support too;
+# a backport loaded only into the parent CMake project is not sufficient.
+cmake.version = ">=3.30"
 install.components = ["python"]
 build.targets = ["kepler_formal_native"]
 
@@ -49,13 +54,16 @@ input = "CMakeLists.txt"
 regex = 'project\(kepler-formal\s+VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
 
 [tool.cibuildwheel]
-build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
-skip = ["*-musllinux_*", "*-win*"]
-test-command = "PYTHONPATH= python {project}/ci/check_kepler_wheel.py && PYTHONPATH= python -m unittest discover -v {project}/test/python -p test_api.py"
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*", "cp314t-*", "cp315-*"]
+# Match NajaEDA: free-threaded 3.14 on Linux x86_64 and macOS arm64 only.
+skip = ["*-musllinux_*", "cp314t-manylinux_aarch64", "cp314t-win*"]
+enable = ["cpython-prerelease"]
+test-command = "PYTHONPATH= python {project}/ci/check_kepler_wheel.py && PYTHONPATH= python -m unittest discover -v {project}/test/python"
 
 [tool.cibuildwheel.linux]
-archs = ["x86_64"]
+archs = ["x86_64", "aarch64"]
 manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 before-all = '''
   set -euo pipefail
   dnf install -y bison boost-devel curl flex m4 ninja-build pkgconfig zlib-devel
@@ -120,3 +128,11 @@ before-all = '''
 '''
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", PATH = "/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH" }
 repair-wheel-command = "delocate-wheel --require-archs arm64 -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+before-all = 'pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {project}\ci\windows_setup.ps1'
+environment = { CC = "C:/Program Files/LLVM/bin/clang-cl.exe", CXX = "C:/Program Files/LLVM/bin/clang-cl.exe", CMAKE_GENERATOR = "Ninja" }
+config-settings = { "cmake.args" = "-DCMAKE_TOOLCHAIN_FILE=C:/Users/runneradmin/vcpkg/scripts/buildsystems/vcpkg.cmake;-DPREGENERATED_PARSER_SOURCES=ON" }
+repair-wheel-command = 'delvewheel repair -v --ignore-existing --analyze-existing --include-imports --add-path C:\Users\runneradmin\vcpkg\installed\x64-windows\bin -w {dest_dir} {wheel}'
+test-command = 'pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {project}\ci\windows_test.ps1'

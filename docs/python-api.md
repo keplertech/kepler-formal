@@ -19,8 +19,19 @@ python -m pip install .
 ```
 
 The build uses `scikit-build-core`, following NajaEDA's package layout. Native
-build dependencies are the same as for the CMake build. Linux and macOS are the
-initially supported platforms.
+build dependencies are the same as for the CMake build. The wheel matrix covers
+Linux x86_64/aarch64, macOS arm64, and Windows AMD64; see the exact Python
+versions in [wheel coverage](python-release.md#wheel-coverage).
+
+Windows source builds require clang-cl with the MSVC SDK environment, CMake,
+Ninja, and the vcpkg dependencies installed by `ci/windows_setup.ps1`. They
+also require pregenerated Verilog parser sources and
+`PREGENERATED_PARSER_SOURCES=ON`; the wheel workflow generates these sources
+on Linux, following NajaEDA's Windows build approach. Ordinary MSVC `cl.exe`
+is not supported for KF's bundled solver sources.
+
+Maintainers can publish tested wheels using the manual
+[Python release workflow](python-release.md).
 
 ## Bundled NajaEDA editor
 
@@ -296,6 +307,9 @@ design, solver, and logging state. The binding therefore has these constraints:
   not reentrant.
 - The binding intentionally keeps Python's GIL for the entire native run.
   Other Python threads cannot execute Python code until verification returns.
+  On free-threaded CPython, importing the binding normally enables the GIL.
+  If it is forcibly disabled with `PYTHON_GIL=0` or `-X gil=0`, verification
+  raises `RuntimeError`; use `PYTHON_GIL=1` or `-X gil=1` instead.
 - The API does not currently provide an in-process timeout or cancellation
   hook. A caller that needs hard cancellation or crash isolation should place
   the Python call in a separately managed process.

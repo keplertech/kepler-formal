@@ -24,7 +24,11 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include "SNLEquipotential.h"
 #include "SNLLogicCone.h"
 #include "../sat/SATSolverWrapper.h"
@@ -420,7 +424,12 @@ void ensureLoggerInitialized() {
       std::error_code ec;
       auto tmp = std::filesystem::temp_directory_path(ec);
       if (!ec) {
-        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(::getpid()) + ".txt");
+#ifdef _WIN32
+        const auto processId = ::_getpid();
+#else
+        const auto processId = ::getpid();
+#endif
+        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(processId) + ".txt");
         // LCOV_DISABLED_STOP
         try {
           // LCOV_DISABLED_START

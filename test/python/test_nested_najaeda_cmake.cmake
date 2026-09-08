@@ -29,6 +29,7 @@ function(check_dependency_modes build_name fmt_mode tomlplusplus_mode)
       "-DKEPLER_SOURCE_DIR:PATH=${KEPLER_SOURCE_DIR}"
       "-DFMT_DEPENDENCY_MODE:STRING=${fmt_mode}"
       "-DTOMLPLUSPLUS_DEPENDENCY_MODE:STRING=${tomlplusplus_mode}"
+      ${ARGN}
     RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
   if(NOT result EQUAL 0)
     message(FATAL_ERROR "Parent ${build_name} configure failed:\n${output}\n${error}")
@@ -63,6 +64,70 @@ endfunction()
 check_dependency_modes("default build" default default)
 check_dependency_modes("declared build" declared declared)
 check_dependency_modes("override build" override override)
+
+check_dependency_modes("platform build" override override
+  "-DTEST_PLATFORM_FORWARDING:BOOL=ON")
+set(platform_build "${TEST_BINARY_DIR}/platform build")
+file(READ "${platform_build}/kepler_nested_najaeda-build/CMakeCache.txt" nested_cache)
+foreach(expected IN ITEMS
+    "CMAKE_TOOLCHAIN_FILE:FILEPATH=${fixture_source}/test toolchain.cmake"
+    "CMAKE_PREFIX_PATH:STRING=${fixture_source}/prefix one\;${fixture_source}/prefix two"
+    "CMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL"
+    "VCPKG_TARGET_TRIPLET:STRING=x64-windows"
+    "VCPKG_HOST_TRIPLET:STRING=x64-windows"
+    "Python3_FIND_ABI:STRING=ANY\;ANY\;ANY\;ON"
+    "PREGENERATED_PARSER_SOURCES:BOOL=ON")
+  string(REPLACE "\\;" ";" expected "${expected}")
+  string(FIND "${nested_cache}" "${expected}\n" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "Nested platform configuration lost: ${expected}")
+  endif()
+endforeach()
+file(GLOB_RECURSE platform_build_files
+  "${platform_build}/*install*.cmake" "${platform_build}/*build.make"
+  "${platform_build}/*.ninja")
+set(found_pyd FALSE)
+foreach(build_file IN LISTS platform_build_files)
+  file(READ "${build_file}" contents)
+  string(FIND "${contents}" "-DMODULE_SUFFIX:STRING=.pyd" position)
+  if(NOT position EQUAL -1)
+    set(found_pyd TRUE)
+  endif()
+endforeach()
+if(NOT found_pyd)
+  message(FATAL_ERROR "Windows nested staging must look for .pyd, not .dll modules")
+endif()
+message(STATUS "Nested NajaEDA platform/ABI configuration forwarding passed")
+
+# Exercise package staging with Windows file names on every host.
+set(stage_source "${TEST_BINARY_DIR}/windows stage source")
+set(stage_destination "${TEST_BINARY_DIR}/windows staged package")
+file(MAKE_DIRECTORY "${stage_source}")
+file(WRITE "${stage_source}/__init__.py" "from najaeda import netlist\n")
+file(WRITE "${stage_source}/netlist.py" "from najaeda.naja import SNLUniverse\n")
+file(WRITE "${stage_source}/naja.cp314-win_amd64.pyd" "fixture module\n")
+file(WRITE "${stage_source}/libkepler_najaeda_naja_nl.dll" "fixture runtime\n")
+execute_process(COMMAND "${CMAKE_COMMAND}"
+  "-DSOURCE_PACKAGE_DIR:PATH=${stage_source}"
+  "-DDESTINATION_PACKAGE_DIR:PATH=${stage_destination}"
+  "-DSHARED_LIBRARY_PREFIX:STRING=libkepler_najaeda_"
+  "-DSHARED_LIBRARY_SUFFIX:STRING=.dll"
+  "-DMODULE_SUFFIX:STRING=.pyd"
+  "-DSTAMP_FILE:FILEPATH=${TEST_BINARY_DIR}/windows stage.stamp"
+  -P "${KEPLER_SOURCE_DIR}/src/python/StageKeplerNestedNajaeda.cmake"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Windows package staging failed:\n${output}\n${error}")
+endif()
+file(READ "${stage_destination}/__init__.py" staged_init)
+file(READ "${stage_destination}/netlist.py" staged_netlist)
+if(NOT staged_init STREQUAL "from kepler_formal.najaeda import netlist\n"
+    OR NOT staged_netlist STREQUAL "from kepler_formal.najaeda.naja import SNLUniverse\n"
+    OR NOT EXISTS "${stage_destination}/naja.cp314-win_amd64.pyd"
+    OR NOT EXISTS "${stage_destination}/libkepler_najaeda_naja_nl.dll")
+  message(FATAL_ERROR "Windows package staging lost modules or nested imports")
+endif()
+message(STATUS "Nested NajaEDA Windows package staging passed")
 check_dependency_modes("installed build" installed installed)
 check_dependency_modes("mixed source first build" override installed)
 check_dependency_modes("mixed package first build" installed override)

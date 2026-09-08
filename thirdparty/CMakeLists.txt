@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 add_subdirectory(naja)
-add_subdirectory(glucose)
+if(NOT WIN32)
+  # Windows builds the serial Glucose library through KeplerWindowsSolvers;
+  # upstream's CMake also builds POSIX-only command-line/parallel targets.
+  add_subdirectory(glucose)
+endif()
 add_subdirectory(yaml-cpp)
 #add_subdirectory(kissat)
 # cadical is built through the root ExternalProject because upstream does not

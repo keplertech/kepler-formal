@@ -20,6 +20,15 @@ function(kepler_add_nested_najaeda consumer_target)
   set(project_include "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/KeplerNestedNajaedaProject.cmake")
   set(stage_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/StageKeplerNestedNajaeda.cmake")
   set(isolated_library_prefix "libkepler_najaeda_")
+  set(pregenerated_parser OFF)
+  if(PREGENERATED_PARSER_SOURCES)
+    set(pregenerated_parser ON)
+  endif()
+  set(naja_module_suffix "${CMAKE_SHARED_MODULE_SUFFIX}")
+  if(WIN32)
+    # Python3_add_library uses .pyd, not CMake's ordinary module DLL suffix.
+    set(naja_module_suffix ".pyd")
+  endif()
 
   set(external_cmake_args
     "-DCMAKE_BUILD_TYPE:STRING=Release"
@@ -29,7 +38,7 @@ function(kepler_add_nested_najaeda consumer_target)
     "-DCMAKE_PROJECT_INCLUDE:FILEPATH=${project_include}"
     "-DKEPLER_NESTED_NAJAEDA_BUILD:BOOL=ON"
     "-DBUILD_NAJA_PYTHON:BOOL=ON"
-    "-DPREGENERATED_PARSER_SOURCES:BOOL=OFF"
+    "-DPREGENERATED_PARSER_SOURCES:BOOL=${pregenerated_parser}"
     "-DBUILD_BENCHMARKS:BOOL=OFF"
     "-DCODE_COVERAGE:BOOL=OFF"
     "-DENABLE_SANITIZERS:BOOL=OFF"
@@ -56,6 +65,22 @@ function(kepler_add_nested_najaeda consumer_target)
       "-DFETCHCONTENT_SOURCE_DIR_${dependency_upper}:PATH=${dependency_source_dir}"
       "-D${dependency}_DIR:PATH=${dependency_package_dir}"
     )
+  endforeach()
+
+  foreach(path_variable IN ITEMS CMAKE_TOOLCHAIN_FILE)
+    if(DEFINED ${path_variable} AND NOT "${${path_variable}}" STREQUAL "")
+      list(APPEND external_cmake_args
+        "-D${path_variable}:FILEPATH=${${path_variable}}")
+    endif()
+  endforeach()
+
+  foreach(config_variable IN ITEMS
+      CMAKE_PREFIX_PATH CMAKE_MSVC_RUNTIME_LIBRARY VCPKG_TARGET_TRIPLET
+      VCPKG_HOST_TRIPLET Python3_FIND_ABI)
+    if(DEFINED ${config_variable} AND NOT "${${config_variable}}" STREQUAL "")
+      string(REPLACE ";" "|" config_value "${${config_variable}}")
+      list(APPEND external_cmake_args "-D${config_variable}:STRING=${config_value}")
+    endif()
   endforeach()
 
   foreach(compiler_variable IN ITEMS CMAKE_C_COMPILER CMAKE_CXX_COMPILER)
@@ -108,7 +133,7 @@ function(kepler_add_nested_najaeda consumer_target)
         "-DDESTINATION_PACKAGE_DIR:PATH=${package_dir}"
         "-DSHARED_LIBRARY_PREFIX:STRING=${isolated_library_prefix}"
         "-DSHARED_LIBRARY_SUFFIX:STRING=${CMAKE_SHARED_LIBRARY_SUFFIX}"
-        "-DMODULE_SUFFIX:STRING=${CMAKE_SHARED_MODULE_SUFFIX}"
+        "-DMODULE_SUFFIX:STRING=${naja_module_suffix}"
         "-DSTAMP_FILE:FILEPATH=${package_stamp}"
         -P "${stage_script}"
     BUILD_ALWAYS TRUE

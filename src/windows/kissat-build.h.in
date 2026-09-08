@@ -1,0 +1,7 @@
+/* Copyright 2024-2026 keplertech.io
+ * SPDX-License-Identifier: GPL-3.0-only */
+#define VERSION "@KEPLER_KISSAT_VERSION@"
+#define COMPILER "@CMAKE_C_COMPILER_ID@ @CMAKE_C_COMPILER_VERSION@"
+#define ID "unknown"
+#define BUILD "Kepler Formal native Windows build"
+#define DIR "@kepler_solver_generated@"
