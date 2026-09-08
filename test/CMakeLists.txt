@@ -16,3 +16,7 @@ add_subdirectory(strategies)
 add_subdirectory(utils)
 add_subdirectory(scope)
 add_subdirectory(sec)
+
+if(BUILD_KEPLER_PYTHON)
+  add_subdirectory(python)
+endif()
