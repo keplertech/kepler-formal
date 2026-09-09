@@ -28,6 +28,7 @@ enum class ConnectivitySkipOrigin {
   LogicalLoop,
   MultiClockDomain,
   OpaqueInternal,
+  UnknownConstant,
 };
 
 struct ConnectivitySkipInfo {  // LCOV_EXCL_LINE

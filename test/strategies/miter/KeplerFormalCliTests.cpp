@@ -3496,6 +3496,88 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogSecVerificationAccepted) {
 }
 
 TEST_F(KeplerFormalCliTests,
+       ConfigSystemVerilogSecUnknownConstantsIdentifyTheirUseSite) {
+  struct Case {
+    const char* name;
+    const char* assignment;
+    const char* diagnostic;
+    bool undriven = false;
+  };
+  const Case cases[] = {
+      {"x_ternary", "assign y = sel ? d : 1'bx;",
+       "unsupported X constant (1'bx)"},
+      {"z_bitwise", "assign y = d & 1'bz;",
+       "unsupported Z constant (1'bz)"},
+      {"x_direct", "assign y = 1'bx;", "unsupported X constant (1'bx)"},
+      {"z_direct", "assign y = 1'bz;", "unsupported Z constant (1'bz)"},
+      {"x_next_state", "always_ff @(posedge clk) y <= sel ? d : 1'bx;",
+       "unsupported X constant (1'bx)"},
+      {"known_zero", "assign y = sel ? d : 1'b0;", nullptr},
+      {"undriven", "assign y = undriven;", nullptr, true},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    const std::string source =
+        "module literal_source(input logic clk, sel, d, output logic y);\n"
+        "  wire undriven;\n"
+        "  " + std::string(test.assignment) + "\n"
+        "endmodule\n"
+        "module top(input logic clk, sel, d, output logic bad, good);\n"
+        "  literal_source u_literals(.clk(clk), .sel(sel), .d(d), .y(bad));\n"
+        "  assign good = d;\n"
+        "endmodule\n";
+    const auto fixture = createEquivalentDesignFixture("sv", source);
+    const auto logPath = fixture.tmpDir / "unknown_constants.log";
+    const auto cfgPath = writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "sec_encoding: dual_rail_steady\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+    {
+      CurrentPathGuard currentPathGuard;
+      std::filesystem::current_path(fixture.tmpDir);
+      const auto run = runStructuredWithConfigFile(cfgPath);
+      const bool skipped = test.diagnostic != nullptr || test.undriven;
+      EXPECT_EQ(run.exitCode,
+                skipped ? kSecPartiallyProvedExitCode : kSecProvedExitCode);
+      EXPECT_EQ(run.result.totalOutputs, 2u);
+      EXPECT_EQ(run.result.coveredOutputs, skipped ? 1u : 2u);
+      EXPECT_EQ(run.result.provenOutputs, skipped ? 1u : 2u);
+      EXPECT_EQ(run.result.skippedObservedOutputs.size(), skipped ? 1u : 0u);
+      if (skipped && !run.result.skippedObservedOutputs.empty()) {
+        const auto& detail = run.result.skippedObservedOutputs.front();
+        EXPECT_NE(detail.find("bad[0]:"), std::string::npos);
+        if (test.diagnostic != nullptr) {
+          EXPECT_NE(detail.find("unknown-constant"), std::string::npos);
+          EXPECT_NE(detail.find(test.diagnostic), std::string::npos);
+          EXPECT_NE(detail.find("u_literals"), std::string::npos);
+          // The location belongs to the consuming assignment/expression,
+          // whose line is distinct from the module and net declarations.
+          EXPECT_TRUE(detail.find("design0.sv:3") != std::string::npos ||
+                      detail.find("design1.sv:3") != std::string::npos)
+              << detail;
+          EXPECT_EQ(detail.find("internal frontier term"), std::string::npos);
+          EXPECT_EQ(detail.find("no-driver connectivity"), std::string::npos);
+          const auto contents = readFileContents(logPath);
+          EXPECT_NE(contents.find(test.diagnostic), std::string::npos);
+        } else {
+          EXPECT_NE(detail.find("no-driver connectivity"), std::string::npos);
+          EXPECT_EQ(detail.find("unknown-constant"), std::string::npos);
+        }
+      }
+      KEPLER_FORMAL::cleanupKeplerFormalState();
+    }
+    std::filesystem::remove(cfgPath);
+    std::filesystem::remove_all(fixture.tmpDir);
+  }
+}
+
+TEST_F(KeplerFormalCliTests,
        CliSystemVerilogSecSharedDivModPrimitiveProvesEquivalent) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",
