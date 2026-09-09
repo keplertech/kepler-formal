@@ -799,6 +799,26 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesDirectConstantOutputs) {
   EXPECT_TRUE(builder.getSkippedOutputs().empty());
 }
 
+TEST_F(MiterTests, BuildPrimaryOutputClausesUnmappedTermWithoutIsoKeepsFallback) {
+  auto* univ = NLUniverse::create();
+  auto* db = NLDB::create(univ);
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* output =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("unconnected"));
+  univ->setTopDesign(top);
+
+  const auto& term = naja::DNL::get()->getTop().getTerminalFromBitTerm(output);
+  ASSERT_EQ(term.getIsoID(), naja::DNL::DNLID_MAX);
+  const std::string fallback = "unconnected output has no drivers";
+  const auto skip =
+      BuildPrimaryOutputClauses::describeUnmappedTerm(term.getID(), fallback);
+  EXPECT_EQ(skip.reason, BuildPrimaryOutputClauses::SkippedOutputReason::NoDriver);
+  EXPECT_EQ(skip.detail, fallback);
+}
+
 TEST_F(MiterTests, BuildPrimaryOutputClausesUnknownConstantsWithoutSourceLocation) {
   auto* univ = NLUniverse::create();
   auto* db = NLDB::create(univ);
