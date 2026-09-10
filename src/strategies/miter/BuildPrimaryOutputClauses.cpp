@@ -8,6 +8,7 @@
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
 #include "SNLPath.h"
+#include "SNLRTLInfos.h"
 #include "NajaProperty.h"
 #include "../../config/Config.h"
 #include <algorithm>
@@ -303,6 +304,36 @@ void reportSkippedPO(const DNLFull* dnl,
 }
 
 }  // namespace
+
+BuildPrimaryOutputClauses::SkippedOutputInfo
+BuildPrimaryOutputClauses::describeUnmappedTerm(
+    DNLID termID, std::string fallbackDetail) {
+  const auto& term = get()->getDNLTerminalFromID(termID);
+  if (term.getIsoID() == DNLID_MAX) {
+    return {SkippedOutputReason::NoDriver, std::move(fallbackDetail)};
+  }
+  const auto& iso = get()->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+  if (!iso.isConstantX() && !iso.isConstantZ()) {
+    return {SkippedOutputReason::NoDriver, std::move(fallbackDetail)};
+  }
+
+  const auto* instTerm = term.getSnlTerm();
+  const auto* rtlInfos = instTerm ? instTerm->getInstance()->getRTLInfos() : nullptr;
+  // Use the consuming instance: the constant net can be shared by literals
+  // from different source locations.
+  std::ostringstream detail;
+  detail << "unsupported " << (iso.isConstantX() ? "X constant (1'bx)" : "Z constant (1'bz)")
+         << " used at ";
+  appendTerminalName(detail, term);
+  if (rtlInfos && rtlInfos->hasSourceLoc()) {
+    const auto& loc = *rtlInfos->getSourceLoc();
+    detail << "; assignment/expression at " << loc.file.getString() << ":" << loc.line;
+    if (loc.column) detail << ":" << loc.column;
+  } else {
+    detail << "; source location unavailable";
+  }
+  return {SkippedOutputReason::UnknownConstant, detail.str()};
+}
 
 BuildPrimaryOutputClauses::PathNameIDs BuildPrimaryOutputClauses::getPathNameIDs(
     const DNLInstanceFull& instance) const {
@@ -665,10 +696,10 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
         dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
     if (!iso.isConstant0() && !iso.isConstant1() &&
         iso.getDrivers().empty()) {
-      skippedOutputs_[out] = makeSkippedOutputInfo(
-          SkippedOutputReason::NoDriver, "its iso has no drivers");
+      const auto skip = describeUnmappedTerm(out, "its iso has no drivers");
+      skippedOutputs_[out] = skip;
       reportSkippedPO(
-          dnl, term, "its iso has no drivers", kSkippedNoDriverPOReport);
+          dnl, term, skip.detail.c_str(), kSkippedNoDriverPOReport);
       DEBUG_LOG("Skipping output %s of model %s as it is not connected to any net\n",
                 term.getSnlBitTerm()->getName().getString().c_str(),
                 term.getSnlBitTerm()
@@ -945,21 +976,20 @@ void BuildPrimaryOutputClauses::build() {
       if (unmappedInput != DNLID_MAX) {
         // LCOV_DISABLED_START
         POs_[i] = BoolExpr::createInvalid();
-        std::ostringstream detail;
-        detail << "encountered internal frontier term "
-               << unmappedInput
-               << " that was not collected as a primary input";
+        const auto skip = describeUnmappedTerm(
+            unmappedInput, "encountered internal frontier term " +
+                std::to_string(unmappedInput) +
+                " that was not collected as a primary input");
                // LCOV_DISABLED_STOP
         {
           // LCOV_DISABLED_START
           std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
-          skippedOutputs_[out] = makeSkippedOutputInfo(
-              SkippedOutputReason::NoDriver, detail.str());
+          skippedOutputs_[out] = skip;
         }
         reportSkippedPO(
             get(),
             get()->getDNLTerminalFromID(out),
-            detail.str().c_str(),
+            skip.detail.c_str(),
             kSkippedNoDriverPOReport);
       }
       // LCOV_DISABLED_STOP

@@ -283,6 +283,8 @@ const char* describeBuilderSkippedOutputReason(
   switch (reason) {
     case BuilderSkippedOutputReason::NoDriver:
       return "no_driver";
+    case BuilderSkippedOutputReason::UnknownConstant:
+      return "unknown_constant";
     case BuilderSkippedOutputReason::MultiDriver:
       // LCOV_EXCL_START
       return "multi_driver";  // LCOV_EXCL_LINE
@@ -308,6 +310,8 @@ std::optional<ConnectivitySkipInfo> getConnectivitySkipInfo(
   switch (info.reason) {
     case BuilderSkippedOutputReason::NoDriver:
       return ConnectivitySkipInfo{ConnectivitySkipOrigin::NoDriver, info.detail};
+    case BuilderSkippedOutputReason::UnknownConstant:
+      return ConnectivitySkipInfo{ConnectivitySkipOrigin::UnknownConstant, info.detail};
     case BuilderSkippedOutputReason::MultiDriver:
       return ConnectivitySkipInfo{ConnectivitySkipOrigin::MultiDriver, info.detail};
     case BuilderSkippedOutputReason::LogicalLoop:
@@ -400,14 +404,12 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
         // LCOV_EXCL_START
         if (inputTermID >= termDNLID2varID.size() ||  // LCOV_EXCL_LINE
             termDNLID2varID[inputTermID] < 2) {  // LCOV_EXCL_LINE
-          localResult.connectivitySkip = ConnectivitySkipInfo{  // LCOV_EXCL_LINE
+          localResult.connectivitySkip = getConnectivitySkipInfo(
+              BuildPrimaryOutputClauses::describeUnmappedTerm(
+                  inputTermID, "encountered internal frontier term " +
+                      std::to_string(inputTermID) +
+                      " that was not collected as a primary input"));
           // LCOV_EXCL_STOP
-              ConnectivitySkipOrigin::NoDriver,  // LCOV_EXCL_LINE
-              // LCOV_EXCL_START
-              "encountered internal frontier term " +  // LCOV_EXCL_LINE
-                  std::to_string(inputTermID) +  // LCOV_EXCL_LINE
-                  // LCOV_EXCL_STOP
-                  " that was not collected as a primary input"};  // LCOV_EXCL_LINE
           // LCOV_EXCL_START
           cloud.destroy();  // LCOV_EXCL_LINE
           return localResult;  // LCOV_EXCL_LINE
@@ -541,11 +543,9 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
       }
       // LCOV_EXCL_START
       if (iso.getDrivers().empty()) {  // LCOV_EXCL_LINE
-        localResult.connectivitySkip = ConnectivitySkipInfo{  // LCOV_EXCL_LINE
-        // LCOV_EXCL_STOP
-            ConnectivitySkipOrigin::NoDriver,
-            // LCOV_EXCL_START
-            "term `" + describeTerm(term) + "` has no drivers"};  // LCOV_EXCL_LINE
+        localResult.connectivitySkip = getConnectivitySkipInfo(
+            BuildPrimaryOutputClauses::describeUnmappedTerm(
+                currentTermID, "term `" + describeTerm(term) + "` has no drivers"));
         return localResult;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
       }
@@ -3426,7 +3426,9 @@ bool isNoDriverSkippedStructuredMemoryTerm(
   }
   const auto connectivitySkip = getConnectivitySkipInfo(skippedIt->second);  // LCOV_EXCL_LINE
   return connectivitySkip.has_value() &&  // LCOV_EXCL_LINE
-         connectivitySkip->origin == ConnectivitySkipOrigin::NoDriver;  // LCOV_EXCL_LINE
+         // UnknownConstant only refines the diagnostic of the old NoDriver case.
+         (connectivitySkip->origin == ConnectivitySkipOrigin::NoDriver ||
+          connectivitySkip->origin == ConnectivitySkipOrigin::UnknownConstant);
 }
 
 bool isDisabledMemoryWriteEnable(

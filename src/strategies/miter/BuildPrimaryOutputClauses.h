@@ -43,6 +43,7 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
     MultiDriver,
     LogicalLoop,
     OpaqueInternal,
+    UnknownConstant,
   };
 
   struct SkippedOutputInfo {  // LCOV_EXCL_LINE
@@ -50,6 +51,9 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
     std::string detail;
     naja::DNL::DNLID opaqueTerm = naja::DNL::DNLID_MAX;
   };
+
+  static SkippedOutputInfo describeUnmappedTerm(
+      naja::DNL::DNLID termID, std::string fallbackDetail);
 
   BuildPrimaryOutputClauses() = default;
   void collect();
