@@ -339,12 +339,15 @@ std::string describeConnectivitySkipOrigin(ConnectivitySkipOrigin origin) {
       return "multi-clock-domain";
     case ConnectivitySkipOrigin::OpaqueInternal:
       return "opaque-internal";
+    case ConnectivitySkipOrigin::UnknownConstant:
+      return "unknown-constant";
   }
   return "connectivity";  // LCOV_EXCL_LINE
 }
 
 std::string describeConnectivitySkipInfo(const ConnectivitySkipInfo& info) {
-  if (info.origin == ConnectivitySkipOrigin::OpaqueInternal) {
+  if (info.origin == ConnectivitySkipOrigin::OpaqueInternal ||
+      info.origin == ConnectivitySkipOrigin::UnknownConstant) {
     return describeConnectivitySkipOrigin(info.origin) + ": " + info.detail;
   }
   std::ostringstream oss;
