@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../../config/Config.h"
+#include "export/Btor2ExportOptions.h"
 
 namespace naja::NL {
 class SNLDesign;
@@ -33,6 +34,7 @@ enum class SequentialEquivalenceStatus {
   Different,
   Inconclusive,
   Unsupported,
+  Exported,
 };
 
 struct SecResetPortSpec {
@@ -105,7 +107,8 @@ class SequentialEquivalenceStrategy {
           KEPLER_FORMAL::Config::getSolverType(),
       SecEngine secEngine = SecEngine::Pdr,
       SecEncoding encoding = SecEncoding::DualRailSteady,
-      SecResetSpec resetSpec = {});
+      SecResetSpec resetSpec = {},
+      Btor2ExportOptions exportOptions = {});
 
   SequentialEquivalenceResult run(size_t maxK) const;
   SequentialEquivalenceResult runExtractedModels(
@@ -120,6 +123,7 @@ class SequentialEquivalenceStrategy {
   SecEngine secEngine_;
   SecEncoding encoding_;
   SecResetSpec resetSpec_;
+  Btor2ExportOptions exportOptions_;
 };
 
 namespace detail {

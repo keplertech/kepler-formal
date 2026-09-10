@@ -43,6 +43,7 @@
 #include "SNLTerm.h"
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
+#include "Btor2ExportConfig.h"
 #include "Config.h"
 #include "KeplerFormalDriver.h"
 #include "KeplerFormalUtils.h"
@@ -132,7 +133,8 @@ static void print_usage(const char* prog) {
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
-      "[--report-skipped-pos]",
+      "[--report-skipped-pos] "
+      "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
 }
@@ -535,6 +537,9 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "sec_engine",
       "sec_encoding",
       "sec_reset",
+      "btor2_export",
+      "btor2_export_path",
+      "dump_only",
       "allow-boundary-mismatch",
       "input_paths",
       "liberty_files",
@@ -1376,6 +1381,7 @@ static int KeplerFormalMainImpl(
   KEPLER_FORMAL::SEC::SecEncoding secEncoding =
       KEPLER_FORMAL::SEC::SecEncoding::DualRailSteady;
   KEPLER_FORMAL::SEC::SecResetSpec secResetSpec;
+  KEPLER_FORMAL::Btor2ExportConfig btor2ExportConfig;
   bool secEngineExplicit = false;
   bool secEncodingExplicit = false;
   bool secResetExplicit = false;
@@ -1536,6 +1542,12 @@ static int KeplerFormalMainImpl(
           secResetExplicit = true;
         }
 
+        std::string btor2ExportError;
+        if (!btor2ExportConfig.parseYaml(cfg, btor2ExportError)) {
+          SPDLOG_CRITICAL("Invalid BTOR2 export config: {}", btor2ExportError);
+          return EXIT_FAILURE;
+        }
+
         // input_paths
         if (cfg["input_paths"]) {
           std::string inputError;
@@ -1687,6 +1699,17 @@ static int KeplerFormalMainImpl(
     int parseStart = 1;
     while (parseStart < argc) {
       std::string arg = argv[parseStart];
+      std::string btor2ExportError;
+      const auto exportArgument = btor2ExportConfig.parseArgument(
+          argc, argv, parseStart, btor2ExportError);
+      if (exportArgument == KEPLER_FORMAL::Btor2ExportConfig::ArgumentResult::Error) {
+        SPDLOG_CRITICAL("{}", btor2ExportError);
+        return EXIT_FAILURE;
+      }
+      if (exportArgument == KEPLER_FORMAL::Btor2ExportConfig::ArgumentResult::Parsed) {
+        ++parseStart;
+        continue;
+      }
       if (arg == "--help" || arg == "-h") {
         if (runResult != nullptr) {
           runResult->status = KEPLER_FORMAL::RunStatus::NoResult;
@@ -1855,6 +1878,16 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_START
     for (int i = parseStart; i < argc; ++i) {
       std::string arg = argv[i];
+      std::string btor2ExportError;
+      const auto exportArgument = btor2ExportConfig.parseArgument(
+          argc, argv, i, btor2ExportError);
+      if (exportArgument == KEPLER_FORMAL::Btor2ExportConfig::ArgumentResult::Error) {
+        SPDLOG_CRITICAL("{}", btor2ExportError);
+        return EXIT_FAILURE;
+      }
+      if (exportArgument == KEPLER_FORMAL::Btor2ExportConfig::ArgumentResult::Parsed) {
+        continue;
+      }
       if (arg == "-v" || arg == "--verification") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing verification mode after {}", arg);
@@ -2162,6 +2195,12 @@ static int KeplerFormalMainImpl(
         "SystemVerilog input formats require SEC verification (-v sec or verification: sec)");
     return EXIT_FAILURE;
   }
+  std::string btor2ExportError;
+  if (!btor2ExportConfig.validate(
+          verificationMode == VerificationMode::SEC, btor2ExportError)) {
+    SPDLOG_CRITICAL("Invalid BTOR2 export options: {}", btor2ExportError);
+    return EXIT_FAILURE;
+  }
   if (verificationMode == VerificationMode::LEC && secMaxKExplicit) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL("max_k/-k is only supported with SEC verification");
@@ -2394,6 +2433,17 @@ static int KeplerFormalMainImpl(
         }
         // LCOV_EXCL_STOP
         switch (result.status) {
+          case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Exported:
+            if (runResult != nullptr) {
+              runResult->status = KEPLER_FORMAL::RunStatus::Exported;
+            }
+            SPDLOG_INFO(
+                "SEC BTOR2 exported to {}; proof not run. "
+                "Export covers {}/{} observed outputs.",
+                btor2ExportConfig.options().path,
+                result.coveredOutputs,
+                result.totalOutputs);
+            return EXIT_SUCCESS;
           case KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Equivalent:
             if (runResult != nullptr) {
               runResult->status = KEPLER_FORMAL::RunStatus::Equivalent;
@@ -2837,7 +2887,8 @@ static int KeplerFormalMainImpl(
               solverType,
               secEngine,
               secEncoding,
-              secResetSpec);
+              secResetSpec,
+              btor2ExportConfig.options());
           return emitSecResult(
               strategy.runExtractedModels(model0, model0, secMaxK));
               // LCOV_EXCL_STOP
@@ -2858,7 +2909,8 @@ static int KeplerFormalMainImpl(
             solverType,
             secEngine,
             secEncoding,
-            secResetSpec);
+            secResetSpec,
+            btor2ExportConfig.options());
         return emitSecResult(
             strategy.runExtractedModels(model0, model1, secMaxK));
       // LCOV_EXCL_START
@@ -3115,7 +3167,8 @@ static int KeplerFormalMainImpl(
           solverType,
           secEngine,
           secEncoding,
-          secResetSpec);
+          secResetSpec,
+          btor2ExportConfig.options());
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP
     // LCOV_EXCL_START
@@ -3262,6 +3315,8 @@ const char* runStatusName(RunStatus status) {
       return "inconclusive";
     case RunStatus::Unsupported:
       return "unsupported";
+    case RunStatus::Exported:
+      return "exported";
     case RunStatus::Error:
     default:
       return "error";

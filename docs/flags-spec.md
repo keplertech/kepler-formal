@@ -31,13 +31,15 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
 | `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
 | `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
+| `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
+| `--dump-only` | Stop after successful BTOR2 export; requires `--dump-btor2`. Exit code `0` indicates export success, without a proof verdict. |
 | `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
 | `-verilog` | Use Verilog Format. |
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
 | `--help`, `-h` | Print usage and exit. |
-| `--config <file>`, `-c <file>` | Load a YAML config file. If present anywhere on the CLI, YAML parsing takes precedence over the rest of the arguments. |
+| `--config <file>`, `-c <file>` | Load a YAML config file. Config mode cannot be combined with other command-line options. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
@@ -58,6 +60,9 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
 | `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
 | `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
+| `btor2_export` | bool | Enable SEC BTOR2 export before solving. Defaults to `false`. |
+| `btor2_export_path` | string | Non-empty BTOR2 output path. Defaults to `miter.btor2` when enabled; requires `btor2_export: true`. |
+| `dump_only` | bool | Stop after BTOR2 export without running a proof engine. Defaults to `false`; requires `btor2_export: true`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |

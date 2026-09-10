@@ -22,3 +22,7 @@ target_link_libraries(BoolExprCnfWriterTests
 )
 
 GTEST_DISCOVER_TESTS(BoolExprCnfWriterTests)
+
+add_executable(Btor2WriterTests Btor2WriterTests.cpp)
+target_link_libraries(Btor2WriterTests GTest::gtest_main formal_structures pthread)
+GTEST_DISCOVER_TESTS(Btor2WriterTests)

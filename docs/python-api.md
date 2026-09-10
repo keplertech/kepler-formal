@@ -218,6 +218,7 @@ Always use `result.status` for the semantic outcome:
 | Status | Meaning |
 | --- | --- |
 | `NO_RESULT` | The invocation intentionally did not attempt verification, for example an empty argument list or `--help`. |
+| `EXPORTED` | Dump-only wrote the prepared SEC problem to BTOR2 without running a proof. Both `equivalent` and `conclusive` are false. |
 | `EQUIVALENT` | LEC found no difference, or SEC completed a proof of equivalence under the selected model and encoding. |
 | `DIFFERENT` | LEC found a difference, or SEC found a counterexample. |
 | `PARTIALLY_PROVED` | SEC proved some observed outputs, but not all of them. |
@@ -225,7 +226,7 @@ Always use `result.status` for the semantic outcome:
 | `UNSUPPORTED` | The selected SEC workflow cannot analyze the design pair. |
 | `ERROR` | Argument parsing, configuration, loading, or another operational step failed before a semantic verdict was produced. |
 
-`DIFFERENT`, `PARTIALLY_PROVED`, `INCONCLUSIVE`, `UNSUPPORTED`, `NO_RESULT`,
+`DIFFERENT`, `PARTIALLY_PROVED`, `INCONCLUSIVE`, `UNSUPPORTED`, `NO_RESULT`, `EXPORTED`,
 and ordinary native `ERROR` outcomes are returned as values, not raised as
 Python exceptions. For an `ERROR`, inspect `reason`, the native log output, and
 `exit_code`; some early failures can provide only a general reason.
@@ -237,7 +238,7 @@ be produced.
 
 Do not infer equivalence from `exit_code == 0`. The value preserves the native
 program's historical exit convention, and LEC uses zero for both equivalent
-and different designs. SEC currently uses zero for a proof, one for a partial
+and different designs. SEC uses zero for a proof or successful dump-only export, one for a partial
 proof, two for inconclusive/unsupported, and three for a counterexample, but
 `status` is the stable, mode-independent interpretation.
 

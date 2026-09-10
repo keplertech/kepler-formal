@@ -32,6 +32,7 @@
 #include "common/BoolExprUtils.h"
 #include "common/AlignedSignals.h"
 #include "common/SecDiag.h"
+#include "export/SecBtor2Exporter.h"
 #include "imc/ExactInterpolantSynthesizer.h"
 #include "imc/IMCEngine.h"
 #include "kinduction/BaseCaseSolver.h"
@@ -3656,13 +3657,19 @@ SequentialEquivalenceStrategy::SequentialEquivalenceStrategy(
     KEPLER_FORMAL::Config::SolverType solverType,
     SecEngine secEngine,
     SecEncoding encoding,
-    SecResetSpec resetSpec)
+    SecResetSpec resetSpec,
+    Btor2ExportOptions exportOptions)
     : top0_(top0),
       top1_(top1),
       solverType_(solverType),
       secEngine_(secEngine),
       encoding_(encoding),
-      resetSpec_(std::move(resetSpec)) {}
+      resetSpec_(std::move(resetSpec)),
+      exportOptions_(std::move(exportOptions)) {
+  if (exportOptions_.dumpOnly && !exportOptions_.enabled()) {
+    throw std::invalid_argument("BTOR2 dump-only requires an export path");
+  }
+}
 
 SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) const {
   const bool secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr;
@@ -3849,6 +3856,16 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     proofProblem = symbolSpace.problem;
   }
   copyResetBootstrapSpec(symbolSpace.problem, proofProblem);
+
+  if (exportOptions_.enabled()) {
+    exportSecBtor2File(proofProblem, exportOptions_.path,
+        {aligned.outputCoverage.totalOutputs, aligned.outputCoverage.skippedOutputs});
+    if (exportOptions_.dumpOnly) {
+      return makeSecResult(SequentialEquivalenceStatus::Exported, 0,
+          "BTOR2 exported to " + exportOptions_.path + "; proof not run",
+          aligned.outputCoverage, extractedBoundaryReports);
+    }
+  }
 
   // Phase 4: hand the fully normalized SEC transition system to the requested
   // top-level engine. From here on, every engine sees the same problem and only

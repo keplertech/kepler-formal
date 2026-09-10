@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 include(GoogleTest)
+include(${PROJECT_SOURCE_DIR}/cmake/KeplerGoogleTest.cmake)
 
-# Prefer headers from the GoogleTest targets we link over system installations
-# exposed by dependencies such as Boost and TBB (e.g. Homebrew's include root).
-# Mixing system headers with the bundled libraries can change the GoogleTest ABI.
-include_directories(BEFORE SYSTEM
-  "$<TARGET_PROPERTY:gmock,INTERFACE_INCLUDE_DIRECTORIES>"
-  "$<TARGET_PROPERTY:gtest,INTERFACE_INCLUDE_DIRECTORIES>"
+add_test(NAME GoogleTestHeaderPrecedence
+  COMMAND ${CMAKE_COMMAND}
+    -DKEPLER_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+    -DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/cmake/googletest_headers
+    -DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GoogleTestHeadersTest.cmake
 )
 
 add_subdirectory(unit_designs)

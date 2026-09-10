@@ -17,6 +17,7 @@ enum class RunStatus {
   PartiallyProved,
   Inconclusive,
   Unsupported,
+  Exported,
 };
 
 struct RunResult {

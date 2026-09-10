@@ -94,12 +94,14 @@ the SEC bound, top-level verification flags, and logging settings. Enum fields
 also accept their exact string values. SEC engine, encoding, and bound options
 cannot be used with LEC.
 
-The result status is one of ``NO_RESULT``, ``EQUIVALENT``, ``DIFFERENT``,
+The result status is one of ``NO_RESULT``, ``EXPORTED``, ``EQUIVALENT``, ``DIFFERENT``,
 ``PARTIALLY_PROVED``, ``INCONCLUSIVE``, ``UNSUPPORTED``, or ``ERROR``. Use
 ``result.status`` for the verdict: the historical native ``exit_code`` is not
 mode-independent, and LEC returns zero for both equivalent and different
 designs. Non-equivalence, partial proof, inconclusive, unsupported, no-result,
-and ordinary operational-error outcomes are returned as values. Invalid
+and ordinary operational-error outcomes are returned as values. ``EXPORTED``
+means dump-only wrote a BTOR2 file without running a proof; both ``equivalent``
+and ``conclusive`` are false. Invalid
 Python arguments raise ``TypeError`` or ``ValueError``; native safety failures
 and unexpected native exceptions raise ``RuntimeError``.
 
