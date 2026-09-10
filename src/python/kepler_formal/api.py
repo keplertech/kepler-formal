@@ -1,7 +1,7 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Pythonic, file-based interface to the native Kepler Formal engine."""
+"""Pythonic file and live-NajaEDA interfaces to Kepler Formal."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence, TypeVar
+
+import najaeda as _najaeda
 
 from . import _native
 from .result import VerificationResult
@@ -77,6 +79,68 @@ class VerificationOptions:
     log_level: str | None = None
 
 
+NativeDesign = _native.NativeDesign
+
+
+def from_najaeda(design: object) -> NativeDesign:
+    """Capture a live NajaEDA design as a stable, zero-copy native handle.
+
+    ``design`` may be a raw ``najaeda.naja.SNLDesign`` or a high-level
+    ``najaeda.netlist.Instance``.  An ``Instance`` is resolved to its current
+    model when this function is called, so later changes to NajaEDA's selected
+    top design do not retarget the returned handle.  The native netlist is not
+    cloned or serialized, and later edits to that same design remain visible.
+    """
+
+    if isinstance(design, _najaeda.naja.SNLDesign):
+        raw_design = design
+    else:
+        from najaeda import netlist
+
+        if not isinstance(design, netlist.Instance):
+            raise TypeError(
+                "design must be a najaeda.naja.SNLDesign or "
+                "najaeda.netlist.Instance"
+            )
+        universe = _najaeda.naja.NLUniverse.get()
+        if universe is None:
+            raise ReferenceError("the NajaEDA instance has no live universe")
+        try:
+            identity = design.get_model_id()
+            raw_design = universe.getSNLDesign(identity)
+        except (AttributeError, RuntimeError) as error:
+            raise ReferenceError(
+                "the NajaEDA instance no longer resolves to a live design"
+            ) from error
+        if raw_design is None:
+            raise ReferenceError(
+                "the NajaEDA instance no longer resolves to a live design"
+            )
+    return _native.from_najaeda(raw_design, design)
+
+
+def verify_designs(
+    design1: NativeDesign | object,
+    design2: NativeDesign | object,
+    *,
+    options: VerificationOptions | None = None,
+) -> VerificationResult:
+    """Compare two live NajaEDA designs without files, copying, or rebuilding.
+
+    Each argument must be a :class:`NativeDesign` or a raw
+    ``najaeda.naja.SNLDesign``.  Capture high-level ``Instance`` objects first
+    with :func:`from_najaeda`; this freezes which model the instance denotes,
+    while retaining the original object for the synchronous native call.
+    """
+
+    native_options = _build_native_design_options(options)
+    first = _as_native_design(design1, "design1")
+    second = _as_native_design(design2, "design2")
+    return VerificationResult._from_native(
+        _native.verify_designs(first, second, native_options)
+    )
+
+
 def run_cli(arguments: Sequence[PathLike]) -> VerificationResult:
     """Run the native engine with CLI-style arguments (without ``argv[0]``).
 
@@ -119,6 +183,112 @@ def verify(
         config_path = Path(directory) / "verify.json"
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         return run_config(config_path)
+
+
+def _as_native_design(value: object, label: str) -> NativeDesign:
+    if isinstance(value, NativeDesign):
+        return value
+    if isinstance(value, _najaeda.naja.SNLDesign):
+        return from_najaeda(value)
+
+    from najaeda import netlist
+
+    if isinstance(value, netlist.Instance):
+        raise TypeError(
+            f"{label} is a najaeda.netlist.Instance; capture it with "
+            "from_najaeda() before changing the current top design"
+        )
+    raise TypeError(f"{label} must be a NativeDesign or najaeda.naja.SNLDesign")
+
+
+def _has_library_paths(value: PathLike | Sequence[PathLike]) -> bool:
+    if isinstance(value, (str, os.PathLike)):
+        return True
+    try:
+        return len(value) != 0
+    except TypeError as error:
+        raise TypeError("libraries must be a path or a sequence of paths") from error
+
+
+def _build_native_design_options(
+    options: VerificationOptions | None,
+) -> Mapping[str, Any]:
+    if options is None:
+        settings = VerificationOptions()
+    elif isinstance(options, VerificationOptions):
+        settings = options
+    else:
+        raise TypeError("options must be a VerificationOptions instance or None")
+
+    input_format = _enum_value(settings.input_format, InputFormat, "input_format")
+    if input_format != InputFormat.VERILOG.value:
+        raise ValueError(
+            "input_format is only valid for file-based verify(); "
+            "verify_designs() receives native designs"
+        )
+    if _has_library_paths(settings.libraries):
+        raise ValueError(
+            "libraries are only valid for file-based verify(); load primitives "
+            "into the NajaEDA universe before capturing native designs"
+        )
+    preprocessing = _boolean(
+        settings.verilog_preprocessing, "verilog_preprocessing"
+    )
+    if preprocessing:
+        raise ValueError(
+            "verilog_preprocessing is only valid for file-based verify()"
+        )
+    compact = _boolean(settings.compact, "compact")
+    if compact:
+        raise ValueError("compact is only valid for file-based verify()")
+
+    mode = _enum_value(settings.mode, VerificationMode, "mode")
+    solver = _enum_value(settings.solver, Solver, "solver")
+    allow_boundary_mismatch = _boolean(
+        settings.allow_boundary_mismatch, "allow_boundary_mismatch"
+    )
+    report_skipped_outputs = _boolean(
+        settings.report_skipped_outputs, "report_skipped_outputs"
+    )
+    if settings.max_k is not None:
+        if isinstance(settings.max_k, bool) or not isinstance(settings.max_k, int):
+            raise TypeError("max_k must be an integer")
+        if settings.max_k < 0:
+            raise ValueError("max_k must be non-negative")
+    if mode == VerificationMode.LEC.value and any(
+        value is not None
+        for value in (settings.max_k, settings.sec_engine, settings.sec_encoding)
+    ):
+        raise ValueError("SEC engine, encoding, and max_k cannot be used with LEC")
+    if mode == VerificationMode.SEC.value and allow_boundary_mismatch:
+        raise ValueError("allow_boundary_mismatch is only supported for LEC")
+
+    sec_engine = (
+        SecEngine.PDR.value
+        if settings.sec_engine is None
+        else _enum_value(settings.sec_engine, SecEngine, "sec_engine")
+    )
+    sec_encoding = (
+        SecEncoding.DUAL_RAIL_STEADY.value
+        if settings.sec_encoding is None
+        else _enum_value(settings.sec_encoding, SecEncoding, "sec_encoding")
+    )
+    log_file = _optional_path(settings.log_file, "log_file")
+    log_level = _optional_text(settings.log_level, "log_level")
+    if log_level not in {None, "debug", "info"}:
+        raise ValueError("log_level must be 'debug', 'info', or None")
+
+    return {
+        "mode": mode,
+        "solver": solver,
+        "max_k": 32 if settings.max_k is None else settings.max_k,
+        "sec_engine": sec_engine,
+        "sec_encoding": sec_encoding,
+        "allow_boundary_mismatch": allow_boundary_mismatch,
+        "report_skipped_outputs": report_skipped_outputs,
+        "log_file": log_file,
+        "log_level": log_level,
+    }
 
 
 def _enum_value(value: _EnumType | str, enum_type: type[_EnumType], label: str) -> str:

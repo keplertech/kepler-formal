@@ -42,22 +42,11 @@ set(KEPLER_EXTERNAL_PIC_ARG "")
 if(BUILD_KEPLER_PYTHON)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   set(KEPLER_EXTERNAL_PIC_ARG -fPIC)
-  if(BUILD_NAJA_PYTHON)
-    # Wheel builds use Naja's hosted-Python mode and must not require or link
-    # an embeddable libpython.  manylinux CPython intentionally provides only
-    # the extension-module development surface.
-    find_package(
-      Python3 3.10...<3.99
-      COMPONENTS Interpreter Development.Module
-      REQUIRED
-    )
-  else()
-    find_package(
-      Python3 3.10...<3.99
-      COMPONENTS Interpreter Development.Module Development.Embed
-      REQUIRED
-    )
-  endif()
+  # A Python build consumes the installed NajaEDA runtime. Standalone builds
+  # retain the vendored Naja build below and never depend on Python packages.
+  find_package(Python3 3.10...<3.99
+    COMPONENTS Interpreter Development.Module REQUIRED)
+  include(src/python/KeplerSharedNaja.cmake)
 endif()
 
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
@@ -201,7 +190,11 @@ option(ENABLE_UNIT_TESTS "Enable unit tests" ON)
 if(ENABLE_UNIT_TESTS)
  include(CTest)
  enable_testing()
- add_subdirectory(test)
+ if(BUILD_KEPLER_PYTHON)
+   add_subdirectory(test/python)
+ else()
+   add_subdirectory(test)
+ endif()
 endif()
 
 option(KEPLER_STATIC "Statically link libstdc++, libgcc, and Cap'n Proto" OFF)

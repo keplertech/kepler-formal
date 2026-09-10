@@ -135,6 +135,8 @@ jobs:
           if match is None:
               sys.exit("Cannot read the Python package version from CMakeLists.txt.")
           version = match.group(1)
+          if "najaeda==0.7.24.dev0" in Path("pyproject.toml").read_text(encoding="utf-8"):
+              sys.exit("Publish the NajaEDA shared-runtime SDK and pin its released version before publishing Kepler Formal.")
           if os.environ["RELEASE_VERSION"] != version:
               sys.exit(f"To publish, confirm version {version} in the workflow's version input.")
           summary = f"Release request: kepler-formal {version} from {os.environ['GITHUB_SHA']}\n"

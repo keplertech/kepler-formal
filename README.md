@@ -119,7 +119,8 @@ The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/
 
 ### Python API
 
-Kepler Formal also provides a native, file-based Python API:
+Kepler Formal also provides a native Python API for files and live NajaEDA
+designs:
 
 ```bash
 python -m pip install .
@@ -136,13 +137,13 @@ result = verify(
 print(result.status)
 ```
 
-The wheel also bundles an isolated editor API under
-`kepler_formal.najaeda`. Its live netlist universe is independent from the
-verifier; designs cross between them through Verilog, SystemVerilog, or Naja
-IF files.
+The installed `najaeda` package provides the native netlist runtime used by
+Kepler Formal. `kepler_formal.najaeda` is an alias to that same package, not a
+second editor or universe. Use `from_najaeda()` and `verify_designs()` to
+compare live designs directly, without dumping or rebuilding them.
 
 See the [Python API guide](docs/python-api.md) for SEC options, structured
-results, the nested NajaEDA editor, and in-process lifetime constraints.
+results, live-design interoperability, and in-process lifetime constraints.
 
 ### Custom Python Primitives
 

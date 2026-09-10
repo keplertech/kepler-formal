@@ -213,73 +213,24 @@ class WheelCheckerTest(unittest.TestCase):
                     gil_disabled=gil_disabled,
                 )
 
-    def test_windows_layout_keeps_naja_runtimes_isolated(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            package_root = Path(temporary).resolve() / "kepler_formal"
-            nested_root = package_root / "najaeda"
-            nested_root.mkdir(parents=True)
-            kepler_extension = package_root / "_native.pyd"
-            nested_extension = nested_root / "naja.pyd"
-            isolated_nl = nested_root / "libkepler_najaeda_naja_nl.dll"
-            isolated_python = nested_root / "libkepler_najaeda_naja_python.dll"
-            for path in (
-                kepler_extension,
-                nested_extension,
-                isolated_nl,
-                isolated_python,
-            ):
-                path.touch()
-
-            native_spec = importlib.machinery.ModuleSpec(
-                "kepler_formal._native", None, origin=str(kepler_extension)
-            )
-            nested_spec = importlib.machinery.ModuleSpec(
-                "kepler_formal.najaeda.naja", None, origin=str(nested_extension)
-            )
-            native_files = (
-                kepler_extension,
-                nested_extension,
-                isolated_nl,
-                isolated_python,
-            )
-            linkages = {
-                kepler_extension.resolve(): ("naja_nl.dll",),
-                nested_extension.resolve(): (
-                    "python315.dll",
-                    "libkepler_najaeda_naja_python.dll",
-                ),
-                isolated_nl.resolve(): (),
-                isolated_python.resolve(): (
-                    "libkepler_najaeda_naja_nl.dll",
-                ),
-            }
-
-            with (
-                patch.object(
-                    wheel_check.importlib.util,
-                    "find_spec",
-                    return_value=nested_spec,
-                ),
-                patch.object(
-                    wheel_check.importlib.machinery,
-                    "EXTENSION_SUFFIXES",
-                    [".pyd"],
-                ),
-            ):
-                wheel_check._check_isolated_native_layout(
-                    package_root,
-                    native_spec,
-                    native_files,
-                    linkages,
-                )
-                linkages[nested_extension.resolve()] += ("libnaja_nl.dll",)
-                with self.assertRaisesRegex(RuntimeError, "collides with unisolated"):
-                    wheel_check._check_isolated_native_layout(
-                        package_root,
-                        native_spec,
-                        native_files,
-                        linkages,
-                    )
+    def test_shared_layout_requires_provider_and_rejects_duplicate_runtime(self):
+        for suffix in (".so", ".dylib", ".dll"):
+            with self.subTest(suffix=suffix):
+                extension = Path("/installed/kepler_formal/_native.so")
+                provider = Path("/installed/najaeda") / ("libnaja_nl" + suffix)
+                links = {extension: (provider.name,)}
+                wheel_check._check_shared_native_layout(
+                    (extension,), links, (provider,))
+                with self.assertRaisesRegex(RuntimeError, "second Naja runtime"):
+                    wheel_check._check_shared_native_layout(
+                        (extension, extension.parent / provider.name),
+                        links, (provider,))
+                with self.assertRaisesRegex(RuntimeError, "not owned"):
+                    wheel_check._check_shared_native_layout(
+                        (extension,), links, ())
+                with self.assertRaisesRegex(RuntimeError, "does not link"):
+                    wheel_check._check_shared_native_layout(
+                        (extension,), {extension: ()}, (provider,))
 
 
 if __name__ == "__main__":

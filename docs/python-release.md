@@ -50,6 +50,16 @@ them as Actions artifacts. This can be used to check a branch before merging.
 
 ## Publish a release
 
+The shared-runtime integration currently pins the **unreleased** NajaEDA SDK
+`0.7.24.dev0`. Publication is deliberately blocked. First release that SDK
+with the matching platform/Python wheels, then update the provider pin in
+`pyproject.toml` (build and runtime requirements) and
+`ci/shared_naja_wheels.py`. Development CI builds a local provider wheel;
+after switching to a release pin, CI downloads the published provider instead.
+This matters because a same-version rebuild is not necessarily ABI/build
+identical to the provider that users install. Kepler and Naja validate native
+build identity before sharing objects.
+
 1. Merge the intended code and workflow changes into `main` and confirm its
    checks pass. Choose an unused PyPI release version. The Python package
    version is read from `project(kepler-formal VERSION ...)` in `CMakeLists.txt`;
@@ -90,7 +100,7 @@ verification; they do not promise concurrent, GIL-free engine calls.
 against NajaEDA's checked-in matrix and checks that publishing includes every
 platform artifact. A Naja update that changes its matrix requires an explicit
 corresponding update here. Every wheel runs the package tests and native
-dependency/isolation checks after repair. Windows reuses Naja's pregenerated
+dependency/shared-runtime checks after repair. Windows reuses Naja's pregenerated
 parser and vcpkg dependency approach, with KF-owned solver compatibility code.
 
 This workflow publishes wheels only, not a source distribution. Intel macOS,

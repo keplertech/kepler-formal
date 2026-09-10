@@ -23,3 +23,5 @@ mcp/src/*.egg-info/
 dist/
 wheelhouse/
 *.egg-info/
+# Separately built NajaEDA provider wheels used by shared-runtime CI tests.
+.kepler-provider-wheels/
