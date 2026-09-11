@@ -53,6 +53,9 @@ target_include_directories(glucose PUBLIC
   "${kepler_solver_compat}" "${GLUCOSE_ROOT}")
 target_link_libraries(glucose PUBLIC ZLIB::ZLIB)
 if(WIN32)
+  # Glucose's proof writer calls the POSIX-only putc_unlocked. The serial
+  # library can use standard putc on the Windows CRT without changing bytes.
+  target_compile_definitions(glucose PRIVATE putc_unlocked=putc)
   # Glucose's public System.h uses timeval/gettimeofday even in its Windows
   # branch, without including sys/time.h. Consumers instantiate those inlines.
   target_compile_options(glucose PUBLIC "/FI${kepler_solver_compat}/sys/time.h")
