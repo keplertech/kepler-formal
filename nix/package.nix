@@ -82,6 +82,9 @@ stdenv.mkDerivation {
     "-DPython3_EXECUTABLE=${lib.getExe python312}"
     "-DPython_EXECUTABLE=${lib.getExe python312}"
     "-DCMAKE_INSTALL_LIBDIR=lib"
+  ] ++ lib.optionals stdenv.hostPlatform.isDarwin [
+    # No C++ modules are used; clang-scan-deps bypasses Nix's include flags.
+    "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
   ];
 
   enableParallelBuilding = true;
