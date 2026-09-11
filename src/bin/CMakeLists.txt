@@ -27,10 +27,6 @@ endfunction()
 
 set(KEPLER_FORMAL_DRIVER_SOURCES KeplerFormal.cpp Btor2ExportConfig.cpp)
 
-add_library(kepler_formal_driver STATIC ${KEPLER_FORMAL_DRIVER_SOURCES})
-configure_kepler_formal_driver(kepler_formal_driver)
-target_link_libraries(kepler_formal_driver PUBLIC naja_snl_pyloader)
-
 if(BUILD_KEPLER_PYTHON)
   # The in-process API rejects Python technology files. Compile that loader
   # path out so a wheel does not embed Naja's separate Python runtime.
@@ -40,7 +36,14 @@ if(BUILD_KEPLER_PYTHON)
     kepler_formal_python_driver
     PRIVATE KEPLER_FORMAL_NO_PY_TECH
   )
+  # Build the standalone executable in a separate, ordinary CMake build. It
+  # must not acquire a runtime dependency on an installed NajaEDA wheel.
+  return()
 endif()
+
+add_library(kepler_formal_driver STATIC ${KEPLER_FORMAL_DRIVER_SOURCES})
+configure_kepler_formal_driver(kepler_formal_driver)
+target_link_libraries(kepler_formal_driver PUBLIC naja_snl_pyloader)
 
 add_executable(kepler-formal KeplerFormalMain.cpp)
 target_link_libraries(kepler-formal PRIVATE kepler_formal_driver)

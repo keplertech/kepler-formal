@@ -69,6 +69,35 @@ BoolExprCache::Impl& BoolExprCache::impl() {
   return *instance;
 }
 
+struct BoolExprCache::ScopedContext::State {
+  SingleMap table;
+  size_t lastID;
+  size_t numQuaries;
+  size_t numMiss;
+  size_t numHit;
+};
+
+BoolExprCache::ScopedContext::ScopedContext() : state_(new State()) {
+  // Complete allocation before taking ownership of any pre-existing cache.
+  auto& table = BoolExprCache::impl().table;
+  table.swap(state_->table);
+  state_->lastID = lastID_.exchange(1, std::memory_order_relaxed);
+  state_->numQuaries = numQuaries_;
+  state_->numMiss = numMiss_;
+  state_->numHit = numHit_;
+  numQuaries_ = numMiss_ = numHit_ = 0;
+}
+
+BoolExprCache::ScopedContext::~ScopedContext() {
+  auto& table = BoolExprCache::impl().table;
+  table.clear();
+  table.swap(state_->table);
+  lastID_.store(state_->lastID, std::memory_order_relaxed);
+  numQuaries_ = state_->numQuaries;
+  numMiss_ = state_->numMiss;
+  numHit_ = state_->numHit;
+}
+
 static inline TupleKey make_tuple_key(Op op,
                                       size_t varId,
                                       BoolExpr* lptr,

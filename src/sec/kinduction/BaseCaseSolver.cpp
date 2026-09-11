@@ -2065,6 +2065,7 @@ struct DualRailPublicBasePrefixResult {
 
 struct DualRailPublicBasePrefixCache {
   const KInductionProblem* problem = nullptr;
+  uint64_t verificationGeneration = 0;
   KEPLER_FORMAL::Config::SolverType solverType =
       KEPLER_FORMAL::Config::SolverType::KISSAT;
   bool hasSafeThrough = false;
@@ -2073,6 +2074,7 @@ struct DualRailPublicBasePrefixCache {
   void reset(const KInductionProblem& newProblem,
              KEPLER_FORMAL::Config::SolverType newSolverType) {
     problem = &newProblem;
+    verificationGeneration = KEPLER_FORMAL::Config::getVerificationGeneration();
     solverType = newSolverType;
     hasSafeThrough = false;
     safeThrough = 0;
@@ -2155,7 +2157,9 @@ DualRailPublicBasePrefixResult tryDualRailPublicBasePrefixCache(
   }
 
   auto& cache = dualRailPublicBasePrefixCache;
-  if (cache.problem != &problem || cache.solverType != solverType) {
+  if (cache.problem != &problem || cache.solverType != solverType ||
+      cache.verificationGeneration !=
+          KEPLER_FORMAL::Config::getVerificationGeneration()) {
     cache.reset(problem, solverType);
   }
   if (cache.hasSafeThrough && k <= cache.safeThrough) {

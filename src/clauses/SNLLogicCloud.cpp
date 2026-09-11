@@ -191,8 +191,11 @@ uint64_t dnlContextSignature(const DNLFull& dnl) {
 
 void refreshPerDnlCaches(const DNLFull& dnl) {
   thread_local uint64_t lastDnlContextSignature = 0;
+  thread_local uint64_t lastVerificationGeneration = 0;
+  const auto generation = Config::getVerificationGeneration();
   const uint64_t currentSignature = dnlContextSignature(dnl);
-  if (currentSignature == lastDnlContextSignature) {
+  if (currentSignature == lastDnlContextSignature &&
+      generation == lastVerificationGeneration) {
     return;
   }
   modelInputLayoutCache.clear();
@@ -204,17 +207,21 @@ void refreshPerDnlCaches(const DNLFull& dnl) {
   transparentLoopVisitedTermsTL.clear();
   loopTermsScratchTL.clear();
   lastDnlContextSignature = currentSignature;
+  lastVerificationGeneration = generation;
 }
 
 std::shared_ptr<const std::vector<DNLID>> getSharedTermIsoIDCache(
     const DNLFull& dnl) {
   static std::mutex mutex;
   static uint64_t cachedSignature = 0;
+  static uint64_t cachedVerificationGeneration = 0;
   static std::shared_ptr<const std::vector<DNLID>> cachedIsoIDs;
 
   const uint64_t currentSignature = dnlContextSignature(dnl);
+  const auto generation = Config::getVerificationGeneration();
   std::lock_guard<std::mutex> lock(mutex);
-  if (cachedIsoIDs && cachedSignature == currentSignature) {
+  if (cachedIsoIDs && cachedSignature == currentSignature &&
+      cachedVerificationGeneration == generation) {
     return cachedIsoIDs;
   }
 
@@ -226,6 +233,7 @@ std::shared_ptr<const std::vector<DNLID>> getSharedTermIsoIDCache(
         dnl.getDNLTerminalFromID(static_cast<DNLID>(i)).getIsoID());
   }
   cachedSignature = currentSignature;
+  cachedVerificationGeneration = generation;
   cachedIsoIDs = std::move(isoIDs);
   return cachedIsoIDs;
 }

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [build-system]
-requires = ["scikit-build-core>=0.11.3,<0.12"]
+requires = ["scikit-build-core>=0.11.3,<0.12", "najaeda==0.7.24.dev0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -11,6 +11,7 @@ description = "Native Python interface for Kepler Formal equivalence checking"
 authors = [{name = "keplertech.io", email = "contact@keplertech.io"}]
 readme = "src/python/README.rst"
 requires-python = ">=3.10"
+dependencies = ["najaeda==0.7.24.dev0"]
 license = {file = "LICENSE.rst"}
 dynamic = ["version"]
 classifiers = [
@@ -19,11 +20,13 @@ classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
@@ -32,15 +35,14 @@ Homepage = "https://github.com/keplertech/kepler-formal"
 Repository = "https://github.com/keplertech/kepler-formal"
 
 [tool.scikit-build]
+# Native consumers must agree on CPython's free-threaded ABI.
+cmake.version = ">=3.30"
 install.components = ["python"]
 build.targets = ["kepler_formal_native"]
 
 [tool.scikit-build.cmake.define]
 CMAKE_BUILD_TYPE = "Release"
 BUILD_KEPLER_PYTHON = "ON"
-# The wheel hosts CPython, so the primary Naja runtime must use Module rather
-# than Embed.  The separately nested NajaEDA runtime is configured likewise.
-BUILD_NAJA_PYTHON = "ON"
 ENABLE_UNIT_TESTS = "OFF"
 
 [tool.scikit-build.metadata.version]
@@ -49,13 +51,19 @@ input = "CMakeLists.txt"
 regex = 'project\(kepler-formal\s+VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
 
 [tool.cibuildwheel]
-build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
-skip = ["*-musllinux_*", "*-win*"]
-test-command = "PYTHONPATH= python {project}/ci/check_kepler_wheel.py"
+build-frontend = { name = "build", args = ["--no-isolation"] }
+before-build = "python {project}/ci/shared_naja_wheels.py build-provider --project {project}"
+before-test = "python {project}/ci/shared_naja_wheels.py install-provider --project {project}"
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*", "cp314t-*", "cp315-*"]
+# Match NajaEDA: free-threaded 3.14 on Linux x86_64 and macOS arm64 only.
+skip = ["*-musllinux_*", "cp314t-manylinux_aarch64", "cp314t-win*"]
+enable = ["cpython-prerelease"]
+test-command = "PYTHONPATH= python {project}/ci/check_kepler_wheel.py && PYTHONPATH= python -m unittest discover -v {project}/test/python"
 
 [tool.cibuildwheel.linux]
-archs = ["x86_64"]
+archs = ["x86_64", "aarch64"]
 manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 before-all = '''
   set -euo pipefail
   dnf install -y bison boost-devel curl flex m4 ninja-build pkgconfig zlib-devel
@@ -76,7 +84,7 @@ before-all = '''
     https://capnproto.org/capnproto-c++-1.1.0.tar.gz
   tar -xzf capnproto-c++-1.1.0.tar.gz
   cd capnproto-c++-1.1.0
-  # Keep the static archives usable when nested NajaEDA links shared objects.
+  # Keep the static archives usable by the separate NajaEDA provider wheel.
   ./configure --with-pic
   make -j$(nproc)
   make install
@@ -91,7 +99,7 @@ before-all = '''
   cmake --install oneTBB-build
 '''
 environment = { CMAKE_ARGS = "-DBISON_EXECUTABLE=/usr/local/bin/bison" }
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+repair-wheel-command = "python {project}/ci/shared_naja_wheels.py repair --wheel {wheel} --dest {dest_dir}"
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
@@ -119,4 +127,12 @@ before-all = '''
   sudo cmake --install oneTBB-build
 '''
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", PATH = "/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH" }
-repair-wheel-command = "delocate-wheel --require-archs arm64 -w {dest_dir} {wheel}"
+repair-wheel-command = "python {project}/ci/shared_naja_wheels.py repair --wheel {wheel} --dest {dest_dir}"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+before-all = 'pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {project}\ci\windows_setup.ps1'
+environment = { CC = "C:/Program Files/LLVM/bin/clang-cl.exe", CXX = "C:/Program Files/LLVM/bin/clang-cl.exe", CMAKE_GENERATOR = "Ninja" }
+config-settings = { "cmake.args" = "-DCMAKE_TOOLCHAIN_FILE=C:/Users/runneradmin/vcpkg/scripts/buildsystems/vcpkg.cmake;-DPREGENERATED_PARSER_SOURCES=ON" }
+repair-wheel-command = 'python {project}/ci/shared_naja_wheels.py repair --wheel {wheel} --dest {dest_dir}'
+test-command = 'pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {project}\ci\windows_test.ps1'

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from kepler_formal import (
     Design,
@@ -108,6 +110,64 @@ class PythonApiTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(VerificationStatus.EQUIVALENT, run_config(config).status)
+
+    def test_run_cli_preserves_argument_strings(self):
+        class RawPath:
+            def __fspath__(self):
+                return "./path//with/trailing/slash/"
+
+        arguments = [
+            "--verilog_design1_top", "foo/", "foo//bar", "./-reference.v",
+            "~/literal", "", Path("reference.v"), RawPath(),
+        ]
+        with patch(
+            "kepler_formal.api._native.run",
+            return_value={"status": "no_result", "exit_code": 0},
+        ) as native_run:
+            run_cli(arguments)
+        native_run.assert_called_once_with([
+            "--verilog_design1_top", "foo/", "foo//bar", "./-reference.v",
+            "~/literal", "", "reference.v", "./path//with/trailing/slash/",
+        ])
+
+    def test_run_cli_rejects_non_string_arguments(self):
+        class BytesPath:
+            def __fspath__(self):
+                return b"reference.v"
+
+        for argument in (None, 42, b"reference.v", BytesPath()):
+            with self.subTest(argument=argument):
+                with self.assertRaisesRegex(TypeError, r"arguments\[0\]"):
+                    run_cli([argument])
+
+    def test_run_cli_selects_escaped_top_verbatim(self):
+        common = "module foo(input a, output y); assign y = a; endmodule\n"
+        self.reference.write_text(
+            common + "module \\foo/ (input a, output y); assign y = a; endmodule\n",
+            encoding="utf-8",
+        )
+        self.different.write_text(
+            common + "module \\foo/ (input a, output y); assign y = 1'b0; endmodule\n",
+            encoding="utf-8",
+        )
+
+        # The CLI writes default logs in the working directory.
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(self.root)
+            for top, expected in (
+                ("foo", VerificationStatus.EQUIVALENT),
+                ("foo/", VerificationStatus.DIFFERENT),
+            ):
+                with self.subTest(top=top):
+                    result = run_cli([
+                        "-verilog", self.reference, self.different,
+                        "--verilog_design1_top", top,
+                        "--verilog_design2_top", top,
+                    ])
+                    self.assertEqual(expected, result.status)
+        finally:
+            os.chdir(previous_directory)
 
     def test_systemverilog_flist_only_sec(self):
         first_flist = self.root / "first.f"

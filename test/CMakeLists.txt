@@ -18,6 +18,17 @@ add_subdirectory(utils)
 add_subdirectory(scope)
 add_subdirectory(sec)
 
+add_test(NAME kepler-formal-windows-glucose-stdio
+  COMMAND ${CMAKE_COMMAND}
+    "-DKEPLER_SOURCE_DIR:PATH=${PROJECT_SOURCE_DIR}"
+    "-DTEST_BINARY_DIR:PATH=${CMAKE_CURRENT_BINARY_DIR}/windows-glucose-stdio"
+    "-DTEST_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}"
+    "-DTEST_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}"
+    "-DTEST_TOOLCHAIN_FILE:FILEPATH=${CMAKE_TOOLCHAIN_FILE}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/windows/test_glucose_stdio.cmake"
+)
+set_tests_properties(kepler-formal-windows-glucose-stdio PROPERTIES TIMEOUT 180)
+
 if(BUILD_KEPLER_PYTHON)
   add_subdirectory(python)
 endif()
