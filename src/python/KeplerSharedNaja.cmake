@@ -36,3 +36,12 @@ endforeach()
 find_path(Boost_INCLUDE_DIR NAMES boost/version.hpp REQUIRED)
 set(Boost_INCLUDE_DIRS "${Boost_INCLUDE_DIR}")
 find_package(TBB REQUIRED)
+if(WIN32)
+  # The provider's repaired TBB import libraries are linked explicitly. Do not
+  # let TBB headers also request the original tbb12.lib (or its debug variant).
+  # Usage requirements must reach static dependencies as well as the module.
+  foreach(dependency IN ITEMS tbb tbbmalloc)
+    target_compile_definitions(TBB::${dependency} INTERFACE
+      __TBB_NO_IMPLICIT_LINKAGE=1)
+  endforeach()
+endif()
