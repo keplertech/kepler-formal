@@ -33,7 +33,32 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           install_url: https://releases.nixos.org/nix/nix-2.35.1/install
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: keplertech
+          skipPush: true
       - name: Check installed package
         run: nix flake check --system ${{ matrix.system }} --print-build-logs --no-update-lock-file
       - name: Build CLI package
         run: nix build .#packages.${{ matrix.system }}.default --print-build-logs --no-update-lock-file
+      - name: Publish CLI package
+        if: github.repository == 'keplertech/kepler-formal' && github.event_name == 'workflow_dispatch'
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          NIX_SYSTEM: ${{ matrix.system }}
+        run: |
+          : "${CACHIX_AUTH_TOKEN:?Set the CACHIX_AUTH_TOKEN repository secret}"
+          package_path=$(nix path-info ./result)
+          cachix push keplertech "$package_path"
+          cachix pin keplertech "kepler-formal-$NIX_SYSTEM" "$package_path" --keep-revisions 20
+      - name: Verify public cache download
+        if: github.repository == 'keplertech/kepler-formal' && github.event_name == 'workflow_dispatch'
+        run: |
+          package_path=$(nix path-info ./result)
+          nix path-info --store https://keplertech.cachix.org "$package_path" \
+            --option narinfo-cache-negative-ttl 0
+          verify_root=$(mktemp -d "$RUNNER_TEMP/cachix-verify.XXXXXX")
+          nix-store --store "$verify_root" --realise "$package_path" \
+            --max-jobs 0 --option builders '' \
+            --option substituters 'https://keplertech.cachix.org https://cache.nixos.org' \
+            --option extra-substituters '' --option narinfo-cache-negative-ttl 0
