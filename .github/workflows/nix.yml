@@ -15,7 +15,16 @@ permissions:
 
 jobs:
   build-and-check:
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.system }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: x86_64-linux
+          - os: macos-latest
+            system: aarch64-darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -25,6 +34,6 @@ jobs:
         with:
           install_url: https://releases.nixos.org/nix/nix-2.35.1/install
       - name: Check installed package
-        run: nix flake check --print-build-logs --no-update-lock-file
+        run: nix flake check --system ${{ matrix.system }} --print-build-logs --no-update-lock-file
       - name: Build CLI package
-        run: nix build --print-build-logs --no-update-lock-file
+        run: nix build .#packages.${{ matrix.system }}.default --print-build-logs --no-update-lock-file

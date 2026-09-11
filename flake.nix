@@ -8,27 +8,36 @@
 
   outputs = { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
-      kepler-formal = pkgs.callPackage ./nix/package.nix { src = self; };
+      forAllSystems = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-darwin" ];
     in
     {
-      packages.${system} = {
-        inherit kepler-formal;
-        default = kepler-formal;
-      };
+      packages = forAllSystems (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          kepler-formal = pkgs.callPackage ./nix/package.nix { src = self; };
+        in
+        {
+          inherit kepler-formal;
+          default = kepler-formal;
+        });
 
-      apps.${system}.default = {
-        type = "app";
-        program = "${kepler-formal}/bin/kepler-formal";
-        meta.description = "Kepler Formal CLI";
-      };
+      apps = forAllSystems (system: {
+        default = {
+          type = "app";
+          program = "${self.packages.${system}.kepler-formal}/bin/kepler-formal";
+          meta.description = "Kepler Formal CLI";
+        };
+      });
 
-      checks.${system}.installed = pkgs.runCommand "kepler-formal-installed-check"
-        { nativeBuildInputs = [ pkgs.bash pkgs.coreutils pkgs.gnugrep ]; }
-        ''
-          bash ${./nix/check.sh} ${kepler-formal}
-          touch "$out"
-        '';
+      checks = forAllSystems (system:
+        let pkgs = import nixpkgs { inherit system; };
+        in {
+          installed = pkgs.runCommand "kepler-formal-installed-check"
+            { nativeBuildInputs = [ pkgs.bash pkgs.coreutils pkgs.gnugrep ]; }
+            ''
+              bash ${./nix/check.sh} ${self.packages.${system}.kepler-formal}
+              touch "$out"
+            '';
+        });
     };
 }

@@ -115,9 +115,10 @@ Additional notes and the BCR publication roadmap are tracked in
 
 ### Nix / NixOS
 
-The native CLI package supports `x86_64-linux`. With Nix 2.35 or later and
-the `nix-command` and `flakes` experimental features enabled, run from this
-checkout:
+The native CLI package supports the same platforms as the Python wheels:
+`x86_64-linux` (Intel/AMD Linux) and `aarch64-darwin` (Apple Silicon macOS).
+With Nix 2.35 or later and the `nix-command` and `flakes` experimental features
+enabled, run from this checkout:
 
 ```bash
 git submodule update --init --recursive
@@ -139,8 +140,8 @@ checkout, including SEC equivalence, a counterexample, and Python primitives.
 
 This first version builds from source using the existing Nixpkgs binary cache
 for dependencies. Kepler binaries are not yet published to a dedicated cache.
-The separate Python API package is not included. Linux CI builds and checks
-the package on pull requests, branch updates, and release tags.
+The separate Python API package is not included. Linux and macOS CI build and
+check the package on pull requests, branch updates, and release tags.
 
 ## Usage
 

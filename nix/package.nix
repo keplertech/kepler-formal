@@ -41,9 +41,8 @@ stdenv.mkDerivation {
     bison
     flex
     python312
-    autoPatchelfHook
     makeWrapper
-  ];
+  ] ++ lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
   buildInputs = [
     boost
     tbb
@@ -52,8 +51,7 @@ stdenv.mkDerivation {
     fmt
     tomlplusplus
     python312
-    (lib.getLib stdenv.cc.cc)
-  ];
+  ] ++ lib.optional stdenv.hostPlatform.isLinux (lib.getLib stdenv.cc.cc);
 
   postPatch = ''
     # Both vendored SAT solvers configure and generate headers in their source
@@ -90,11 +88,14 @@ stdenv.mkDerivation {
 
   # CMake copies naja.so beside the executable without rewriting its build
   # RPATH. Repair that module and the installed shared libraries together.
-  preFixup = ''
+  preFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
     # Remove build paths before stdenv checks them; autoPatchelfHook then finds
     # the installed libraries and writes the module's runtime search path.
     patchelf --remove-rpath "$out/bin/naja.so"
     addAutoPatchelfSearchPath "$out/lib"
+  '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
+    # Use CMake's installed module, whose Mach-O library paths were rewritten.
+    cp "$out/lib/python/naja/naja.so" "$out/bin/naja.so"
   '';
   postFixup = ''
     # The CLI embeds Python for technology primitives; its standard library
@@ -109,6 +110,6 @@ stdenv.mkDerivation {
     homepage = "https://github.com/keplertech/kepler-formal";
     license = lib.licenses.gpl3Only;
     mainProgram = "kepler-formal";
-    platforms = [ "x86_64-linux" ];
+    platforms = [ "x86_64-linux" "aarch64-darwin" ];
   };
 }

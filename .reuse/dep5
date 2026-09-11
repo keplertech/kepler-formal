@@ -19,6 +19,10 @@ Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
 
+Files: flake.nix flake.lock
+Copyright: 2026 keplertech.io
+License: GPL-3.0-only
+
 Files: bazel/*
 Copyright: 2025 keplertech.io
 License: GPL-3.0-only
