@@ -1,0 +1,30 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: nix
+
+on:
+  pull_request:
+  push:
+    branches: [main, nixOS]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.35.1/install
+      - name: Check installed package
+        run: nix flake check --print-build-logs --no-update-lock-file
+      - name: Build CLI package
+        run: nix build --print-build-logs --no-update-lock-file

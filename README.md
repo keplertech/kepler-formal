@@ -113,6 +113,35 @@ bazelisk test //test/...
 Additional notes and the BCR publication roadmap are tracked in
 [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
+### Nix / NixOS
+
+The native CLI package supports `x86_64-linux`. With Nix 2.35 or later and
+the `nix-command` and `flakes` experimental features enabled, run from this
+checkout:
+
+```bash
+git submodule update --init --recursive
+nix build
+nix run . -- --help
+nix flake check --print-build-logs
+```
+
+The executable is also available at `result/bin/kepler-formal`. To install it
+in your Nix profile, use `nix profile add .#kepler-formal`. NixOS configurations
+can use the flake's `packages.x86_64-linux.kepler-formal` output in
+`environment.systemPackages`.
+
+`flake.lock` pins the build dependencies; Git submodule revisions pin Naja and
+the bundled SAT solvers. The package builds without downloading dependencies
+during compilation and includes the Python runtime needed for technology
+primitive files. `nix flake check` tests the installed package outside the
+checkout, including SEC equivalence, a counterexample, and Python primitives.
+
+This first version builds from source using the existing Nixpkgs binary cache
+for dependencies. Kepler binaries are not yet published to a dedicated cache.
+The separate Python API package is not included. Linux CI builds and checks
+the package on pull requests, branch updates, and release tags.
+
 ## Usage
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
