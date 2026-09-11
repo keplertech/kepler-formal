@@ -19,6 +19,7 @@ class VerificationStatus(str, Enum):
     PARTIALLY_PROVED = "partially_proved"
     INCONCLUSIVE = "inconclusive"
     UNSUPPORTED = "unsupported"
+    EXPORTED = "exported"
     ERROR = "error"
 
 

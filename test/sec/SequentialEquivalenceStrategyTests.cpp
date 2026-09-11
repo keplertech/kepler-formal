@@ -16714,6 +16714,75 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractReportsSkippedMemoryWriteEnableDependencies) {
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel = createSinglePortMemoryModel(primitives, "MEM_SKIPPED_WE");
+  auto* bufferModel = createBufModel(primitives);
+
+  for (const auto type :
+       {SNLNet::Type::Standard, SNLNet::Type::AssignX, SNLNet::Type::AssignZ}) {
+    const bool unknown = type != SNLNet::Type::Standard;
+    const std::string name = type == SNLNet::Type::AssignX ? "x_enable" :
+        type == SNLNet::Type::AssignZ ? "z_enable" : "undriven_enable";
+    SCOPED_TRACE(name);
+    auto* top = createSinglePortMemoryTop(
+        library, name, memoryModel, std::nullopt, false, nullptr, true);
+    auto* source = SNLScalarNet::create(top, NLName("we_source"));
+    source->setType(type);
+    auto* buffer = SNLInstance::create(top, bufferModel, NLName("we_buffer"));
+    buffer->getInstTerm(bufferModel->getScalarTerm(NLName("A")))->setNet(source);
+    buffer->getInstTerm(bufferModel->getScalarTerm(NLName("Y")))
+        ->setNet(top->getInstance(NLName("mem0"))
+                     ->getInstTerm(memoryModel->getScalarTerm(NLName("WE")))
+                     ->getNet());
+
+    // The buffer makes WE a dependency cone whose skipped frontier must keep
+    // the existing disabled-write behavior while identifying its cause.
+    testing::internal::CaptureStderr();
+    const auto extracted = SequentialDesignModel::extract(top);
+    const std::string diagnostics = testing::internal::GetCapturedStderr();
+
+    const auto skipStart = diagnostics.find(
+        "structured memory dependency build skipped requested=MEM_SKIPPED_WE.WE");
+    ASSERT_NE(skipStart, std::string::npos) << diagnostics;
+    const auto skip = diagnostics.substr(
+        skipStart, diagnostics.find('\n', skipStart) - skipStart);
+    EXPECT_NE(skip.find(unknown ? "reason=unknown_constant" : "reason=no_driver"),
+              std::string::npos) << skip;
+    if (unknown) {
+      EXPECT_NE(skip.find(type == SNLNet::Type::AssignX ?
+                             "unsupported X constant (1'bx)" :
+                             "unsupported Z constant (1'bz)"),
+                std::string::npos) << skip;
+      EXPECT_NE(skip.find("we_buffer.A"), std::string::npos) << skip;
+    }
+    EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+    EXPECT_EQ(extracted.observedOutputs.size(), 4u);
+    EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+    ASSERT_EQ(extracted.stateBits.size(), 20u);
+    ASSERT_EQ(extracted.nextStateExprByStateKey.size(), 20u);
+    size_t heldCells = 0;
+    for (const auto& stateKey : extracted.stateBits) {
+      if (extracted.displayNameByKey.at(stateKey).find(".__MEM_CELL[") ==
+          std::string::npos) {
+        continue;
+      }
+      const auto* nextState = extracted.nextStateExprByStateKey.at(stateKey);
+      EXPECT_EQ(nextState->getOp(), KEPLER_FORMAL::Op::VAR);
+      EXPECT_EQ(nextState->getId(), extracted.inputVarByKey.at(stateKey));
+      ++heldCells;
+    }
+    EXPECT_EQ(heldCells, 16u);
+  }
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        OpaqueEnabledMemoryWriteDataSkipsReadOutputs) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());

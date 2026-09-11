@@ -799,6 +799,69 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesDirectConstantOutputs) {
   EXPECT_TRUE(builder.getSkippedOutputs().empty());
 }
 
+TEST_F(MiterTests, BuildPrimaryOutputClausesUnmappedTermWithoutIsoKeepsFallback) {
+  auto* univ = NLUniverse::create();
+  auto* db = NLDB::create(univ);
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* output =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("unconnected"));
+  univ->setTopDesign(top);
+
+  const auto& term = naja::DNL::get()->getTop().getTerminalFromBitTerm(output);
+  ASSERT_EQ(term.getIsoID(), naja::DNL::DNLID_MAX);
+  const std::string fallback = "unconnected output has no drivers";
+  const auto skip =
+      BuildPrimaryOutputClauses::describeUnmappedTerm(term.getID(), fallback);
+  EXPECT_EQ(skip.reason, BuildPrimaryOutputClauses::SkippedOutputReason::NoDriver);
+  EXPECT_EQ(skip.detail, fallback);
+}
+
+TEST_F(MiterTests, BuildPrimaryOutputClausesUnknownConstantsWithoutSourceLocation) {
+  auto* univ = NLUniverse::create();
+  auto* db = NLDB::create(univ);
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("primitives"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* dummy =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("DUMMY"));
+  univ->setTopDesign(top);
+  // As above, keep the top non-leaf so DNL retains driverless constant nets.
+  SNLInstance::create(top, dummy, NLName("dummy0"));
+  SNLInstance::create(top, dummy, NLName("dummy1"));
+  for (const auto type : {SNLNet::Type::AssignX, SNLNet::Type::AssignZ}) {
+    const NLName name(type == SNLNet::Type::AssignX ? "x_out" : "z_out");
+    auto* output = SNLScalarTerm::create(top, SNLTerm::Direction::Output, name);
+    auto* net = SNLScalarNet::create(top, name);
+    net->setType(type);
+    output->setNet(net);
+  }
+
+  const auto* dnl = naja::DNL::get();
+  BuildPrimaryOutputClauses builder;
+  builder.collect();
+  EXPECT_TRUE(builder.getOutputs().empty());
+  ASSERT_EQ(builder.getSkippedOutputs().size(), 2u);
+  for (const auto& [termID, skip] : builder.getSkippedOutputs()) {
+    const auto name =
+        dnl->getDNLTerminalFromID(termID).getSnlBitTerm()->getName().getString();
+    SCOPED_TRACE(name);
+    EXPECT_EQ(skip.reason,
+              BuildPrimaryOutputClauses::SkippedOutputReason::UnknownConstant);
+    EXPECT_NE(skip.detail.find(name == "x_out" ? "unsupported X constant (1'bx)"
+                                              : "unsupported Z constant (1'bz)"),
+              std::string::npos);
+    EXPECT_NE(skip.detail.find(name), std::string::npos);
+    EXPECT_NE(skip.detail.find("source location unavailable"), std::string::npos);
+    EXPECT_EQ(skip.detail.find("has no drivers"), std::string::npos);
+  }
+}
+
 TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);

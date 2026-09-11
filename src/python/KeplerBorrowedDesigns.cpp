@@ -181,6 +181,10 @@ void assignSecResult(const SEC::SequentialEquivalenceResult& proof,
     result.provenOutputs = proof.coveredOutputs;
   }
   switch (proof.status) {
+    case SEC::SequentialEquivalenceStatus::Exported:
+      result.status = RunStatus::Exported;
+      result.exitCode = 0;
+      break;
     case SEC::SequentialEquivalenceStatus::Equivalent:
       result.status = RunStatus::Equivalent;
       result.exitCode = kSecProvedExitCode;

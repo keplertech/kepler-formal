@@ -12,6 +12,7 @@ add_library(formal_structures STATIC
     BoolExpr.cpp
     BoolExprCache.cpp
     BoolExprCnfWriter.cpp
+    Btor2Writer.cpp
 )
 
 # Make headers accessible to other targets

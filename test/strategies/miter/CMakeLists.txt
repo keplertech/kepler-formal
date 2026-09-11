@@ -24,7 +24,10 @@ GTEST_DISCOVER_TESTS(
 
 add_executable(keplerFormalCliTests
     KeplerFormalCliTests.cpp
+    Btor2ExportCliTests.cpp
+    Btor2ExportDriverTests.cpp
     ${CMAKE_SOURCE_DIR}/src/bin/KeplerFormal.cpp
+    ${CMAKE_SOURCE_DIR}/src/bin/Btor2ExportConfig.cpp
 )
 
 target_compile_definitions(keplerFormalCliTests PRIVATE KEPLER_FORMAL_NO_MAIN)

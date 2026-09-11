@@ -25,10 +25,12 @@ function(configure_kepler_formal_driver target)
   target_link_libraries(${target} PUBLIC ${KEPLER_FORMAL_DRIVER_LIBRARIES})
 endfunction()
 
+set(KEPLER_FORMAL_DRIVER_SOURCES KeplerFormal.cpp Btor2ExportConfig.cpp)
+
 if(BUILD_KEPLER_PYTHON)
   # The in-process API rejects Python technology files. Compile that loader
   # path out so a wheel does not embed Naja's separate Python runtime.
-  add_library(kepler_formal_python_driver STATIC KeplerFormal.cpp)
+  add_library(kepler_formal_python_driver STATIC ${KEPLER_FORMAL_DRIVER_SOURCES})
   configure_kepler_formal_driver(kepler_formal_python_driver)
   target_compile_definitions(
     kepler_formal_python_driver
@@ -39,7 +41,7 @@ if(BUILD_KEPLER_PYTHON)
   return()
 endif()
 
-add_library(kepler_formal_driver STATIC KeplerFormal.cpp)
+add_library(kepler_formal_driver STATIC ${KEPLER_FORMAL_DRIVER_SOURCES})
 configure_kepler_formal_driver(kepler_formal_driver)
 target_link_libraries(kepler_formal_driver PUBLIC naja_snl_pyloader)
 
