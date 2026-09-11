@@ -11,6 +11,10 @@ execute_process(
   ERROR_VARIABLE provider_error
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+# Package-manager wrappers can expand find_package arguments a second time.
+# Normalize native Windows separators before a path such as C:\Users reaches
+# vcpkg's macro, where the backslash would otherwise introduce an escape.
+file(TO_CMAKE_PATH "${provider_cmake_dir}" provider_cmake_dir)
 if(NOT provider_status EQUAL 0 OR NOT IS_DIRECTORY "${provider_cmake_dir}")
   message(FATAL_ERROR
     "Python builds require the NajaEDA shared-runtime SDK in ${Python3_EXECUTABLE}. "
