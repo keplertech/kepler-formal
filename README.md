@@ -51,11 +51,15 @@ The property of stable indices is employed to localize the scopes affected by ed
 
 ## Distribution
 
-Install the CLI with Nix 2.35+ (`nix-command` and `flakes` enabled):
+Enable the `keplertech` Cachix binary cache, then install the CLI
+(Nix 2.35+ with `nix-command` and `flakes` enabled):
 
 ```bash
+nix run nixpkgs#cachix -- use keplertech
 nix profile install 'git+https://github.com/keplertech/kepler-formal?ref=main&submodules=1#kepler-formal'
 ```
+
+On NixOS, run `sudo nixos-rebuild switch` between these two commands.
 
 ## Build Instructions
 
