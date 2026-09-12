@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kepler-formal-mcp"
+version = "1.0.0"
+description = "Optional local stdio MCP server for kepler-formal"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "keplertech.io" }]
+dependencies = [
+  "mcp>=2,<3",
+  "typing-extensions>=4.13",
+]
+
+[project.scripts]
+kepler-formal-mcp = "kepler_formal_mcp.server:main"
+
+[project.urls]
+Repository = "https://github.com/keplertech/kepler-formal"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kepler_formal_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

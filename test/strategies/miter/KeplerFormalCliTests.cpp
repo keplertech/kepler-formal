@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <gtest/gtest.h>
+#include <spdlog/sinks/null_sink.h>
+#include <spdlog/spdlog.h>
 
 #include <cstdlib>
 #include <algorithm>
@@ -9,13 +11,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "DNL.h"
 #include "BoolExprCache.h"
 #include "Config.h"
+#include "KeplerFormalDriver.h"
 #include "Tree2BoolExpr.h"
 #include "KeplerFormalUtils.h"
 #include "NLDB0.h"
@@ -30,8 +35,6 @@
 #include "SNLTruthTable.h"
 #include "SNLUtils.h"
 #include "SNLVRLConstructor.h"
-
-extern int KeplerFormalMain(int argc, char** argv);
 
 namespace {
 
@@ -72,8 +75,9 @@ std::filesystem::path copyNajaIfForCurrentBuild(
   return copy;
 }
 
-int runWithConfigFile(const std::filesystem::path& cfgPath) {
-  std::string argv0 = "kepler-formal";
+int runWithConfigFile(
+    const std::filesystem::path& cfgPath,
+    std::string argv0 = "kepler-formal") {
   std::string argv1 = "--config";
   std::string argv2 = cfgPath.string();
   char* argv[] = {argv0.data(), argv1.data(), argv2.data()};
@@ -96,6 +100,30 @@ int runWithArgs(std::vector<std::string> args) {
   KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
   KEPLER_FORMAL::BoolExprCache::destroy();
   return rc;
+}
+
+struct StructuredRun {
+  int exitCode;
+  KEPLER_FORMAL::RunResult result;
+};
+
+StructuredRun runStructuredWithArgs(std::vector<std::string> args) {
+  std::vector<char*> argv;
+  argv.reserve(args.size());
+  for (auto& arg : args) {
+    argv.push_back(arg.data());
+  }
+  KEPLER_FORMAL::RunResult result;
+  const int rc = KEPLER_FORMAL::runKeplerFormal(
+      static_cast<int>(argv.size()), argv.data(), result);
+  return {rc, std::move(result)};
+}
+
+StructuredRun runStructuredWithConfigFile(
+    const std::filesystem::path& cfgPath,
+    std::string argv0 = "kepler-formal") {
+  return runStructuredWithArgs(
+      {std::move(argv0), "--config", cfgPath.string()});
 }
 
 std::filesystem::path findBuiltNajaModuleDir() {
@@ -304,16 +332,30 @@ struct ReportSkippedPOsGuard {
   bool oldValue_;
 };
 
-struct SecBoundaryAbstractionGuard {
-  SecBoundaryAbstractionGuard()
-      : oldValue_(
-            KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary()) {}
-
-  ~SecBoundaryAbstractionGuard() {
-    KEPLER_FORMAL::Config::setSecTreatUncomputableSeqAsBoundary(oldValue_);
+struct NamedLoggerGuard {
+  explicit NamedLoggerGuard(std::string name)
+      : name_(std::move(name)),
+        previousDefault_(spdlog::default_logger()),
+        previousNamed_(spdlog::get(name_)),
+        installed_(std::make_shared<spdlog::logger>(
+            name_, std::make_shared<spdlog::sinks::null_sink_mt>())) {
+    spdlog::drop(name_);
+    spdlog::register_logger(installed_);
+    spdlog::set_default_logger(installed_);
   }
 
-  bool oldValue_;
+  ~NamedLoggerGuard() {
+    spdlog::drop(name_);
+    if (previousNamed_ != nullptr) {
+      spdlog::register_logger(previousNamed_);
+    }
+    spdlog::set_default_logger(previousDefault_);
+  }
+
+  std::string name_;
+  std::shared_ptr<spdlog::logger> previousDefault_;
+  std::shared_ptr<spdlog::logger> previousNamed_;
+  std::shared_ptr<spdlog::logger> installed_;
 };
 
 struct CurrentPathGuard {
@@ -389,7 +431,7 @@ MultiFileVerilogFixture createMultiFileVerilogFixture() {
   const auto design1Top = fixture.tmpDir / "design1_top.v";
   fixture.cfgPath = fixture.tmpDir / "config.yaml";
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
   const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
   const auto lib2 = exampleDir / "fakeram45_64x32.lib";
@@ -476,7 +518,8 @@ SimpleCliFixture createEquivalentDesignFixture(const std::string& extension,
 
 std::filesystem::path copyExampleLibertyFile(const std::filesystem::path& directory,
                                              const std::string& filename) {
-  const auto source = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto source = repoRoot() / "examples" / "tinyrocket" /
+                      "NangateOpenCellLibrary_typical.lib";
   const auto destination = directory / filename;
   std::filesystem::copy_file(
       source, destination, std::filesystem::copy_options::overwrite_existing);
@@ -551,7 +594,8 @@ ScopedNajaIfFixture createEquivalentScopedNajaIfFixture() {
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_scope_if");
   fixture.design0IfPath = fixture.tmpDir / "design0.capnp";
   fixture.design1IfPath = fixture.tmpDir / "design1.capnp";
-  fixture.libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  fixture.libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                        "NangateOpenCellLibrary_typical.lib";
 
   const auto design0Child = fixture.tmpDir / "design0_child.v";
   const auto design0Top = fixture.tmpDir / "design0_top.v";
@@ -791,6 +835,45 @@ class KeplerFormalCliTests : public ::testing::Test {
         lineEnd == std::string::npos ? std::string::npos : lineEnd - start);
   }
 
+  static void expectSecDifferenceLogIncludesWitnessDetails(
+      const std::string& engine) {
+    const auto fixture = createDifferentSequentialNajaIfFixture();
+    const auto logPath =
+        fixture.tmpDir / ("sec_difference_" + engine + ".log");
+    const auto cfgPath = writeTempConfig(
+        "format: naja_if\n"
+        "verification: sec\n"
+        "sec_engine: " + engine + "\n"
+        "sec_encoding: dual_rail_steady\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + fixture.design0IfPath.string() + "\n"
+        "  - " + fixture.design1IfPath.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, kSecCounterexampleExitCode);
+    EXPECT_EQ(run.result.exitCode, kSecCounterexampleExitCode);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+    EXPECT_EQ(run.result.totalOutputs, 1u);
+    EXPECT_EQ(run.result.coveredOutputs, 1u);
+    EXPECT_EQ(run.result.provenOutputs, 0u);
+    ASSERT_TRUE(std::filesystem::exists(logPath));
+    const auto contents = readFileContents(logPath);
+    EXPECT_NE(contents.find("SEC counterexample details:"), std::string::npos);
+    EXPECT_NE(
+        contents.find(
+            "Counterexample reaches the first bad frame at cycle 1."),
+        std::string::npos);
+    EXPECT_NE(contents.find("Input trace:"), std::string::npos);
+    EXPECT_NE(
+        contents.find("Observed output mismatches at cycle 1:"),
+        std::string::npos);
+
+    std::filesystem::remove(cfgPath);
+    std::filesystem::remove_all(fixture.tmpDir);
+  }
+
   void TearDown() override {
     KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
     KEPLER_FORMAL::BoolExprCache::destroy();
@@ -813,10 +896,136 @@ TEST_F(KeplerFormalCliTests, SecResultExitCodesAreStable) {
   EXPECT_EQ(kSecCounterexampleExitCode, 3);
 }
 
+TEST_F(KeplerFormalCliTests, InProcessRunStatusNamesAreStable) {
+  using KEPLER_FORMAL::RunStatus;
+  EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::NoResult), "no_result");
+  EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::Equivalent), "equivalent");
+  EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::Different), "different");
+  EXPECT_STREQ(
+      KEPLER_FORMAL::runStatusName(RunStatus::PartiallyProved),
+      "partially_proved");
+  EXPECT_STREQ(
+      KEPLER_FORMAL::runStatusName(RunStatus::Inconclusive), "inconclusive");
+  EXPECT_STREQ(
+      KEPLER_FORMAL::runStatusName(RunStatus::Unsupported), "unsupported");
+  EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::Error), "error");
+  EXPECT_STREQ(
+      KEPLER_FORMAL::runStatusName(static_cast<RunStatus>(-1)), "error");
+}
+
+TEST_F(KeplerFormalCliTests, InProcessDriverReportsNoResultAndErrors) {
+  const auto noArguments = runStructuredWithArgs({"kepler-formal"});
+  EXPECT_EQ(noArguments.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(noArguments.result.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(noArguments.result.status, KEPLER_FORMAL::RunStatus::NoResult);
+
+  const auto help =
+      runStructuredWithArgs({"kepler-formal", "--help"});
+  EXPECT_EQ(help.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(help.result.status, KEPLER_FORMAL::RunStatus::NoResult);
+
+  const auto invalid =
+      runStructuredWithArgs({"kepler-formal", "--not-a-kepler-option"});
+  EXPECT_EQ(invalid.exitCode, EXIT_FAILURE);
+  EXPECT_EQ(invalid.result.exitCode, EXIT_FAILURE);
+  EXPECT_EQ(invalid.result.status, KEPLER_FORMAL::RunStatus::Error);
+  EXPECT_NE(
+      invalid.result.reason.find(
+          "failed before producing a verification result"),
+      std::string::npos);
+}
+
+TEST_F(KeplerFormalCliTests, InProcessDriverRejectsAnActiveNajaUniverse) {
+  cleanupNajaTestState();
+  NLUniverse::create();
+  EXPECT_THROW(
+      runStructuredWithArgs({"kepler-formal", "--help"}),
+      std::runtime_error);
+  cleanupNajaTestState();
+
+  const auto help =
+      runStructuredWithArgs({"kepler-formal", "--help"});
+  EXPECT_EQ(help.result.status, KEPLER_FORMAL::RunStatus::NoResult);
+}
+
+TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {
+  SolverGuard solverGuard;
+  ReportSkippedPOsGuard reportGuard;
+  KEPLER_FORMAL::Config::setSolverType(KEPLER_FORMAL::Config::CADICAL);
+  KEPLER_FORMAL::Config::setReportSkippedPOs(true);
+  NamedLoggerGuard loggerGuard("kepler_formal_main_logger");
+
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n",
+      "module top(input a, output y);\n"
+      "  assign y = 1'b0;\n"
+      "endmodule\n");
+  const auto equivalentLog = fixture.tmpDir / "structured_equivalent.log";
+  const auto equivalentCfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "log_file: " + equivalentLog.string() + "\n");
+  const auto equivalent = runStructuredWithConfigFile(equivalentCfg);
+  EXPECT_EQ(equivalent.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(equivalent.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(equivalent.result.inputFormat, "verilog");
+  EXPECT_EQ(equivalent.result.verification, "lec");
+  EXPECT_EQ(equivalent.result.logFile, equivalentLog.string());
+  EXPECT_TRUE(std::filesystem::exists(equivalentLog));
+  EXPECT_EQ(
+      KEPLER_FORMAL::Config::getSolverType(), KEPLER_FORMAL::Config::CADICAL);
+  EXPECT_TRUE(KEPLER_FORMAL::Config::getReportSkippedPOs());
+  EXPECT_EQ(NLUniverse::get(), nullptr);
+  EXPECT_EQ(
+      spdlog::get("kepler_formal_main_logger"), loggerGuard.installed_);
+
+  const auto differentLog = fixture.tmpDir / "structured_different.log";
+  const auto differentCfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + differentLog.string() + "\n");
+  const auto different = runStructuredWithConfigFile(differentCfg);
+  EXPECT_EQ(different.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(different.result.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(different.result.status, KEPLER_FORMAL::RunStatus::Different);
+  EXPECT_EQ(different.result.logFile, differentLog.string());
+  EXPECT_TRUE(std::filesystem::exists(differentLog));
+  EXPECT_EQ(NLUniverse::get(), nullptr);
+
+  const auto pythonTechCfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "py_tech_files:\n"
+      "  - " + (fixture.tmpDir / "primitives.py").string() + "\n");
+  const auto pythonTech = runStructuredWithConfigFile(pythonTechCfg);
+  EXPECT_EQ(pythonTech.exitCode, EXIT_FAILURE);
+  EXPECT_EQ(pythonTech.result.status, KEPLER_FORMAL::RunStatus::Error);
+  EXPECT_NE(pythonTech.result.reason.find("not supported"), std::string::npos);
+  EXPECT_EQ(
+      spdlog::get("kepler_formal_main_logger"), loggerGuard.installed_);
+
+  std::filesystem::remove(equivalentCfg);
+  std::filesystem::remove(differentCfg);
+  std::filesystem::remove(pythonTechCfg);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 
 TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = exampleDir / "tinyrocket.v";
   const auto design1 = exampleDir / "tinyrocket_edited.v";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -1426,7 +1635,8 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_prim");
   fixture.design0Path = fixture.tmpDir / "design0.sv";
   fixture.design1Path = fixture.tmpDir / "design1.v";
-  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
   ASSERT_TRUE(std::filesystem::exists(libertyPath));
 
   {
@@ -1456,6 +1666,254 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(
+    KeplerFormalCliTests,
+    ConfigSv2vDesignDefinedModuleOverridesGeneratedPrimitiveStub) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_owned_prim");
+  fixture.design0Path = fixture.tmpDir / "design0.sv";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
+  ASSERT_TRUE(std::filesystem::exists(libertyPath));
+
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module INV_X1(input A, output ZN);\n";
+    design0 << "  assign ZN = A;\n";
+    design0 << "endmodule\n";
+    design0 << "module top(input logic a, b, output logic y);\n";
+    design0 << "  logic n;\n";
+    design0 << "  INV_X1 u_owned(.A(a), .ZN(n));\n";
+    design0 << "  AND2_X1 u_lib(.A1(n), .A2(b), .ZN(y));\n";
+    design0 << "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, b, output y);\n";
+    design1 << "  AND2_X1 u_lib(.A1(a), .A2(b), .ZN(y));\n";
+    design1 << "endmodule\n";
+  }
+
+  for (const bool compact : {false, true}) {
+    const std::string mode = compact ? "compact" : "standard";
+    const auto runDir = fixture.tmpDir / mode;
+    std::filesystem::create_directories(runDir);
+    const auto logPath = runDir / "run.log";
+    const auto diagnosticsPath = runDir / "naja_sv_diagnostics.log";
+    const auto cfgPath = writeTempConfig(
+        "format: sv2v\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "sec_encoding: binary\n"
+        "max_k: 4\n"
+        "compact_mode: " + std::string(compact ? "true" : "false") + "\n"
+        "sv_design1_top: top\n"
+        "verilog_design2_top: top\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "liberty_files:\n"
+        "  - " + libertyPath.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+
+    {
+      CurrentPathGuard currentPathGuard;
+      std::filesystem::current_path(runDir);
+      EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS) << mode;
+    }
+    ASSERT_TRUE(std::filesystem::exists(logPath)) << mode;
+    const auto logContents = readFileContents(logPath);
+    EXPECT_NE(
+        logContents.find(
+            "SEC checked-output coverage: 100.00% (1/1 covered/existing outputs)."),
+        std::string::npos)
+        << mode;
+    const auto compactMarker =
+        "SEC compact mode: extracting and releasing design 1 before "
+        "loading design 2";
+    if (compact) {
+      EXPECT_NE(logContents.find(compactMarker), std::string::npos) << mode;
+    } else {
+      EXPECT_EQ(logContents.find(compactMarker), std::string::npos) << mode;
+    }
+    ASSERT_TRUE(std::filesystem::exists(diagnosticsPath)) << mode;
+    EXPECT_EQ(
+        readFileContents(diagnosticsPath).find("duplicate definition of 'INV_X1'"),
+        std::string::npos)
+        << mode;
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(
+    KeplerFormalCliTests,
+    ConfigPythonPrimitivesUseAdjacentNajaModuleWithoutPythonPath) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_adjacent_naja");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto pyPrimitives = fixture.tmpDir / "primitives.py";
+  const auto cfgPath = fixture.tmpDir / "config.yaml";
+  {
+    std::ofstream py(pyPrimitives);
+    py << "import naja\n"
+          "\n"
+          "def constructPrimitives(lib):\n"
+          "  cell = naja.SNLDesign.createPrimitive(lib, 'BUF')\n"
+          "  naja.SNLScalarTerm.create(cell, naja.SNLTerm.Direction.Input, 'A')\n"
+          "  naja.SNLScalarTerm.create(cell, naja.SNLTerm.Direction.Output, 'Z')\n"
+          "  cell.setTruthTable(0b10)\n";
+  }
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input a, output y);\n"
+               "  BUF u_buf(.A(a), .Z(y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, output y);\n"
+               "  assign y = a;\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << fixture.design0Path.string() << "\n"
+        << "  - " << fixture.design1Path.string() << "\n"
+           "py_tech_files:\n"
+        << "  - " << pyPrimitives.string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  const std::filesystem::path keplerBinPath(keplerBin);
+  ASSERT_TRUE(std::filesystem::exists(keplerBinPath));
+  ASSERT_TRUE(std::filesystem::exists(keplerBinPath.parent_path() / "naja.so"));
+
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  unsetenv("PYTHONPATH");
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    EXPECT_EQ(runWithConfigFile(cfgPath, keplerBinPath.string()), EXIT_SUCCESS);
+  }
+  ASSERT_NE(std::getenv("PYTHONPATH"), nullptr);
+  EXPECT_EQ(
+      std::filesystem::path(std::getenv("PYTHONPATH")),
+      keplerBinPath.parent_path());
+
+  EnvVarGuard pathGuard("PATH");
+  pathGuard.set(keplerBinPath.parent_path().string());
+  pythonPathGuard.set(fixture.tmpDir.string());
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    EXPECT_EQ(
+        runWithConfigFile(cfgPath, keplerBinPath.filename().string()),
+        EXIT_SUCCESS);
+  }
+  EXPECT_EQ(
+      std::getenv("PYTHONPATH"),
+      keplerBinPath.parent_path().string() + ":" + fixture.tmpDir.string());
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxPythonPrimitiveSecExample) {
+  const auto exampleDir =
+      repoRoot() / "examples" / "xilinx" / "register_slice";
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_sec");
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: sec\n"
+           "sec_engine: pdr\n"
+           "sec_encoding: dual_rail_steady\n"
+           "input_paths:\n"
+        << "  - " << (exampleDir / "xilinx_register_slice_mapped.v").string()
+        << "\n  - "
+        << (exampleDir / "xilinx_register_slice_compact.v").string()
+        << "\npy_tech_files:\n  - "
+        << (exampleDir.parent_path() / "xilinx.py").string()
+        << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxLutInstanceParameters) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_xilinx_luts");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  const auto cfgPath = fixture.tmpDir / "config.yaml";
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "module top(input a, b, output xor_y, and_y);\n"
+               "  LUT2 #(.INIT(4'h6)) xor_lut(.I0(a), .I1(b), .O(xor_y));\n"
+               "  LUT2 #(.INIT(4'h8)) and_lut(.I0(a), .I1(b), .O(and_y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "module top(input a, b, output xor_y, and_y);\n"
+               "  XOR2 explicit_xor(.A(a), .B(b), .Y(xor_y));\n"
+               "  AND2 explicit_and(.A(a), .B(b), .Y(and_y));\n"
+               "endmodule\n";
+  }
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << fixture.design0Path.string() << "\n"
+        << "  - " << fixture.design1Path.string() << "\n"
+           "py_tech_files:\n"
+        << "  - "
+        << (repoRoot() / "examples" / "xilinx" / "xilinx.py").string()
+        << "\nlog_file: " << (fixture.tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigXilinxVexRiscvGenFullLecExample) {
+  const auto exampleDir = repoRoot() / "examples" / "xilinx" / "vexriscv";
+  const auto netlist = exampleDir / "vexriscv_genfull_xilinx.v";
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_vexriscv_xilinx");
+  const auto cfgPath = tmpDir / "config.yaml";
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << "format: verilog\n"
+           "verification: lec\n"
+           "input_paths:\n"
+        << "  - " << netlist.string() << "\n"
+        << "  - " << netlist.string() << "\n"
+           "verilog_design1_top: vexriscv.demo.GenFull\n"
+           "verilog_design2_top: vexriscv.demo.GenFull\n"
+           "py_tech_files:\n"
+        << "  - " << (exampleDir.parent_path() / "xilinx.py").string()
+        << "\nlog_file: " << (tmpDir / "miter.log").string() << "\n";
+  }
+
+  const char* keplerBin = std::getenv("KEPLER_BIN");
+  ASSERT_NE(keplerBin, nullptr);
+  EXPECT_EQ(runWithConfigFile(cfgPath, keplerBin), EXIT_SUCCESS);
+  std::filesystem::remove_all(tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSv2vPythonPrimitivesBuildsComplexStubLibrary) {
@@ -1743,7 +2201,8 @@ TEST_F(KeplerFormalCliTests, ConfigCompactSystemVerilogLecCnfRejected) {
   const auto fixture = createSystemVerilogFlistFixture();
   const auto cnfPath = fixture.tmpDir / "compact_sv.cnf";
   const auto poCnfDir = fixture.tmpDir / "compact_sv_po_cnfs";
-  const auto libertyPath = repoRoot() / "example" / "NangateOpenCellLibrary_typical.lib";
+  const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
+                           "NangateOpenCellLibrary_typical.lib";
   const auto cfgPath = writeTempConfig(
       "format: systemverilog\n"
       "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
@@ -2204,7 +2663,7 @@ TEST_F(KeplerFormalCliTests, SnlMultiFileRejected) {
 
 TEST_F(KeplerFormalCliTests, MissingFirstNajaIfFails) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design1 = exampleDir / "tinyrocket_naja.if";
   ASSERT_TRUE(std::filesystem::exists(design1));
 
@@ -2220,7 +2679,7 @@ TEST_F(KeplerFormalCliTests, MissingFirstNajaIfFails) {
 
 TEST_F(KeplerFormalCliTests, MissingSecondNajaIfFails) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = exampleDir / "tinyrocket_naja.if";
   ASSERT_TRUE(std::filesystem::exists(design0));
 
@@ -2236,7 +2695,7 @@ TEST_F(KeplerFormalCliTests, MissingSecondNajaIfFails) {
 
 TEST_F(KeplerFormalCliTests, ConfigCompactNajaIfAccepted) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design = copyNajaIfForCurrentBuild(
       exampleDir / "tinyrocket_naja.if", "kepler_compact_naja_if");
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -2384,12 +2843,11 @@ TEST_F(KeplerFormalCliTests, ConfigMaxKMustBeScalar) {
   std::filesystem::remove(cfgPath);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigSecBoundaryAbstractionMustBeScalar) {
+TEST_F(KeplerFormalCliTests, ConfigRemovedSecBoundaryAbstractionKeyIsRejected) {
   const auto cfgPath = writeTempConfig(
       "format: verilog\n"
       "verification: sec\n"
-      "sec_uncomputable_seq_as_boundary:\n"
-      "  - false\n");
+      "sec_uncomputable_seq_as_boundary: true\n");
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
   std::filesystem::remove(cfgPath);
 }
@@ -2475,7 +2933,6 @@ TEST_F(KeplerFormalCliTests, ConfigSecEngineWithoutSecFails) {
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSecVerificationAccepted) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
@@ -2491,7 +2948,6 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationAccepted) {
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSecDefaultsToDualRailEncoding) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
   const auto logPath = fixture.tmpDir / "default_sec_encoding.log";
   // Intentionally omit sec_encoding here: this is the regression that guards the
@@ -2514,9 +2970,359 @@ TEST_F(KeplerFormalCliTests, ConfigSecDefaultsToDualRailEncoding) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapAcceptsMultiplePorts) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input scan_reset_n, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_bootstrap.log";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n"
+      "    - name: scan_reset_n\n"
+      "      active_value: 0\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC reset bootstrap: 1 cycle(s)"),
+            std::string::npos);
+  EXPECT_NE(contents.find("SEC reset bootstrap port: reset active=1"),
+            std::string::npos);
+  EXPECT_NE(
+      contents.find("SEC reset bootstrap port: scan_reset_n active=0"),
+      std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapUsesSequentialResetInput) {
+  const EnvVarGuard secDiag("KEPLER_SEC_DIAG");
+  secDiag.set("1");
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic clk, input logic reset, input logic a, output logic y);\n"
+      "  always_ff @(posedge clk) begin\n"
+      "    if (reset) y <= 1'b0;\n"
+      "    else y <= a;\n"
+      "  end\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: true\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapAcceptsRepeatedPorts) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input scan_reset_n, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-verilog",
+                   "-v",
+                   "sec",
+                   "--sec-engine",
+                   "pdr",
+                   "--sec-encoding",
+                   "binary",
+                   "-k",
+                   "1",
+                   "--sec-reset-cycles",
+                   "1",
+                   "--sec-reset-port",
+                   "reset=1",
+                   "--sec-reset-port",
+                   "scan_reset_n=0",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      kSecProvedExitCode);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapMissingPortFails) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_missing.log";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: missing\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+  EXPECT_NE(run.result.reason.find("missing"), std::string::npos);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(
+      contents.find(
+          "Reset bootstrap port `missing` was not found among aligned "
+          "top-level inputs"),
+      std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsMalformedYaml) {
+  const std::vector<std::string> invalidResetBlocks = {
+      "sec_reset: scalar\n",
+      "sec_reset:\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: invalid\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - reset\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: \"\"\n"
+      "      active_value: 1\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: maybe\n",
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n"
+      "    - name: reset\n"
+      "      active_value: 0\n",
+      "sec_reset:\n"
+      "  cycles: 0\n"
+      "  ports:\n"
+      "    - name: reset\n"
+      "      active_value: 1\n"};
+
+  for (const auto& resetBlock : invalidResetBlocks) {
+    const auto cfgPath = writeTempConfig(
+        "format: verilog\n"
+        "verification: sec\n" +
+        resetBlock);
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE) << resetBlock;
+    std::filesystem::remove(cfgPath);
+  }
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapRejectsMalformedPortTokens) {
+  for (const char* resetPort : {"reset", "reset=maybe", "=1"}) {
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-v",
+                     "sec",
+                     "--sec-reset-port",
+                     resetPort,
+                     "-verilog"}),
+        EXIT_FAILURE) << resetPort;
+  }
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapIncompleteSpecFails) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-v",
+                   "sec",
+                   "--sec-reset-cycles",
+                   "1",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      EXIT_FAILURE);
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "-v",
+                   "sec",
+                   "--sec-reset-port",
+                   "reset=1",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSecResetBootstrapRejectedForLec) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input reset, input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal",
+                   "--sec-reset-cycles",
+                   "1",
+                   "--sec-reset-port",
+                   "reset=1",
+                   "-verilog",
+                   fixture.design0Path.string(),
+                   fixture.design1Path.string()}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapAcceptsBareOneBitBus) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic [0:0] rst, input logic a, output logic y);\n"
+      "  assign y = rst[0] & a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: rst\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsBareMultiBitBus) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic [1:0] rst, input logic a, output logic y);\n"
+      "  assign y = (rst[0] & a) | rst[1];\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_bus.log";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: rst\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(
+      contents.find("matched multiple input bits; name each reset bit explicitly"),
+      std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecResetBootstrapRejectsDuplicateResolvedBusBit) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic [0:0] rst, input logic a, output logic y);\n"
+      "  assign y = rst[0] & a;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_reset_duplicate_bit.log";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 1\n"
+      "sec_reset:\n"
+      "  cycles: 1\n"
+      "  ports:\n"
+      "    - name: rst\n"
+      "      active_value: 1\n"
+      "    - name: rst[0]\n"
+      "      active_value: 1\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("resolves to the same top-level input"),
+            std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithPdrEngine) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
+  const auto logPath = fixture.tmpDir / "structured_pdr.log";
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
       "verification: sec\n"
@@ -2525,14 +3331,24 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithPdrEngine) {
       "max_k: 4\n"
       "input_paths:\n"
       "  - " + fixture.design0IfPath.string() + "\n"
-      "  - " + fixture.design1IfPath.string() + "\n");
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(run.result.inputFormat, "naja_if");
+  EXPECT_EQ(run.result.verification, "sec");
+  EXPECT_EQ(run.result.totalOutputs, 1u);
+  EXPECT_EQ(run.result.coveredOutputs, 1u);
+  EXPECT_EQ(run.result.provenOutputs, 1u);
+  EXPECT_TRUE(run.result.unprovenOutputs.empty());
+  EXPECT_EQ(run.result.logFile, logPath.string());
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSecVerificationRejectsLegacyEngine) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
@@ -2549,7 +3365,6 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationRejectsLegacyEngine) {
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithKInductionEngine) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
@@ -2566,8 +3381,8 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithKInductionEngine) 
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithImcEngine) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture = createEquivalentSequentialNajaIfFixture();
+  const auto logPath = fixture.tmpDir / "structured_imc.log";
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
       "verification: sec\n"
@@ -2576,35 +3391,141 @@ TEST_F(KeplerFormalCliTests, ConfigSecVerificationAcceptedWithImcEngine) {
       "max_k: 4\n"
       "input_paths:\n"
       "  - " + fixture.design0IfPath.string() + "\n"
-      "  - " + fixture.design1IfPath.string() + "\n");
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
   // This option-parsing fixture is valid input for IMC, but IMC does not
   // converge within the small bound.
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Inconclusive);
+  EXPECT_EQ(run.result.totalOutputs, 1u);
+  EXPECT_EQ(run.result.provenOutputs, 0u);
+  EXPECT_EQ(run.result.unprovenOutputs, std::vector<std::string>{"out[0]"});
+  EXPECT_EQ(run.result.logFile, logPath.string());
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests,
-     ConfigSecAbstractsUncomputableSequentialBoundariesByDefault) {
-  SecBoundaryAbstractionGuard boundaryGuard;
+     ConfigSecReportsPartialProofAndWritesOpaqueOutputReport) {
   const auto fixture = createUncomputableSequentialNajaIfFixture();
+  const auto logPath = fixture.tmpDir / "sec_partial_opaque.log";
+  const auto reportPath = fixture.tmpDir / "skipped_opaque_cells_pos.txt";
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
       "verification: sec\n"
       "sec_encoding: binary\n"
       "max_k: 2\n"
+      "report_skipped_pos: true\n"
       "input_paths:\n"
       "  - " + fixture.design0IfPath.string() + "\n"
-      "  - " + fixture.design1IfPath.string() + "\n");
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
-  EXPECT_TRUE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, kSecPartiallyProvedExitCode);
+    EXPECT_EQ(run.result.exitCode, kSecPartiallyProvedExitCode);
+    EXPECT_EQ(
+        run.result.status, KEPLER_FORMAL::RunStatus::PartiallyProved);
+    EXPECT_EQ(run.result.totalOutputs, 2u);
+    EXPECT_EQ(run.result.coveredOutputs, 1u);
+    EXPECT_EQ(run.result.provenOutputs, 1u);
+    ASSERT_EQ(run.result.skippedObservedOutputs.size(), 1u);
+    EXPECT_NE(
+        run.result.skippedObservedOutputs.front().find("bad[0]:"),
+        std::string::npos);
+    EXPECT_NE(
+        run.result.skippedObservedOutputs.front().find("opaque internal cell"),
+        std::string::npos);
+  }
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC checked-output coverage: 50.00% (1/2"),
+            std::string::npos);
+  EXPECT_NE(contents.find("bad[0]:"), std::string::npos);
+  EXPECT_NE(contents.find("opaque internal cell"), std::string::npos);
+  EXPECT_NE(contents.find("SEC partially proved equivalence"), std::string::npos);
+  EXPECT_NE(contents.find("did not prove all observed outputs"), std::string::npos);
+
+  ASSERT_TRUE(std::filesystem::exists(reportPath));
+  const auto report = readFileContents(reportPath);
+  const auto entry = report.find("- bad[0]:");
+  ASSERT_NE(entry, std::string::npos);
+  EXPECT_EQ(report.find("- bad[0]:", entry + 1), std::string::npos);
+  EXPECT_NE(report.find("outputs were not verified"), std::string::npos);
+  EXPECT_NE(report.find("ff0"), std::string::npos);
+  EXPECT_NE(report.find("SEQ_NO_D"), std::string::npos);
+  EXPECT_NE(report.find("Q[0]"), std::string::npos);
+  EXPECT_NE(report.find("no initialized combinational truth table"),
+            std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+     SecStatefulClockGateWithoutBehavioralModelIsSkippedAsOpaque) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
+      "  wire gclk;\n"
+      "  wire qn;\n"
+      "  wire pass_n;\n"
+      "  CLKGATE_X1 u_gate(.CK(clk), .E(en), .GCK(gclk));\n"
+      "  DFFR_X1 u_q(.CK(gclk), .D(d), .Q(q), .QN(qn), .RN(rst_n));\n"
+      "  DFFR_X1 u_pass(.CK(clk), .D(d), .Q(pass), .QN(pass_n), .RN(rst_n));\n"
+      "endmodule\n",
+      "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
+      "  wire next_q;\n"
+      "  wire qn;\n"
+      "  wire pass_n;\n"
+      "  MUX2_X1 u_hold(.A(q), .B(d), .S(en), .Z(next_q));\n"
+      "  DFFR_X1 u_q(.CK(clk), .D(next_q), .Q(q), .QN(qn), .RN(rst_n));\n"
+      "  DFFR_X1 u_pass(.CK(clk), .D(d), .Q(pass), .QN(pass_n), .RN(rst_n));\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_clockgate_opaque.log";
+  const auto libertyPath =
+      repoRoot() / "examples" / "tinyrocket" /
+      "NangateOpenCellLibrary_typical.lib";
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_encoding: dual_rail_steady\n"
+      "sec_engine: pdr\n"
+      "max_k: 2\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files:\n"
+      "  - " + libertyPath.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecPartiallyProvedExitCode);
+
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC checked-output coverage: 50.00% (1/2"),
+            std::string::npos);
+  EXPECT_NE(contents.find("q[0]: design0 opaque-internal"), std::string::npos);
+  EXPECT_NE(contents.find("CLKGATE_X1"), std::string::npos);
+  EXPECT_NE(contents.find("no initialized combinational truth table or usable "
+                          "sequential model"),
+            std::string::npos);
+  // Liberty `statetable`/`state_function` cells must remain opaque until their
+  // stateful behavior is modeled. In particular, the frontend must not invent
+  // the old zero-input truth table for GCK.
+  EXPECT_EQ(contents.find("combinational truth table arity does not match "
+                          "instance inputs"),
+            std::string::npos);
+  EXPECT_EQ(contents.find("SNLLogicCloud arity mismatch"), std::string::npos);
+  EXPECT_EQ(contents.find("unpublished internal support"), std::string::npos);
+
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSecUnsupportedMismatchLogUsesUnsupportedResult) {
-  SecBoundaryAbstractionGuard boundaryGuard;
   const auto fixture =
       createEquivalentSequentialNajaIfFixture("ff0", "ff0", "out", "z");
   const auto logPath = fixture.tmpDir / "sec_unsupported_mismatch.log";
@@ -2624,26 +3545,6 @@ TEST_F(KeplerFormalCliTests, ConfigSecUnsupportedMismatchLogUsesUnsupportedResul
   EXPECT_NE(contents.find("SEC workflow failed:"), std::string::npos);
   EXPECT_NE(contents.find("Mismatched observed output sets"), std::string::npos);
 
-  std::filesystem::remove(cfgPath);
-  std::filesystem::remove_all(fixture.tmpDir);
-}
-
-TEST_F(KeplerFormalCliTests,
-     ConfigSecCanDisableBoundaryAbstractionForUncomputableSequentials) {
-  SecBoundaryAbstractionGuard boundaryGuard;
-  const auto fixture = createEquivalentSequentialNajaIfFixture();
-  const auto cfgPath = writeTempConfig(
-      "format: naja_if\n"
-      "verification: sec\n"
-      "sec_encoding: dual_rail_steady\n"
-      "max_k: 2\n"
-      "sec_uncomputable_seq_as_boundary: false\n"
-      "input_paths:\n"
-      "  - " + fixture.design0IfPath.string() + "\n"
-      "  - " + fixture.design1IfPath.string() + "\n");
-
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
-  EXPECT_FALSE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
@@ -2695,6 +3596,88 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogSecVerificationAccepted) {
 }
 
 TEST_F(KeplerFormalCliTests,
+       ConfigSystemVerilogSecUnknownConstantsIdentifyTheirUseSite) {
+  struct Case {
+    const char* name;
+    const char* assignment;
+    const char* diagnostic;
+    bool undriven = false;
+  };
+  const Case cases[] = {
+      {"x_ternary", "assign y = sel ? d : 1'bx;",
+       "unsupported X constant (1'bx)"},
+      {"z_bitwise", "assign y = d & 1'bz;",
+       "unsupported Z constant (1'bz)"},
+      {"x_direct", "assign y = 1'bx;", "unsupported X constant (1'bx)"},
+      {"z_direct", "assign y = 1'bz;", "unsupported Z constant (1'bz)"},
+      {"x_next_state", "always_ff @(posedge clk) y <= sel ? d : 1'bx;",
+       "unsupported X constant (1'bx)"},
+      {"known_zero", "assign y = sel ? d : 1'b0;", nullptr},
+      {"undriven", "assign y = undriven;", nullptr, true},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    const std::string source =
+        "module literal_source(input logic clk, sel, d, output logic y);\n"
+        "  wire undriven;\n"
+        "  " + std::string(test.assignment) + "\n"
+        "endmodule\n"
+        "module top(input logic clk, sel, d, output logic bad, good);\n"
+        "  literal_source u_literals(.clk(clk), .sel(sel), .d(d), .y(bad));\n"
+        "  assign good = d;\n"
+        "endmodule\n";
+    const auto fixture = createEquivalentDesignFixture("sv", source);
+    const auto logPath = fixture.tmpDir / "unknown_constants.log";
+    const auto cfgPath = writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "sec_encoding: dual_rail_steady\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+    {
+      CurrentPathGuard currentPathGuard;
+      std::filesystem::current_path(fixture.tmpDir);
+      const auto run = runStructuredWithConfigFile(cfgPath);
+      const bool skipped = test.diagnostic != nullptr || test.undriven;
+      EXPECT_EQ(run.exitCode,
+                skipped ? kSecPartiallyProvedExitCode : kSecProvedExitCode);
+      EXPECT_EQ(run.result.totalOutputs, 2u);
+      EXPECT_EQ(run.result.coveredOutputs, skipped ? 1u : 2u);
+      EXPECT_EQ(run.result.provenOutputs, skipped ? 1u : 2u);
+      EXPECT_EQ(run.result.skippedObservedOutputs.size(), skipped ? 1u : 0u);
+      if (skipped && !run.result.skippedObservedOutputs.empty()) {
+        const auto& detail = run.result.skippedObservedOutputs.front();
+        EXPECT_NE(detail.find("bad[0]:"), std::string::npos);
+        if (test.diagnostic != nullptr) {
+          EXPECT_NE(detail.find("unknown-constant"), std::string::npos);
+          EXPECT_NE(detail.find(test.diagnostic), std::string::npos);
+          EXPECT_NE(detail.find("u_literals"), std::string::npos);
+          // The location belongs to the consuming assignment/expression,
+          // whose line is distinct from the module and net declarations.
+          EXPECT_TRUE(detail.find("design0.sv:3") != std::string::npos ||
+                      detail.find("design1.sv:3") != std::string::npos)
+              << detail;
+          EXPECT_EQ(detail.find("internal frontier term"), std::string::npos);
+          EXPECT_EQ(detail.find("no-driver connectivity"), std::string::npos);
+          const auto contents = readFileContents(logPath);
+          EXPECT_NE(contents.find(test.diagnostic), std::string::npos);
+        } else {
+          EXPECT_NE(detail.find("no-driver connectivity"), std::string::npos);
+          EXPECT_EQ(detail.find("unknown-constant"), std::string::npos);
+        }
+      }
+      KEPLER_FORMAL::cleanupKeplerFormalState();
+    }
+    std::filesystem::remove(cfgPath);
+    std::filesystem::remove_all(fixture.tmpDir);
+  }
+}
+
+TEST_F(KeplerFormalCliTests,
        CliSystemVerilogSecSharedDivModPrimitiveProvesEquivalent) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",
@@ -2736,6 +3719,100 @@ TEST_F(KeplerFormalCliTests,
             "(128/128 covered/existing outputs)."),
         std::string::npos);
   }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogVariableIndexMatchesExplicitMux) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module t(input [2:0] sel, input [7:0] d, output y);\n"
+      "  assign y = d[sel];\n"
+      "endmodule\n",
+      "module t(input [2:0] sel, input [7:0] d, output y);\n"
+      "  assign y = sel == 3'd0 ? d[0] : sel == 3'd1 ? d[1]\n"
+      "           : sel == 3'd2 ? d[2] : sel == 3'd3 ? d[3]\n"
+      "           : sel == 3'd4 ? d[4] : sel == 3'd5 ? d[5]\n"
+      "           : sel == 3'd6 ? d[6] : d[7];\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "variable_index_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string(),
+                     "--sv_design1_top",
+                     "t",
+                     "--sv_design2_top",
+                     "t",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr"}),
+        kSecProvedExitCode);
+  }
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogAutomaticVariableDynamicIndexMatchesModuleVariable) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module t(input [2:0] sel, input [7:0] flat, output logic q);\n"
+      "  always_comb begin\n"
+      "    automatic logic [7:0] tbl = flat;\n"
+      "    q = tbl[sel];\n"
+      "  end\n"
+      "endmodule\n",
+      "module t(input [2:0] sel, input [7:0] flat, output logic q);\n"
+      "  logic [7:0] tbl;\n"
+      "  always_comb begin\n"
+      "    tbl = flat;\n"
+      "    q = tbl[sel];\n"
+      "  end\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "automatic_variable_index_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal",
+                     "-sv",
+                     "--design1",
+                     fixture.design0Path.string(),
+                     "--design2",
+                     fixture.design1Path.string(),
+                     "--sv_design1_top",
+                     "t",
+                     "--sv_design2_top",
+                     "t",
+                     "-v",
+                     "sec",
+                     "--sec-engine",
+                     "pdr"}),
+        kSecProvedExitCode);
+
+    const auto logs = listMiterLogsInCurrentDirectory();
+    ASSERT_EQ(logs.size(), 1u);
+    const auto contents = readFileContents(runDir / logs.front());
+    EXPECT_NE(
+        contents.find(
+            "SEC checked-output coverage: 100.00% "
+            "(1/1 covered/existing outputs)."),
+        std::string::npos);
+    EXPECT_EQ(contents.find("no-driver connectivity"), std::string::npos);
+  }
+
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
@@ -3084,34 +4161,22 @@ TEST_F(KeplerFormalCliTests, ConfigSecReportsPartialObservedOutputCoverage) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigSecDifferenceLogIncludesWitnessDetails) {
-  const auto fixture = createDifferentSequentialNajaIfFixture();
-  const auto logPath = fixture.tmpDir / "sec_difference.log";
-  const auto cfgPath = writeTempConfig(
-      "format: naja_if\n"
-      "verification: sec\n"
-      "sec_encoding: dual_rail_steady\n"
-      "max_k: 2\n"
-      "input_paths:\n"
-      "  - " + fixture.design0IfPath.string() + "\n"
-      "  - " + fixture.design1IfPath.string() + "\n"
-      "log_file: " + logPath.string() + "\n");
+TEST_F(KeplerFormalCliTests, ConfigSecPdrDifferenceLogIncludesWitnessDetails) {
+  expectSecDifferenceLogIncludesWitnessDetails("pdr");
+}
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecCounterexampleExitCode);
-  ASSERT_TRUE(std::filesystem::exists(logPath));
-  const auto contents = readFileContents(logPath);
-  EXPECT_NE(contents.find("SEC counterexample details:"), std::string::npos);
-  EXPECT_NE(
-      contents.find("Exact PDR found a defined-value counterexample at k = "),
-      std::string::npos);
+TEST_F(KeplerFormalCliTests,
+       ConfigSecKInductionDifferenceLogIncludesWitnessDetails) {
+  expectSecDifferenceLogIncludesWitnessDetails("k_induction");
+}
 
-  std::filesystem::remove(cfgPath);
-  std::filesystem::remove_all(fixture.tmpDir);
+TEST_F(KeplerFormalCliTests, ConfigSecImcDifferenceLogIncludesWitnessDetails) {
+  expectSecDifferenceLogIncludesWitnessDetails("imc");
 }
 
 TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design = exampleDir / "tinyrocket.v";
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
   const auto lib1 = exampleDir / "fakeram45_1024x32.lib";
@@ -3241,25 +4306,18 @@ TEST_F(KeplerFormalCliTests, WriteBoundaryTermsReportFormatsEntries) {
       {.design = "design0", .signal = "clk[0]", .roles = {"top_input"}},
       {.design = "design0",
        .signal = "bad[0]",
-       .roles = {"top_output", "opaque_internal_output", "abstracted_sequential_observed"},
+       .roles = {"top_output"},
        .connectivitySkip = "logical-loop connectivity: cycle"}};
 
   writeBoundaryTermsReport(reportPath, reports);
 
   const auto content = readFileContents(reportPath);
   EXPECT_NE(content.find("# SEC boundary terms report"), std::string::npos);
-  EXPECT_NE(content.find("opaque_internal_input / opaque_internal_output"),
-            std::string::npos);
-  EXPECT_NE(content.find("abstracted_sequential_state / abstracted_sequential_observed"),
-            std::string::npos);
   EXPECT_NE(content.find("design: design0"), std::string::npos);
   EXPECT_NE(content.find("signal: clk[0]"), std::string::npos);
   EXPECT_NE(content.find("roles: [top_input]"), std::string::npos);
   EXPECT_NE(content.find("signal: bad[0]"), std::string::npos);
-  EXPECT_NE(
-      content.find(
-          "roles: [top_output, opaque_internal_output, abstracted_sequential_observed]"),
-      std::string::npos);
+  EXPECT_NE(content.find("roles: [top_output]"), std::string::npos);
   EXPECT_NE(
       content.find("connectivity_skip: logical-loop connectivity: cycle"),
       std::string::npos);
@@ -3341,6 +4399,41 @@ TEST_F(KeplerFormalCliTests, WriteMultiClockDomainSkippedOutputsReportSkipsEmpty
   const auto reportPath = tempDir / "skipped_multi_clock_domain_pos.txt";
 
   writeMultiClockDomainSkippedOutputsReport(reportPath, {});
+
+  EXPECT_FALSE(std::filesystem::exists(reportPath));
+  std::filesystem::remove_all(tempDir);
+}
+
+TEST_F(KeplerFormalCliTests, WriteOpaqueCellSkippedOutputsReportFormatsEntries) {
+  const auto tempDir =
+      makeUniqueTempDir("kepler_formal_cli_opaque_cell_report");
+  const auto reportPath = tempDir / "skipped_opaque_cells_pos.txt";
+
+  writeOpaqueCellSkippedOutputsReport(
+      reportPath,
+      {"bad[0]: design0 opaque-internal: opaque internal cell `u_opaque` "
+       "(model `OPAQUE`) pin `Y[0]`: no usable SEC model"});
+
+  const auto content = readFileContents(reportPath);
+  EXPECT_NE(content.find("# SEC opaque-cell skipped top-level outputs"),
+            std::string::npos);
+  EXPECT_NE(content.find("outputs were not verified"), std::string::npos);
+  EXPECT_NE(content.find("No free"), std::string::npos);
+  EXPECT_NE(content.find("bad[0]"), std::string::npos);
+  EXPECT_NE(content.find("u_opaque"), std::string::npos);
+  EXPECT_NE(content.find("OPAQUE"), std::string::npos);
+  EXPECT_NE(content.find("Y[0]"), std::string::npos);
+  EXPECT_NE(content.find("no usable SEC model"), std::string::npos);
+
+  std::filesystem::remove_all(tempDir);
+}
+
+TEST_F(KeplerFormalCliTests, WriteOpaqueCellSkippedOutputsReportSkipsEmptyEntries) {
+  const auto tempDir =
+      makeUniqueTempDir("kepler_formal_cli_empty_opaque_cell_report");
+  const auto reportPath = tempDir / "skipped_opaque_cells_pos.txt";
+
+  writeOpaqueCellSkippedOutputsReport(reportPath, {});
 
   EXPECT_FALSE(std::filesystem::exists(reportPath));
   std::filesystem::remove_all(tempDir);
@@ -3945,46 +5038,13 @@ TEST_F(KeplerFormalCliTests, CliRemovedKInductionAliasesAreRejectedBeforeFormat)
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, CliSecBoundaryFlagAcceptedBeforeFormat) {
-  SecBoundaryAbstractionGuard boundaryGuard;
-  const auto fixture = createEquivalentSequentialNajaIfFixture();
-
-  EXPECT_EQ(
-      runWithArgs({"kepler-formal",
-                   "-v",
-                   "sec",
-                   "-k",
-                   "4",
-                   "--sec-encoding",
-                   "dual_rail_steady",
-                   "--sec-uncomputable-seq-boundary",
-                   "-naja_if",
-                   fixture.design0IfPath.string(),
-                   fixture.design1IfPath.string()}),
-      kSecProvedExitCode);
-  EXPECT_TRUE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
-  std::filesystem::remove_all(fixture.tmpDir);
-}
-
-TEST_F(KeplerFormalCliTests, CliNoSecBoundaryFlagAcceptedBeforeFormat) {
-  SecBoundaryAbstractionGuard boundaryGuard;
-  const auto fixture = createEquivalentSequentialNajaIfFixture();
-
-  EXPECT_EQ(
-      runWithArgs({"kepler-formal",
-                   "-v",
-                   "sec",
-                   "-k",
-                   "4",
-                   "--sec-encoding",
-                   "dual_rail_steady",
-                   "--no-sec-uncomputable-seq-boundary",
-                   "-naja_if",
-                   fixture.design0IfPath.string(),
-                   fixture.design1IfPath.string()}),
-      kSecProvedExitCode);
-  EXPECT_FALSE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
-  std::filesystem::remove_all(fixture.tmpDir);
+TEST_F(KeplerFormalCliTests, CliRemovedSecBoundaryFlagsAreRejectedBeforeFormat) {
+  for (const char* flag : {"--sec-uncomputable-seq-boundary",
+                           "--no-sec-uncomputable-seq-boundary"}) {
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal", "-v", "sec", flag, "-verilog"}),
+        EXIT_FAILURE);
+  }
 }
 
 TEST_F(KeplerFormalCliTests, CliMissingVerificationAfterFormatFails) {
@@ -4048,46 +5108,13 @@ TEST_F(KeplerFormalCliTests, CliInvalidSecEncodingAfterFormatFails) {
       EXIT_FAILURE);
 }
 
-TEST_F(KeplerFormalCliTests, CliSecBoundaryFlagAcceptedAfterFormat) {
-  SecBoundaryAbstractionGuard boundaryGuard;
-  const auto fixture = createEquivalentSequentialNajaIfFixture();
-
-  EXPECT_EQ(
-      runWithArgs({"kepler-formal",
-                   "-naja_if",
-                   "-v",
-                   "sec",
-                   "-k",
-                   "4",
-                   "--sec-encoding",
-                   "dual_rail_steady",
-                   "--sec-uncomputable-seq-boundary",
-                   fixture.design0IfPath.string(),
-                   fixture.design1IfPath.string()}),
-      kSecProvedExitCode);
-  EXPECT_TRUE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
-  std::filesystem::remove_all(fixture.tmpDir);
-}
-
-TEST_F(KeplerFormalCliTests, CliNoSecBoundaryFlagAcceptedAfterFormat) {
-  SecBoundaryAbstractionGuard boundaryGuard;
-  const auto fixture = createEquivalentSequentialNajaIfFixture();
-
-  EXPECT_EQ(
-      runWithArgs({"kepler-formal",
-                   "-naja_if",
-                   "-v",
-                   "sec",
-                   "-k",
-                   "4",
-                   "--sec-encoding",
-                   "dual_rail_steady",
-                   "--no-sec-uncomputable-seq-boundary",
-                   fixture.design0IfPath.string(),
-                   fixture.design1IfPath.string()}),
-      kSecProvedExitCode);
-  EXPECT_FALSE(KEPLER_FORMAL::Config::getSecTreatUncomputableSeqAsBoundary());
-  std::filesystem::remove_all(fixture.tmpDir);
+TEST_F(KeplerFormalCliTests, CliRemovedSecBoundaryFlagsAreRejectedAfterFormat) {
+  for (const char* flag : {"--sec-uncomputable-seq-boundary",
+                           "--no-sec-uncomputable-seq-boundary"}) {
+    EXPECT_EQ(
+        runWithArgs({"kepler-formal", "-verilog", "-v", "sec", flag}),
+        EXIT_FAILURE);
+  }
 }
 
 TEST_F(KeplerFormalCliTests, CliSecPdrReportsCombinationalMismatchAtFrameZero) {
@@ -4811,7 +5838,7 @@ TEST_F(KeplerFormalCliTests, VerilogNoLibertyCreatesDbAndFailsOnSecondParse) {
 
 TEST_F(KeplerFormalCliTests, SnlScopesNoDifference) {
   const auto root = repoRoot();
-  const auto exampleDir = root / "example";
+  const auto exampleDir = root / "examples" / "tinyrocket";
   const auto design0 = copyNajaIfForCurrentBuild(
       exampleDir / "tinyrocket_naja.if", "kepler_scoped_naja_if");
   const auto lib0 = exampleDir / "NangateOpenCellLibrary_typical.lib";
@@ -4845,6 +5872,7 @@ TEST_F(KeplerFormalCliTests, SnlScopesEquivalentEditedScopeNoDifference) {
   ASSERT_TRUE(std::filesystem::exists(fixture.design0IfPath));
   ASSERT_TRUE(std::filesystem::exists(fixture.design1IfPath));
   ASSERT_TRUE(std::filesystem::exists(fixture.libertyPath));
+  const auto logPath = fixture.tmpDir / "structured_scoped.log";
 
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
@@ -4853,10 +5881,14 @@ TEST_F(KeplerFormalCliTests, SnlScopesEquivalentEditedScopeNoDifference) {
       "  - " + fixture.design1IfPath.string() + "\n"
       "liberty_files:\n"
       "  - " + fixture.libertyPath.string() + "\n"
-      "use_scopes: true\n");
+      "use_scopes: true\n"
+      "log_file: " + logPath.string() + "\n");
 
-  int rc = runWithConfigFile(cfgPath);
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(run.result.logFile, logPath.string());
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }

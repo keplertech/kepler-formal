@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "common/BoolExprUtils.h"
-#include "common/PrivateProofSymbol.h"
 
 namespace KEPLER_FORMAL::SEC {
 
@@ -212,11 +211,10 @@ size_t mapLazyTransitionSymbol(
       mappedIt != symbolMap.end()) {
     return mappedIt->second;
   }
-
-  const size_t privateSymbol =
-      makePrivateProofLeafSymbol(designIndex, localSymbol);
-  symbolMap.emplace(localSymbol, privateSymbol);
-  return privateSymbol;
+  throw std::runtime_error(
+      "SEC lazy transition for design" + std::to_string(designIndex) +
+      " contains unpublished internal support v" +
+      std::to_string(localSymbol));
 }
 
 std::set<size_t> remappedSupport(
@@ -370,9 +368,8 @@ BoolExpr* TransitionExprResolver::at(size_t stateSymbol) const {
     return remapped;
   }
 
-  // Populate design-private mappings for transition-only local support before
-  // materializing the lazy BoolExpr.  This keeps unmodeled internal leaves
-  // design-local without forcing a full transition remap during COI discovery.
+  // Validate the lazy transition support before materializing the BoolExpr.
+  // Extraction must have skipped every cone that reaches an internal frontier.
   (void)remappedSupport(
       source.localExpr,
       source.designIndex,

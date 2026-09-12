@@ -1,0 +1,122 @@
+# Copyright 2024-2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+[build-system]
+requires = ["scikit-build-core>=0.11.3,<0.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "kepler-formal"
+description = "Native Python interface for Kepler Formal equivalence checking"
+authors = [{name = "keplertech.io", email = "contact@keplertech.io"}]
+readme = "src/python/README.rst"
+requires-python = ">=3.10"
+license = {file = "LICENSE.rst"}
+dynamic = ["version"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+
+[project.urls]
+Homepage = "https://github.com/keplertech/kepler-formal"
+Repository = "https://github.com/keplertech/kepler-formal"
+
+[tool.scikit-build]
+install.components = ["python"]
+build.targets = ["kepler_formal_native"]
+
+[tool.scikit-build.cmake.define]
+CMAKE_BUILD_TYPE = "Release"
+BUILD_KEPLER_PYTHON = "ON"
+# The wheel hosts CPython, so the primary Naja runtime must use Module rather
+# than Embed.  The separately nested NajaEDA runtime is configured likewise.
+BUILD_NAJA_PYTHON = "ON"
+ENABLE_UNIT_TESTS = "OFF"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = 'project\(kepler-formal\s+VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
+
+[tool.cibuildwheel]
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+skip = ["*-musllinux_*", "*-win*"]
+test-command = "PYTHONPATH= python {project}/ci/check_kepler_wheel.py"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_28"
+before-all = '''
+  set -euo pipefail
+  dnf install -y bison boost-devel curl flex m4 ninja-build pkgconfig zlib-devel
+
+  # manylinux_2_28 provides Bison 3.0.4, which rejects naja-verilog's C++
+  # parser definition.  Install the same modern Bison series used by the
+  # successful macOS wheel build; /usr/local/bin precedes /usr/bin here.
+  curl --retry 5 --retry-delay 5 -fsSLo bison-3.8.2.tar.gz \
+    https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.gz
+  tar -xzf bison-3.8.2.tar.gz
+  cd bison-3.8.2
+  ./configure --prefix=/usr/local
+  make -j$(nproc)
+  make install
+  cd ..
+
+  curl --retry 5 --retry-delay 5 -fsSLo capnproto-c++-1.1.0.tar.gz \
+    https://capnproto.org/capnproto-c++-1.1.0.tar.gz
+  tar -xzf capnproto-c++-1.1.0.tar.gz
+  cd capnproto-c++-1.1.0
+  # Keep the static archives usable when nested NajaEDA links shared objects.
+  ./configure --with-pic
+  make -j$(nproc)
+  make install
+  cd ..
+
+  curl --retry 5 --retry-delay 5 -fsSLo oneTBB-2022.1.0.tar.gz \
+    https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2022.1.0.tar.gz
+  tar -xzf oneTBB-2022.1.0.tar.gz
+  cmake -S oneTBB-2022.1.0 -B oneTBB-build \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DTBB_TEST=OFF
+  cmake --build oneTBB-build -j$(nproc)
+  cmake --install oneTBB-build
+'''
+environment = { CMAKE_ARGS = "-DBISON_EXECUTABLE=/usr/local/bin/bison" }
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+before-all = '''
+  set -euo pipefail
+  export MACOSX_DEPLOYMENT_TARGET=11.0
+  brew install bison boost cmake flex ninja pkg-config
+
+  curl --retry 5 --retry-delay 5 -fsSLo capnproto-c++-1.1.0.tar.gz \
+    https://capnproto.org/capnproto-c++-1.1.0.tar.gz
+  tar -xzf capnproto-c++-1.1.0.tar.gz
+  cd capnproto-c++-1.1.0
+  MACOSX_DEPLOYMENT_TARGET=11.0 ./configure
+  make -j$(sysctl -n hw.ncpu)
+  sudo make install
+  cd ..
+
+  curl --retry 5 --retry-delay 5 -fsSLo oneTBB-2022.1.0.tar.gz \
+    https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2022.1.0.tar.gz
+  tar -xzf oneTBB-2022.1.0.tar.gz
+  cmake -S oneTBB-2022.1.0 -B oneTBB-build \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DTBB_TEST=OFF
+  cmake --build oneTBB-build -j$(sysctl -n hw.ncpu)
+  sudo cmake --install oneTBB-build
+'''
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", PATH = "/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH" }
+repair-wheel-command = "delocate-wheel --require-archs arm64 -w {dest_dir} {wheel}"

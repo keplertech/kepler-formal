@@ -17,14 +17,18 @@ class SNLLogicCloud {
     MultiDriver,
     NoDriver,
     LogicalLoop,
+    OpaqueInternal,
   };
 
   SNLLogicCloud(naja::DNL::DNLID seedOutputTerm,
                 const std::vector<bool>& PIs,
                 const std::vector<bool>& POs,
+                bool stopAtOpaqueInternalOutputs = false,
                 bool outputConeAcyclic = false)
       : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()),
-        PIs_(PIs), POs_(POs), outputConeAcyclic_(outputConeAcyclic) {
+        PIs_(PIs), POs_(POs),
+        stopAtOpaqueInternalOutputs_(stopAtOpaqueInternalOutputs),
+        outputConeAcyclic_(outputConeAcyclic) {
   }
   void compute();
   static void flushSkippedPOReports();
@@ -32,6 +36,9 @@ class SNLLogicCloud {
   bool isOutput(naja::DNL::DNLID inputTerm);
   SkipReason getSkipReason() const { return skipReason_; }
   const std::string& getSkipReasonText() const { return skipReasonText_; }
+  naja::DNL::DNLID getOpaqueInternalTerm() const {
+    return opaqueInternalTerm_;
+  }
   SNLTruthTableTree& getTruthTable() { return table_; }
   const std::vector<naja::DNL::DNLID, tbb::tbb_allocator<naja::DNL::DNLID>>& getInputs() const {
     return currentIterationInputs_;
@@ -96,6 +103,7 @@ class SNLLogicCloud {
       naja::DNL::DNLID termID,
       const std::shared_ptr<const std::vector<naja::DNL::DNLID>>&
           termIsoIDs) const;
+  bool rejectOpaqueInternalOutput(naja::DNL::DNLID termID);
 
   naja::DNL::DNLID seedOutputTerm_;
   TermIDVector currentIterationInputs_;
@@ -103,9 +111,11 @@ class SNLLogicCloud {
   const naja::DNL::DNLFull& dnl_;
   const std::vector<bool>& PIs_;
   const std::vector<bool>& POs_;
+  bool stopAtOpaqueInternalOutputs_ = false;
   bool outputConeAcyclic_ = false;
   SkipReason skipReason_ = SkipReason::None;
   std::string skipReasonText_;
+  naja::DNL::DNLID opaqueInternalTerm_ = naja::DNL::DNLID_MAX;
 };
 
 }  // namespace KEPLER_FORMAL

@@ -705,11 +705,14 @@ void ensureModelIsUsable(const SequentialDesignModel &model,
                            " extraction is unsupported: " +
                            joinStrings(model.unsupportedReasons, "; "));
   }
-  if (!model.abstractedSequentialBoundaries.empty() ||
-      !model.internalBoundaryInputKeys.empty() ||
-      !model.internalBoundaryOutputKeys.empty()) {
+  if (std::any_of(
+          model.connectivitySkipInfoByKey.begin(),
+          model.connectivitySkipInfoByKey.end(),
+          [](const auto &entry) {
+            return entry.second.origin == SEC::ConnectivitySkipOrigin::OpaqueInternal;
+          })) {
     throw UnsupportedC2Rtl(std::string("C2RTL ") + label +
-                           " contains an abstracted or opaque boundary");
+                           " contains an opaque boundary");
   }
   if (!model.skippedObservedOutputs.empty() ||
       model.observedOutputs.size() != model.topOutputKeys.size()) {

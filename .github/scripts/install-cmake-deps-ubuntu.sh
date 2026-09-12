@@ -11,8 +11,14 @@ ubuntu_codename="${VERSION_CODENAME:-jammy}"
 llvm_keyring="/usr/share/keyrings/llvm-snapshot.gpg"
 llvm_list="/etc/apt/sources.list.d/llvm-toolchain-${ubuntu_codename}-${llvm_version}.list"
 
-sudo apt-get update
-sudo apt-get install -yq ca-certificates curl gnupg lsb-release
+apt_options=(
+  -o Acquire::Retries=3
+  -o Acquire::http::Timeout=30
+  -o Acquire::https::Timeout=30
+  -o DPkg::Lock::Timeout=60
+)
+sudo apt-get "${apt_options[@]}" update
+sudo apt-get "${apt_options[@]}" install -yq ca-certificates curl gnupg lsb-release
 
 if [[ ! -f "${llvm_keyring}" ]]; then
   curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
@@ -22,8 +28,8 @@ printf 'deb [signed-by=%s] https://apt.llvm.org/%s/ llvm-toolchain-%s-%s main\n'
   "${llvm_keyring}" "${ubuntu_codename}" "${ubuntu_codename}" "${llvm_version}" \
   | sudo tee "${llvm_list}" >/dev/null
 
-sudo apt-get update
-sudo apt-get install -yq \
+sudo apt-get "${apt_options[@]}" update
+sudo apt-get "${apt_options[@]}" install -yq \
   build-essential cmake ninja-build pkg-config curl ca-certificates \
   bison flex doxygen python3-dev \
   "clang-${llvm_version}" "clang-tools-${llvm_version}" \

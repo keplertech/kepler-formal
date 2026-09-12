@@ -1,0 +1,13 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+format: verilog
+verification: lec
+input_paths:
+  - vexriscv_genfull_xilinx.v
+  - vexriscv_genfull_xilinx.v
+verilog_design1_top: vexriscv.demo.GenFull
+verilog_design2_top: vexriscv.demo.GenFull
+py_tech_files:
+  - ../xilinx.py
+solver: kissat

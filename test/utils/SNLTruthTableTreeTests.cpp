@@ -856,7 +856,9 @@ TEST(SNLTruthTableTreeEval_Additions, EvaluatesNestedTableChild) {
 TEST(Tree2BoolExprGenericCoverageTest, TableSelectCollapsesMatchingBranches) {
   auto* address = BoolExpr::Var(10);
   auto* sharedData = BoolExpr::Var(20);
-  setChildExpressions({address, sharedData, sharedData});
+  // TABLE_SELECT dependencies arrive in flattened model-term order: DATA
+  // (highest row first), followed by ADDR (most-significant bit first).
+  setChildExpressions({sharedData, sharedData, address});
 
   const auto table =
       SNLTruthTable::TableSelect(1, 2, SNLTruthTable::fullDependencies(3));
@@ -870,11 +872,11 @@ TEST(Tree2BoolExprGenericCoverageTest, TableSelectCollapsesMatchingBranches) {
 TEST(Tree2BoolExprGenericCoverageTest, TableSelectPrunesWideOutOfRangePrefixes) {
   std::vector<BoolExpr*> children;
   children.reserve(65);
+  auto* data0 = BoolExpr::Var(200);
+  children.push_back(data0);
   for (size_t i = 0; i < 64; ++i) {
     children.push_back(BoolExpr::Var(100 + i));
   }
-  auto* data0 = BoolExpr::Var(200);
-  children.push_back(data0);
   setChildExpressions(children);
 
   const auto table =
@@ -883,6 +885,51 @@ TEST(Tree2BoolExprGenericCoverageTest, TableSelectPrunesWideOutOfRangePrefixes) 
 
   EXPECT_NE(expr, nullptr);
   EXPECT_NE(expr, BoolExpr::createFalse());
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, TableSelectUsesFlatModelTermOrder) {
+  constexpr uint32_t addressSize = 3;
+  constexpr uint32_t depth = 8;
+  constexpr size_t dataVarBase = 100;
+  constexpr size_t addressVarBase = 200;
+
+  std::vector<BoolExpr*> children;
+  children.reserve(addressSize + depth);
+  // DATA[7:0] precedes ADDR[2:0] in the DB0 model and both buses are
+  // flattened from MSB to LSB.
+  for (uint32_t row = depth; row-- > 0;) {
+    children.push_back(BoolExpr::Var(dataVarBase + row));
+  }
+  for (uint32_t bit = addressSize; bit-- > 0;) {
+    children.push_back(BoolExpr::Var(addressVarBase + bit));
+  }
+  setChildExpressions(children);
+
+  const auto table = SNLTruthTable::TableSelect(
+      addressSize,
+      depth,
+      SNLTruthTable::fullDependencies(addressSize + depth));
+  auto* expr = buildGenericTruthTableExpr(table, addressSize + depth);
+  ASSERT_NE(expr, nullptr);
+
+  for (uint32_t data = 0; data < (1u << depth); ++data) {
+    for (uint32_t address = 0; address < depth; ++address) {
+      SCOPED_TRACE(
+          ::testing::Message() << "data=" << data << " address=" << address);
+      std::unordered_map<size_t, bool> values;
+      for (uint32_t row = 0; row < depth; ++row) {
+        values.emplace(dataVarBase + row, (data & (1u << row)) != 0);
+      }
+      for (uint32_t bit = 0; bit < addressSize; ++bit) {
+        values.emplace(
+            addressVarBase + bit, (address & (1u << bit)) != 0);
+      }
+      EXPECT_EQ(expr->evaluate(values), (data & (1u << address)) != 0);
+    }
+  }
+
   clearChildFETS();
   BoolExprCache::destroy();
 }

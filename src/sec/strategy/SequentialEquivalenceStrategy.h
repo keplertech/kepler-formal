@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../../config/Config.h"
+#include "export/Btor2ExportOptions.h"
 
 namespace naja::NL {
 class SNLDesign;
@@ -33,6 +34,21 @@ enum class SequentialEquivalenceStatus {
   Different,
   Inconclusive,
   Unsupported,
+  Exported,
+};
+
+struct SecResetPortSpec {
+  std::string name;
+  bool activeValue = true;
+};
+
+struct SecResetSpec {
+  size_t cycles = 0;
+  std::vector<SecResetPortSpec> ports;
+
+  bool enabled() const {
+    return cycles != 0 && !ports.empty();
+  }
 };
 
 struct ExtractedBoundaryReportEntry {  // LCOV_EXCL_LINE
@@ -64,7 +80,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
   std::vector<std::string> skippedObservedOutputs;
   std::vector<std::string> resetUnanchoredSkippedOutputs;
   std::vector<std::string> multiClockDomainSkippedOutputs;
-  std::vector<std::string> abstractedSequentialBoundaries;
+  std::vector<std::string> opaqueCellSkippedOutputs;
   std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
 
   double outputCoveragePercent() const {
@@ -90,7 +106,9 @@ class SequentialEquivalenceStrategy {
       KEPLER_FORMAL::Config::SolverType solverType =
           KEPLER_FORMAL::Config::getSolverType(),
       SecEngine secEngine = SecEngine::Pdr,
-      SecEncoding encoding = SecEncoding::DualRailSteady);
+      SecEncoding encoding = SecEncoding::DualRailSteady,
+      SecResetSpec resetSpec = {},
+      Btor2ExportOptions exportOptions = {});
 
   SequentialEquivalenceResult run(size_t maxK) const;
   SequentialEquivalenceResult runExtractedModels(
@@ -104,6 +122,8 @@ class SequentialEquivalenceStrategy {
   KEPLER_FORMAL::Config::SolverType solverType_;
   SecEngine secEngine_;
   SecEncoding encoding_;
+  SecResetSpec resetSpec_;
+  Btor2ExportOptions exportOptions_;
 };
 
 namespace detail {

@@ -7,11 +7,13 @@ cc_library(
         "BoolExpr.cpp",
         "BoolExprCache.cpp",
         "BoolExprCnfWriter.cpp",
+        "Btor2Writer.cpp",
     ],
     hdrs = [
         "BoolExpr.h",
         "BoolExprCache.h",
         "BoolExprCnfWriter.h",
+        "Btor2Writer.h",
     ],
     includes = ["."],
     visibility = ["//visibility:public"],

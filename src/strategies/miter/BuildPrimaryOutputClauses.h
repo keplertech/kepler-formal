@@ -42,12 +42,18 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
     NoDriver,
     MultiDriver,
     LogicalLoop,
+    OpaqueInternal,
+    UnknownConstant,
   };
 
   struct SkippedOutputInfo {  // LCOV_EXCL_LINE
     SkippedOutputReason reason = SkippedOutputReason::None;
     std::string detail;
+    naja::DNL::DNLID opaqueTerm = naja::DNL::DNLID_MAX;
   };
+
+  static SkippedOutputInfo describeUnmappedTerm(
+      naja::DNL::DNLID termID, std::string fallbackDetail);
 
   BuildPrimaryOutputClauses() = default;
   void collect();
@@ -77,6 +83,9 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
     setOutputs2OutputsIDs();
   }
   void setRetainDnl(bool retain) { retainDnl_ = retain; }
+  void setStopAtOpaqueInternalOutputs(bool stop) {
+    stopAtOpaqueInternalOutputs_ = stop;
+  }
   const std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash>&
   getInputsMap() const {
     return inputsMap_;
@@ -129,6 +138,7 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   std::vector<size_t> termDNLID2varID_;  // Only for PIs
   size_t lastCommonID = 1;
   std::unordered_map<naja::DNL::DNLID, SkippedOutputInfo> skippedOutputs_;
+  bool stopAtOpaqueInternalOutputs_ = false;
   mutable std::mutex skippedOutputsMutex_;
 
   struct hash {

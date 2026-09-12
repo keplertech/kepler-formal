@@ -24,7 +24,10 @@ GTEST_DISCOVER_TESTS(
 
 add_executable(keplerFormalCliTests
     KeplerFormalCliTests.cpp
+    Btor2ExportCliTests.cpp
+    Btor2ExportDriverTests.cpp
     ${CMAKE_SOURCE_DIR}/src/bin/KeplerFormal.cpp
+    ${CMAKE_SOURCE_DIR}/src/bin/Btor2ExportConfig.cpp
 )
 
 target_compile_definitions(keplerFormalCliTests PRIVATE KEPLER_FORMAL_NO_MAIN)
@@ -55,7 +58,11 @@ else()
     target_link_libraries(keplerFormalCliTests PRIVATE ${GTEST_LIBRARIES})
 endif()
 
-GTEST_DISCOVER_TESTS(keplerFormalCliTests)
+add_dependencies(keplerFormalCliTests kepler-formal)
+GTEST_DISCOVER_TESTS(
+    keplerFormalCliTests
+    PROPERTIES ENVIRONMENT "KEPLER_BIN=$<TARGET_FILE:kepler-formal>"
+)
 
 # TinyRocket is an intentionally large end-to-end SEC test.  Remove CTest's
 # global timeout for this test alone so slower runners can reach its verdict.

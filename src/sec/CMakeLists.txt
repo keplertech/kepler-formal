@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 add_library(kepler_sec STATIC
+    export/SecBtor2Exporter.cpp
     common/BoolExprUtils.cpp
     common/ProofProblemDebug.cpp
     imc/CraigInterpolatingModelChecker.cpp
@@ -9,6 +10,7 @@ add_library(kepler_sec STATIC
     imc/IMCEngine.cpp
     kinduction/KInductionEngine.cpp
     kinduction/OutputBatching.cpp
+    model/SecNetlistChecks.cpp
     model/SequentialDesignModel.cpp
     pdr/PDREngine.cpp
     proof/DualRailEncoding.cpp

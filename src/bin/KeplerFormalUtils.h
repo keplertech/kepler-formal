@@ -29,3 +29,7 @@ void writeResetUnanchoredSkippedOutputsReport(
 void writeMultiClockDomainSkippedOutputsReport(
     const std::filesystem::path& reportPath,
     const std::vector<std::string>& skippedOutputs);
+
+void writeOpaqueCellSkippedOutputsReport(
+    const std::filesystem::path& reportPath,
+    const std::vector<std::string>& skippedOutputs);
