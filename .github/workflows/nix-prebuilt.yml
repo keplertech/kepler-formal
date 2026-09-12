@@ -1,0 +1,75 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: nix-prebuilt
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Published branch or tag to install (must already be cached)
+        type: string
+        required: true
+        default: main
+      revision:
+        description: Optional published commit SHA (defaults to the current ref)
+        type: string
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      revision:
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install ${{ matrix.system }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: x86_64-linux
+          - os: macos-latest
+            system: aarch64-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      # These are fresh runners, not the jobs that built/published the package.
+      # Only the smoke-test scripts are needed from the checkout.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.35.1/install
+          enable_kvm: false
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = 0
+            builders =
+            allow-import-from-derivation = false
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: keplertech
+          skipPush: true
+      - name: Install and test the public prebuilt CLI (no builds)
+        shell: bash
+        env:
+          INSTALL_REF: ${{ inputs.ref }}
+          PUBLISHED_SHA: ${{ inputs.revision }}
+        run: |
+          flake="git+https://github.com/keplertech/kepler-formal?ref=$INSTALL_REF"
+          if [[ -n "$PUBLISHED_SHA" ]]; then
+            # Pin the publication's exact revision even if its branch moves.
+            flake="$flake&rev=$PUBLISHED_SHA"
+          fi
+          bash nix/check-prebuilt.sh "$flake"
