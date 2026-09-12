@@ -61,7 +61,6 @@ struct ModelInputLayoutKeyHash {
 
 struct ModelInputLayout {
   bool isMux2 = false;
-  bool isTableSelect = false;
   bool isAssign = false;
   size_t bitTermCount = 0;
   std::vector<size_t> nonOutputTermFlatIDs;
@@ -242,7 +241,6 @@ const ModelInputLayout& getModelInputLayout(const DNLFull& dnl,
   ModelInputLayout layout;
   if (model != nullptr) {
     layout.isMux2 = NLDB0::isMux2(model);
-    layout.isTableSelect = NLDB0::isTableSelect(model);
     layout.isAssign = NLDB0::isAssign(model);
     layout.nonOutputTermFlatIDs.reserve(model->getBitTerms().size());
     for (const auto* term : model->getBitTerms()) {
@@ -800,7 +798,9 @@ naja::DNL::DNLID SNLLogicCloud::resolveInstanceInputTerm(
   const auto& inputTerm =
       dnl_.getDNLTerminalFromID(termIndexes.first + flatTermID);
   if (inputTerm.isNull() || inputTerm.getSnlBitTerm() == nullptr ||
-      inputTerm.getSnlBitTerm()->getOrderID() != flatTermID) {
+      inputTerm.getSnlBitTerm()->getOrderID() != flatTermID ||
+      inputTerm.getSnlBitTerm()->getDirection() ==
+          SNLBitTerm::Direction::Output) {
     // LCOV_EXCL_START
     // LCOV_DISABLED_START
     std::ostringstream error;
@@ -823,14 +823,16 @@ size_t SNLLogicCloud::getRelevantInstanceInputCount(
     naja::DNL::DNLID driver) const {
   const auto& inst = dnl_.getDNLTerminalFromID(driver).getDNLInstance();
   const auto& layout = getModelInputLayout(dnl_, inst.getSNLModel());
-  if (layout.isTableSelect) {
+  if (!layout.isMux2) {
     const auto* model = inst.getSNLModel();
     const auto& tt = getTruthTableCached(
         model,
         inst.getSNLInstance(),
         dnl_.getDNLTerminalFromID(driver).getSnlBitTerm()->getOrderID());
-    return naja::NL::NLBitDependencies::countBitsForVector(
-        tt.getDependencies());
+    if (tt.isInitialized()) {
+      return naja::NL::NLBitDependencies::countBitsForVector(
+          tt.getDependencies());
+    }
   }
   return layout.isMux2 ? size_t{3} : layout.nonOutputTermFlatIDs.size();
 }
@@ -842,18 +844,21 @@ void SNLLogicCloud::appendRelevantInstanceInputs(
   const auto& inst = driverTerm.getDNLInstance();
   const auto* model = inst.getSNLModel();
   const auto& layout = getModelInputLayout(dnl_, model);
-  if (layout.isTableSelect) {
+  if (!layout.isMux2) {
     const auto& tt = getTruthTableCached(
         model, inst.getSNLInstance(), driverTerm.getSnlBitTerm()->getOrderID());
-    const auto deps = naja::NL::NLBitDependencies::decodeBits(
-        tt.getDependencies());
-    for (size_t flatTermID : deps) {
-      relevantTerms.emplace_back(resolveInstanceInputTerm(
-          inst, flatTermID, driver, "table select dependency"));
+    if (tt.isInitialized()) {
+      // Each output can use a different subset of the cell's inputs. These
+      // are model flat term IDs, including gaps for interleaved output pins;
+      // ascending IDs match the truth table's least-significant variable first.
+      const auto deps = naja::NL::NLBitDependencies::decodeBits(
+          tt.getDependencies());
+      for (size_t flatTermID : deps) {
+        relevantTerms.emplace_back(resolveInstanceInputTerm(
+            inst, flatTermID, driver, "truth table dependency"));
+      }
+      return;
     }
-    return;
-  }
-  if (!layout.isMux2) {
     for (size_t flatTermID : layout.nonOutputTermFlatIDs) {
       relevantTerms.emplace_back(resolveInstanceInputTerm(
           inst, flatTermID, driver, "instance dependency"));

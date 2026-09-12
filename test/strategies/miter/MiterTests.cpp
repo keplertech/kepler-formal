@@ -8,9 +8,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 #include <spdlog/spdlog.h>
 
@@ -440,6 +442,87 @@ class MiterTests : public ::testing::Test {
 
   std::filesystem::path testTempPath(const std::string& leaf) const {
     return tempDir_ / leaf;
+  }
+
+  using ScalarTruthAssignment = std::unordered_map<std::string, bool>;
+
+  // Evaluate independently specified Boolean functions through the full
+  // Liberty -> logic cloud -> BoolExpr path, including every primary output.
+  void expectScalarPrimitiveTruthTable(
+      SNLDesign* model,
+      const std::function<bool(const std::string&,
+                               const ScalarTruthAssignment&)>& expected) {
+    auto* universe = NLUniverse::get();
+    auto* designs = NLLibrary::create(
+        model->getLibrary()->getDB(), NLLibrary::Type::Standard,
+        NLName("truth_table_test_designs"));
+    auto* top = SNLDesign::create(designs, NLName("truth_table_top"));
+    auto* instance = SNLInstance::create(top, model, NLName("gate0"));
+    std::vector<std::string> inputNames;
+    size_t outputCount = 0;
+    for (auto* modelTerm : model->getBitTerms()) {
+      auto* term = SNLScalarTerm::create(
+          top, modelTerm->getDirection(), modelTerm->getName());
+      auto* net = SNLScalarNet::create(top, modelTerm->getName());
+      term->setNet(net);
+      instance->getInstTerm(modelTerm)->setNet(net);
+      if (modelTerm->getDirection() == SNLTerm::Direction::Input) {
+        inputNames.push_back(modelTerm->getName().getString());
+      } else {
+        ASSERT_EQ(SNLTerm::Direction::Output, modelTerm->getDirection());
+        ++outputCount;
+      }
+    }
+    ASSERT_LT(inputNames.size(), 8u);
+    universe->setTopDesign(top);
+    BuildPrimaryOutputClauses builder;
+    builder.setRetainDnl(true);
+    builder.collect();
+    builder.build();
+    ASSERT_EQ(builder.getOutputs().size(), builder.getPOs().size());
+    ASSERT_TRUE(builder.getSkippedOutputs().empty());
+    std::vector<size_t> topOutputs;
+    for (size_t output = 0; output < builder.getOutputs().size(); ++output) {
+      const auto& term = naja::DNL::get()->getDNLTerminalFromID(
+          builder.getOutputs()[output]);
+      // Inputs unused by every output also form internal LEC endpoints.
+      // Check the actual top outputs without assuming there are no others.
+      if (!term.isTopPort()) {
+        continue;
+      }
+      topOutputs.push_back(output);
+      auto* expression = builder.getPOs()[output];
+      ASSERT_NE(nullptr, expression);
+      ASSERT_TRUE(expression->isValid());
+    }
+    ASSERT_EQ(outputCount, topOutputs.size());
+    for (size_t pattern = 0; pattern < (size_t{1} << inputNames.size()); ++pattern) {
+      SCOPED_TRACE(::testing::Message() << "pattern=" << pattern);
+      ScalarTruthAssignment inputs;
+      for (size_t bit = 0; bit < inputNames.size(); ++bit) {
+        inputs.emplace(inputNames[bit], (pattern & (size_t{1} << bit)) != 0);
+      }
+      std::unordered_map<size_t, bool> values;
+      for (auto termID : builder.getInputs()) {
+        const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
+        const auto variable = builder.getTermDNLID2VarID().at(termID);
+        if (!term.isTopPort()) {
+          // Constant outputs are collected as internal inputs but use the
+          // reserved constant IDs, not unconstrained Boolean variables.
+          ASSERT_LE(variable, 1u);
+          continue;
+        }
+        values.emplace(variable,
+                       inputs.at(term.getSnlBitTerm()->getName().getString()));
+      }
+      for (size_t output : topOutputs) {
+        const auto& term = naja::DNL::get()->getDNLTerminalFromID(
+            builder.getOutputs()[output]);
+        const auto name = term.getSnlBitTerm()->getName().getString();
+        EXPECT_EQ(expected(name, inputs), builder.getPOs()[output]->evaluate(values))
+            << "output=" << name;
+      }
+    }
   }
 
   std::filesystem::path tempDir_;
@@ -938,8 +1021,7 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
       passModel, SNLTerm::Direction::Output, NLName("y"));
   SNLDesignModeling::setTruthTable(
       passModel,
-      SNLTruthTable(3, 0xF0,
-                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+      SNLTruthTable(1, 2, NLBitDependencies::encodeBits({0})));
 
   auto inst = SNLInstance::create(top, passModel, NLName("u0"));
   auto netA = SNLScalarNet::create(top, NLName("net_a"));
@@ -1020,8 +1102,7 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
       passModel, SNLTerm::Direction::Output, NLName("y"));
   SNLDesignModeling::setTruthTable(
       passModel,
-      SNLTruthTable(2, 0b1100,
-                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+      SNLTruthTable(1, 2, NLBitDependencies::encodeBits({0})));
 
   auto const0 = SNLInstance::create(top, logic0, NLName("const0"));
   auto const1 = SNLInstance::create(top, logic1, NLName("const1"));
@@ -1108,8 +1189,7 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesInitializesSkippedPOReportFilesOnlyO
       passModel, SNLTerm::Direction::Output, NLName("y"));
   SNLDesignModeling::setTruthTable(
       passModel,
-      SNLTruthTable(2, 0b1100,
-                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+      SNLTruthTable(1, 2, NLBitDependencies::encodeBits({0})));
 
   auto const0 = SNLInstance::create(top, logic0, NLName("const0"));
   auto const1 = SNLInstance::create(top, logic1, NLName("const1"));
@@ -1559,8 +1639,7 @@ TEST_F(MiterTests, SNLLogicCloudReportsSkippedNoDriverRoot) {
       passModel, SNLTerm::Direction::Output, NLName("y"));
   SNLDesignModeling::setTruthTable(
       passModel,
-      SNLTruthTable(2, 0b1100,
-                    NLBitDependencies::encodeBits(std::vector<size_t>{0})));
+      SNLTruthTable(2, 0b1100, SNLTruthTable::fullDependencies(2)));
 
   auto inst = SNLInstance::create(top, passModel, NLName("u0"));
   auto netA = SNLScalarNet::create(top, NLName("net_a"));
@@ -2072,7 +2151,7 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   }
 }
 
-TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
+TEST_F(MiterTests, ReducedTruthTableArityUsesOnlyDeclaredInput) {
   NLUniverse* univ = NLUniverse::create();
   NLDB* db = NLDB::create(univ);
   NLLibrary* libraryDesigns =
@@ -2092,7 +2171,7 @@ TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
       buf2Model,
       SNLTruthTable(1, 2, NLBitDependencies::encodeBits(std::vector<size_t>{0})));
 
-  auto buildTop = [&](const char* topName) {
+  auto buildTop = [&](const char* topName, bool useCell, bool wrongReference) {
     auto top = SNLDesign::create(
         libraryDesigns, SNLDesign::Type::Standard, NLName(topName));
     univ->setTopDesign(top);
@@ -2104,36 +2183,255 @@ TEST_F(MiterTests, ReducedTruthTableArityStillQueuesAllInstanceInputs) {
     auto topOut =
         SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
 
-    auto inst = SNLInstance::create(top, buf2Model, NLName("buf2"));
-
     auto netA = SNLScalarNet::create(top, NLName("net_a"));
     auto netB = SNLScalarNet::create(top, NLName("net_b"));
-    auto netOut = SNLScalarNet::create(top, NLName("net_out"));
-
     topA->setNet(netA);
     topB->setNet(netB);
-    topOut->setNet(netOut);
-
-    inst->getInstTerm(bufIn1)->setNet(netA);
-    inst->getInstTerm(bufIn2)->setNet(netB);
-    inst->getInstTerm(bufOut)->setNet(netOut);
+    if (useCell) {
+      auto* inst = SNLInstance::create(top, buf2Model, NLName("buf2"));
+      auto* netOut = SNLScalarNet::create(top, NLName("net_out"));
+      topOut->setNet(netOut);
+      inst->getInstTerm(bufIn1)->setNet(netA);
+      inst->getInstTerm(bufIn2)->setNet(netB);
+      inst->getInstTerm(bufOut)->setNet(netOut);
+    } else {
+      // The reference is direct wiring, so it cannot share the cell's
+      // dependency mapping bug. The negative reference selects the unused pin.
+      topOut->setNet(wrongReference ? netB : netA);
+    }
 
     return top;
   };
 
-  auto top = buildTop("top");
-  auto topClone = top->clone(NLName("topClone"));
-  MiterStrategy MiterS(top, topClone, "ReducedTruthTableArity");
-  MiterS.init();
+  auto* top = buildTop("top", true, false);
+  auto* reference = buildTop("reference", false, false);
+  auto* wrongReference = buildTop("wrong_reference", false, true);
+  {
+    MiterStrategy miter(top, reference, testTempPath("reduced_tt.log").string());
+    miter.init();
+    EXPECT_TRUE(miter.run());
+  }
+  {
+    MiterStrategy miter(
+        top, wrongReference, testTempPath("reduced_tt_wrong_input.log").string());
+    miter.init();
+    EXPECT_FALSE(miter.run());
+  }
+}
+
+TEST_F(MiterTests, TruthTableArityMustMatchDependencyCount) {
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* library = NLLibrary::create(
+      db, NLLibrary::Type::Primitives, NLName("malformed_tt"));
+  auto* model = SNLDesign::create(
+      library, SNLDesign::Type::Primitive, NLName("BAD_TT"));
+  auto* a = SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("a"));
+  auto* b = SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("b"));
+  auto* y = SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("y"));
+  // There is no third input to supply the table's third variable. This is
+  // malformed metadata, unlike an arity-one table explicitly depending on a.
+  SNLDesignModeling::setTruthTable(
+      model, SNLTruthTable(3, 0x80, NLBitDependencies::encodeBits({0, 1})));
+  auto* designs = NLLibrary::create(db, NLName("designs"));
+  auto* top = SNLDesign::create(designs, NLName("top"));
+  auto* instance = SNLInstance::create(top, model, NLName("bad0"));
+  for (auto* pin : {a, b, y}) {
+    auto* term = SNLScalarTerm::create(top, pin->getDirection(), pin->getName());
+    auto* net = SNLScalarNet::create(top, pin->getName());
+    term->setNet(net);
+    instance->getInstTerm(pin)->setNet(net);
+  }
+  universe->setTopDesign(top);
+  auto* clone = top->clone(NLName("clone"));
+  MiterStrategy miter(top, clone, testTempPath("malformed_tt.log").string());
+  miter.init();
   try {
-    (void)MiterS.run();
+    (void)miter.run();
     FAIL() << "Expected arity mismatch runtime_error";
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
     EXPECT_NE(message.find("SNLLogicCloud arity mismatch"), std::string::npos);
-    EXPECT_NE(message.find("TT arity=1"), std::string::npos);
+    EXPECT_NE(message.find("TT arity=3"), std::string::npos);
     EXPECT_NE(message.find("model non-output term count=2"), std::string::npos);
   }
+}
+
+TEST_F(MiterTests, TruthTableDependenciesRejectOutputsAndOutOfRangeTerms) {
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* primitives = NLLibrary::create(
+      db, NLLibrary::Type::Primitives, NLName("malformed_dependencies"));
+  auto* designs = NLLibrary::create(db, NLName("designs"));
+  for (size_t dependency : {size_t{1}, size_t{8}}) {
+    SCOPED_TRACE(::testing::Message() << "dependency=" << dependency);
+    auto* model = SNLDesign::create(
+        primitives, SNLDesign::Type::Primitive,
+        NLName("BAD_DEP_" + std::to_string(dependency)));
+    auto* a = SNLScalarTerm::create(
+        model, SNLTerm::Direction::Input, NLName("a"));
+    auto* y = SNLScalarTerm::create(
+        model, SNLTerm::Direction::Output, NLName("y"));
+    // Simulate corrupted serialized metadata. The public setter already
+    // rejects both an output dependency (1) and an out-of-range one (8).
+    auto* property = naja::NajaDumpableProperty::create(
+        model, "SNLDesignTruthTableProperty");
+    property->addUInt64Value(1);
+    property->addUInt64Value(2);
+    property->addUInt64Value(uint64_t{1} << dependency);
+    auto* top = SNLDesign::create(
+        designs, NLName("top_" + std::to_string(dependency)));
+    auto* instance = SNLInstance::create(top, model, NLName("bad0"));
+    for (auto* pin : {a, y}) {
+      auto* term = SNLScalarTerm::create(top, pin->getDirection(), pin->getName());
+      auto* net = SNLScalarNet::create(top, pin->getName());
+      term->setNet(net);
+      instance->getInstTerm(pin)->setNet(net);
+    }
+    universe->setTopDesign(top);
+    auto* dnl = naja::DNL::get();
+    std::vector<bool> isPIs(dnl->getNBterms() + 1, false);
+    std::vector<bool> isPOs(dnl->getNBterms() + 1, false);
+    auto root = naja::DNL::DNLID_MAX;
+    for (naja::DNL::DNLID id = 0; id <= dnl->getNBterms(); ++id) {
+      const auto& term = dnl->getDNLTerminalFromID(id);
+      if (term.isNull() || !term.isTopPort()) {
+        continue;
+      }
+      if (term.getSnlBitTerm()->getDirection() == SNLTerm::Direction::Input) {
+        isPIs[id] = true;
+      } else {
+        isPOs[id] = true;
+        root = id;
+      }
+    }
+    ASSERT_NE(naja::DNL::DNLID_MAX, root);
+    {
+      SNLLogicCloud cloud(root, isPIs, isPOs);
+      try {
+        cloud.compute();
+        FAIL() << "Expected malformed dependency runtime_error";
+      } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("SNLLogicCloud failed to map truth table dependency"),
+                  std::string::npos);
+        EXPECT_NE(message.find("flat_term_id=" + std::to_string(dependency)),
+                  std::string::npos);
+      }
+    }
+    naja::DNL::destroy();
+  }
+}
+
+TEST_F(MiterTests, LibertyMultiOutputReducedTruthTablesMatchIssue236Functions) {
+  const auto libertyPath = testTempPath("issue_236.lib");
+  {
+    std::ofstream liberty(libertyPath);
+    ASSERT_TRUE(liberty.good());
+    liberty << R"liberty(
+library (issue_236) {
+  cell (gate) {
+    pin (a) { direction : input; }
+    pin (b) { direction : input; }
+    pin (c) { direction : input; }
+    pin (c_in) { direction : input; }
+    pin (c_out) {
+      direction : output;
+      function : "((a ^ b ^ c) & d) | ((a ^ b ^ c) & c_in) | (d & c_in)";
+    }
+    pin (d) { direction : input; }
+    pin (c2) {
+      direction : output;
+      function : "(a & b) | (a & c) | (b & c)";
+    }
+    pin (so) { direction : output; function : "a ^ b ^ c ^ d ^ c_in"; }
+  }
+}
+)liberty";
+  }
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* library = NLLibrary::create(
+      db, NLLibrary::Type::Primitives, NLName("issue_236"));
+  SNLLibertyConstructor constructor(library);
+  constructor.construct(libertyPath);
+  auto* model = library->getSNLDesign(NLName("gate"));
+  ASSERT_NE(nullptr, model);
+  ASSERT_EQ(3u, SNLDesignModeling::getTruthTableCount(model));
+  auto* c2 = model->getScalarTerm(NLName("c2"));
+  auto* d = model->getScalarTerm(NLName("d"));
+  ASSERT_NE(nullptr, c2);
+  ASSERT_NE(nullptr, d);
+  EXPECT_EQ(5u, d->getOrderID());
+  const auto table = SNLDesignModeling::getTruthTable(model, c2->getOrderID());
+  ASSERT_EQ(3u, table.size());
+  EXPECT_EQ(std::vector<size_t>({0, 1, 2}),
+            NLBitDependencies::decodeBits(table.getDependencies()));
+
+  // Exhaust every input assignment against arithmetic specified independently
+  // of the Liberty parser and its truth-table input ordering.
+  expectScalarPrimitiveTruthTable(
+      model, [](const std::string& output, const ScalarTruthAssignment& input) {
+        const unsigned abc = input.at("a") + input.at("b") + input.at("c");
+        if (output == "c2") {
+          return abc >= 2;
+        }
+        if (output == "c_out") {
+          return (abc % 2 + input.at("d") + input.at("c_in")) >= 2;
+        }
+        EXPECT_EQ("so", output);
+        return (abc + input.at("d") + input.at("c_in")) % 2 != 0;
+      });
+}
+
+TEST_F(MiterTests, LibertySparseDependenciesPreserveOrderAndIgnoreUnusedInputs) {
+  const auto libertyPath = testTempPath("sparse_dependencies.lib");
+  {
+    std::ofstream liberty(libertyPath);
+    ASSERT_TRUE(liberty.good());
+    liberty << R"liberty(
+library (sparse_dependencies) {
+  cell (sparse) {
+    pin (a) { direction : input; }
+    pin (zero) { direction : output; function : "0"; }
+    pin (unused0) { direction : input; }
+    pin (unused1) { direction : input; }
+    pin (unused2) { direction : input; }
+    pin (d) { direction : input; }
+    pin (y) { direction : output; function : "a & !d"; }
+  }
+}
+)liberty";
+  }
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* library = NLLibrary::create(
+      db, NLLibrary::Type::Primitives, NLName("sparse_dependencies"));
+  SNLLibertyConstructor constructor(library);
+  constructor.construct(libertyPath);
+  auto* model = library->getSNLDesign(NLName("sparse"));
+  ASSERT_NE(nullptr, model);
+  auto* y = model->getScalarTerm(NLName("y"));
+  auto* zero = model->getScalarTerm(NLName("zero"));
+  ASSERT_NE(nullptr, y);
+  ASSERT_NE(nullptr, zero);
+  const auto table = SNLDesignModeling::getTruthTable(model, y->getOrderID());
+  ASSERT_EQ(2u, table.size());
+  EXPECT_EQ(std::vector<size_t>({0, 5}),
+            NLBitDependencies::decodeBits(table.getDependencies()));
+  const auto constant =
+      SNLDesignModeling::getTruthTable(model, zero->getOrderID());
+  ASSERT_TRUE(constant.isInitialized());
+  EXPECT_EQ(0u, constant.size());
+  EXPECT_TRUE(NLBitDependencies::decodeBits(constant.getDependencies()).empty());
+  expectScalarPrimitiveTruthTable(
+      model, [](const std::string& output, const ScalarTruthAssignment& input) {
+        if (output == "zero") {
+          return false;
+        }
+        EXPECT_EQ("y", output);
+        return input.at("a") && !input.at("d");
+      });
 }
 
 TEST_F(MiterTests, Asap7StateFunctionClockGateIsOpaque) {
