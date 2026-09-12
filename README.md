@@ -51,6 +51,8 @@ The property of stable indices is employed to localize the scopes affected by ed
 
 ## Distribution
 
+Install Nix using the [official installation instructions](https://nixos.org/download/).
+
 Enable the `keplertech` Cachix binary cache, then install the CLI
 (Nix 2.35+ with `nix-command` and `flakes` enabled):
 
