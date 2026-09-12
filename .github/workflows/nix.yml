@@ -62,3 +62,13 @@ jobs:
             --max-jobs 0 --option builders '' \
             --option substituters 'https://keplertech.cachix.org https://cache.nixos.org' \
             --option extra-substituters '' --option narinfo-cache-negative-ttl 0
+
+  test-prebuilt-install:
+    # PR/push runs do not publish. After manual publication, verify real profile
+    # installation on fresh runners that cannot reuse the preceding build.
+    needs: build-and-check
+    if: github.repository == 'keplertech/kepler-formal' && github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/nix-prebuilt.yml
+    with:
+      ref: ${{ github.ref_name }}
+      revision: ${{ github.sha }}
