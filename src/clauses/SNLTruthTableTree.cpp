@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "SNLTruthTableTree.h"
+#include "../config/Config.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -189,6 +190,7 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
     const naja::NL::SNLDesign* design,
     size_t flatTermID) {
   static std::mutex cacheMutex;
+  static uint64_t cacheGeneration = 0;
   static std::unordered_map<SharedTruthTableKey,
                             std::shared_ptr<const SNLTruthTable>,
                             SharedTruthTableKeyHash>
@@ -197,6 +199,13 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
                                   std::shared_ptr<const SNLTruthTable>,
                                   SharedTruthTableKeyHash>
       localCache;
+
+  thread_local uint64_t localCacheGeneration = 0;
+  const auto generation = KEPLER_FORMAL::Config::getVerificationGeneration();
+  if (localCacheGeneration != generation) {
+    localCache.clear();
+    localCacheGeneration = generation;
+  }
 
   const bool usesInstanceTable =
       SNLDesignModeling::hasTruthTableFromParameter(design, flatTermID);
@@ -212,6 +221,10 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
 
   {
     std::lock_guard<std::mutex> lock(cacheMutex);
+    if (cacheGeneration != generation) {
+      cache.clear();
+      cacheGeneration = generation;
+    }
     const auto it = cache.find(key);
     if (it != cache.end()) {
       localCache.emplace(key, it->second);

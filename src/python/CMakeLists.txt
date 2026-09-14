@@ -12,6 +12,10 @@ if(NOT KEPLER_FORMAL_GIT_HASH)
   set(KEPLER_FORMAL_GIT_HASH "unknown")
 endif()
 
+add_library(kepler_borrowed_designs STATIC KeplerBorrowedDesigns.cpp)
+target_include_directories(kepler_borrowed_designs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kepler_borrowed_designs PUBLIC kepler_formal_python_driver)
+
 Python3_add_library(kepler_formal_native MODULE WITH_SOABI PyKeplerFormal.cpp)
 set_target_properties(kepler_formal_native PROPERTIES
   OUTPUT_NAME _native
@@ -24,45 +28,26 @@ target_compile_definitions(kepler_formal_native PRIVATE
 )
 target_include_directories(kepler_formal_native PRIVATE ${PROJECT_SOURCE_DIR}/src/bin)
 target_link_libraries(kepler_formal_native PRIVATE
-  kepler_formal_python_driver
+  kepler_borrowed_designs
+  naja_python
   Python3::Module
 )
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/KeplerNestedNajaeda.cmake)
-kepler_add_nested_najaeda(kepler_formal_native)
+najaeda_fixup_consumer(kepler_formal_native)
 
 if(APPLE)
-  set_target_properties(kepler_formal_native PROPERTIES INSTALL_RPATH "@loader_path")
+  set_target_properties(kepler_formal_native PROPERTIES
+    INSTALL_RPATH "@loader_path;@loader_path/../najaeda")
 elseif(UNIX)
-  set_target_properties(kepler_formal_native PROPERTIES INSTALL_RPATH "$ORIGIN")
+  set_target_properties(kepler_formal_native PROPERTIES
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/../najaeda")
 endif()
 
 install(TARGETS
   kepler_formal_native
-  naja_nl
-  naja_dnl
-  naja_bne
-  naja_opt
   LIBRARY DESTINATION kepler_formal COMPONENT python
   RUNTIME DESTINATION kepler_formal COMPONENT python
   PUBLIC_HEADER DESTINATION kepler_formal/include
   COMPONENT python-headers
-)
-
-install(
-  DIRECTORY "${KEPLER_NESTED_NAJAEDA_PACKAGE_DIR}/"
-  DESTINATION kepler_formal/najaeda
-  COMPONENT python
-  PATTERN "__pycache__" EXCLUDE
-  PATTERN "*.pyc" EXCLUDE
-)
-
-install(
-  FILES
-    "${PROJECT_SOURCE_DIR}/thirdparty/naja/LICENSE"
-    "${PROJECT_SOURCE_DIR}/thirdparty/naja/AUTHORS"
-  DESTINATION kepler_formal/najaeda
-  COMPONENT python
 )
 
 install(

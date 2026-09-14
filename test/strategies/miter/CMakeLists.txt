@@ -26,14 +26,14 @@ add_executable(keplerFormalCliTests
     KeplerFormalCliTests.cpp
     Btor2ExportCliTests.cpp
     Btor2ExportDriverTests.cpp
-    ${CMAKE_SOURCE_DIR}/src/bin/KeplerFormal.cpp
-    ${CMAKE_SOURCE_DIR}/src/bin/Btor2ExportConfig.cpp
+    DriverSeparationTests.cpp
 )
 
-target_compile_definitions(keplerFormalCliTests PRIVATE KEPLER_FORMAL_NO_MAIN)
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)
 
 target_link_libraries(keplerFormalCliTests
+    kepler_formal_driver
+    kepler_formal_python_driver
     kepler_config
     kepler_sec
     naja_snl_pyloader

@@ -19,28 +19,29 @@ set(KEPLER_FORMAL_DRIVER_LIBRARIES
 )
 
 function(configure_kepler_formal_driver target)
-  target_compile_definitions(${target} PRIVATE KEPLER_FORMAL_NO_MAIN)
   target_include_directories(${target} SYSTEM BEFORE PUBLIC ${Boost_INCLUDE_DIR})
   target_include_directories(${target} PUBLIC ${ARGPARSE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${target} PUBLIC ${KEPLER_FORMAL_DRIVER_LIBRARIES})
 endfunction()
 
-set(KEPLER_FORMAL_DRIVER_SOURCES KeplerFormal.cpp Btor2ExportConfig.cpp)
+add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp)
+configure_kepler_formal_driver(kepler_formal_core)
 
-add_library(kepler_formal_driver STATIC ${KEPLER_FORMAL_DRIVER_SOURCES})
-configure_kepler_formal_driver(kepler_formal_driver)
-target_link_libraries(kepler_formal_driver PUBLIC naja_snl_pyloader)
+# Both adapters call the same core. Only the standalone adapter links the
+# embedded Python primitive loader; the Python adapter runs in its host runtime.
+add_library(kepler_formal_python_driver STATIC ../python/PythonDriver.cpp)
+target_link_libraries(kepler_formal_python_driver PUBLIC kepler_formal_core)
+target_include_directories(kepler_formal_python_driver PUBLIC
+  ${PROJECT_SOURCE_DIR}/src/python)
 
 if(BUILD_KEPLER_PYTHON)
-  # The in-process API rejects Python technology files. Compile that loader
-  # path out so a wheel does not embed Naja's separate Python runtime.
-  add_library(kepler_formal_python_driver STATIC ${KEPLER_FORMAL_DRIVER_SOURCES})
-  configure_kepler_formal_driver(kepler_formal_python_driver)
-  target_compile_definitions(
-    kepler_formal_python_driver
-    PRIVATE KEPLER_FORMAL_NO_PY_TECH
-  )
+  # Build the standalone executable in a separate, ordinary CMake build. It
+  # must not acquire a runtime dependency on an installed NajaEDA wheel.
+  return()
 endif()
+
+add_library(kepler_formal_driver STATIC CppDriver.cpp)
+target_link_libraries(kepler_formal_driver PUBLIC kepler_formal_core naja_snl_pyloader)
 
 add_executable(kepler-formal KeplerFormalMain.cpp)
 target_link_libraries(kepler-formal PRIVATE kepler_formal_driver)

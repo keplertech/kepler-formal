@@ -27,6 +27,21 @@ class BoolExprCache {
  public:
   using Key = BoolExprCacheKey;
 
+  // An isolated cache for a synchronous embedding operation. Existing users
+  // retain the original global-cache behavior unless they opt into this scope.
+  // Callers must serialize all cache use for the lifetime of the scope.
+  class ScopedContext {
+   public:
+    ScopedContext();
+    ~ScopedContext();
+    ScopedContext(const ScopedContext&) = delete;
+    ScopedContext& operator=(const ScopedContext&) = delete;
+
+   private:
+    struct State;
+    std::unique_ptr<State> state_;
+  };
+
   // Lookup-or-create API
   static BoolExpr* getExpression(Key const& k);
   static void destroy();

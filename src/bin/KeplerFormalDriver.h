@@ -4,8 +4,14 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
+
 #include <string>
 #include <vector>
+
+namespace naja::NL {
+class NLLibrary;
+}
 
 namespace KEPLER_FORMAL {
 
@@ -37,10 +43,31 @@ struct RunResult {
 
 const char *runStatusName(RunStatus status);
 
-// Runs one complete verification in the current process. Calls are not
-// reentrant: the implementation owns Naja's process-global universe while it
-// runs. The Python binding serializes access to this entry point.
-int runKeplerFormal(int argc, char **argv, RunResult &result);
+// Frontend-specific technology loading. The shared run API invokes prepare
+// once, after configuration validation, before creating any design library.
+class PrimitiveLibraryLoader {
+ public:
+  virtual ~PrimitiveLibraryLoader() = default;
+  virtual void prepare(const char* executable) const = 0;
+  virtual void load(naja::NL::NLLibrary* library,
+                    const std::filesystem::path& path) const = 0;
+};
+
+// Shared workflow used by both adapters: argument/YAML parsing, file loading,
+// LEC/SEC, exports and results. It owns and releases the run's Naja designs.
+// The standalone adapter uses this directly; embedding callers use the guarded
+// API below to preserve their process state and reject a foreign universe.
+int runKeplerFormalWorkflow(int argc, char** argv, RunResult& result,
+                            const PrimitiveLibraryLoader& primitiveLoader);
+
+// Serialize an in-process run and restore its logger/solver/cache state.
+// A live external Naja universe is rejected without being destroyed.
+int runKeplerFormal(int argc, char** argv, RunResult& result,
+                    const PrimitiveLibraryLoader& primitiveLoader);
+
+// Compatibility entry point for existing in-process callers. It uses the
+// Python driver's technology policy and is supplied by that driver library.
+int runKeplerFormal(int argc, char** argv, RunResult& result);
 
 // Releases process-global expression caches retained after a run. The native
 // Python binding calls this after every invocation because, unlike the command
