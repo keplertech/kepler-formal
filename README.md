@@ -90,8 +90,10 @@ On macOS, using [Homebrew](https://brew.sh/):
 ```bash
 brew install cmake doxygen capnp tbb bison flex boost spdlog zlib
 ```
-C2RTL CMake builds also need LLVM, Abseil, Protobuf, OpenSSL, Z3, RE2, and
-OR-Tools graph headers. The macOS CI workflow installs the pinned headers.
+C2RTL CMake builds also need LLVM, Abseil 20260526 or later, Protobuf,
+OpenSSL, Z3, RE2, and OR-Tools graph headers. Protobuf and RE2 must be built
+against the same Abseil version used by Kepler. The macOS CI workflow installs
+the pinned OR-Tools headers.
 
 Ensure the versions of `bison` and `flex` installed via Homebrew take precedence over the macOS defaults by modifying your $PATH environment variable as follows:
 

@@ -41,14 +41,14 @@ sudo apt-get "${apt_options[@]}" install -yq \
   libz3-dev zlib1g-dev \
   "$@"
 
-absl_version="20260107.0"
+absl_version="20260526.0"
 protobuf_version="${KEPLER_PROTOBUF_VERSION:-35.1}"
 re2_version="${KEPLER_RE2_VERSION:-2025-11-05}"
 ortools_version="${KEPLER_ORTOOLS_VERSION:-9.15}"
 absl_prefix="/usr/local"
-absl_config="${absl_prefix}/lib/cmake/absl/abslConfig.cmake"
+absl_rebuild_marker="${absl_prefix}/.kepler-absl-upgrade-pending"
 
-if [[ ! -f "${absl_config}" ]]; then
+if [[ -f "${absl_rebuild_marker}" || ! -f "${absl_prefix}/include/absl/status/status_builder.h" ]]; then
   work_dir="${RUNNER_TEMP:-/tmp}/abseil-cpp-${absl_version}"
   src_dir="${work_dir}/src"
   build_dir="${work_dir}/build"
@@ -71,6 +71,7 @@ if [[ ! -f "${absl_config}" ]]; then
     -DABSL_PROPAGATE_CXX_STD=ON \
     -DCMAKE_INSTALL_PREFIX="${absl_prefix}"
   cmake --build "${build_dir}" -j "$(nproc)"
+  sudo touch "${absl_rebuild_marker}"
   sudo cmake --install "${build_dir}"
   sudo ldconfig
 fi
@@ -78,7 +79,7 @@ fi
 re2_prefix="/usr/local"
 re2_header="${re2_prefix}/include/re2/re2.h"
 
-if [[ ! -f "${re2_header}" ]]; then
+if [[ -f "${absl_rebuild_marker}" || ! -f "${re2_header}" ]]; then
   work_dir="${RUNNER_TEMP:-/tmp}/re2-${re2_version}"
   src_dir="${work_dir}/src"
   build_dir="${work_dir}/build"
@@ -107,7 +108,7 @@ fi
 protobuf_prefix="/usr/local"
 protobuf_config="${protobuf_prefix}/lib/cmake/protobuf/protobuf-config.cmake"
 
-if [[ ! -f "${protobuf_config}" ]]; then
+if [[ -f "${absl_rebuild_marker}" || ! -f "${protobuf_config}" ]]; then
   work_dir="${RUNNER_TEMP:-/tmp}/protobuf-${protobuf_version}"
   src_dir="${work_dir}/src"
   build_dir="${work_dir}/build"
@@ -137,6 +138,8 @@ if [[ ! -f "${protobuf_config}" ]]; then
   sudo cmake --install "${build_dir}"
   sudo ldconfig
 fi
+
+sudo rm -f "${absl_rebuild_marker}"
 
 ortools_prefix="/usr/local"
 ortools_header="${ortools_prefix}/include/ortools/graph/graph.h"

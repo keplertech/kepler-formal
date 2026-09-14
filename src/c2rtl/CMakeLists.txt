@@ -62,8 +62,6 @@ set(XLS_C2RTL_XLS_SOURCES
   ${KEPLER_XLS_ROOT}/xls/common/math_util.cc
   ${KEPLER_XLS_ROOT}/xls/common/status/error_code_to_status.cc
   ${KEPLER_XLS_ROOT}/xls/common/status/ret_check.cc
-  ${KEPLER_XLS_ROOT}/xls/common/status/status_builder.cc
-  ${KEPLER_XLS_ROOT}/xls/common/status/status_builder_oss.cc
   ${KEPLER_XLS_ROOT}/xls/common/stopwatch.cc
   ${KEPLER_XLS_ROOT}/xls/common/strerror.cc
   ${KEPLER_XLS_ROOT}/xls/common/string_to_int.cc
@@ -309,15 +307,19 @@ target_link_libraries(kepler_xls_c2rtl
     absl::flat_hash_map
     absl::flat_hash_set
     absl::inlined_vector
+    absl::linked_hash_map
     absl::log
     absl::check
     absl::status
+    absl::status_builder
+    absl::status_macros
     absl::statusor
     absl::strings
     absl::str_format
     absl::stacktrace
     absl::synchronization
     absl::span
+    absl::source_location
     absl::symbolize
     absl::time
 )
