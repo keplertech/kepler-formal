@@ -13,13 +13,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      # No submodules needed — Bazel fetches deps via http_archive
+      with:
+        submodules: true
+      # Bazel fetches most deps via http_archive/BCR, but the C2RTL overlay
+      # deliberately builds from the pinned thirdparty/xls checkout.
 
     - name: Cache Bazel outputs
       uses: actions/cache@v4
       with:
         path: ~/.cache/bazel
-        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel') }}
+        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel', 'bazel/*.bzl') }}
         restore-keys: |
           bazel-${{ runner.os }}-
 
@@ -28,7 +31,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -yq \
           build-essential pkg-config \
-          bison flex python3-dev
+          bison cmake flex ninja-build python3-dev
 
     - name: Build kepler-formal
       run: bazelisk build //src/bin:kepler-formal

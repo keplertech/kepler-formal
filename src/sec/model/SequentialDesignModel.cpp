@@ -19,9 +19,16 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#elif defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
+#include <tbb/scalable_allocator.h>
+#include <tbb/task_arena.h>
 
 #include "DNL.h"
 #include "NLDB0.h"
@@ -637,6 +644,8 @@ void mergeMaterializedBuilderOutputs(  // LCOV_EXCL_LINE
 }  // LCOV_EXCL_LINE
 // LCOV_EXCL_STOP
 
+constexpr size_t kSecInitialOutputBatchSize = 128;
+
 std::unordered_map<size_t, size_t> buildStableBuilderVarRemap(
     const std::vector<size_t>& sourceTermDNLID2varID,
     const std::vector<size_t>& stableTermDNLID2varID) {
@@ -965,6 +974,74 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
   return result;
 }
 
+MaterializedBuilderOutputs materializeBuilderOutputsInBatches(
+    const std::vector<naja::DNL::DNLID>& requestedOutputs,
+    const std::vector<naja::DNL::DNLID>& collectedInputs,
+    const std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>&
+        collectedSkippedOutputs,
+    size_t batchSize,
+    bool secDiagEnabled,
+    const char* topName,
+    const char* phaseLabel) {
+  MaterializedBuilderOutputs result;
+  if (requestedOutputs.empty()) {
+    return result;
+  }
+
+  if (batchSize == 0 || requestedOutputs.size() <= batchSize) {
+    return materializeBuilderOutputs(
+        requestedOutputs,
+        collectedInputs,
+        result.termDNLID2varID,
+        collectedSkippedOutputs,
+        secDiagEnabled,
+        topName,
+        phaseLabel);
+  }
+
+  if (secDiagEnabled) {
+    fprintf(
+        stderr,
+        "SEC diag: extract(%s) %s batched begin outputs=%zu batch_size=%zu\n",
+        topName,
+        phaseLabel,
+        requestedOutputs.size(),
+        batchSize);
+    fflush(stderr);
+  }
+
+  for (size_t first = 0; first < requestedOutputs.size(); first += batchSize) {
+    const size_t last = std::min(first + batchSize, requestedOutputs.size());
+    std::vector<naja::DNL::DNLID> batchOutputs(
+        requestedOutputs.begin() + static_cast<std::ptrdiff_t>(first),
+        requestedOutputs.begin() + static_cast<std::ptrdiff_t>(last));
+    const std::string batchLabel =
+        std::string(phaseLabel) + " batch [" + std::to_string(first) + "," +
+        std::to_string(last) + ")";
+    const auto batchResult = materializeBuilderOutputs(
+        batchOutputs,
+        collectedInputs,
+        result.termDNLID2varID,
+        collectedSkippedOutputs,
+        secDiagEnabled,
+        topName,
+        batchLabel.c_str());
+    mergeMaterializedBuilderOutputs(result, batchResult);
+  }
+
+  if (secDiagEnabled) {
+    fprintf(
+        stderr,
+        "SEC diag: extract(%s) %s batched end outputs=%zu exprs=%zu\n",
+        topName,
+        phaseLabel,
+        result.outputs.size(),
+        result.outputExprByTerm.size());
+    fflush(stderr);
+  }
+  return result;
+}
+
 struct CandidateDependencyScratch {
   std::vector<const BoolExpr*> stack;
   std::vector<size_t> dependencies;
@@ -1144,20 +1221,149 @@ std::optional<std::pair<size_t, bool>> getStateOutputReference(
   return std::pair<size_t, bool>{node->state, complemented};
 }
 
-bool isSequentialStateOutput(const naja::DNL::DNLTerminalFull& term) {
+struct StructuralQueryCache {
+  struct StateOutputPinInfo {
+    naja::NL::SNLBitTerm* bitTerm = nullptr;
+    std::vector<naja::NL::SNLBitTerm*> clockBitTerms;
+  };
+
+  struct SequentialModelPinIndex {
+    std::vector<StateOutputPinInfo> stateOutputs;
+    bool hasMemoryInterface = false;
+  };
+
+  std::unordered_map<naja::NL::SNLBitTerm*, std::vector<naja::NL::SNLBitTerm*>>
+      outputRelatedClocksByTerm;
+  std::unordered_map<naja::NL::SNLBitTerm*, std::vector<naja::NL::SNLBitTerm*>>
+      inputRelatedClocksByTerm;
+  std::unordered_map<const void*, bool> memoryInterfaceByModel;
+  std::unordered_map<const void*, bool> structuredMemoryByInstance;
+  std::unordered_map<const void*, SequentialModelPinIndex> sequentialPinsByModel;
+  size_t outputClockQueries = 0;
+  size_t outputClockCacheHits = 0;
+  size_t inputClockQueries = 0;
+  size_t inputClockCacheHits = 0;
+  size_t memoryInterfaceQueries = 0;
+  size_t memoryInterfaceCacheHits = 0;
+  size_t structuredMemoryQueries = 0;
+  size_t structuredMemoryCacheHits = 0;
+  size_t sequentialPinIndexBuilds = 0;
+  size_t sequentialPinIndexHits = 0;
+
+  const std::vector<naja::NL::SNLBitTerm*>& outputRelatedClocks(
+      naja::NL::SNLBitTerm* bitTerm) {
+    static const std::vector<naja::NL::SNLBitTerm*> empty;
+    if (bitTerm == nullptr) {
+      return empty;
+    }
+    if (auto it = outputRelatedClocksByTerm.find(bitTerm);
+        it != outputRelatedClocksByTerm.end()) {
+      ++outputClockCacheHits;
+      return it->second;
+    }
+    ++outputClockQueries;
+    std::vector<naja::NL::SNLBitTerm*> clocks;
+    for (auto* clockBitTerm :
+         naja::NL::SNLDesignModeling::getOutputRelatedClocks(bitTerm)) {
+      clocks.push_back(clockBitTerm);
+    }
+    auto [it, _] = outputRelatedClocksByTerm.emplace(
+        bitTerm, std::move(clocks));
+    return it->second;
+  }
+
+  const std::vector<naja::NL::SNLBitTerm*>& inputRelatedClocks(
+      naja::NL::SNLBitTerm* bitTerm) {
+    static const std::vector<naja::NL::SNLBitTerm*> empty;
+    if (bitTerm == nullptr) {
+      return empty;
+    }
+    if (auto it = inputRelatedClocksByTerm.find(bitTerm);
+        it != inputRelatedClocksByTerm.end()) {
+      ++inputClockCacheHits;
+      return it->second;
+    }
+    ++inputClockQueries;
+    std::vector<naja::NL::SNLBitTerm*> clocks;
+    for (auto* clockBitTerm :
+         naja::NL::SNLDesignModeling::getInputRelatedClocks(bitTerm)) {
+      clocks.push_back(clockBitTerm);
+    }
+    auto [it, _] = inputRelatedClocksByTerm.emplace(
+        bitTerm, std::move(clocks));
+    return it->second;
+  }
+
+  bool hasMemoryInterfaceForModel(const naja::NL::SNLDesign* model) {
+    const void* modelKey = model;
+    if (auto it = memoryInterfaceByModel.find(modelKey);
+        it != memoryInterfaceByModel.end()) {
+      ++memoryInterfaceCacheHits;
+      return it->second;
+    }
+    ++memoryInterfaceQueries;
+    const bool hasInterface =
+        naja::NL::SNLDesignModeling::hasMemoryInterface(model);
+    memoryInterfaceByModel.emplace(modelKey, hasInterface);
+    return hasInterface;
+  }
+
+  const SequentialModelPinIndex& sequentialPins(
+      const naja::DNL::DNLInstanceFull& instance) {
+    const void* modelKey = instance.getSNLModel();
+    if (auto it = sequentialPinsByModel.find(modelKey);
+        it != sequentialPinsByModel.end()) {
+      ++sequentialPinIndexHits;
+      return it->second;
+    }
+
+    ++sequentialPinIndexBuilds;
+    SequentialModelPinIndex index;
+    index.hasMemoryInterface = hasMemoryInterfaceForModel(instance.getSNLModel());
+    for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
+         termID != naja::DNL::DNLID_MAX &&
+         termID <= instance.getTermIndexes().second;
+         ++termID) {
+      const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
+      if (term.isNull()) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      auto* bitTerm = term.getSnlBitTerm();
+      if (term.getSnlBitTerm()->getDirection() !=
+          naja::NL::SNLBitTerm::Direction::Input) {
+        const auto& clocks = outputRelatedClocks(bitTerm);
+        if (!clocks.empty()) {
+          index.stateOutputs.push_back({bitTerm, clocks});
+        }
+      }
+    }
+    auto [it, _] = sequentialPinsByModel.emplace(modelKey, std::move(index));
+    return it->second;
+  }
+};
+
+bool isSequentialStateOutput(const naja::DNL::DNLTerminalFull& term,
+                             StructuralQueryCache* cache = nullptr) {
   if (term.isTopPort()) {
     return false;
+  }
+  if (cache != nullptr) {
+    return !cache->outputRelatedClocks(term.getSnlBitTerm()).empty();
   }
   return !naja::NL::SNLDesignModeling::getOutputRelatedClocks(
               term.getSnlBitTerm())
               .empty();
 }
 
-bool isSequentialNextStateInput(const naja::DNL::DNLTerminalFull& term) {
+bool isSequentialNextStateInput(const naja::DNL::DNLTerminalFull& term,
+                                StructuralQueryCache* cache = nullptr) {
   if (term.isTopPort()) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
     // LCOV_EXCL_STOP
+  }
+  if (cache != nullptr) {
+    return !cache->inputRelatedClocks(term.getSnlBitTerm()).empty();
   }
   return !naja::NL::SNLDesignModeling::getInputRelatedClocks(
               term.getSnlBitTerm())
@@ -2307,6 +2513,23 @@ struct ExtractContext {
   std::unique_ptr<PureClockCarrierStructureIndex> pureClockCarrierStructure;
   std::vector<PendingTransition> pendingTransitions;
   std::vector<PendingMemoryInstance> pendingMemoryInstances;
+  StructuralQueryCache structuralCache;
+  bool hasInitialMaterializedOutputs = false;
+  MaterializedBuilderOutputs initialMaterializedOutputs;
+};
+
+void releaseUnusedAllocatorPages() {
+  scalable_allocation_command(TBBMALLOC_CLEAN_ALL_BUFFERS, nullptr);
+#if defined(__APPLE__)
+  malloc_zone_pressure_relief(nullptr, 0);
+#elif defined(__GLIBC__)
+  malloc_trim(0);
+#endif
+}
+
+class ScopedAllocatorPageRelease {
+ public:
+  ~ScopedAllocatorPageRelease() { releaseUnusedAllocatorPages(); }
 };
 
 std::string describeSupportVarOrigins(  // LCOV_EXCL_LINE
@@ -2401,7 +2624,9 @@ void collectInitialBuilderBoundary(ExtractContext& ctx) {
     fprintf(stderr, "SEC diag: extract(%s) collect begin\n", ctx.topName.c_str());
     fflush(stderr);
   }
-  ctx.builder.collect();
+  releaseUnusedAllocatorPages();
+  tbb::task_arena dnlBuildArena(1);
+  dnlBuildArena.execute([&ctx]() { ctx.builder.collect(); });
   ctx.collectedSkippedOutputs = ctx.builder.getSkippedOutputs();
   if (ctx.secDiagEnabled) {
     fprintf(
@@ -2517,7 +2742,7 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
     SignalKey key = getTerminalPathKey(term);
     ctx.inputKeyByTerm.emplace(inputTermID, key);
     model.displayNameByKey.try_emplace(key, getTerminalDisplayName(term));
-    if (isSequentialStateOutput(term)) {
+    if (isSequentialStateOutput(term, &ctx.structuralCache)) {
       ctx.stateBits.insert(key);
     } else if (term.isTopPort()) {
       ctx.environmentInputs.insert(key);
@@ -2538,7 +2763,8 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
 // LCOV_EXCL_STOP
 
 std::optional<SequentialInstanceScan> scanSequentialInstance(
-    const naja::DNL::DNLInstanceFull& instance) {
+    const naja::DNL::DNLInstanceFull& instance,
+    StructuralQueryCache& structuralCache) {
   // LCOV_EXCL_START
   SequentialInstanceScan scan;
   // LCOV_EXCL_STOP
@@ -2553,7 +2779,7 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
       scan.modelTermIDs.emplace(
           term.getSnlBitTerm(),
           PendingPinTerm{termID, term.getSnlBitTerm()->getBit()});
-      if (isSequentialStateOutput(term) &&
+      if (isSequentialStateOutput(term, &structuralCache) &&
           term.getSnlBitTerm()->getDirection() !=
               naja::NL::SNLBitTerm::Direction::Input) {
         physicalStateOutputTermIDs.push_back(termID);
@@ -2621,13 +2847,14 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
     for (const auto& [modelTerm, _] : scan.modelTermIDs) {
       if (isSequentialNextStateInput(
               instance.getTerminalFromBitTerm(
-                  const_cast<naja::NL::SNLBitTerm*>(modelTerm))) &&
+                  const_cast<naja::NL::SNLBitTerm*>(modelTerm)),
+              &structuralCache) &&
           modeledUpdateTerms.find(modelTerm) == modeledUpdateTerms.end()) {
         const std::string reason =
             "Unsupported sequential primitive with update pin `" +
             modelTerm->getName().getString() + "`";
         std::unordered_set<const naja::NL::SNLBitTerm*> relatedClocks;
-        for (auto* clock : naja::NL::SNLDesignModeling::getInputRelatedClocks(
+        for (auto* clock : structuralCache.inputRelatedClocks(
                  const_cast<naja::NL::SNLBitTerm*>(modelTerm))) {
           relatedClocks.insert(clock);
         }
@@ -2635,8 +2862,7 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
           auto* outputTerm = naja::DNL::get()
                                  ->getDNLTerminalFromID(stateOutput.termID)
                                  .getSnlBitTerm();
-          const auto outputClocks =
-              naja::NL::SNLDesignModeling::getOutputRelatedClocks(outputTerm);
+          const auto& outputClocks = structuralCache.outputRelatedClocks(outputTerm);
           if (std::any_of(
                   outputClocks.begin(),
                   outputClocks.end(),
@@ -2775,6 +3001,34 @@ bool supportsStructuredMemoryModel(
   // LCOV_EXCL_START
   return true;
   // LCOV_EXCL_STOP
+}
+
+bool hasMemoryInterfaceCached(ExtractContext& ctx,
+                              const naja::DNL::DNLInstanceFull& instance) {
+  return ctx.structuralCache.hasMemoryInterfaceForModel(
+      instance.getSNLInstance()->getModel());
+}
+
+bool supportsStructuredMemoryModelCached(
+    ExtractContext& ctx,
+    const naja::DNL::DNLInstanceFull& instance) {
+  if (!hasMemoryInterfaceCached(ctx, instance)) {
+    return false;
+  }
+  const void* instanceKey = instance.getSNLInstance();
+  auto& cache = ctx.structuralCache;
+  if (auto it = cache.structuredMemoryByInstance.find(instanceKey);
+      it != cache.structuredMemoryByInstance.end()) {
+    ++cache.structuredMemoryCacheHits;
+    return it->second;
+  }
+  ++cache.structuredMemoryQueries;
+  const bool supported =
+      supportsStructuredMemoryModel(
+          naja::NL::SNLDesignModeling::getMemoryInterface(
+              instance.getSNLInstance()));
+  cache.structuredMemoryByInstance.emplace(instanceKey, supported);
+  return supported;
 }
 
 naja::DNL::DNLID getRequiredInstanceTermID(
@@ -3104,20 +3358,47 @@ void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& mo
   // Boolean expressions have been built.
   for (auto leafID : ctx.dnl->getLeaves()) {
     const auto& instance = ctx.dnl->getDNLInstanceFromID(leafID);
-    if (naja::NL::SNLDesignModeling::hasMemoryInterface(
-            instance.getSNLInstance()->getModel()) &&
-        supportsStructuredMemoryModel(
-            naja::NL::SNLDesignModeling::getMemoryInterface(
-                instance.getSNLInstance()))) {
+    const auto& pinIndex = ctx.structuralCache.sequentialPins(instance);
+    if (pinIndex.hasMemoryInterface &&
+        supportsStructuredMemoryModelCached(ctx, instance)) {
       appendPendingMemoryInstance(ctx, model, instance);
       continue;
     }
-    const auto scan = scanSequentialInstance(instance);
+    if (pinIndex.stateOutputs.empty() &&
+        !naja::NL::SNLDesignModeling::hasSequentialModel(instance.getSNLModel())) {
+      continue;
+    }
+    const auto scan = scanSequentialInstance(instance, ctx.structuralCache);
     if (!scan.has_value()) {
       continue;
     }
     appendPendingTransitionsForInstance(ctx, model, *scan);
   }
+}
+
+void logStructuralQueryStats(const ExtractContext& ctx) {
+  if (!ctx.secDiagEnabled) {
+    return;
+  }
+  const auto& cache = ctx.structuralCache;
+  fprintf(
+      stderr,
+      "SEC diag: extract(%s) structural cache "
+      "output_clock_queries=%zu hits=%zu input_clock_queries=%zu hits=%zu "
+      "memory_queries=%zu hits=%zu structured_memory_queries=%zu hits=%zu "
+      "pin_indexes=%zu hits=%zu\n",
+      ctx.topName.c_str(),
+      cache.outputClockQueries,
+      cache.outputClockCacheHits,
+      cache.inputClockQueries,
+      cache.inputClockCacheHits,
+      cache.memoryInterfaceQueries,
+      cache.memoryInterfaceCacheHits,
+      cache.structuredMemoryQueries,
+      cache.structuredMemoryCacheHits,
+      cache.sequentialPinIndexBuilds,
+      cache.sequentialPinIndexHits);
+  fflush(stderr);
 }
 
 std::vector<naja::DNL::DNLID> collectInitialObservedTerms(const ExtractContext& ctx) {
@@ -3162,6 +3443,28 @@ void buildInitialObservedOutputClouds(ExtractContext& ctx) {
   if (ctx.secDiagEnabled) {
     fprintf(stderr, "SEC diag: extract(%s) build begin\n", ctx.topName.c_str());
     fflush(stderr);
+  }
+  const size_t batchSize = kSecInitialOutputBatchSize;
+  if (batchSize != 0 && initialMaterializedOutputs.size() > batchSize) {
+    ctx.initialMaterializedOutputs = materializeBuilderOutputsInBatches(
+        initialMaterializedOutputs,
+        ctx.builder.getInputs(),
+        ctx.collectedSkippedOutputs,
+        batchSize,
+        ctx.secDiagEnabled,
+        ctx.topName.c_str(),
+        "initial observed output build");
+    // The batch list excludes outputs already classified as connectivity skips.
+    // Preserve those collect-time facts just as the non-batched builder does.
+    for (const auto& [termID, info] : ctx.collectedSkippedOutputs) {
+      ctx.initialMaterializedOutputs.skippedOutputsByTerm.emplace(termID, info);
+    }
+    ctx.hasInitialMaterializedOutputs = true;
+    if (ctx.secDiagEnabled) {
+      fprintf(stderr, "SEC diag: extract(%s) build end\n", ctx.topName.c_str());
+      fflush(stderr);
+    }
+    return;
   }
   ctx.builder.build();
   if (ctx.secDiagEnabled) {
@@ -3276,6 +3579,32 @@ void recordBoundaryInputVars(
     fprintf(
         stderr,
         "SEC diag: extract(%s) mapped boundary vars=%zu\n",
+        ctx.topName.c_str(),
+        model.inputVarByKey.size());
+    fflush(stderr);
+  }
+}
+
+void recordDeferredBoundaryInputVars(
+    const ExtractContext& ctx,
+    SequentialDesignModel& model) {
+  const auto& builderInputs = ctx.builder.getInputs();
+  for (size_t inputIndex = 0; inputIndex < builderInputs.size(); ++inputIndex) {
+    const auto inputTermID = builderInputs[inputIndex];
+    const auto& term = ctx.dnl->getDNLTerminalFromID(inputTermID);
+    if (isConstantInternalOutputTerm(term)) {
+      continue;
+    }
+    const auto keyIt = ctx.inputKeyByTerm.find(inputTermID);
+    if (keyIt == ctx.inputKeyByTerm.end()) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    model.inputVarByKey.emplace(keyIt->second, inputIndex + 2);
+  }
+  if (ctx.secDiagEnabled) {
+    fprintf(
+        stderr,
+        "SEC diag: extract(%s) deferred boundary vars=%zu\n",
         ctx.topName.c_str(),
         model.inputVarByKey.size());
     fflush(stderr);
@@ -4785,6 +5114,12 @@ void logExtractedModelDebugSummary(const ExtractContext& ctx,
 }  // namespace
 
 SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
+  return extract(top, SequentialDesignExtractOptions{});
+}
+
+SequentialDesignModel SequentialDesignModel::extract(
+    naja::NL::SNLDesign* top,
+    const SequentialDesignExtractOptions& options) {
   if (top == nullptr) {
     throw std::invalid_argument("SequentialDesignModel::extract: null top");
   }
@@ -4794,6 +5129,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
     throw std::runtime_error("SequentialDesignModel::extract: NLUniverse not created");
   }
 
+  ScopedAllocatorPageRelease allocatorPageRelease;
   SequentialDesignModel model;
   ExtractContext ctx{
       // LCOV_EXCL_START
@@ -4813,6 +5149,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   collectTopInterfaceTerms(ctx, model);
   classifyBuilderBoundaryTerms(ctx, model);
   collectSequentialTransitions(ctx, model);
+  logStructuralQueryStats(ctx);
 
   if (model.hasUnsupportedFeatures()) {
     // Primitive-modeling issues are structural, not proof-related. Report them
@@ -4838,29 +5175,73 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
   filterOpaqueBuilderInputs(ctx, model);
   skipTopOutputsReachedByOpaqueTerminals(ctx, model);
 
+  const bool canDeferObservedOutputs =
+      options.deferCombinationalObservedOutputs &&
+      ctx.stateBits.empty() &&
+      ctx.pendingTransitions.empty() &&
+      ctx.pendingMemoryInstances.empty() &&
+      !ctx.hasOpaqueInternalTerminals;
+  if (canDeferObservedOutputs) {
+    publishNormalizedBoundary(ctx, model);
+    recordDeferredBoundaryInputVars(ctx, model);
+    model.observedOutputs = model.allObservedOutputs;
+    model.observedOutputExprsMaterialized = false;
+    naja::DNL::destroy();
+    if (ctx.previousTop != nullptr) {
+      universe->setTopDesign(ctx.previousTop);
+    }
+    if (ctx.secDiagEnabled) {
+      fprintf(
+          stderr,
+          "SEC diag: extract(%s) deferred observed output materialization outputs=%zu\n",
+          ctx.topName.c_str(),
+          model.observedOutputs.size());
+      fflush(stderr);
+      fprintf(stderr, "SEC diag: extract(%s) end\n", ctx.topName.c_str());
+      fflush(stderr);
+    }
+    return model;
+  }
+
   // Phase 2: build top-output formulas, stopping at the temporary internal
   // frontiers identified during collection, then publish the SEC interface.
   buildInitialObservedOutputClouds(ctx);
   publishNormalizedBoundary(ctx, model);
 
-  std::vector<naja::DNL::DNLID> builderInputs = ctx.builder.getInputs();
-  std::vector<naja::DNL::DNLID> builderOutputs = ctx.builder.getOutputs();
-  std::vector<size_t> termDNLID2varID = ctx.builder.getTermDNLID2VarID();
+  std::vector<naja::DNL::DNLID> builderInputs =
+      ctx.hasInitialMaterializedOutputs
+          ? ctx.initialMaterializedOutputs.inputs
+          : ctx.builder.getInputs();
+  std::vector<naja::DNL::DNLID> builderOutputs =
+      ctx.hasInitialMaterializedOutputs
+          ? ctx.initialMaterializedOutputs.outputs
+          : ctx.builder.getOutputs();
+  std::vector<size_t> termDNLID2varID =
+      ctx.hasInitialMaterializedOutputs
+          ? ctx.initialMaterializedOutputs.termDNLID2varID
+          : ctx.builder.getTermDNLID2VarID();
   recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
 
   std::unordered_map<naja::DNL::DNLID, BoolExpr*> outputExprByTerm;
-  const auto& outputTerms = builderOutputs;
-  const auto& outputExprs = ctx.builder.getPOs();
-  auto skippedOutputsByTerm = ctx.builder.getSkippedOutputs();
+  auto skippedOutputsByTerm =
+      ctx.hasInitialMaterializedOutputs
+          ? ctx.initialMaterializedOutputs.skippedOutputsByTerm
+          : ctx.builder.getSkippedOutputs();
   // Keep only the valid formulas produced by the clause builder. Invalid
   // clouds are classified below either as skippable SEC gaps or as hard
   // unsupported logic.
-  for (size_t i = 0; i < outputTerms.size(); ++i) {
-    BoolExpr* expr = outputExprs[i];
-    if (expr == nullptr || !expr->isValid()) {
-      continue;  // LCOV_EXCL_LINE
+  if (ctx.hasInitialMaterializedOutputs) {
+    outputExprByTerm = ctx.initialMaterializedOutputs.outputExprByTerm;
+  } else {
+    const auto& outputTerms = builderOutputs;
+    const auto& outputExprs = ctx.builder.getPOs();
+    for (size_t i = 0; i < outputTerms.size(); ++i) {
+      BoolExpr* expr = outputExprs[i];
+      if (expr == nullptr || !expr->isValid()) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      outputExprByTerm.emplace(outputTerms[i], expr);
     }
-    outputExprByTerm.emplace(outputTerms[i], expr);
   }
 
   const auto structuredMemoryDependencyTerms =

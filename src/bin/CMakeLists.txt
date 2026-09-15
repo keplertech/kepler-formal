@@ -32,6 +32,8 @@ set(KEPLER_FORMAL_DRIVER_LIBRARIES
     scope_extraction
     yaml-cpp
     ${SPDLOG_TARGET}
+    kepler_c2rtl_formal
+    kepler_xls_c2rtl
 )
 
 function(configure_kepler_formal_driver target)

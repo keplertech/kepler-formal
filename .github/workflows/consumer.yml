@@ -19,20 +19,22 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: true
+      # The C2RTL overlay copies the pinned thirdparty/xls checkout, so the
+      # dependency smoke test needs the same submodule checkout as root builds.
 
     - name: Cache Bazel outputs
       uses: actions/cache@v4
       with:
         path: ~/.cache/bazel
-        key: bazel-consumer-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel') }}
-        restore-keys: |
-          bazel-consumer-${{ runner.os }}-
+        key: bazel-consumer-${{ runner.os }}-${{ hashFiles('MODULE.bazel', '.github/consumer-test/MODULE.bazel', '.github/workflows/consumer.yml', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel', 'bazel/*.bzl') }}
 
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -yq \
-          build-essential pkg-config \
+          build-essential pkg-config cmake ninja-build \
           bison flex python3-dev
 
     - name: Build kepler-formal as a dependency

@@ -22,22 +22,9 @@ jobs:
         submodules: true
 
     - name: Install dependencies
-      timeout-minutes: 10
-      run: |
-        sudo apt-get \
-          -o Acquire::Retries=3 \
-          -o Acquire::http::Timeout=30 \
-          -o Acquire::https::Timeout=30 \
-          update
-        sudo apt-get \
-          -o Acquire::Retries=3 \
-          -o Acquire::http::Timeout=30 \
-          -o Acquire::https::Timeout=30 \
-          -o DPkg::Lock::Timeout=60 \
-          install -y \
-          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
-          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
-          libboost-iostreams-dev zlib1g-dev
+      run: bash .github/scripts/install-cmake-deps-ubuntu.sh
+      # C2RTL also builds dependencies from source; bound the full setup.
+      timeout-minutes: 30
 
     - name: Checkout submodules
       run: git submodule update --init --recursive
@@ -46,6 +33,10 @@ jobs:
       run: |
         cmake -B ${{github.workspace}}/build-sec-regress \
           -GNinja \
+          -DCMAKE_C_COMPILER=clang-22 \
+          -DCMAKE_CXX_COMPILER=clang++-22 \
+          -DCMAKE_PREFIX_PATH="/usr/local;/usr/lib/llvm-22" \
+          -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=clang-scan-deps-22 \
           -DPYTHON_INTERFACE=OFF \
           -DENABLE_UNIT_TESTS=ON \
           -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/stage \
