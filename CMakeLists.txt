@@ -1,5 +1,5 @@
 # Copyright 2024-2025 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.21)
 # tell CMake to pretend any cmake_minimum_required(VERSION X) with X<3.5
@@ -14,8 +14,18 @@ set(NAJA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja)
 
 message(STATUS "CMake version: ${CMAKE_VERSION}")
 
+set(kepler_version_template "${CMAKE_CURRENT_SOURCE_DIR}/src/bin/KeplerVersion.h.in")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${kepler_version_template}")
+file(STRINGS "${kepler_version_template}" kepler_version_line
+  REGEX "KEPLER_VERSION.*\"[0-9]+\\.[0-9]+\\.[0-9]+\"")
+string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" KEPLER_VERSION "${kepler_version_line}")
+if(KEPLER_VERSION STREQUAL "")
+  message(FATAL_ERROR "Cannot read the version from ${kepler_version_template}")
+endif()
+
 project(kepler-formal
-  VERSION 1.0.0
+  VERSION ${KEPLER_VERSION}
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 

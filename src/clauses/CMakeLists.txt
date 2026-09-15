@@ -1,5 +1,5 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.10)
 project(kepler_clauses_lib)

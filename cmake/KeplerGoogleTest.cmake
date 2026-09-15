@@ -1,5 +1,5 @@
 # Copyright 2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 # Use headers from the GoogleTest targets we link, even when a dependency adds
 # an SDK prefix containing a different GoogleTest installation. Keep these

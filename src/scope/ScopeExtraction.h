@@ -1,5 +1,5 @@
 // src/scope/ScopeExtraction.h
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //
 // Small, test-friendly adjustment:
 //  - add a protected default constructor so test subclasses can default-construct

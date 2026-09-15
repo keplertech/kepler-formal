@@ -1,0 +1,14 @@
+// Copyright 2024-2026 keplertech.io
+// SPDX-License-Identifier: GPL-3.0-only
+
+#pragma once
+
+#include <string_view>
+
+namespace KEPLER_FORMAL {
+
+// Source of truth for the project version; keep package metadata in sync.
+inline constexpr std::string_view KEPLER_VERSION { "0.5.0" };
+inline constexpr std::string_view KEPLER_GIT_HASH { "@KEPLER_GIT_HASH@" };
+
+} // namespace KEPLER_FORMAL

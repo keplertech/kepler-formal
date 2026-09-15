@@ -1,11 +1,11 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: naja 
+Upstream-Name: kepler-formal
 Upstream-Contact: Christophe Alexandre <contact@keplertech.io>
 Source: https://github.com/keplertech/kepler-formal
 
 Files: src/*
 Copyright: 2025 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: examples/* .github/workflows/* .github/consumer-test/* .gitmodules README.md docs/*
 Copyright: 2025 keplertech.io
@@ -13,28 +13,30 @@ License: Apache-2.0
 
 Files: test/*
 Copyright: 2025 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore
 Copyright: 2025 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: flake.nix flake.lock
 Copyright: 2026 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: bazel/*
 Copyright: 2025 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: tools/*
 Copyright: 2025 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: mcp/*
 Copyright: 2026 keplertech.io
-License: GPL-3.0-only
+License: Apache-2.0
 
 Files: regress/*/miter.cnf regress/*/miter.cnf.tar.gz regress/*/po_cnfs.tar.gz
 Copyright: 2026 keplertech.io
 License: GPL-3.0-only
+Comment: Generated benchmark artifacts retain their existing licensing; they
+ are not included in the Apache-2.0 relicensing of Kepler Formal's own code.

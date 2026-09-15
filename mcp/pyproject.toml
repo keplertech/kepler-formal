@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kepler-formal-mcp"
-version = "1.0.0"
+version = "0.5.0"
 description = "Optional local stdio MCP server for kepler-formal"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-only" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "keplertech.io" }]
 dependencies = [
   "mcp>=2,<3",

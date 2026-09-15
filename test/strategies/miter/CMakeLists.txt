@@ -1,5 +1,5 @@
 # Copyright 2024-2025 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 add_executable(miterTests MiterTests.cpp)
 
@@ -35,6 +35,7 @@ target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/
 
 target_link_libraries(keplerFormalCliTests
     PRIVATE
+    kepler_version
     kepler_config
     kepler_sec
     naja_snl_pyloader

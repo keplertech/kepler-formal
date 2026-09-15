@@ -1,5 +1,20 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:kepler_version.bzl", "kepler_version")
 load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
+
+exports_files(["KeplerVersion.h.in"])
+
+kepler_version(
+    name = "version_header",
+    template = "KeplerVersion.h.in",
+)
+
+cc_library(
+    name = "kepler_version",
+    hdrs = [":version_header"],
+    includes = ["."],
+)
 
 genrule(
     name = "naja_python_module",
@@ -27,6 +42,7 @@ cc_binary(
     # which supersedes the former -static-libstdc++/-static-libgcc.
     visibility = ["//visibility:public"],
     deps = [
+        ":kepler_version",
         "//src/config:kepler_config",
         "//src/c2rtl:kepler_c2rtl_formal",
         "//src/sec:kepler_sec",

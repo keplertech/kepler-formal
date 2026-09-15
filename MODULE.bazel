@@ -1,6 +1,7 @@
 module(
     name = "kepler-formal",
-    version = "1.0.0",
+    # Keep in sync with KEPLER_VERSION in src/bin/KeplerVersion.h.in.
+    version = "0.5.0",
 )
 
 # Infrastructure

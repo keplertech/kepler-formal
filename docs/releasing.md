@@ -5,7 +5,7 @@ This document explains how to set up and perform binary releases.
 ## How it works
 
 1. A maintainer runs `bazelisk run //:release` locally.
-2. The script validates that MODULE.bazel, CMakeLists.txt, and the optional MCP
+2. The script validates that src/bin/KeplerVersion.h.in, MODULE.bazel, and the optional MCP
    package have the same version, ensures the working tree has no tracked or
    untracked changes, creates an annotated git tag (`v1.0.0`), and pushes it.
 3. GitHub Actions (`.github/workflows/release.yml`) triggers on the tag,
@@ -39,15 +39,15 @@ permissions.
 Edit all three version declarations:
 
 ```
-MODULE.bazel:  version = "1.1.0"
-CMakeLists.txt: VERSION 1.1.0
+src/bin/KeplerVersion.h.in: KEPLER_VERSION { "1.1.0" }
+MODULE.bazel: version = "1.1.0"
 mcp/pyproject.toml: version = "1.1.0"
 ```
 
 Commit the version bump:
 
 ```bash
-git add MODULE.bazel CMakeLists.txt mcp/pyproject.toml
+git add src/bin/KeplerVersion.h.in MODULE.bazel mcp/pyproject.toml
 git commit -m "Bump version to 1.1.0"
 git push origin main
 ```
@@ -59,7 +59,7 @@ bazelisk run //:release
 ```
 
 The script will:
-- Verify MODULE.bazel, CMakeLists.txt, and mcp/pyproject.toml versions match
+- Verify src/bin/KeplerVersion.h.in, MODULE.bazel, and mcp/pyproject.toml versions match
 - Check that the working tree is clean (including untracked files)
 - Check that the tag doesn't already exist
 - Create and push `v1.1.0`
@@ -93,9 +93,10 @@ sha256sum -c kepler-formal-1.1.0-linux-x86_64.tar.gz.sha256
 
 ## Versioning
 
-The project uses [semantic versioning](https://semver.org/).  The version
-must match in `MODULE.bazel`, `CMakeLists.txt`, and `mcp/pyproject.toml`. The
-release script validates this.
+The project uses [semantic versioning](https://semver.org/). The canonical
+version is defined in `src/bin/KeplerVersion.h.in`; CMake derives its project
+version from that include template. `MODULE.bazel` and `mcp/pyproject.toml`
+must declare the same version, which the release script validates.
 
 Tags use the `v` prefix (`v1.0.0`).  This is the convention expected by
 the [publish-to-bcr](https://github.com/bazel-contrib/publish-to-bcr)
@@ -128,7 +129,7 @@ git_override(
 
 ## Troubleshooting
 
-**"Version mismatch" error**: Edit MODULE.bazel, CMakeLists.txt, and
+**"Version mismatch" error**: Edit src/bin/KeplerVersion.h.in, MODULE.bazel, and
 mcp/pyproject.toml to have the same version string, commit, and retry.
 
 **"Tag already exists" error**: The version has already been released.

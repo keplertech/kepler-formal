@@ -98,6 +98,7 @@ sh_binary(
     srcs = ["tools/release.sh"],
     data = [
         "MODULE.bazel",
-        "CMakeLists.txt",
+        "//src/bin:KeplerVersion.h.in",
+        "mcp/pyproject.toml",
     ],
 )

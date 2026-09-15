@@ -1,5 +1,5 @@
 # Copyright 2024-2025 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 include(GoogleTest)
 include(${PROJECT_SOURCE_DIR}/cmake/KeplerGoogleTest.cmake)
@@ -11,6 +11,10 @@ add_test(NAME GoogleTestHeaderPrecedence
     -DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GoogleTestHeadersTest.cmake
 )
+
+add_test(NAME VersionCliTest
+  COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/VersionCliTest.sh"
+    $<TARGET_FILE:kepler-formal>)
 
 add_subdirectory(unit_designs)
 add_subdirectory(strategies)

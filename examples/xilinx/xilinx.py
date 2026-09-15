@@ -1,5 +1,5 @@
 # Copyright 2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 """Formal models for the Xilinx primitives used by these examples."""
 

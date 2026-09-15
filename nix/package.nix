@@ -1,5 +1,5 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 {
   lib,
@@ -29,8 +29,8 @@ stdenv.mkDerivation {
   pname = "kepler-formal";
   version = builtins.head (
     builtins.match
-      ".*project\\(kepler-formal[[:space:]]+VERSION[[:space:]]+([0-9]+\\.[0-9]+\\.[0-9]+).*"
-      (builtins.readFile "${src}/CMakeLists.txt")
+      ''.*KEPLER_VERSION[[:space:]]*\{[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*''
+      (builtins.readFile "${src}/src/bin/KeplerVersion.h.in")
   );
   inherit src;
 
@@ -111,7 +111,7 @@ stdenv.mkDerivation {
   meta = {
     description = "Formal equivalence checking for digital circuits";
     homepage = "https://github.com/keplertech/kepler-formal";
-    license = lib.licenses.gpl3Only;
+    license = lib.licenses.asl20;
     mainProgram = "kepler-formal";
     platforms = [ "x86_64-linux" "aarch64-darwin" ];
   };

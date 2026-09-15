@@ -151,33 +151,6 @@ The YAML equivalents are `btor2_export: true`,
 `btor2_export_path: equivalence.btor2`, and `dump_only: true`.
 See [BTOR2 export](docs/btor2-export.md) for examples and model semantics.
 
-### Python API
-
-Kepler Formal also provides a native, file-based Python API:
-
-```bash
-python -m pip install .
-```
-
-```python
-from kepler_formal import VerificationOptions, verify
-
-result = verify(
-    "reference.v",
-    "implementation.v",
-    options=VerificationOptions(log_file="verification.log"),
-)
-print(result.status)
-```
-
-The wheel also bundles an isolated editor API under
-`kepler_formal.najaeda`. Its live netlist universe is independent from the
-verifier; designs cross between them through Verilog, SystemVerilog, or Naja
-IF files.
-
-See the [Python API guide](docs/python-api.md) for SEC options, structured
-results, the nested NajaEDA editor, and in-process lifetime constraints.
-
 ### Custom Python Primitives
 
 Custom technology primitives can be defined in Python and loaded through the
@@ -200,6 +173,19 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ### Binary Flags
 
+Report the versions and Git revisions embedded in the executable:
+
+```bash
+kepler-formal --version
+```
+
+The command needs no configuration or netlists. Hashes describe the sources
+used to build the executable. Kepler uses `unknown` when Git metadata is
+unavailable; CMake source-archive builds can supply `-DKEPLER_GIT_HASH=<hash>`.
+The project version is defined in `src/bin/KeplerVersion.h.in`. CMake reads
+it for its project metadata; Bazel generates the CLI include directly from
+that template. Release checks keep Bazel and MCP package versions in sync.
+
 ```bash
 # Single file per design
 build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-cc/-cxx> [options] \
@@ -220,6 +206,7 @@ build/src/bin/kepler-formal -sv -v sec \
 | Flag | Meaning |
 | --- | --- |
 | `--help`, `-h` | Print usage. |
+| `--version`, `-V` | Print Kepler Formal and Naja versions and build Git hashes, then exit. |
 | `--config <file>`, `-c <file>` | Load a YAML config. Config mode cannot be combined with other CLI options. |
 | `--verification <lec\|sec>`, `-v <lec\|sec>` | Select combinational LEC or sequential SEC. Defaults to `lec`. |
 | `--dump-btor2 <file>` | Export the prepared SEC equivalence problem as BTOR2 before solving. |
@@ -309,26 +296,11 @@ build/src/bin/kepler-formal -cc -v sec --cc_top top_function design0.cc design1.
 
 See the organized [examples](examples).
 
-## Optional local MCP server
+## License
 
-An optional stdio MCP wrapper lives in [`mcp/`](mcp). Install it from this
-checkout with `python -m pip install ./mcp`, then start it with an explicit
-project root:
-
-```sh
-kepler-formal-mcp --project-root /absolute/path/to/design-project
-```
-
-It exposes one-shot `gate_lec`, `gate_sec`, and `rtl_sec` tools. Each invocation
-resolves `kepler-formal` from `PATH`, the local cache, or a checksummed GitHub
-Release; spawns a fresh native process; and enforces the caller's timeout. See
-the [MCP add-on README](mcp/README.md) for setup and the structured result
-taxonomy.
-
-The native stdio model is deliberate: local agent edits are immediately visible
-without Docker volume mapping, and kepler-formal only reads/checks design files.
-Containers remain the right packaging for CI or a future hosted deployment, not
-for this local editing loop.
+Except where otherwise noted, Kepler Formal is licensed under the
+[Apache License, Version 2.0](LICENSE.rst). Third-party components and example
+inputs retain their respective licenses and notices.
 
 ## Contact
 

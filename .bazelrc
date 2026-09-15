@@ -2,6 +2,7 @@ common --enable_platform_specific_config
 
 build --cxxopt=-std=c++20
 build --host_cxxopt=-std=c++20
+build --workspace_status_command=tools/workspace_status.sh
 
 # Never fall back to autodetecting /usr/bin/gcc on Linux — the hermetic
 # toolchain (hermetic-llvm) must win resolution. macOS still uses the

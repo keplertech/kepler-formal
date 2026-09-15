@@ -101,7 +101,7 @@ CI without building from source.
 
 To publish to BCR:
 
-1. Ensure the version in `MODULE.bazel` follows semver (currently `1.0.0`).
+1. Ensure the version in `MODULE.bazel` follows semver and matches `src/bin/KeplerVersion.h.in` (currently `0.5.0`).
 2. Create a GitHub release/tag matching the version (e.g. `v1.0.0`) —
    this now happens automatically via `bazelisk run //:release`.
 3. Submit to BCR via the

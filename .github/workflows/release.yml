@@ -1,5 +1,5 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 name: release
 
@@ -98,6 +98,7 @@ jobs:
         readelf -p .comment "${DIST}/bin/kepler-formal" | grep clang
         echo "=== smoke test ==="
         "./${DIST}/kepler-formal" --help || true
+        "./${DIST}/kepler-formal" --version
 
     - name: Create GitHub Release
       env:

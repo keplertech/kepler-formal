@@ -1,1 +1,8 @@
 # Package marker for test directory
+
+sh_test(
+    name = "VersionCliTest",
+    srcs = ["VersionCliTest.sh"],
+    args = ["$(rootpath //src/bin:kepler-formal)"],
+    data = ["//src/bin:kepler-formal"],
+)
