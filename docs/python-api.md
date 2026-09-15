@@ -6,160 +6,151 @@ and returns an owning, structured result after each run.
 
 This is a direct, in-process binding. It does not start the command-line
 executable, use a subprocess, or communicate through MCP or another service.
-The verification API is deliberately file-based. The distribution also
-contains an opt-in, nested NajaEDA package for live netlist analysis and
-editing, with a separate native runtime and lifecycle.
+NajaEDA loads or creates the netlists; Kepler borrows those live designs for
+verification without serializing, cloning, or rebuilding them. The separately
+installed `najaeda` package provides the single native netlist runtime shared
+by both APIs.
 
 ## Build and install
 
-From a recursive source checkout:
+This development change requires the matching NajaEDA shared-runtime SDK,
+currently version `0.7.24.dev0` in `thirdparty/naja`. That SDK has not been
+published. Build both packages from this recursive checkout in one virtual
+environment, with the native build dependencies installed:
 
 ```bash
-python -m pip install .
+python -m pip install 'scikit-build-core>=0.11.3,<0.12' build wheel
+python -m pip install --no-build-isolation ./thirdparty/naja
+python -m pip install --no-build-isolation .
 ```
+
+The wheel CI builds and installs a separate local provider wheel for every
+Python/platform combination. Publishing Kepler is blocked until the SDK is
+released and its released version is pinned in `pyproject.toml` and
+`ci/shared_naja_wheels.py`. An older NajaEDA wheel without this SDK cannot be
+used for direct object sharing. Once that prerequisite is satisfied, ordinary
+isolated `pip install .` builds can resolve the provider from the package index.
+
+`BUILD_KEPLER_PYTHON=ON` is a Python-only CMake build. Build the standalone
+executable separately with `BUILD_KEPLER_PYTHON=OFF`; it continues to use the
+vendored Naja and does not depend on an installed NajaEDA package.
+
+The Python binding calls the shared verification engine with existing NajaEDA
+designs. Source loading and configuration parsing belong to the standalone
+executable; the Python extension does not link that file driver.
 
 The build uses `scikit-build-core`, following NajaEDA's package layout. Native
-build dependencies are the same as for the CMake build. Linux and macOS are the
-initially supported platforms.
+build dependencies are the same as for the CMake build. The wheel matrix covers
+Linux x86_64/aarch64, macOS arm64, and Windows AMD64; see the exact Python
+versions in [wheel coverage](python-release.md#wheel-coverage).
 
-## Bundled NajaEDA editor
+Windows source builds require clang-cl with the MSVC SDK environment, CMake,
+Ninja, and the vcpkg dependencies installed by `ci/windows_setup.ps1`. Building
+the Windows NajaEDA provider also requires pregenerated Verilog parser sources
+and `PREGENERATED_PARSER_SOURCES=ON`; the wheel workflow generates these sources
+on Linux. Ordinary MSVC `cl.exe` is not supported for KF's bundled solver
+sources.
 
-Import the bundled editor explicitly from Kepler Formal's namespace:
+Maintainers can publish tested wheels using the manual
+[Python release workflow](python-release.md).
 
-```python
-from kepler_formal import najaeda
-from kepler_formal.najaeda import netlist
+## Shared NajaEDA runtime
 
-print(najaeda.__version__)
+`najaeda` is a runtime dependency of `kepler_formal` and is imported before
+Kepler's native extension. It initializes the Naja runtime and publishes a
+versioned native API that Kepler validates at import and before each live-design
+call. A mismatched build, ABI, or runtime identity fails explicitly instead of
+passing objects across an unsafe binary boundary.
 
-netlist.reset()
-top = netlist.load_verilog("candidate.v")
-top.get_net("old_name").set_name("new_name")
-netlist.dump_naja_if("candidate.najaif")
-```
-
-Importing `kepler_formal` does not load this editor runtime. It is initialized
-only by an explicit access such as `from kepler_formal import najaeda` or an
-import below `kepler_formal.najaeda`. The usual upstream high-level modules
-remain nested, for example:
-
-- `kepler_formal.najaeda.netlist` for loading, navigation, analysis, and edits;
-- `kepler_formal.najaeda.naja` for the expert raw SNL API;
-- `kepler_formal.najaeda.instance_visitor`, `stats`, and `primitives` for the
-  corresponding upstream helpers.
-
-Always use these fully nested names in application code. The package does not
-install or replace a `sys.modules["najaeda"]` alias, and its internal modules
-resolve one another through `kepler_formal.najaeda`. A separately installed
-top-level `najaeda` package is not used by the bundled editor. Prefer one API
-namespace consistently in an application so object ownership remains clear.
-
-### Two native runtimes
-
-The editor and verifier deliberately have independent native Naja runtimes:
-
-- `kepler_formal.najaeda` owns a persistent editing universe. Its live
-  `Instance`, `Net`, `Term`, and raw SNL objects remain valid until the editor
-  deletes them or `netlist.reset()` destroys that universe.
-- `verify()`, `run_config()`, and `run_cli()` use Kepler's private verification
-  universe. Each call creates and destroys its run state without destroying
-  the nested editor's universe.
-
-This separation allows a verification call while the nested editor has a live
-design, but native objects cannot cross the boundary. `Design.files` accepts
-path-like values only; it does not accept editor `Instance`, raw `SNLDesign`,
-or other NajaEDA objects. Results likewise contain no live Naja objects.
-
-Exchange a design through a file. Naja IF is the most direct snapshot format:
+For compatibility, `kepler_formal.najaeda` and all of its submodules are
+aliases to the original package:
 
 ```python
-from kepler_formal import Design, InputFormat, VerificationOptions, verify
-from kepler_formal.najaeda import netlist
+import najaeda
+import kepler_formal
+from najaeda import netlist
 
-netlist.dump_naja_if("edited.najaif")
-result = verify(
-    Design("reference.najaif"),
-    Design("edited.najaif"),
-    options=VerificationOptions(input_format=InputFormat.NAJA_IF),
-)
+assert kepler_formal.najaeda is najaeda
+assert kepler_formal.najaeda.netlist is netlist
 ```
 
-Verilog and SystemVerilog files are also valid exchange formats under their
-normal input rules. Saving a path and then passing that path is intentional:
-the verifier never borrows the editor's in-memory universe.
+There is one package, one native runtime, and one live universe. Either import
+spelling refers to the same Python module objects; new code should generally
+use the original `najaeda` namespace.
 
-## Compare two designs
+## Load in NajaEDA, verify in Kepler
+
+Use NajaEDA to load each design into the same live universe, then pass the raw
+`SNLDesign` objects to `verify_designs()`:
 
 ```python
-from kepler_formal import (
-    Design,
-    InputFormat,
-    SecEngine,
-    VerificationMode,
-    VerificationOptions,
-    VerificationStatus,
-    verify,
-)
+from najaeda import naja
+from kepler_formal import VerificationOptions, verify_designs
 
-result = verify(
-    Design("reference.v", top="top"),
-    Design("implementation.v", top="top"),
-    options=VerificationOptions(
-        input_format=InputFormat.VERILOG,
-        mode=VerificationMode.SEC,
-        libraries=("cells.lib",),
-        sec_engine=SecEngine.PDR,
-        max_k=32,
-        log_file="verification.log",
-    ),
-)
+universe = naja.NLUniverse.create()
+reference_db = naja.NLDB.create(universe)
+reference_db.loadVerilog(["reference.v"])
+reference = reference_db.getTopDesign()
 
-if result.status is VerificationStatus.EQUIVALENT:
-    print("proved equivalent")
-else:
-    print(result.status.value, result.reason)
+implementation_db = naja.NLDB.create(universe)
+implementation_db.loadVerilog(["implementation.v"])
+implementation = implementation_db.getTopDesign()
+
+result = verify_designs(
+    reference,
+    implementation,
+    options=VerificationOptions(log_file="verification.log"),
+)
+print(result.status, result.reason)
+# Both designs remain available for edits and further verification calls.
 ```
 
-`verify()` accepts a `Design`, one path, or a sequence of paths for each side.
-It creates a temporary JSON configuration and synchronously runs the native
-engine. Paths passed through `Design` and `VerificationOptions` are expanded
-and made absolute relative to the process's current working directory.
+Load libraries and primitives through NajaEDA before verification. Existing
+in-memory designs can be passed directly; no loading step is required.
+The caller owns the designs, databases, and universe. Kepler does not destroy
+them on success, non-equivalence, or an error.
 
-## Design inputs and flists
-
-`Design` has three fields:
-
-- `files`: one path-like value or a sequence of source paths. It defaults to an
-  empty sequence so that a SystemVerilog flist can be the only input.
-- `top`: an optional top-module name.
-- `flist`: an optional path to a SystemVerilog file list.
-
-Each design must provide at least one source in `files`, a permitted `flist`,
-or both. The exact rules depend on `input_format`:
-
-| Input format | Design 1 | Design 2 | Verification modes |
-| --- | --- | --- | --- |
-| `verilog` | Verilog file(s), optional `top`, no flist | Verilog file(s), optional `top`, no flist | LEC or SEC |
-| `systemverilog` | SystemVerilog file(s) and/or flist, optional `top` | SystemVerilog file(s) and/or flist, optional `top` | SEC only |
-| `sv2v` | SystemVerilog file(s) and/or flist, optional `top` | Verilog file(s), optional `top`, no flist | SEC only |
-| `naja_if` | Exactly one Naja IF snapshot, no `top` or flist | Exactly one Naja IF snapshot, no `top` or flist | LEC or SEC |
-
-For example, a flist-only SystemVerilog comparison is:
+For a high-level `najaeda.netlist.Instance`, capture its current model with
+`from_najaeda()` before changing the selected top:
 
 ```python
-result = verify(
-    Design(flist="reference.f", top="top"),
-    Design(flist="implementation.f", top="top"),
-    options=VerificationOptions(
-        input_format=InputFormat.SYSTEMVERILOG,
-        mode=VerificationMode.SEC,
-    ),
-)
+from najaeda import netlist
+from kepler_formal import from_najaeda
+
+universe.setTopDesign(reference)
+reference_handle = from_najaeda(netlist.get_top())
+universe.setTopDesign(implementation)
+implementation_handle = from_najaeda(netlist.get_top())
+result = verify_designs(reference_handle, implementation_handle)
 ```
 
-The native SystemVerilog loader interprets the contents of each flist. The
-Python layer resolves the flist path itself but does not rewrite paths inside
-the flist.
+`from_najaeda(Instance)` resolves the instance's current model immediately.
+Changing NajaEDA's selected top later does not retarget the returned
+`NativeDesign`. The handle retains the original Python object and its resolved
+raw `SNLDesign`; its `source` and `najaeda_design` properties expose those two
+objects. It retains the Python wrappers, not ownership of the native design or
+universe. It is not a netlist snapshot: edits to the captured native design
+remain visible to later calls, and explicit Naja destruction invalidates it.
+
+`verify_designs()` also accepts raw `SNLDesign` objects and captures them for
+the call. It deliberately rejects a high-level `Instance`; call
+`from_najaeda(instance)` while the intended model is current so the selection
+cannot change implicitly. If the design or its universe is destroyed, using
+the handle raises `ReferenceError`.
+
+`VerificationOptions` controls the mode, solver, SEC engine/encoding/bound,
+boundary handling, reports, and logging. Source formats, libraries, and
+preprocessing are configured through NajaEDA when loading designs.
+
+The call is synchronous, serialized, and holds Python's GIL. Do not mutate,
+delete, or reset the shared NajaEDA universe from another native thread while
+verification is running. Kepler temporarily selects and analyzes the borrowed
+designs, then restores the caller's universe top selections, DNL, ordering
+metadata, expression caches, configuration, and logger references.
+
+YAML/JSON configuration and file-based verification remain available through
+the standalone `kepler-formal` executable. The Python package exposes
+`from_najaeda()` and `verify_designs()` for existing netlists.
 
 ## Verification options
 
@@ -167,49 +158,19 @@ Enum fields accept either the exported enum member or its exact string value.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `input_format` | `InputFormat.VERILOG` | `verilog`, `systemverilog`, `sv2v`, or `naja_if` |
 | `mode` | `VerificationMode.LEC` | `lec` or `sec` |
-| `libraries` | empty | One Liberty path or a sequence of Liberty paths |
 | `solver` | `Solver.KISSAT` | `kissat`, `cadical`, or `glucose` |
 | `max_k` | native default (32 for SEC) | Non-negative SEC bound |
 | `sec_engine` | native default (`pdr`) | `pdr`, `k_induction`, or `imc` |
 | `sec_encoding` | native default (`dual_rail_steady`) | `dual_rail_steady` or `binary` |
-| `verilog_preprocessing` | `False` | Enable Verilog preprocessing |
-| `compact` | `False` | Enable compact verification mode |
 | `allow_boundary_mismatch` | `False` | Permit supported extracted-boundary mismatches |
 | `report_skipped_outputs` | `False` | Ask the native engine to write detailed skipped-output reports |
-| `log_file` | native-generated path | Requested native log path |
+| `log_file` | `None` | Requested native log path; LEC selects a default path when omitted |
 | `log_level` | `info` | Native log level (`debug` enables debug logging) |
 
 `max_k`, `sec_engine`, and `sec_encoding` are SEC-only and are rejected when
-`mode` is LEC. SystemVerilog-based formats are also SEC-only in the high-level
-API.
-
-## Other entry points
-
-An existing YAML or JSON configuration can be used directly:
-
-```python
-from kepler_formal import run_config
-
-result = run_config("verify.yml")
-```
-
-`run_config()` passes the configuration to the same in-process engine. Unlike
-`verify()`, it does not translate the configuration into high-level Python
-options, so the native configuration parser is authoritative.
-
-The lower-level `run_cli()` accepts the same argument sequence as the native
-executable, excluding `argv[0]`:
-
-```python
-from kepler_formal import run_cli
-
-result = run_cli(("-verilog", "reference.v", "implementation.v"))
-```
-
-`run_cli()` is still an in-process call; “CLI” describes only its argument
-shape. Pass a sequence, not one string or path.
+`mode` is LEC. `allow_boundary_mismatch` is supported only for LEC.
+`log_file` is expanded and resolved relative to the current working directory.
 
 ## Statuses and errors
 
@@ -217,29 +178,27 @@ Always use `result.status` for the semantic outcome:
 
 | Status | Meaning |
 | --- | --- |
-| `NO_RESULT` | The invocation intentionally did not attempt verification, for example an empty argument list or `--help`. |
-| `EXPORTED` | Dump-only wrote the prepared SEC problem to BTOR2 without running a proof. Both `equivalent` and `conclusive` are false. |
 | `EQUIVALENT` | LEC found no difference, or SEC completed a proof of equivalence under the selected model and encoding. |
 | `DIFFERENT` | LEC found a difference, or SEC found a counterexample. |
 | `PARTIALLY_PROVED` | SEC proved some observed outputs, but not all of them. |
 | `INCONCLUSIVE` | SEC completed without either a full proof or a counterexample, commonly because a bound or engine limit was reached. |
 | `UNSUPPORTED` | The selected SEC workflow cannot analyze the design pair. |
-| `ERROR` | Argument parsing, configuration, loading, or another operational step failed before a semantic verdict was produced. |
+| `ERROR` | An operational step failed before a semantic verdict was produced; inspect `reason`. |
 
-`DIFFERENT`, `PARTIALLY_PROVED`, `INCONCLUSIVE`, `UNSUPPORTED`, `NO_RESULT`, `EXPORTED`,
-and ordinary native `ERROR` outcomes are returned as values, not raised as
-Python exceptions. For an `ERROR`, inspect `reason`, the native log output, and
-`exit_code`; some early failures can provide only a general reason.
+`DIFFERENT`, `PARTIALLY_PROVED`, `INCONCLUSIVE`, `UNSUPPORTED`, and ordinary
+native `ERROR` outcomes are returned as values. For an `ERROR`, inspect `reason`,
+the native log output, and `exit_code`; some early failures can provide only a
+general reason.
 
-Python argument validation still raises `TypeError` or `ValueError`. A native
-safety violation (for example, an active external Naja universe) or an
-unexpected native exception raises `RuntimeError` because no normal result can
-be produced.
+Invalid arguments raise `TypeError` or `ValueError`; destroyed designs raise
+`ReferenceError`. Native runtime-safety failures and unexpected binding
+exceptions raise `RuntimeError`. Handles remain reusable after failed calls
+while their caller-owned designs remain live.
 
 Do not infer equivalence from `exit_code == 0`. The value preserves the native
 program's historical exit convention, and LEC uses zero for both equivalent
-and different designs. SEC uses zero for a proof or successful dump-only export, one for a partial
-proof, two for inconclusive/unsupported, and three for a counterexample, but
+and different designs. SEC uses zero for a proof, one for a partial proof, two
+for inconclusive/unsupported, and three for a counterexample, but
 `status` is the stable, mode-independent interpretation.
 
 ## Result fields
@@ -250,8 +209,8 @@ proof, two for inconclusive/unsupported, and three for a counterexample, but
 | --- | --- |
 | `status` | A `VerificationStatus` semantic outcome |
 | `exit_code` | The native return code; do not use it alone as the verdict |
-| `input_format` | Parsed input-format string, or `None` if parsing ended before it was available |
-| `verification` | Parsed `lec` or `sec` mode, or `None` if unavailable |
+| `input_format` | `naja_design` for live-design verification |
+| `verification` | Selected `lec` or `sec` mode |
 | `log_file` | The actual log path selected by the engine, or `None` if no log was created |
 | `bound` | The SEC bound associated with the result; zero for LEC or when unavailable |
 | `reason` | Engine detail or an operational error explanation, when available |
@@ -284,43 +243,31 @@ set of covered-but-unproved outputs.
 
 ## Lifetime, global state, and concurrency
 
-Results contain only Python strings, integers, tuples, and enums. They remain
-valid after the call because the verification runtime's native Naja universe,
-miter state, expression caches, and run-owned objects are released before
-control returns to Python. The binding restores the Kepler solver/report
-settings and spdlog logger references that it changes.
+Results contain only Python strings, integers, tuples, and enums, so they remain
+valid after verification and after the caller later destroys the designs.
+`NativeDesign` retains live NajaEDA wrappers and is valid only while the
+captured design remains in the
+active shared universe. The binding restores the Kepler solver/report settings
+and spdlog logger references that it changes.
 
-Within the private verification runtime, Kepler and Naja still use global
-design, solver, and logging state. The binding therefore has these constraints:
+Kepler and Naja still use global design, solver, and logging state. The binding
+therefore has these constraints:
 
 - Verification calls are synchronous, serialized by a process-wide mutex, and
   not reentrant.
 - The binding intentionally keeps Python's GIL for the entire native run.
   Other Python threads cannot execute Python code until verification returns.
+  On free-threaded CPython, importing the binding normally enables the GIL.
+  If it is forcibly disabled with `PYTHON_GIL=0` or `-X gil=0`, verification
+  raises `RuntimeError`; use `PYTHON_GIL=1` or `-X gil=1` instead.
 - The API does not currently provide an in-process timeout or cancellation
   hook. A caller that needs hard cancellation or crash isolation should place
   the Python call in a separately managed process.
-- A call is rejected with `RuntimeError` if Kepler's private verification
-  runtime already contains an unexpected live universe. A universe owned by
-  the isolated `kepler_formal.najaeda` editor is independent and may remain
-  live across verification calls.
-- No `Design` or result field accepts or returns live Naja/SNL/NajaEDA objects.
-  Pass files or snapshots and keep only the owning result values.
+- `verify_designs()` uses the shared live NajaEDA universe. Do not concurrently
+  read, mutate, delete, or reset that universe from native threads. Destroying
+  a captured design or calling `netlist.reset()` invalidates its handles.
 - Kepler temporarily installs a process-global spdlog default/named logger and
   restores the previous loggers after the run. The mutex protects Kepler calls,
   but it cannot protect unrelated native threads. A host with C++ threads that
   concurrently use spdlog's global default logger must coordinate those
   threads or run verification in an isolated process.
-
-## Python technology files
-
-`py_tech_files` are not supported by the in-process verification driver. The
-driver deliberately excludes Naja's CPython technology loader. This
-restriction applies even though the separate nested NajaEDA editor has its own
-primitive-loading facilities. Liberty libraries are supported through
-`VerificationOptions.libraries`.
-
-If a YAML/JSON configuration supplied to `run_config()` contains
-`py_tech_files`, the call returns `VerificationStatus.ERROR` with a nonzero
-`exit_code` and an explanatory `reason`. Use the standalone `kepler-formal`
-executable for a workflow that currently requires Python technology files.

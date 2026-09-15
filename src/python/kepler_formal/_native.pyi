@@ -1,9 +1,7 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Sequence
-from os import PathLike
-from typing import TypedDict
+from typing import Mapping, TypedDict
 
 
 class NativeResult(TypedDict):
@@ -21,6 +19,19 @@ class NativeResult(TypedDict):
     skipped_observed_outputs: list[str]
 
 
-def run(arguments: Sequence[str | PathLike[str]]) -> NativeResult: ...
+class NativeDesign:
+    @property
+    def source(self) -> object: ...
+
+    @property
+    def najaeda_design(self) -> object: ...
+
+
+def from_najaeda(design: object, source: object = ...) -> NativeDesign: ...
+def verify_designs(
+    design1: NativeDesign,
+    design2: NativeDesign,
+    options: Mapping[str, object],
+) -> NativeResult: ...
 def get_version() -> str: ...
 def get_git_hash() -> str: ...

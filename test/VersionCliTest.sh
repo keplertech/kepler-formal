@@ -9,8 +9,10 @@ output=$(PYTHONPATH=/nonexistent "$binary" --version)
 short_output=$(PYTHONPATH=/nonexistent "$binary" -V)
 [ "$output" = "$short_output" ]
 [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 4 ]
+printf '%s\n' "$output" | grep -Eq '^kepler-formal version: [0-9]+\.[0-9]+\.[0-9]+$'
+# The pinned Naja provider may be a development wheel.
+printf '%s\n' "$output" | grep -Eq '^naja version: [0-9]+\.[0-9]+\.[0-9]+(\.dev[0-9]+)?$'
 for project in kepler-formal naja; do
-  printf '%s\n' "$output" | grep -Eq "^${project} version: [0-9]+\.[0-9]+\.[0-9]+$"
   printf '%s\n' "$output" | grep -Eq "^${project} git hash: ([0-9a-f]{7,40}|unknown)$"
 done
 

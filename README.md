@@ -255,6 +255,24 @@ py_tech_files:
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ```
 
+## Python API
+
+NajaEDA loads or creates the netlists; Kepler verifies the existing designs in
+memory through `verify_designs()`:
+
+```python
+from kepler_formal import verify_designs
+
+# reference and implementation are live NajaEDA SNLDesign objects.
+result = verify_designs(reference, implementation)
+print(result.status)
+```
+
+The caller retains ownership of both designs and can edit and verify them
+again. YAML/configuration and file loading remain available in the standalone
+executable. See the [Python API](docs/python-api.md) for NajaEDA loading examples,
+installation, and options.
+
 ## Examples 
 
 See the organized [examples](examples).
