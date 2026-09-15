@@ -3789,7 +3789,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
 
   // Compact self-comparison passes the same immutable extracted model twice.
   // Its aligned outputs are identical without constructing a proof problem.
-  if (&model0 == &model1) {
+  if (&model0 == &model1 && !exportOptions_.enabled()) {
     return makeSecResult(
         SequentialEquivalenceStatus::Equivalent,
         0,
