@@ -83,6 +83,54 @@ SNLDesign* makeConstant(NLLibrary* library, const std::string& name, bool value)
   return design;
 }
 
+struct OpaqueBoundaryFixture {
+  SNLDesign* design = nullptr;
+  SNLInstance* instance = nullptr;
+  SNLScalarNet* instanceInputNet = nullptr;
+  SNLScalarNet* instanceOutputNet = nullptr;
+  SNLScalarTerm* modelInput = nullptr;
+  SNLScalarTerm* modelOutput = nullptr;
+};
+
+OpaqueBoundaryFixture makeOpaqueBoundary(NLLibrary* library,
+                                         NLLibrary* primitives,
+                                         const std::string& name,
+                                         const std::string& inputSource) {
+  auto* model = SNLDesign::create(primitives, SNLDesign::Type::Primitive,
+                                  NLName(name + "_opaque"));
+  auto* modelInput = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Input, NLName("A"));
+  auto* modelOutput = SNLScalarTerm::create(
+      model, SNLTerm::Direction::Output, NLName("Y"));
+  auto* design = SNLDesign::create(library, NLName(name));
+  auto* input = SNLScalarTerm::create(
+      design, SNLTerm::Direction::Input, NLName("I"));
+  auto* output = SNLScalarTerm::create(
+      design, SNLTerm::Direction::Output, NLName("O"));
+  auto* inputNet = SNLScalarNet::create(design, NLName("input"));
+  input->setNet(inputNet);
+  auto* alternateInput = SNLScalarTerm::create(
+      design, SNLTerm::Direction::Input, NLName("ALT"));
+  auto* alternateInputNet =
+      SNLScalarNet::create(design, NLName("alternate_input"));
+  alternateInput->setNet(alternateInputNet);
+  auto* instanceInputNet =
+      inputSource == "alternate" ? alternateInputNet : inputNet;
+  if (inputSource == "constant") {
+    instanceInputNet =
+        SNLScalarNet::create(design, NLName("constant_input"));
+    instanceInputNet->setType(SNLNet::Type::Assign0);
+  }
+  auto* instanceOutputNet =
+      SNLScalarNet::create(design, NLName("output"));
+  output->setNet(instanceOutputNet);
+  auto* instance = SNLInstance::create(design, model, NLName("opaque"));
+  instance->getInstTerm(modelInput)->setNet(instanceInputNet);
+  instance->getInstTerm(modelOutput)->setNet(instanceOutputNet);
+  return {design, instance, instanceInputNet, instanceOutputNet,
+          modelInput, modelOutput};
+}
+
 std::pair<SNLDesign*, SNLInstParameter*> makeMutableLut(
     NLLibrary* library, NLLibrary* primitives, const std::string& name) {
   auto* model = SNLDesign::create(primitives, SNLDesign::Type::Primitive,
@@ -150,6 +198,14 @@ void runTests() {
   auto* partialSecond = makeUnresetFlop(library1, "partial_second", true);
   auto* inconclusiveFirst = makeUnresetFlop(library0, "inconclusive_first", false);
   auto* inconclusiveSecond = makeUnresetFlop(library1, "inconclusive_second", false);
+  auto opaqueFirst =
+      makeOpaqueBoundary(library0, primitives0, "opaque_first", "primary");
+  auto opaqueSecond =
+      makeOpaqueBoundary(library1, primitives1, "opaque_second", "alternate");
+  auto opaqueConstant =
+      makeOpaqueBoundary(library1, primitives1, "opaque_constant", "constant");
+  auto* assignInput = NLDB0::getAssignInput();
+  auto* assignOutput = NLDB0::getAssignOutput();
   universe->setTopDesign(anchor);
   db1->setTopDesign(nullptr);
   auto* savedDnl = naja::DNL::get();
@@ -172,6 +228,13 @@ void runTests() {
   modelInput->setOrderID(102);
   const auto firstRevision = first->getRevisionCount();
   const auto secondRevision = second->getRevisionCount();
+  const auto opaqueFirstRevision = opaqueFirst.design->getRevisionCount();
+  const auto opaqueSecondRevision = opaqueSecond.design->getRevisionCount();
+  const auto opaqueConstantRevision = opaqueConstant.design->getRevisionCount();
+  const auto assignInputOrderID = assignInput->getOrderID();
+  const auto assignOutputOrderID = assignOutput->getOrderID();
+  const auto db0LibraryCount = db0->getLibraries().size();
+  const auto db1LibraryCount = db1->getLibraries().size();
 
   auto checkState = [&]() {
     check(NLUniverse::get() == universe, "universe identity changed");
@@ -179,12 +242,43 @@ void runTests() {
           "caller top selection changed");
     check(db0->getTopDesign() == anchor && db1->getTopDesign() == nullptr,
           "a per-DB top selection changed");
+    check(db0->getLibraries().size() == db0LibraryCount &&
+              db1->getLibraries().size() == db1LibraryCount,
+          "temporary boundary library escaped its call");
     check(naja::DNL::isCreated() && naja::DNL::get() == savedDnl,
           "caller DNL was replaced or destroyed");
     check(firstInput->getOrderID() == 100 && child->getOrderID() == 101 &&
               modelInput->getOrderID() == 102, "caller ordering metadata changed");
+    check(assignInput->getOrderID() == assignInputOrderID &&
+              assignOutput->getOrderID() == assignOutputOrderID,
+          "boundary-only primitive ordering metadata changed");
     check(first->getRevisionCount() == firstRevision &&
               second->getRevisionCount() == secondRevision, "design was modified");
+    check(opaqueFirst.design->getRevisionCount() == opaqueFirstRevision &&
+              opaqueSecond.design->getRevisionCount() == opaqueSecondRevision &&
+              opaqueConstant.design->getRevisionCount() ==
+                  opaqueConstantRevision,
+          "boundary source design was modified");
+    check(opaqueFirst.design->getInstance(NLName("opaque")) ==
+                  opaqueFirst.instance &&
+              opaqueSecond.design->getInstance(NLName("opaque")) ==
+                  opaqueSecond.instance &&
+              opaqueConstant.design->getInstance(NLName("opaque")) ==
+                  opaqueConstant.instance,
+          "boundary source instance was replaced");
+    check(opaqueFirst.instance->getInstTerm(opaqueFirst.modelInput)->getNet() ==
+                  opaqueFirst.instanceInputNet &&
+              opaqueFirst.instance->getInstTerm(opaqueFirst.modelOutput)->getNet() ==
+                  opaqueFirst.instanceOutputNet &&
+              opaqueSecond.instance->getInstTerm(opaqueSecond.modelInput)->getNet() ==
+                  opaqueSecond.instanceInputNet &&
+              opaqueSecond.instance->getInstTerm(opaqueSecond.modelOutput)->getNet() ==
+                  opaqueSecond.instanceOutputNet &&
+              opaqueConstant.instance->getInstTerm(opaqueConstant.modelInput)->getNet() ==
+                  opaqueConstant.instanceInputNet &&
+              opaqueConstant.instance->getInstTerm(opaqueConstant.modelOutput)->getNet() ==
+                  opaqueConstant.instanceOutputNet,
+          "boundary source connectivity was modified");
     check(BoolExpr::Var(987654) == savedExpression, "caller expression cache changed");
     auto found = Tree2BoolExpr::iso2boolExpr_.find(123456);
     check(found != Tree2BoolExpr::iso2boolExpr_.end() && found->second == savedExpression,
@@ -235,6 +329,47 @@ void runTests() {
             result.reason.find("boundary mismatch") != std::string::npos,
         "boundary mismatch did not return a structured error: " + result.reason);
   checkState();
+
+  options.setAsBoundary = {{"opaque", "opaque"}};
+  for (const auto mode : {BorrowedVerificationMode::LEC,
+                          BorrowedVerificationMode::SEC}) {
+    options.mode = mode;
+    options.secEngine = SEC::SecEngine::KInduction;
+    options.secEncoding = SEC::SecEncoding::Binary;
+    options.maxK = 1;
+    options.logFile = mode == BorrowedVerificationMode::LEC
+                          ? "borrowed_boundary_lec.log"
+                          : "borrowed_boundary_sec.log";
+    check(verifyBorrowedDesigns(opaqueFirst.design, opaqueFirst.design,
+                                options, result) == 0 &&
+              result.status == RunStatus::Equivalent,
+          "self comparison with selected boundary failed: " + result.reason);
+    checkState();
+    const int differentExit =
+        mode == BorrowedVerificationMode::SEC ? 3 : 0;
+    check(verifyBorrowedDesigns(opaqueFirst.design, opaqueSecond.design,
+                                options, result) == differentExit &&
+              result.status == RunStatus::Different,
+          "unequal selected-boundary input was not detected: " +
+              result.reason);
+    checkState();
+    check(verifyBorrowedDesigns(opaqueFirst.design, opaqueConstant.design,
+                                options, result) == differentExit &&
+              result.status == RunStatus::Different,
+          "constant selected-boundary input was not detected: " +
+              result.reason);
+    checkState();
+  }
+  options.mode = BorrowedVerificationMode::LEC;
+  options.setAsBoundary = {{"opaque", "missing"}};
+  check(verifyBorrowedDesigns(opaqueFirst.design, opaqueSecond.design,
+                              options, result) == 1 &&
+            result.status == RunStatus::Error &&
+            result.reason.find("does not resolve") != std::string::npos,
+        "selected-boundary construction error was not structured: " +
+            result.reason);
+  checkState();
+  options.setAsBoundary.clear();
 
   options.mode = BorrowedVerificationMode::SEC;
   options.secEncoding = SEC::SecEncoding::Binary;

@@ -26,3 +26,11 @@ GTEST_DISCOVER_TESTS(BoolExprCnfWriterTests)
 add_executable(Btor2WriterTests Btor2WriterTests.cpp)
 target_link_libraries(Btor2WriterTests GTest::gtest_main formal_structures pthread)
 GTEST_DISCOVER_TESTS(Btor2WriterTests)
+
+add_executable(DesignBoundaryTests DesignBoundaryTests.cpp)
+target_link_libraries(DesignBoundaryTests
+    GTest::gtest_main
+    kepler_formal_utils
+    naja_nl
+)
+GTEST_DISCOVER_TESTS(DesignBoundaryTests)

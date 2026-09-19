@@ -106,6 +106,14 @@ class BorrowedExpressionState {
   decltype(Tree2BoolExpr::iso2boolExpr_) previousIsoExpressions_;
 };
 
+// BoundaryDesign owns scratch SNL objects. Any DNL built from those objects
+// must be gone before their owners are destroyed; BorrowedNajaState restores
+// the caller's previously exchanged-out DNL later.
+class BoundaryDnlCleanup {
+ public:
+  ~BoundaryDnlCleanup() { naja::DNL::destroy(); }
+};
+
 class BorrowedRunState {
  public:
   BorrowedRunState()
@@ -253,35 +261,53 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     Config::setSolverType(options.solver);
     Config::setReportSkippedPOs(options.reportSkippedOutputs);
     configureLogger(options, result);
-    if (options.mode == BorrowedVerificationMode::SEC) {
-      SEC::SequentialEquivalenceStrategy strategy(
-          design0, design1, options.solver, options.secEngine, options.secEncoding);
-      const auto proof = strategy.run(options.maxK);
-      assignSecResult(proof, result);
-      if (options.reportSkippedOutputs) {
-        writeBoundaryTermsReport("boundary_terms.txt", proof.extractedBoundaryReports);
-        writeResetUnanchoredSkippedOutputsReport(
-            "skipped_reset_unanchored_pos.txt", proof.resetUnanchoredSkippedOutputs);
-        writeMultiClockDomainSkippedOutputsReport(
-            "skipped_multi_clock_domain_pos.txt", proof.multiClockDomainSkippedOutputs);
-        writeOpaqueCellSkippedOutputsReport(
-            "skipped_opaque_cells_pos.txt", proof.opaqueCellSkippedOutputs);
+    const auto runComparison = [&](naja::NL::SNLDesign* first,
+                                   naja::NL::SNLDesign* second) {
+      if (options.mode == BorrowedVerificationMode::SEC) {
+        SEC::SequentialEquivalenceStrategy strategy(
+            first, second, options.solver, options.secEngine,
+            options.secEncoding);
+        const auto proof = strategy.run(options.maxK);
+        assignSecResult(proof, result);
+        if (options.reportSkippedOutputs) {
+          writeBoundaryTermsReport("boundary_terms.txt",
+                                   proof.extractedBoundaryReports);
+          writeResetUnanchoredSkippedOutputsReport(
+              "skipped_reset_unanchored_pos.txt",
+              proof.resetUnanchoredSkippedOutputs);
+          writeMultiClockDomainSkippedOutputsReport(
+              "skipped_multi_clock_domain_pos.txt",
+              proof.multiClockDomainSkippedOutputs);
+          writeOpaqueCellSkippedOutputsReport(
+              "skipped_opaque_cells_pos.txt", proof.opaqueCellSkippedOutputs);
+        }
+        SPDLOG_INFO("Borrowed SEC result: {} at k = {} ({}/{} outputs covered)",
+                    runStatusName(result.status), result.bound,
+                    result.coveredOutputs, result.totalOutputs);
+        if (!result.reason.empty()) {
+          SPDLOG_INFO("{}", result.reason);
+        }
+      } else {
+        MiterStrategy strategy(first, second, options.logFile);
+        strategy.setAllowBoundaryMismatch(options.allowBoundaryMismatch);
+        strategy.init();
+        result.logFile = MiterStrategy::getActualLogFileName();
+        result.status =
+            strategy.run(false) ? RunStatus::Equivalent : RunStatus::Different;
+        // Match the CLI's LEC exit convention: a completed comparison returns
+        // 0 even for Different; the structured status carries the verdict.
+        result.exitCode = 0;
       }
-      SPDLOG_INFO("Borrowed SEC result: {} at k = {} ({}/{} outputs covered)",
-                  runStatusName(result.status), result.bound,
-                  result.coveredOutputs, result.totalOutputs);
-      if (!result.reason.empty()) {
-        SPDLOG_INFO("{}", result.reason);
-      }
+    };
+    if (options.setAsBoundary.empty()) {
+      runComparison(design0, design1);
     } else {
-      MiterStrategy strategy(design0, design1, options.logFile);
-      strategy.setAllowBoundaryMismatch(options.allowBoundaryMismatch);
-      strategy.init();
-      result.logFile = MiterStrategy::getActualLogFileName();
-      result.status = strategy.run(false) ? RunStatus::Equivalent : RunStatus::Different;
-      // Match the CLI's LEC exit convention: a completed comparison returns 0
-      // even for Different; the structured status carries the verdict.
-      result.exitCode = 0;
+      BoundaryDesign firstBoundary(design0, options.setAsBoundary, 0);
+      BoundaryDesign secondBoundary(design1, options.setAsBoundary, 1);
+      validateBoundaryInterfaces(firstBoundary.getPorts(),
+                                 secondBoundary.getPorts());
+      BoundaryDnlCleanup boundaryDnlCleanup;
+      runComparison(firstBoundary.getTop(), secondBoundary.getTop());
     }
   } catch (const std::exception& error) {
     result.status = RunStatus::Error;

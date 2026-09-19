@@ -56,6 +56,35 @@ def _create_design(library, primitives, name: str, *, invert: bool = False):
     return design, parameter
 
 
+def _create_opaque_boundary_design(
+    library, model, name: str, *, instance_input: str = "a"
+):
+    design = najaeda.naja.SNLDesign.create(library, name)
+    input_term = najaeda.naja.SNLScalarTerm.create(
+        design, najaeda.naja.SNLTerm.Direction.Input, "a"
+    )
+    output_term = najaeda.naja.SNLScalarTerm.create(
+        design, najaeda.naja.SNLTerm.Direction.Output, "y"
+    )
+    input_net = najaeda.naja.SNLScalarNet.create(design, "a")
+    input_term.setNet(input_net)
+    alternate_term = najaeda.naja.SNLScalarTerm.create(
+        design, najaeda.naja.SNLTerm.Direction.Input, "b"
+    )
+    alternate_net = najaeda.naja.SNLScalarNet.create(design, "b")
+    alternate_term.setNet(alternate_net)
+    output_net = najaeda.naja.SNLScalarNet.create(design, "y")
+    output_term.setNet(output_net)
+    instance = najaeda.naja.SNLInstance.create(design, model, "opaque")
+    selected_input = input_net if instance_input == "a" else alternate_net
+    if instance_input == "constant":
+        selected_input = najaeda.naja.SNLScalarNet.create(design, "constant_input")
+        selected_input.setType(najaeda.naja.SNLNet.Type.Assign0)
+    instance.getInstTerm(model.getScalarTerm("A")).setNet(selected_input)
+    instance.getInstTerm(model.getScalarTerm("Y")).setNet(output_net)
+    return design, instance, selected_input, output_net
+
+
 class LiveNajaedaInteroperabilityTest(unittest.TestCase):
     def setUp(self):
         netlist.reset()
@@ -210,6 +239,86 @@ class LiveNajaedaInteroperabilityTest(unittest.TestCase):
         self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
         self.assertEqual("naja_design", result.input_format)
         self.assertEqual(1, result.total_outputs)
+
+    def test_selected_instances_are_compared_as_shared_boundaries(self):
+        opaque = najaeda.naja.SNLDesign.createPrimitive(
+            self.primitives, "opaque_boundary_model"
+        )
+        najaeda.naja.SNLScalarTerm.create(
+            opaque, najaeda.naja.SNLTerm.Direction.Input, "A"
+        )
+        najaeda.naja.SNLScalarTerm.create(
+            opaque, najaeda.naja.SNLTerm.Direction.Output, "Y"
+        )
+        left = _create_opaque_boundary_design(
+            self.library, opaque, "boundary_left"
+        )
+        right = _create_opaque_boundary_design(
+            self.library, opaque, "boundary_right", instance_input="b"
+        )
+        constant = _create_opaque_boundary_design(
+            self.library, opaque, "boundary_constant", instance_input="constant"
+        )
+        top_before = self.universe.getTopDesign()
+        revisions = tuple(
+            fixture[0].getRevisionCount() for fixture in (left, right, constant)
+        )
+        boundary = [("opaque", "opaque")]
+
+        for mode in (VerificationMode.LEC, VerificationMode.SEC):
+            with self.subTest(mode=mode):
+                options = VerificationOptions(
+                    mode=mode,
+                    sec_engine=(
+                        SecEngine.K_INDUCTION
+                        if mode is VerificationMode.SEC
+                        else None
+                    ),
+                    sec_encoding=(
+                        SecEncoding.BINARY
+                        if mode is VerificationMode.SEC
+                        else None
+                    ),
+                    max_k=1 if mode is VerificationMode.SEC else None,
+                    set_as_boundary=boundary,
+                    log_file=self.root / f"boundary-{mode.value}.log",
+                )
+                same = verify_designs(left[0], left[0], options=options)
+                self.assertEqual(VerificationStatus.EQUIVALENT, same.status)
+                unequal_input = verify_designs(left[0], right[0], options=options)
+                self.assertEqual(VerificationStatus.DIFFERENT, unequal_input.status)
+                constant_input = verify_designs(
+                    left[0], constant[0], options=options
+                )
+                self.assertEqual(VerificationStatus.DIFFERENT, constant_input.status)
+
+        self.assertIs(self.universe.getTopDesign(), top_before)
+        self.assertEqual(revisions[0], left[0].getRevisionCount())
+        self.assertEqual(revisions[1], right[0].getRevisionCount())
+        self.assertEqual(revisions[2], constant[0].getRevisionCount())
+        self.assertEqual(left[0].getInstance("opaque"), left[1])
+        self.assertEqual(right[0].getInstance("opaque"), right[1])
+        self.assertEqual(constant[0].getInstance("opaque"), constant[1])
+        self.assertIs(
+            left[1].getInstTerm(opaque.getScalarTerm("A")).getNet(), left[2]
+        )
+        self.assertIs(
+            right[1].getInstTerm(opaque.getScalarTerm("A")).getNet(), right[2]
+        )
+        self.assertIs(
+            left[1].getInstTerm(opaque.getScalarTerm("Y")).getNet(), left[3]
+        )
+        self.assertIs(
+            right[1].getInstTerm(opaque.getScalarTerm("Y")).getNet(), right[3]
+        )
+        self.assertIs(
+            constant[1].getInstTerm(opaque.getScalarTerm("A")).getNet(),
+            constant[2],
+        )
+        self.assertIs(
+            constant[1].getInstTerm(opaque.getScalarTerm("Y")).getNet(),
+            constant[3],
+        )
 
 
 if __name__ == "__main__":

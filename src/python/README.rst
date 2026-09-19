@@ -34,10 +34,11 @@ Load both designs through NajaEDA in one universe, then verify them:
    # Both netlists remain available for editing and repeated verification.
 
 The caller owns the designs, databases, and universe. Kepler borrows them
-without copying or serializing them, and does not destroy them when a call
-succeeds or fails. Load libraries and primitives with NajaEDA as part of design
-preparation. YAML/JSON configuration and file-based verification remain in the
-standalone ``kepler-formal`` executable.
+without serializing them, and does not destroy them when a call succeeds or
+fails. Selected-boundary verification uses temporary clones and never modifies
+the caller's designs. Load libraries and primitives with NajaEDA as part of
+design preparation. YAML/JSON configuration and file-based verification remain
+in the standalone ``kepler-formal`` executable.
 
 Shared NajaEDA runtime and live designs
 ---------------------------------------
@@ -74,9 +75,17 @@ Options and results
 
 ``VerificationOptions`` selects ``VerificationMode``, ``Solver``, ``SecEngine``,
 and ``SecEncoding`` and provides ``max_k``, ``allow_boundary_mismatch``,
-``report_skipped_outputs``, ``log_file``, and ``log_level``. Enum fields accept
-their exact string values. SEC engine, encoding, and bound options require SEC;
-boundary-mismatch handling requires LEC.
+``report_skipped_outputs``, ``log_file``, ``log_level``, and
+``set_as_boundary``. Enum fields accept their exact string values. SEC engine,
+encoding, and bound options require SEC; boundary-mismatch handling requires
+LEC.
+
+``set_as_boundary`` accepts ordered pairs of slash-separated instance paths,
+one path relative to each supplied top design. For every selected instance,
+its inputs become additional compared outputs and its outputs become shared
+unconstrained inputs. Corresponding pin interfaces must match. Kepler applies
+the transformation to temporary clones for both LEC and SEC, so the original
+designs and any caller-owned DNL remain reusable after the call.
 
 Use ``result.status`` for the verdict: the historical native ``exit_code`` is
 not mode-independent, and LEC returns zero for both equivalent and different

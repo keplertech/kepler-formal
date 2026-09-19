@@ -3,8 +3,9 @@
 
 #pragma once
 
-#include "RunResult.h"
 #include "Config.h"
+#include "DesignBoundary.h"
+#include "RunResult.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
 namespace KEPLER_FORMAL {
@@ -23,12 +24,14 @@ struct BorrowedDesignOptions {
   bool reportSkippedOutputs = false;
   std::string logFile;
   std::string logLevel;
+  BoundaryPairs setAsBoundary;
 };
 
-// Verify two live designs in the current Naja universe, without cloning,
-// serializing, deleting or editing their netlists. The binding must validate
-// runtime identity and retain the design wrappers; the caller must prevent
-// concurrent Naja access (including reads/reset) for the synchronous call. This entry
+// Verify two live designs in the current Naja universe without serializing,
+// deleting or editing their netlists. Selected boundaries, when configured,
+// are applied only to temporary clones. The binding must validate runtime
+// identity and retain the design wrappers; the caller must prevent concurrent
+// Naja access (including reads/reset) for the synchronous call. This entry
 // point is serialized and non-reentrant, but does not lock arbitrary Naja APIs.
 // Temporary DNL, ordering IDs, top selections and expression caches are scoped
 // to this call. Engine errors are returned as Error/exitCode=1 with a reason.

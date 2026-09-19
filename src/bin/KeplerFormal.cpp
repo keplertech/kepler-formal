@@ -45,6 +45,7 @@
 #include "ScopeExtraction.h"
 #include "Btor2ExportConfig.h"
 #include "Config.h"
+#include "DesignBoundary.h"
 #include "KeplerFormalDriver.h"
 #include "KeplerFormalUtils.h"
 #include "Tree2BoolExpr.h"
@@ -66,15 +67,18 @@ static void print_usage(const char* prog) {
       "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
       "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
+      "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
+      "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
+      "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
@@ -483,6 +487,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "btor2_export_path",
       "dump_only",
       "allow-boundary-mismatch",
+      "set_as_boundary",
       "input_paths",
       "liberty_files",
       "py_tech_files",
@@ -633,6 +638,40 @@ static bool parseConfigInputPaths(const YAML::Node& node,
   return true;
 }
 
+static bool parseConfigBoundaryPairs(
+    const YAML::Node& node,
+    KEPLER_FORMAL::BoundaryPairs& out,
+    std::string& error) {
+  out.clear();
+  if (!node.IsSequence()) {
+    error = "set_as_boundary must be a sequence of [design1_path, design2_path] pairs";
+    return false;
+  }
+
+  for (size_t pairIndex = 0; pairIndex < node.size(); ++pairIndex) {
+    const auto pairNode = node[pairIndex];
+    if (!pairNode.IsSequence() || pairNode.size() != 2) {
+      error = "set_as_boundary[" + std::to_string(pairIndex) +
+              "] must contain exactly two paths";
+      return false;
+    }
+    if (!pairNode[0].IsScalar() || !pairNode[1].IsScalar()) {
+      error = "set_as_boundary[" + std::to_string(pairIndex) +
+              "] paths must be scalars";
+      return false;
+    }
+    const auto leftPath = pairNode[0].as<std::string>();
+    const auto rightPath = pairNode[1].as<std::string>();
+    if (leftPath.empty() || rightPath.empty()) {
+      error = "set_as_boundary[" + std::to_string(pairIndex) +
+              "] paths must not be empty";
+      return false;
+    }
+    out.emplace_back(leftPath, rightPath);
+  }
+  return true;
+}
+
 static void logDesignPaths(const char* label,
                            const std::vector<std::string>& paths) {
   if (paths.empty()) {
@@ -729,10 +768,16 @@ static bool sameCompactSecDesignSpec(
     bool isSystemVerilog,
     const DesignInputs& designInputs,
     const SystemVerilogOptions& systemVerilogOptions,
-    const VerilogTopOptions& verilogTopOptions) {
+    const VerilogTopOptions& verilogTopOptions,
+    const KEPLER_FORMAL::BoundaryPairs& boundaryPairs) {
   if (normalizeInputListForComparison(designInputs.design0) !=
       normalizeInputListForComparison(designInputs.design1)) {
     return false;
+  }
+  for (const auto& [leftPath, rightPath] : boundaryPairs) {
+    if (leftPath != rightPath) {
+      return false;
+    }
   }
   // LCOV_EXCL_START
   if (!isSystemVerilog) {
@@ -1182,6 +1227,7 @@ static int KeplerFormalMainImpl(
   DesignInputs designInputs;
   SystemVerilogOptions systemVerilogOptions;
   VerilogTopOptions verilogTopOptions;
+  KEPLER_FORMAL::BoundaryPairs boundaryPairs;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
@@ -1365,6 +1411,16 @@ static int KeplerFormalMainImpl(
             SPDLOG_CRITICAL("Invalid input_paths in config: {}", inputError);
             return EXIT_FAILURE;
             // LCOV_EXCL_STOP
+          }
+        }
+
+        if (cfg["set_as_boundary"]) {
+          std::string boundaryError;
+          if (!parseConfigBoundaryPairs(
+                  cfg["set_as_boundary"], boundaryPairs, boundaryError)) {
+            SPDLOG_CRITICAL(
+                "Invalid set_as_boundary in config: {}", boundaryError);
+            return EXIT_FAILURE;
           }
         }
 
@@ -1637,6 +1693,22 @@ static int KeplerFormalMainImpl(
         ++parseStart;
         continue;
       }
+      if (arg == "--set-as-boundary" || arg == "--set_as_boundary") {
+        if (parseStart + 2 >= argc) {
+          SPDLOG_CRITICAL(
+              "Missing design path pair after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string leftPath = argv[parseStart + 1];
+        const std::string rightPath = argv[parseStart + 2];
+        if (leftPath.empty() || rightPath.empty()) {
+          SPDLOG_CRITICAL("Empty design path provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        boundaryPairs.emplace_back(leftPath, rightPath);
+        parseStart += 3;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "-naja_if") {
         inputFormatType = FormatType::NAJA_IF;
@@ -1798,6 +1870,20 @@ static int KeplerFormalMainImpl(
         allowBoundaryMismatch = true;
         continue;
       }
+      if (arg == "--set-as-boundary" || arg == "--set_as_boundary") {
+        if (i + 2 >= argc) {
+          SPDLOG_CRITICAL("Missing design path pair after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string leftPath = argv[++i];
+        const std::string rightPath = argv[++i];
+        if (leftPath.empty() || rightPath.empty()) {
+          SPDLOG_CRITICAL("Empty design path provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        boundaryPairs.emplace_back(leftPath, rightPath);
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--design1") {
         explicitDesignFlags = true;
@@ -1957,6 +2043,13 @@ static int KeplerFormalMainImpl(
   }
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);
+  for (size_t pairIndex = 0; pairIndex < boundaryPairs.size(); ++pairIndex) {
+    SPDLOG_INFO(
+        "Boundary pair {}: design 1 `{}`; design 2 `{}`",
+        pairIndex,
+        boundaryPairs[pairIndex].first,
+        boundaryPairs[pairIndex].second);
+  }
 
   // Basic validation
   if (inputFormatType == FormatType::SYSTEMVERILOG) {
@@ -2030,6 +2123,11 @@ static int KeplerFormalMainImpl(
   }
   if (verificationMode == VerificationMode::LEC && secResetExplicit) {
     SPDLOG_CRITICAL("sec_reset/--sec-reset-* is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (!boundaryPairs.empty() && (useScopes || cleanScopes)) {
+    SPDLOG_CRITICAL(
+        "set_as_boundary/--set-as-boundary cannot be combined with scope extraction or cleaning");
     return EXIT_FAILURE;
   }
   if (secResetExplicit) {
@@ -2340,6 +2438,11 @@ static int KeplerFormalMainImpl(
   // --------------------------------------------------------------------------
   naja::NL::SNLDesign* top0 = nullptr;
   naja::NL::SNLDesign* top1 = nullptr;
+  std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign0;
+  std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign1;
+  struct DnlCleanupBeforeBoundary {
+    ~DnlCleanupBeforeBoundary() { naja::DNL::destroy(); }
+  } boundaryDnlCleanup;
   try {
     NLUniverse::create();
     NLDB* db0 = nullptr;
@@ -2547,25 +2650,78 @@ static int KeplerFormalMainImpl(
         };
         // LCOV_EXCL_STOP
 
+    auto releaseCompactDb = [](
+        NLDB*& db,
+        std::unique_ptr<KEPLER_FORMAL::BoundaryDesign>& boundaryDesign) {
+      naja::DNL::destroy();
+      if (auto* universe = NLUniverse::get()) {
+        // Compact mode deliberately releases each elaborated DB before the
+        // next one is loaded. Clear the universe top first so it never points
+        // into a released database.
+        universe->setTopDB(nullptr);
+      }
+      boundaryDesign.reset();
+      if (db != nullptr) {
+        db->destroy();
+        db = nullptr;
+      }
+    };
+
+    auto extractCompactLecSnapshot =
+        [&](const std::vector<std::string>& designPaths,
+            const SystemVerilogDesignOptions& designOptions,
+            int designIndex,
+            int dbID,
+            const char* designLabel) {
+          NLDB* db =
+              loadOneDesign(designPaths, designOptions, designIndex, dbID);
+          std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign;
+          DnlCleanupBeforeBoundary dnlCleanup;
+          try {
+            auto* top = db->getTopDesign();
+            if (top == nullptr) {
+              throw std::runtime_error(
+                  std::string("Top design not set for ") + designLabel);
+            }
+            std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts;
+            if (!boundaryPairs.empty()) {
+              boundaryDesign =
+                  std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
+                      top, boundaryPairs, static_cast<size_t>(designIndex));
+              top = boundaryDesign->getTop();
+              boundaryPorts = boundaryDesign->getPorts();
+            }
+            auto snapshot = buildCompactSnapshotForTop(top, designLabel);
+            releaseCompactDb(db, boundaryDesign);
+            return std::make_pair(
+                std::move(snapshot), std::move(boundaryPorts));
+          } catch (...) {
+            releaseCompactDb(db, boundaryDesign);
+            throw;
+          }
+        };
+
     if (compactMode && verificationMode == VerificationMode::LEC && !useScopes) {
       // LCOV_EXCL_START
-      NLDB* compactDb0 =
-          loadOneDesign(designInputs.design0, systemVerilogOptions.design0, 0, 2);
-      top0 = compactDb0->getTopDesign();
-      auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0");
-      naja::DNL::destroy();
-      compactDb0->destroy();
-      top0 = nullptr;
+      auto [snapshot0, boundaryPorts0] = extractCompactLecSnapshot(
+          designInputs.design0,
+          systemVerilogOptions.design0,
+          0,
+          2,
+          "design 1");
       // LCOV_EXCL_STOP
 
       // LCOV_EXCL_START
-      NLDB* compactDb1 =
-          loadOneDesign(designInputs.design1, systemVerilogOptions.design1, 1, 1);
-      top1 = compactDb1->getTopDesign();
-      auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1");
-      naja::DNL::destroy();
-      compactDb1->destroy();
-      top1 = nullptr;
+      auto [snapshot1, boundaryPorts1] = extractCompactLecSnapshot(
+          designInputs.design1,
+          systemVerilogOptions.design1,
+          1,
+          1,
+          "design 2");
+      if (!boundaryPairs.empty()) {
+        KEPLER_FORMAL::validateBoundaryInterfaces(
+            boundaryPorts0, boundaryPorts1);
+      }
       // LCOV_EXCL_STOP
 
       try {
@@ -2607,28 +2763,17 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_STOP
 
     if (compactMode && verificationMode == VerificationMode::SEC) {
-      auto releaseCompactDb = [](NLDB* db) {
-        naja::DNL::destroy();
-        if (auto* universe = NLUniverse::get()) {
-          // Sequential extraction restores the current top when possible. In
-          // compact mode we deliberately drop that elaborated DB before loading
-          // the next design, so clear the universe top DB first to avoid a
-          // dangling top pointer.
-          universe->setTopDB(nullptr);
-        }
-        if (db != nullptr) {
-          db->destroy();
-        }
-      };
-
       auto extractCompactSecModel =
           [&](const std::vector<std::string>& designPaths,
               const SystemVerilogDesignOptions& designOptions,
               int designIndex,
               int dbID,
-              const char* designLabel) {
+              const char* designLabel,
+              std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts) {
             NLDB* db =
                 loadOneDesign(designPaths, designOptions, designIndex, dbID);
+            std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign;
+            DnlCleanupBeforeBoundary dnlCleanup;
             try {
               auto* top = db->getTopDesign();
               if (top == nullptr) {
@@ -2639,13 +2784,20 @@ static int KeplerFormalMainImpl(
                     // LCOV_DISABLED_STOP
                 // LCOV_EXCL_STOP
               }
+              if (!boundaryPairs.empty()) {
+                boundaryDesign =
+                    std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
+                        top, boundaryPairs, static_cast<size_t>(designIndex));
+                top = boundaryDesign->getTop();
+                boundaryPorts = boundaryDesign->getPorts();
+              }
               auto model = KEPLER_FORMAL::SEC::SequentialDesignModel::extract(top);
-              releaseCompactDb(db);
+              releaseCompactDb(db, boundaryDesign);
               return model;
             } catch (...) {
               // LCOV_EXCL_START
               // LCOV_DISABLED_START
-              releaseCompactDb(db);
+              releaseCompactDb(db, boundaryDesign);
               throw;
               // LCOV_DISABLED_STOP
               // LCOV_EXCL_STOP
@@ -2658,18 +2810,21 @@ static int KeplerFormalMainImpl(
         SPDLOG_INFO(
             "SEC compact mode: extracting and releasing design 1 before "
             "loading design 2");
+        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts0;
         const auto model0 = extractCompactSecModel(
             designInputs.design0,
             systemVerilogOptions.design0,
             0,
             2,
-            "design 1");
+            "design 1",
+            boundaryPorts0);
         if (inputFormatType != FormatType::SV2V &&
             sameCompactSecDesignSpec(
                 inputFormatType == FormatType::SYSTEMVERILOG,
                 designInputs,
                 systemVerilogOptions,
-                verilogTopOptions)) {
+                verilogTopOptions,
+                boundaryPairs)) {
           // CVA6-style smoke runs often compare a design against itself. In
           // compact SEC, extracting that identical second side would require
           // holding the already extracted value model while elaborating the
@@ -2696,12 +2851,18 @@ static int KeplerFormalMainImpl(
         SPDLOG_INFO(
             "SEC compact mode: extracting and releasing design 2 before "
             "starting proof");
+        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts1;
         const auto model1 = extractCompactSecModel(
             designInputs.design1,
             systemVerilogOptions.design1,
             1,
             1,
-            "design 2");
+            "design 2",
+            boundaryPorts1);
+        if (!boundaryPairs.empty()) {
+          KEPLER_FORMAL::validateBoundaryInterfaces(
+              boundaryPorts0, boundaryPorts1);
+        }
 
         KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
             nullptr,
@@ -2945,6 +3106,18 @@ static int KeplerFormalMainImpl(
       return EXIT_FAILURE;
       // LCOV_DISABLED_STOP
       // LCOV_EXCL_STOP
+    }
+    if (!boundaryPairs.empty()) {
+      boundaryDesign0 =
+          std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
+              top0, boundaryPairs, 0);
+      boundaryDesign1 =
+          std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
+              top1, boundaryPairs, 1);
+      KEPLER_FORMAL::validateBoundaryInterfaces(
+          boundaryDesign0->getPorts(), boundaryDesign1->getPorts());
+      top0 = boundaryDesign0->getTop();
+      top1 = boundaryDesign1->getTop();
     }
   // LCOV_EXCL_START
   } catch (const std::exception& e) {

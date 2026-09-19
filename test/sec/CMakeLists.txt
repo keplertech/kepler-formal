@@ -31,6 +31,11 @@ endif()
 
 GTEST_DISCOVER_TESTS(secStrategyTests)
 
+add_executable(BoundaryEquivalenceTests BoundaryEquivalenceTests.cpp)
+target_link_libraries(BoundaryEquivalenceTests
+    kepler_sec kepler_formal_utils GTest::gtest_main)
+GTEST_DISCOVER_TESTS(BoundaryEquivalenceTests)
+
 add_executable(SecBtor2ExporterTests
     SecBtor2ExporterTests.cpp
     SecBtor2ExportValidationTests.cpp)

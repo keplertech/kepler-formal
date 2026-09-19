@@ -14,7 +14,10 @@ endif()
 
 add_library(kepler_borrowed_designs STATIC KeplerBorrowedDesigns.cpp KeplerNajaState.cpp)
 target_include_directories(kepler_borrowed_designs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(kepler_borrowed_designs PUBLIC kepler_verification_support)
+target_link_libraries(kepler_borrowed_designs PUBLIC
+  kepler_verification_support
+  kepler_formal_utils
+)
 
 if(KEPLER_USE_PUBLISHED_NAJAEDA)
   set(kepler_runtime_source KeplerPublishedNajaRuntime.cpp)

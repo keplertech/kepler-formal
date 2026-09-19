@@ -34,6 +34,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
 | `--dump-only` | Stop after successful BTOR2 export; requires `--dump-btor2`. Exit code `0` indicates export success, without a proof verdict. |
 | `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
+| `--set-as-boundary <design1-path> <design2-path>` | Treat the paired hierarchical instances as a proof boundary. Repeat the flag for multiple instance pairs. The compatibility alias `--set_as_boundary` is also accepted. |
 | `-verilog` | Use Verilog Format. |
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
@@ -65,6 +66,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `btor2_export_path` | string | Non-empty BTOR2 output path. Defaults to `miter.btor2` when enabled; requires `btor2_export: true`. |
 | `dump_only` | bool | Stop after BTOR2 export without running a proof engine. Defaults to `false`; requires `btor2_export: true`. |
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
+| `set_as_boundary` | list[list[string, string]] | Paired, top-relative instance paths to turn into proof boundaries, for example `[[u_core/u_mem, u_core/u_mem_impl]]`. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
@@ -123,4 +125,41 @@ liberty_files:
 solver: kissat
 compact_mode: true
 report_skipped_pos: true
+```
+
+## User-defined instance boundaries
+
+`--set-as-boundary` removes a selected instance from the proof obligation while
+keeping the surrounding logic visible. Paths are slash-separated and relative
+to each design's selected top. Pair entries may use different paths when the
+corresponding instances have different names or hierarchy in the two designs:
+
+```sh
+kepler-formal -verilog design0.v design1.v \
+  --set-as-boundary u_core/u_mem u_core/u_mem_impl \
+  --set-as-boundary u_io/u_phy u_io/u_phy_gate
+```
+
+For each selected instance, input pins become additional compared top outputs.
+This proves that both surrounding designs drive the abstracted block the same
+way. Output pins become additional shared top inputs, so the proof considers
+all possible values produced by the abstracted block without checking its
+implementation. Original top-level ports and all logic outside the selected
+instances remain part of the normal equivalence result.
+
+The two sides must expose matching pin names, bit ranges, and directions at
+each paired boundary. Instance input pins must be connected, and nonconstant
+input nets must have exactly one driver; unused output pins are allowed.
+Inout pins, aliased or multiply driven output nets, duplicate
+paths, and selections where one path is an ancestor of another are rejected.
+Kepler Formal validates these conditions before starting the proof. Boundary
+selection supports both LEC and SEC, including compact mode. It cannot
+currently be combined with `use_scopes` or `clean_scopes`.
+
+The equivalent YAML form is:
+
+```yaml
+set_as_boundary:
+  - [u_core/u_mem, u_core/u_mem_impl]
+  - [u_io/u_phy, u_io/u_phy_gate]
 ```

@@ -55,6 +55,9 @@ class VerificationOptions:
     report_skipped_outputs: bool = False
     log_file: PathLike | None = None
     log_level: str | None = None
+    set_as_boundary: (
+        list[tuple[str, str]] | tuple[tuple[str, str], ...]
+    ) = ()
 
 
 NativeDesign = _native.NativeDesign
@@ -103,12 +106,14 @@ def verify_designs(
     *,
     options: VerificationOptions | None = None,
 ) -> VerificationResult:
-    """Compare two live NajaEDA designs without files, copying, or rebuilding.
+    """Compare two live NajaEDA designs without files or rebuilding.
 
     Each argument must be a :class:`NativeDesign` or a raw
     ``najaeda.naja.SNLDesign``.  Capture high-level ``Instance`` objects first
     with :func:`from_najaeda`; this freezes which model the instance denotes,
     while retaining the original object for the synchronous native call.
+    Selected boundaries are applied to temporary clones; otherwise the native
+    designs are analyzed directly.
     The caller owns both netlists; verification leaves them available for
     further edits and calls, including when verification reports an error.
     """
@@ -155,6 +160,7 @@ def _build_native_design_options(
     report_skipped_outputs = _boolean(
         settings.report_skipped_outputs, "report_skipped_outputs"
     )
+    set_as_boundary = _boundary_pairs(settings.set_as_boundary)
     if settings.max_k is not None:
         if isinstance(settings.max_k, bool) or not isinstance(settings.max_k, int):
             raise TypeError("max_k must be an integer")
@@ -190,6 +196,7 @@ def _build_native_design_options(
         "sec_engine": sec_engine,
         "sec_encoding": sec_encoding,
         "allow_boundary_mismatch": allow_boundary_mismatch,
+        "set_as_boundary": set_as_boundary,
         "report_skipped_outputs": report_skipped_outputs,
         "log_file": log_file,
         "log_level": log_level,
@@ -235,6 +242,33 @@ def _optional_text(value: str | None, label: str) -> str | None:
     if not value:
         raise ValueError(f"{label} must not be empty")
     return value
+
+
+def _boundary_pairs(value: object) -> list[tuple[str, str]]:
+    if not isinstance(value, (list, tuple)):
+        raise TypeError("set_as_boundary must be a list or tuple of path pairs")
+    result: list[tuple[str, str]] = []
+    for index, pair in enumerate(value):
+        if not isinstance(pair, (list, tuple)):
+            raise TypeError(
+                f"set_as_boundary[{index}] must be a list or tuple of two paths"
+            )
+        if len(pair) != 2:
+            raise ValueError(
+                f"set_as_boundary[{index}] must contain exactly two paths"
+            )
+        paths: list[str] = []
+        for side, path in enumerate(pair):
+            label = f"set_as_boundary[{index}][{side}]"
+            if not isinstance(path, str):
+                raise TypeError(f"{label} must be a string")
+            if not path:
+                raise ValueError(f"{label} must not be empty")
+            if "\0" in path:
+                raise ValueError(f"{label} cannot contain NUL bytes")
+            paths.append(path)
+        result.append((paths[0], paths[1]))
+    return result
 
 
 def _boolean(value: bool, label: str) -> bool:

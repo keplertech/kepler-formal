@@ -7,9 +7,11 @@ and returns an owning, structured result after each run.
 This is a direct, in-process binding. It does not start the command-line
 executable, use a subprocess, or communicate through MCP or another service.
 NajaEDA loads or creates the netlists; Kepler borrows those live designs for
-verification without serializing, cloning, or rebuilding them. The separately
-installed `najaeda` package provides the single native netlist runtime shared
-by both APIs.
+verification without serializing or rebuilding them. Verification normally
+uses the designs directly. When selected instances are configured as
+boundaries, Kepler transforms temporary clones and leaves the live designs
+unchanged. The separately installed `najaeda` package provides the single
+native netlist runtime shared by both APIs.
 
 ## Build and install
 
@@ -176,10 +178,49 @@ Enum fields accept either the exported enum member or its exact string value.
 | `report_skipped_outputs` | `False` | Ask the native engine to write detailed skipped-output reports |
 | `log_file` | `None` | Requested native log path; LEC selects a default path when omitted |
 | `log_level` | `info` | Native log level (`debug` enables debug logging) |
+| `set_as_boundary` | `()` | Ordered `(design1_path, design2_path)` instance-path pairs to treat as shared boundaries |
 
 `max_k`, `sec_engine`, and `sec_encoding` are SEC-only and are rejected when
 `mode` is LEC. `allow_boundary_mismatch` is supported only for LEC.
 `log_file` is expanded and resolved relative to the current working directory.
+
+### Treat selected instances as shared boundaries
+
+Use `set_as_boundary` to remove paired block implementations from the proof
+and verify surrounding logic through their exposed interfaces. Each item pairs
+the instance path in `design1` with its corresponding path in `design2`. Paths
+are slash-separated and relative to the supplied top designs:
+
+```python
+options = VerificationOptions(
+    set_as_boundary=[
+        ("subsystem/memory", "u_subsystem/u_memory"),
+        ("clocking/gate", "u_clocking/icg"),
+    ],
+    log_file="boundary-verification.log",
+)
+result = verify_designs(reference, implementation, options=options)
+```
+
+The outer collection and each pair may be a list or tuple. Every pair must
+contain exactly two non-empty strings. Pair order is significant and duplicate
+or overlapping selections are rejected by the native boundary transformer.
+
+For each selected instance, Kepler promotes its original input pins to extra
+top-level outputs, so the proof checks that the two designs drive the block
+identically. It promotes the instance's original output pins to shared
+top-level inputs, so both sides see the same unconstrained block response.
+Scalar and bus pin names, directions, widths, and ranges must match across each
+pair. `allow_boundary_mismatch` does not relax this selected-boundary interface
+check. Input pins must be connected, with exactly one driver on nonconstant
+input nets. Unused output pins are allowed; inout pins and aliased or multiply
+driven output nets are rejected.
+
+Boundary transformation works for both LEC and SEC. It is performed on
+temporary clones for the duration of the synchronous call; the caller's
+designs, connectivity, selected tops, and cached DNL remain unchanged and can
+be reused afterward. This option belongs to the live-design API. The Python
+extension does not expose file loading or command-line configuration parsing.
 
 ## Statuses and errors
 

@@ -58,6 +58,32 @@ else:
         with self.assertRaisesRegex(TypeError, "unknown.*option"):
             _native.verify_designs(None, None, {"verilog": "design.v"})
 
+    def test_native_boundary_option_conversion(self):
+        with self.assertRaisesRegex(TypeError, "design1 must be a NativeDesign"):
+            _native.verify_designs(
+                None,
+                None,
+                {"set_as_boundary": (["left/path", "right/path"],)},
+            )
+        invalid_options = (
+            (TypeError, "set_as_boundary", {"set_as_boundary": "opaque"}),
+            (TypeError, r"set_as_boundary\[0\]", {"set_as_boundary": ["opaque"]}),
+            (ValueError, "exactly two", {"set_as_boundary": [("opaque",)]}),
+            (TypeError, r"set_as_boundary\[0\]\[1\]", {
+                "set_as_boundary": [("opaque", 1)]
+            }),
+            (ValueError, "must not be empty", {
+                "set_as_boundary": [("", "opaque")]
+            }),
+            (ValueError, "NUL", {
+                "set_as_boundary": [("opaque\0child", "opaque")]
+            }),
+        )
+        for error_type, message, options in invalid_options:
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(error_type, message):
+                    _native.verify_designs(None, None, options)
+
 
 if __name__ == "__main__":
     unittest.main()

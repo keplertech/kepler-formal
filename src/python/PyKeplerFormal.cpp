@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "KeplerBorrowedDesigns.h"
@@ -271,6 +272,75 @@ bool dictionarySize(PyObject *dictionary, const char *key, size_t &value) {
   return true;
 }
 
+bool dictionaryBoundaryPairs(PyObject *dictionary, const char *key,
+                             KEPLER_FORMAL::BoundaryPairs &value) {
+  PyObject *item = PyDict_GetItemString(dictionary, key);
+  if (item == nullptr) {
+    return true;
+  }
+  if (!PyList_Check(item) && !PyTuple_Check(item)) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s must be a list or tuple of path pairs", key);
+    return false;
+  }
+  OwnedPyObject pairs(
+      PySequence_Fast(item, "set_as_boundary must be a list or tuple"));
+  if (pairs == nullptr) {
+    return false;
+  }
+  KEPLER_FORMAL::BoundaryPairs parsed;
+  const Py_ssize_t pairCount = PySequence_Fast_GET_SIZE(pairs.get());
+  parsed.reserve(static_cast<size_t>(pairCount));
+  for (Py_ssize_t index = 0; index < pairCount; ++index) {
+    PyObject *pair = PySequence_Fast_GET_ITEM(pairs.get(), index);
+    if (!PyList_Check(pair) && !PyTuple_Check(pair)) {
+      PyErr_Format(PyExc_TypeError,
+                   "%s[%zd] must be a list or tuple of two paths", key,
+                   index);
+      return false;
+    }
+    OwnedPyObject pathPair(
+        PySequence_Fast(pair, "boundary path pair must be a list or tuple"));
+    if (pathPair == nullptr) {
+      return false;
+    }
+    if (PySequence_Fast_GET_SIZE(pathPair.get()) != 2) {
+      PyErr_Format(PyExc_ValueError,
+                   "%s[%zd] must contain exactly two paths", key, index);
+      return false;
+    }
+    std::string paths[2];
+    for (Py_ssize_t side = 0; side < 2; ++side) {
+      PyObject *path = PySequence_Fast_GET_ITEM(pathPair.get(), side);
+      if (!PyUnicode_Check(path)) {
+        PyErr_Format(PyExc_TypeError, "%s[%zd][%zd] must be a string", key,
+                     index, side);
+        return false;
+      }
+      Py_ssize_t size = 0;
+      const char *data = PyUnicode_AsUTF8AndSize(path, &size);
+      if (data == nullptr) {
+        return false;
+      }
+      paths[side].assign(data, static_cast<size_t>(size));
+      if (paths[side].empty()) {
+        PyErr_Format(PyExc_ValueError, "%s[%zd][%zd] must not be empty", key,
+                     index, side);
+        return false;
+      }
+      if (paths[side].find('\0') != std::string::npos) {
+        PyErr_Format(PyExc_ValueError,
+                     "%s[%zd][%zd] cannot contain NUL bytes", key, index,
+                     side);
+        return false;
+      }
+    }
+    parsed.emplace_back(std::move(paths[0]), std::move(paths[1]));
+  }
+  value = std::move(parsed);
+  return true;
+}
+
 bool parseBorrowedOptions(PyObject *object,
                           KEPLER_FORMAL::BorrowedDesignOptions &options) {
   if (!PyDict_Check(object)) {
@@ -281,7 +351,7 @@ bool parseBorrowedOptions(PyObject *object,
   static const std::unordered_set<std::string_view> allowedKeys = {
       "mode",          "solver",          "max_k",
       "sec_engine",    "sec_encoding",    "allow_boundary_mismatch",
-      "report_skipped_outputs", "log_file", "log_level"};
+      "set_as_boundary", "report_skipped_outputs", "log_file", "log_level"};
   Py_ssize_t position = 0;
   PyObject *key = nullptr;
   PyObject *value = nullptr;
@@ -313,6 +383,8 @@ bool parseBorrowedOptions(PyObject *object,
       !dictionaryString(object, "log_file", options.logFile, true) ||
       !dictionaryString(object, "log_level", options.logLevel, true) ||
       !dictionarySize(object, "max_k", options.maxK) ||
+      !dictionaryBoundaryPairs(object, "set_as_boundary",
+                               options.setAsBoundary) ||
       !dictionaryBoolean(object, "allow_boundary_mismatch",
                          options.allowBoundaryMismatch) ||
       !dictionaryBoolean(object, "report_skipped_outputs",
@@ -472,7 +544,7 @@ PyMethodDef methods[] = {
     {"from_najaeda", fromNajaeda, METH_VARARGS,
      "Capture a live NajaEDA SNLDesign without copying its native netlist."},
     {"verify_designs", verifyDesigns, METH_VARARGS,
-     "Verify two captured NajaEDA designs without serialization or copying."},
+     "Verify two captured NajaEDA designs without taking ownership."},
     {"get_version", version, METH_NOARGS, "Return the Kepler Formal version."},
     {"get_git_hash", gitHash, METH_NOARGS, "Return the build git hash."},
     {nullptr, nullptr, 0, nullptr},

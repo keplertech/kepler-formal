@@ -5,6 +5,15 @@ API. This is useful when a technology library needs formal models that are not
 available in Liberty, including parameterized truth tables and sequential-cell
 models.
 
+If the same block exists on both sides and its internal behavior does not need
+to be checked, a model may be unnecessary: select the corresponding instances
+as shared boundaries instead. Kepler then compares the signals driven into the
+block and gives both designs the same unconstrained block outputs. The Python
+live-design API exposes this through `VerificationOptions.set_as_boundary`; see
+[Treat selected instances as shared boundaries](python-api.md#treat-selected-instances-as-shared-boundaries).
+Use a primitive model when the block's behavior itself must constrain or
+participate in the proof.
+
 ## Configure Primitive Files
 
 List each primitive file under `py_tech_files` in the YAML configuration:

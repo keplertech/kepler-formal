@@ -156,6 +156,18 @@ class PythonApiTest(unittest.TestCase):
             (ValueError, "solver", VerificationOptions(solver="unknown")),
             (TypeError, "allow_boundary_mismatch", VerificationOptions(
                 allow_boundary_mismatch="false")),
+            (TypeError, "set_as_boundary", VerificationOptions(
+                set_as_boundary="opaque")),
+            (TypeError, r"set_as_boundary\[0\]", VerificationOptions(
+                set_as_boundary=["opaque"])),
+            (ValueError, "exactly two", VerificationOptions(
+                set_as_boundary=[("opaque",)])),
+            (TypeError, r"set_as_boundary\[0\]\[1\]", VerificationOptions(
+                set_as_boundary=[("opaque", 1)])),
+            (ValueError, "must not be empty", VerificationOptions(
+                set_as_boundary=[("", "opaque")])),
+            (ValueError, "NUL", VerificationOptions(
+                set_as_boundary=[("opaque\0child", "opaque")])),
             (ValueError, "log_file", VerificationOptions(log_file="")),
         )
         for error_type, message, options in invalid_options:
@@ -164,6 +176,24 @@ class PythonApiTest(unittest.TestCase):
                     verify_designs(self.reference, self.equivalent, options=options)
         with self.assertRaisesRegex(TypeError, "NativeDesign.*SNLDesign"):
             verify_designs("reference.v", self.equivalent)
+
+    def test_verification_options_preserves_positional_compatibility(self):
+        options = VerificationOptions(
+            VerificationMode.LEC,
+            "kissat",
+            None,
+            None,
+            None,
+            True,
+            True,
+            "verification.log",
+            "debug",
+        )
+        self.assertTrue(options.allow_boundary_mismatch)
+        self.assertTrue(options.report_skipped_outputs)
+        self.assertEqual("verification.log", options.log_file)
+        self.assertEqual("debug", options.log_level)
+        self.assertEqual((), options.set_as_boundary)
 
 
 if __name__ == "__main__":

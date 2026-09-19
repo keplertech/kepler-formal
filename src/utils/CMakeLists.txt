@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Create a static library target
 add_library(kepler_formal_utils STATIC
+    DesignBoundary.cpp
     SNLLogicCone.cpp
 )
 
