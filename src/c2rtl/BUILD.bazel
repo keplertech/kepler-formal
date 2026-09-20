@@ -3,13 +3,14 @@ load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
 cc_library(
     name = "kepler_c2rtl_formal",
-    srcs = ["formal/C2RtlEquivalenceStrategy.cpp"],
-    hdrs = ["formal/C2RtlEquivalenceStrategy.h"],
+    srcs = ["formal/C2RtlEquivalenceStrategy.cpp", "formal/C2RtlExpression.cpp"],
+    hdrs = ["formal/C2RtlEquivalenceStrategy.h", "formal/C2RtlExpression.h"],
     includes = ["."],
     copts = NAJA_HEADER_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         "//src/config:kepler_config",
+        "//src/formal:formal_structures",
         "//src/sec:kepler_sec",
         "@naja",
         "@naja//:naja_extra_headers",

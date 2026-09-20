@@ -326,6 +326,7 @@ target_link_libraries(kepler_xls_c2rtl
 
 add_library(kepler_c2rtl_formal STATIC
   formal/C2RtlEquivalenceStrategy.cpp
+  formal/C2RtlExpression.cpp
 )
 
 target_include_directories(kepler_c2rtl_formal

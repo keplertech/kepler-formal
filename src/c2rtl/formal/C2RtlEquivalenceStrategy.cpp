@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "formal/C2RtlEquivalenceStrategy.h"
+#include "formal/C2RtlExpression.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -19,6 +21,7 @@
 #include "NLDB0.h"
 #include "NLUniverse.h"
 #include "SNLBitTerm.h"
+#include "SNLBusTerm.h"
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLPath.h"
@@ -26,6 +29,7 @@
 #include "common/SignalKey.h"
 #include "kinduction/BaseCaseSolver.h"
 #include "kinduction/KInductionProblem.h"
+#include "kinduction/SatEncoding.h"
 #include "model/SequentialDesignModel.h"
 #include "pdr/PDREngine.h"
 
@@ -61,7 +65,8 @@ std::string joinStrings(const std::vector<std::string> &values,
 }
 
 std::string formatCounterexampleTrace(
-    const KInductionResult::CounterexampleWitness &witness) {
+    const KInductionResult::CounterexampleWitness &witness,
+    bool eventuals = false) {
   std::ostringstream oss;
   oss << "C2RTL counterexample reaches the first bad frame at cycle "
       << witness.badFrame << ".\n";
@@ -86,6 +91,13 @@ std::string formatCounterexampleTrace(
     }
   }
   if (!witness.outputMismatches.empty()) {
+    if (eventuals) {
+      oss << "Failed eventual checks at cycle " << witness.badFrame << ":\n";
+      for (const auto &mismatch : witness.outputMismatches) {
+        oss << "  " << mismatch.signal << "\n";
+      }
+      return oss.str();
+    }
     oss << "Delayed-reference/RTL output mismatches at cycle "
         << witness.badFrame << ":\n";
     for (const auto &mismatch : witness.outputMismatches) {
@@ -923,13 +935,17 @@ BoolExpr *makeEquality(BoolExpr *lhs, BoolExpr *rhs) {
 struct BuiltC2RtlProblem {
   KInductionProblem problem;
   size_t comparedBits = 0;
+  BoolExpr *inputConstraints = nullptr;
 };
 
 BuiltC2RtlProblem buildProblem(const SequentialDesignModel &reference,
                                const SequentialDesignModel &implementation,
+                               naja::NL::SNLDesign *referenceTop,
+                               naja::NL::SNLDesign *implementationTop,
                                const RtlControls &controls,
                                const std::vector<InputAlignment> &inputs,
-                               const std::vector<OutputAlignment> &outputs) {
+                               const std::vector<OutputAlignment> &outputs,
+                               const C2RtlEquivalenceOptions &options) {
   BuiltC2RtlProblem built;
   auto &problem = built.problem;
   size_t nextSymbol = 2;
@@ -976,6 +992,12 @@ BuiltC2RtlProblem buildProblem(const SequentialDesignModel &reference,
     problem.allSymbols.push_back(*resetSymbol);
     problem.environmentInputNames.push_back(controls.reset->name);
   }
+  // Each proof frame samples an active clock event.
+  if (const auto clock = implementation.inputVarByKey.find(controls.clockKey);
+      clock != implementation.inputVarByKey.end()) {
+    implementationSymbols.emplace(clock->second,
+                                  controls.clockPhase == ClockPhase::Pos ? 1 : 0);
+  }
 
   std::unordered_map<BoolExpr *, BoolExpr *> referenceMemo;
   std::unordered_map<BoolExpr *, BoolExpr *> implementationMemo;
@@ -998,6 +1020,90 @@ BuiltC2RtlProblem buildProblem(const SequentialDesignModel &reference,
     if (symbolIt != rtlStateSymbols.end()) {
       addInitialAssignment(problem, symbolIt->second, value, initialCondition);
     }
+  }
+
+  enum class ExpressionScope { Inputs, Terminals, Outputs };
+  const auto referenceInputs = collectSignalBuses(
+      reference, reference.topInputKeys, "model input");
+  const auto referenceOutputs = collectSignalBuses(
+      reference, reference.topOutputKeys, "model output");
+  const auto rtlInputs = collectSignalBuses(
+      implementation, implementation.topInputKeys, "RTL input");
+  const auto rtlOutputs = collectSignalBuses(
+      implementation, implementation.topOutputKeys, "RTL output");
+  auto compile = [&](const std::string &text, ExpressionScope scope,
+                     const std::string &role) {
+    try {
+      return compileC2RtlExpression(text, [&](const std::string &name,
+                                            std::optional<size_t> index) {
+        const bool modelPrefix = name.rfind("model.", 0) == 0;
+        const bool rtlPrefix = name.rfind("rtl.", 0) == 0;
+        const std::string base = modelPrefix ? name.substr(6)
+                                 : rtlPrefix ? name.substr(4) : name;
+        // Bare names identify shared inputs; outputs must name their side.
+        const bool useModel = modelPrefix ||
+            (!rtlPrefix && referenceInputs.count(base) != 0);
+        const auto &inputBuses = useModel ? referenceInputs : rtlInputs;
+        const auto &outputBuses = useModel ? referenceOutputs : rtlOutputs;
+        const auto input = inputBuses.find(base);
+        const auto output = outputBuses.find(base);
+        const bool isInput = input != inputBuses.end();
+        if (!isInput && output == outputBuses.end()) {
+          throw std::invalid_argument("unknown terminal `" + name + "`");
+        }
+        if ((isInput && scope == ExpressionScope::Outputs) ||
+            (!isInput && scope == ExpressionScope::Inputs)) {
+          throw std::invalid_argument(role + " may reference only " +
+              (scope == ExpressionScope::Outputs ? "outputs" : "inputs") +
+              "; invalid terminal `" + name + "`");
+        }
+        if (!isInput && !modelPrefix && !rtlPrefix) {
+          throw std::invalid_argument("output `" + name +
+                                      "` requires a model. or rtl. prefix");
+        }
+        const auto &bus = isInput ? input->second : output->second;
+        if (index.has_value() && bus.bits.count(*index) == 0) {
+          throw std::invalid_argument("bit index out of range for `" + name + "`");
+        }
+        if (!index.has_value()) {
+          contiguousBusWidth(base, bus, "expression terminal");
+        }
+        const auto &model = useModel ? reference : implementation;
+        const auto &symbols = useModel ? referenceSymbols : implementationSymbols;
+        auto &memo = useModel ? referenceMemo : implementationMemo;
+        ExpressionBits bits;
+        for (const auto &[bit, key] : bus.bits) {
+          if (index.has_value() && bit != *index) {
+            continue;
+          }
+          BoolExpr *expr = nullptr;
+          if (isInput && !useModel && key == controls.clockKey) {
+            expr = BoolExpr::Var(controls.clockPhase == ClockPhase::Pos ? 1 : 0);
+          } else {
+            expr = isInput ? BoolExpr::Var(model.inputVarByKey.at(key))
+                           : model.observedOutputExprByKey.at(key);
+            expr = remapFormulaStrict(expr, symbols, memo, role.c_str());
+          }
+          bits.push_back(expr);
+        }
+        if (!index.has_value()) {
+          const auto *top = useModel ? referenceTop : implementationTop;
+          if (const auto *terminal = top->getBusTerm(naja::NL::NLName(base));
+              terminal && terminal->getMSB() < terminal->getLSB()) {
+            std::reverse(bits.begin(), bits.end());
+          }
+        }
+        return bits;
+      });
+    } catch (const std::invalid_argument &error) {
+      throw UnsupportedC2Rtl("C2RTL " + role + ": " + error.what());
+    }
+  };
+  built.inputConstraints = BoolExpr::createTrue();
+  for (size_t i = 0; i < options.constraints.size(); ++i) {
+    built.inputConstraints = BoolExpr::And(built.inputConstraints,
+        compile(options.constraints[i], ExpressionScope::Inputs,
+                "constraint[" + std::to_string(i) + "]"));
   }
 
   struct ComparedBit {
@@ -1109,14 +1215,96 @@ BuiltC2RtlProblem buildProblem(const SequentialDesignModel &reference,
     property = BoolExpr::And(property, bitProperty);
   }
 
+  auto *admissibleInputs = built.inputConstraints;
+  if (!options.eventuals.empty()) {
+    size_t lastCycle = 0;
+    for (const auto &eventual : options.eventuals) {
+      lastCycle = std::max(lastCycle, eventual.cycle);
+    }
+    if (lastCycle == std::numeric_limits<size_t>::max()) {
+      throw UnsupportedC2Rtl("C2RTL eventual cycle is too large");
+    }
+    auto addAuxiliary = [&]() {
+      const size_t symbol = nextSymbol++;
+      problem.auxiliaryStateSymbols.push_back(symbol);
+      problem.allSymbols.push_back(symbol);
+      addInitialAssignment(problem, symbol, false, initialCondition);
+      return symbol;
+    };
+    // Saturate after the last check so a cycle never recurs through wrapping.
+    std::vector<size_t> cycleBits;
+    for (size_t remaining = lastCycle + 1; remaining; remaining >>= 1) {
+      cycleBits.push_back(addAuxiliary());
+    }
+    auto atCycle = [&](size_t cycle) {
+      auto *match = BoolExpr::createTrue();
+      for (size_t bit = 0; bit < cycleBits.size(); ++bit) {
+        auto *value = BoolExpr::Var(cycleBits[bit]);
+        match = BoolExpr::And(match,
+            ((cycle >> bit) & 1) ? value : BoolExpr::Not(value));
+      }
+      return match;
+    };
+    auto *carry = BoolExpr::Not(atCycle(lastCycle + 1));
+    for (const size_t symbol : cycleBits) {
+      auto *value = BoolExpr::Var(symbol);
+      problem.auxiliaryTransitions.emplace_back(symbol, BoolExpr::Xor(value, carry));
+      carry = BoolExpr::And(carry, value);
+    }
+    auto *firstCycle = atCycle(0);
+    for (size_t input = 0; input < inputs.size(); ++input) {
+      auto *value = BoolExpr::Var(problem.inputSymbols[input]);
+      const size_t snapshot = addAuxiliary();
+      auto *saved = BoolExpr::Var(snapshot);
+      problem.auxiliaryTransitions.emplace_back(snapshot, BoolExpr::Or(
+          BoolExpr::And(firstCycle, value),
+          BoolExpr::And(BoolExpr::Not(firstCycle), saved)));
+      admissibleInputs = BoolExpr::And(admissibleInputs, BoolExpr::Or(
+          firstCycle, makeEquality(value, saved)));
+    }
+    for (size_t i = 0; i < options.eventuals.size(); ++i) {
+      const auto &eventual = options.eventuals[i];
+      const auto label = "eventual[" + std::to_string(i) + "]";
+      auto *condition = compile(eventual.condition, ExpressionScope::Terminals,
+                                label + ".condition");
+      auto *equality = compile(eventual.equality, ExpressionScope::Outputs,
+                               label + ".equality");
+      auto *enabled = BoolExpr::And(atCycle(eventual.cycle), condition);
+      property = BoolExpr::And(property,
+          BoolExpr::Or(BoolExpr::Not(enabled), equality));
+      problem.observedOutputNames.push_back(label + " cycle " +
+          std::to_string(eventual.cycle) + ": " + eventual.equality);
+      problem.observedOutputExprs0.push_back(enabled);
+      problem.observedOutputExprs1.push_back(BoolExpr::And(enabled, equality));
+    }
+  }
+
+  if (!options.constraints.empty() || !options.eventuals.empty()) {
+    // A violation at any frame invalidates that entire input trace prefix,
+    // including values retained by the RTL pipeline and reference history.
+    const size_t validPrefix = nextSymbol++;
+    problem.auxiliaryStateSymbols.push_back(validPrefix);
+    problem.allSymbols.push_back(validPrefix);
+    addInitialAssignment(problem, validPrefix, true, initialCondition);
+    auto *valid = BoolExpr::And(BoolExpr::Var(validPrefix), admissibleInputs);
+    problem.auxiliaryTransitions.emplace_back(validPrefix, valid);
+    property = BoolExpr::Or(BoolExpr::Not(valid), property);
+    for (auto *observations : {&problem.observedOutputExprs0,
+                              &problem.observedOutputExprs1}) {
+      for (auto *&expr : *observations) {
+        expr = BoolExpr::And(valid, expr);
+      }
+    }
+  }
+
   problem.initialCondition = BoolExpr::simplify(initialCondition);
   problem.totalStateCount =
       problem.state1Symbols.size() + problem.auxiliaryStateSymbols.size();
   problem.property = BoolExpr::simplify(property);
   problem.bad = BoolExpr::simplify(BoolExpr::Not(problem.property));
-  problem.originalObservedOutputCount = comparedBits.size();
-  problem.description = "C2RTL delayed combinational-reference safety property";
-  built.comparedBits = comparedBits.size();
+  problem.originalObservedOutputCount = problem.observedOutputNames.size();
+  problem.description = "C2RTL combinational-reference output relations";
+  built.comparedBits = problem.originalObservedOutputCount;
   return built;
 }
 
@@ -1142,6 +1330,9 @@ C2RtlEquivalenceResult C2RtlEquivalenceStrategy::run(size_t maxFrames) const {
   if (combinationalReference_ == nullptr || clockedImplementation_ == nullptr) {
     return unsupportedResult("C2RTL requires both parsed RTL designs");
   }
+  if (!options_.eventuals.empty() && !options_.outputDelays.empty()) {
+    return unsupportedResult("C2RTL eventuals cannot be combined with output delays");
+  }
 
   try {
     const SequentialDesignModel reference =
@@ -1160,9 +1351,29 @@ C2RtlEquivalenceResult C2RtlEquivalenceStrategy::run(size_t maxFrames) const {
     const RtlControls controls =
         classifyRtlControls(clockedImplementation_, implementation);
     const auto inputs = alignDataInputs(reference, implementation, controls);
-    const auto outputs = alignOutputs(reference, implementation, options_);
+    const auto outputs = options_.eventuals.empty()
+        ? alignOutputs(reference, implementation, options_)
+        : std::vector<OutputAlignment>{};
     const BuiltC2RtlProblem built =
-        buildProblem(reference, implementation, controls, inputs, outputs);
+        buildProblem(reference, implementation,
+                     combinationalReference_, clockedImplementation_,
+                     controls, inputs, outputs, options_);
+
+    if (options_.checkReachability && !options_.constraints.empty()) {
+      SATSolverWrapper solver(solverType_);
+      SEC::FrameVariableStore variables(solver, built.problem.inputSymbols, 1);
+      SEC::FrameFormulaEncoder encoder(solver, variables.makeLeafLits(0));
+      solver.addClause({encoder.encode(built.inputConstraints)});
+      switch (solver.solveStatus()) {
+      case SATSolverWrapper::SolveStatus::Unsat:
+        return unsupportedResult("C2RTL input constraints are unsatisfiable; "
+                                 "equivalence would be vacuous");
+      case SATSolverWrapper::SolveStatus::Unknown:
+        throw std::runtime_error("input constraint satisfiability check was inconclusive");
+      case SATSolverWrapper::SolveStatus::Sat:
+        break;
+      }
+    }
 
     KEPLER_FORMAL::SEC::PDREngine engine(built.problem, solverType_);
     const PDRResult proof = engine.run(maxFrames);
@@ -1170,7 +1381,8 @@ C2RtlEquivalenceResult C2RtlEquivalenceStrategy::run(size_t maxFrames) const {
     C2RtlEquivalenceResult result;
     result.bound = proof.bound;
     result.comparedBits = built.comparedBits;
-    result.comparedOutputs = outputs.size();
+    result.comparedOutputs = options_.eventuals.empty()
+        ? outputs.size() : options_.eventuals.size();
     result.clock = controls.clockName + " " +
                    KEPLER_FORMAL::SEC::clockPhaseName(controls.clockPhase);
     if (controls.reset.has_value()) {
@@ -1183,16 +1395,17 @@ C2RtlEquivalenceResult C2RtlEquivalenceStrategy::run(size_t maxFrames) const {
     switch (proof.status) {
     case PDRStatus::Equivalent:
       result.status = C2RtlEquivalenceStatus::Equivalent;
-      result.reason = "PDR proved every configured delayed output relation";
+      result.reason = "PDR proved every configured output relation";
       break;
     case PDRStatus::Different:
       result.status = C2RtlEquivalenceStatus::Different;
       result.reason =
-          "PDR found a trace that violates a configured delayed output "
+          "PDR found a trace that violates a configured output "
           "relation";
       if (const auto witness = KEPLER_FORMAL::SEC::findBaseCounterexample(
               built.problem, solverType_, proof.bound)) {
-        result.counterexampleTrace = formatCounterexampleTrace(*witness);
+        result.counterexampleTrace = formatCounterexampleTrace(
+            *witness, !options_.eventuals.empty());
       }
       break;
     case PDRStatus::Inconclusive:

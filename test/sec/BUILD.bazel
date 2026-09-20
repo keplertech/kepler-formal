@@ -2,6 +2,20 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
 cc_test(
+    name = "C2RtlFormalTests",
+    srcs = ["C2RtlExpressionTests.cpp", "C2RtlEquivalenceTests.cpp"],
+    copts = NAJA_HEADER_COPTS,
+    deps = [
+        "//src/c2rtl:kepler_c2rtl_formal",
+        "//src/clauses:kepler_clauses",
+        "//src/formal:formal_structures",
+        "@naja",
+        "@naja//:naja_extra_headers",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "BoundaryEquivalenceTests",
     srcs = ["BoundaryEquivalenceTests.cpp"],
     copts = NAJA_HEADER_COPTS,

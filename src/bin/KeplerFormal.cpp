@@ -52,6 +52,7 @@
 #include "model/SequentialDesignModel.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 #include "formal/C2RtlEquivalenceStrategy.h"
+#include "formal/C2RtlExpression.h"
 #include "KeplerXlsC2Rtl.h"
 
 static const char* kBoundaryTermsReport = "boundary_terms.txt";
@@ -533,6 +534,9 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "cc_output_dir",
       "c2rtl_auto_align",
       "c2rtl_output_delays",
+      "constraints",
+      "eventuals",
+      "check_reachability",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -549,6 +553,106 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       return false;
       // LCOV_EXCL_STOP
     }
+  }
+  return true;
+}
+
+static bool parseC2RtlExpressionConfig(
+    const YAML::Node& node,
+    const std::string& field,
+    std::string& expression,
+    std::string& error) {
+  if (!node || !node.IsScalar()) {
+    error = field + " must be a non-empty expression string";
+    return false;
+  }
+  expression = node.as<std::string>();
+  if (expression.find_first_not_of(" \t\r\n") == std::string::npos) {
+    error = field + " must be a non-empty expression string";
+    return false;
+  }
+  try {
+    KEPLER_FORMAL::C2RTL::validateC2RtlExpression(expression);
+  } catch (const std::invalid_argument& ex) {
+    error = field + ": " + ex.what();
+    return false;
+  }
+  return true;
+}
+
+static bool parseC2RtlPropertyConfig(
+    const YAML::Node& cfg,
+    KEPLER_FORMAL::C2RTL::C2RtlEquivalenceOptions& options,
+    std::string& error) {
+  if (const auto constraints = cfg["constraints"]) {
+    if (!constraints.IsSequence() || constraints.size() == 0) {
+      error = "constraints must be a non-empty sequence of expressions";
+      return false;
+    }
+    for (size_t i = 0; i < constraints.size(); ++i) {
+      std::string expression;
+      if (!parseC2RtlExpressionConfig(
+              constraints[i], "constraints[" + std::to_string(i) + "]",
+              expression, error)) {
+        return false;
+      }
+      options.constraints.push_back(std::move(expression));
+    }
+  }
+  if (const auto eventuals = cfg["eventuals"]) {
+    if (!eventuals.IsSequence() || eventuals.size() == 0) {
+      error = "eventuals must be a non-empty sequence of maps";
+      return false;
+    }
+    for (size_t i = 0; i < eventuals.size(); ++i) {
+      const auto entry = eventuals[i];
+      const auto field = "eventuals[" + std::to_string(i) + "]";
+      if (!entry.IsMap()) {
+        error = field + " must be a map with cycle, condition, and equality";
+        return false;
+      }
+      std::unordered_set<std::string> keys;
+      for (const auto& item : entry) {
+        if (!item.first.IsScalar()) {
+          error = field + " keys must be cycle, condition, or equality";
+          return false;
+        }
+        const auto key = item.first.as<std::string>();
+        if (key != "cycle" && key != "condition" && key != "equality") {
+          error = field + ": unknown key " + key;
+          return false;
+        }
+        if (!keys.insert(key).second) {
+          error = field + ": duplicate key " + key;
+          return false;
+        }
+      }
+      KEPLER_FORMAL::C2RTL::C2RtlEventual eventual;
+      if (!entry["cycle"] || !entry["cycle"].IsScalar()) {
+        error = field + ".cycle must be a non-negative integer";
+        return false;
+      }
+      if (!parseNonNegativeSizeToken(
+              entry["cycle"].as<std::string>(), (field + ".cycle").c_str(),
+              eventual.cycle, error) ||
+          !parseC2RtlExpressionConfig(
+              entry["condition"], field + ".condition",
+              eventual.condition, error) ||
+          !parseC2RtlExpressionConfig(
+              entry["equality"], field + ".equality",
+              eventual.equality, error)) {
+        return false;
+      }
+      options.eventuals.push_back(std::move(eventual));
+    }
+  }
+  if (const auto check = cfg["check_reachability"]) {
+    if (!check.IsScalar() ||
+        (check.Scalar() != "true" && check.Scalar() != "false")) {
+      error = "check_reachability must be true or false";
+      return false;
+    }
+    options.checkReachability = check.Scalar() == "true";
   }
   return true;
 }
@@ -1631,6 +1735,8 @@ static int KeplerFormalMainImpl(
   bool c2rtlAutoAlign = false;
   bool c2rtlOutputDelaysConfigured = false;
   std::unordered_map<std::string, size_t> c2rtlOutputDelays;
+  bool c2rtlPropertiesConfigured = false;
+  KEPLER_FORMAL::C2RTL::C2RtlEquivalenceOptions c2rtlOptions;
 
   // Basic argument sanity
   if (argc < 2) {
@@ -1841,6 +1947,14 @@ static int KeplerFormalMainImpl(
               return EXIT_FAILURE;
             }
           }
+        }
+
+        c2rtlPropertiesConfigured =
+            cfg["constraints"] || cfg["eventuals"] || cfg["check_reachability"];
+        std::string c2rtlPropertyError;
+        if (!parseC2RtlPropertyConfig(cfg, c2rtlOptions, c2rtlPropertyError)) {
+          SPDLOG_CRITICAL("Invalid C2RTL property config: {}", c2rtlPropertyError);
+          return EXIT_FAILURE;
         }
 
         if (cfg["sec_reset"]) {
@@ -2852,6 +2966,15 @@ static int KeplerFormalMainImpl(
         "c2rtl_output_delays requires c2rtl_auto_align: true");
     return EXIT_FAILURE;
   }
+  if (c2rtlPropertiesConfigured && !c2rtlAutoAlign) {
+    SPDLOG_CRITICAL(
+        "constraints, eventuals, and check_reachability require c2rtl_auto_align: true");
+    return EXIT_FAILURE;
+  }
+  if (c2rtlOutputDelaysConfigured && !c2rtlOptions.eventuals.empty()) {
+    SPDLOG_CRITICAL("eventuals cannot be combined with c2rtl_output_delays");
+    return EXIT_FAILURE;
+  }
   if (c2rtlAutoAlign) {
     if (inputFormatType != FormatType::C_VS_RTL) {
       SPDLOG_CRITICAL(
@@ -3182,7 +3305,7 @@ static int KeplerFormalMainImpl(
               runResult->provenOutputs = result.comparedBits;
             }
             SPDLOG_INFO(
-                "C2RTL PDR proved the configured delayed output relation at "
+                "C2RTL PDR proved the configured output relations at "
                 "frame {}.",
                 result.bound);
             return kSecProvedExitCode;
@@ -3875,12 +3998,12 @@ static int KeplerFormalMainImpl(
   // LCOV_EXCL_STOP
     try {
       if (c2rtlAutoAlign) {
+        c2rtlOptions.outputDelays = std::move(c2rtlOutputDelays);
         KEPLER_FORMAL::C2RTL::C2RtlEquivalenceStrategy strategy(
             top0,
             top1,
             solverType,
-            KEPLER_FORMAL::C2RTL::C2RtlEquivalenceOptions{
-                c2rtlOutputDelays});
+            std::move(c2rtlOptions));
         return emitC2RtlResult(strategy.run(secMaxK));
       }
       // LCOV_EXCL_START

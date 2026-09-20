@@ -91,6 +91,11 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `cc_design2_block_proto_path` | string | Optional XLSCC block proto path for design 2. |
 | `cc_include_paths` | list[string] | Include directories passed to XLS C/C++ synthesis. |
 | `cc_output_dir` | string | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
+| `c2rtl_auto_align` | bool | Enable temporal C++ model versus RTL proofs. Requires `format: c_vs_rtl`, `verification: sec`, `sec_engine: pdr`, and `sec_encoding: binary`. |
+| `c2rtl_output_delays` | map[string, integer] | Per-output delay in active clock events. Cannot be combined with `eventuals`. |
+| `constraints` | list[string] | Non-empty list of input assumptions, all of which must hold. Requires `c2rtl_auto_align: true`. |
+| `eventuals` | list[map] | Non-empty list of conditional output relations, each containing exactly `cycle`, `condition`, and `equality`. Replaces automatic output equality; requires `c2rtl_auto_align: true`. |
+| `check_reachability` | bool | Check input assumptions for satisfiability before proving equivalence. Defaults to `true`; requires `c2rtl_auto_align: true`. |
 | `log_level` | string | `debug` and `info` are handled explicitly. Other values currently fall back to `info`. |
 | `log_file` | string | Output path for the miter log file. If omitted, the tool writes `miter_log_<n>.txt` in the current working directory. |
 | `use_scopes` | bool | Enable scoped verification for `naja_if` inputs. |
@@ -149,6 +154,57 @@ The `kepler-formal` CMake build compiles the KF C2RTL bridge as the normal
 ```bash
 cmake --build build --target kepler-formal
 ```
+
+For conditional C++ model versus sequential RTL comparisons:
+
+```yaml
+format: c_vs_rtl
+verification: sec
+sec_engine: pdr
+sec_encoding: binary
+c2rtl_auto_align: true
+cc_top: calculate
+sv_design2_top: calculate_rtl
+input_paths: [calculate.cc, calculate.sv]
+constraints:
+  - A_in > 0x10000000
+  - A_in < 0x7FFFF000
+  - "!rtl.rst"  # If the RTL has an active-high reset, hold it inactive.
+eventuals:
+  - cycle: 4
+    condition: "true"
+    equality: "model.nan == rtl.nan"
+  - cycle: 4
+    condition: "!model.nan && !model.inf"
+    equality: "model.mantissa == rtl.mantissa"
+```
+
+Every eventual requires `condition -> equality` at its specified cycle. Entries
+at the same cycle are independent; a false condition imposes no requirement for
+that entry. Both designs receive one symbolic data-input vector held fixed from
+cycle 0, so the combinational C++ result stays fixed. Cycle 0 is the initial RTL
+state; cycle N is after N active clock transitions. Conditions read input or
+output terminal values at that cycle using `model.` and `rtl.`. The `equality`
+field may reference **only output terminals**.
+
+Eventuals have no implicit reset masking. Constrain reset inactive as above or
+include the intended reset condition explicitly. Constraints may reference only
+inputs and must hold at every cycle; unqualified names refer to aligned data
+inputs. Without eventuals, the existing output-delay mode retains its streaming
+inputs and reset behavior.
+
+Expressions support `==`, `!=`, `<`, `>`, `<=`, `>=`, `!`, `&&`, `||`,
+parentheses, bit selection such as `rtl.mantissa[40]`, `true`/`false`, and
+non-negative decimal, hexadecimal (`0x`) or binary (`0b`) constants. Comparisons
+are unsigned and zero-extend the narrower operand; constants are never
+truncated. Boolean expressions treat nonzero vectors as true. Quote expressions
+containing YAML-special characters, particularly a leading `!`.
+
+Contradictory constraints produce an inconclusive result rather than a vacuous
+equivalence result. `check_reachability: false` disables this extra check while
+retaining the assumptions, so an empty input domain can then prove vacuously.
+This check concerns the allowed input domain, not arbitrary internal RTL state
+reachability.
 
 SEC `sv2v` example:
 

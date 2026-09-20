@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 #include <spdlog/sinks/null_sink.h>
+#include <spdlog/sinks/ostream_sink.h>
 #include <spdlog/spdlog.h>
 
 #include <cstdlib>
@@ -5264,7 +5265,8 @@ TemporalC2RtlTransformFixture createTemporalC2RtlTransformFixture() {
 std::filesystem::path writeTemporalC2RtlTransformConfig(
     const TemporalC2RtlTransformFixture& fixture,
     const std::string& delayEntries,
-    const std::string& verification = "sec") {
+    const std::string& verification = "sec",
+    const std::string& properties = "") {
   const auto cfgPath = fixture.tmpDir /
       ("config_" +
        std::to_string(
@@ -5277,8 +5279,11 @@ std::filesystem::path writeTemporalC2RtlTransformConfig(
   cfg << "sec_engine: pdr\n";
   cfg << "sec_encoding: binary\n";
   cfg << "c2rtl_auto_align: true\n";
-  cfg << "c2rtl_output_delays:\n";
-  cfg << delayEntries;
+  if (!delayEntries.empty()) {
+    cfg << "c2rtl_output_delays:\n";
+    cfg << delayEntries;
+  }
+  cfg << properties;
   cfg << "cc_top: word_transform\n";
   cfg << "cc_design1_module_name: word_transform_c2rtl\n";
   cfg << "cc_output_dir: " << fixture.outputDir.string() << "\n";
@@ -5291,6 +5296,143 @@ std::filesystem::path writeTemporalC2RtlTransformConfig(
 }
 
 TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsMalformedPropertiesBeforeSynthesis) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"constraints: payload > 0\n", "constraints must be a non-empty sequence"},
+      {"constraints: []\n", "constraints must be a non-empty sequence"},
+      {"constraints: [null]\n", "constraints[0] must be a non-empty expression"},
+      {"constraints: [[payload]]\n", "constraints[0] must be a non-empty expression"},
+      {"constraints: ['   ']\n", "constraints[0] must be a non-empty expression"},
+      {"constraints: ['payload >']\n", "constraints[0]:"},
+      {"eventuals: {}\n", "eventuals must be a non-empty sequence"},
+      {"eventuals: []\n", "eventuals must be a non-empty sequence"},
+      {"eventuals: [true]\n", "eventuals[0] must be a map"},
+      {"eventuals: [{cycle: 1, condition: true, equality: true, delay: 1}]\n",
+       "eventuals[0]: unknown key delay"},
+      {"eventuals: [{cycle: 1, cycle: 2, condition: true, equality: true}]\n",
+       "eventuals[0]: duplicate key cycle"},
+      {"eventuals: [{cycle: 1, condition: true, condition: false, equality: true}]\n",
+       "eventuals[0]: duplicate key condition"},
+      {"eventuals: [{cycle: 1, condition: true, equality: true, equality: false}]\n",
+       "eventuals[0]: duplicate key equality"},
+      {"eventuals: [{condition: true, equality: true}]\n",
+       "eventuals[0].cycle must be a non-negative integer"},
+      {"eventuals: [{cycle: -1, condition: true, equality: true}]\n",
+       "eventuals[0].cycle must be a non-negative integer"},
+      {"eventuals: [{cycle: 1.5, condition: true, equality: true}]\n",
+       "eventuals[0].cycle must be a non-negative integer"},
+      {"eventuals: [{cycle: 18446744073709551616, condition: true, equality: true}]\n",
+       "eventuals[0].cycle is out of range"},
+      {"eventuals: [{cycle: 1, equality: true}]\n",
+       "eventuals[0].condition must be a non-empty expression"},
+      {"eventuals: [{cycle: 1, condition: true}]\n",
+       "eventuals[0].equality must be a non-empty expression"},
+      {"eventuals: [{cycle: 1, condition: '', equality: true}]\n",
+       "eventuals[0].condition must be a non-empty expression"},
+      {"eventuals: [{cycle: 1, condition: true, equality: ''}]\n",
+       "eventuals[0].equality must be a non-empty expression"},
+      {"eventuals: [{cycle: 1, condition: '!()', equality: true}]\n",
+       "eventuals[0].condition:"},
+      {"eventuals: [{cycle: 1, condition: true, equality: 'model.marker =='}]\n",
+       "eventuals[0].equality:"},
+      {"check_reachability: yes\n", "check_reachability must be true or false"},
+      {"check_reachability: 1\n", "check_reachability must be true or false"},
+      {"check_reachability: []\n", "check_reachability must be true or false"},
+  };
+  for (const auto& [properties, expectedError] : cases) {
+    SCOPED_TRACE(properties);
+    std::ostringstream captured;
+    NamedLoggerGuard logger("c2rtl_config_validation");
+    logger.installed_->sinks().clear();
+    logger.installed_->sinks().push_back(
+        std::make_shared<spdlog::sinks::ostream_sink_mt>(captured));
+    const auto cfgPath = writeTemporalC2RtlTransformConfig(
+        fixture, "", "sec", properties);
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+    EXPECT_NE(captured.str().find(expectedError), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(fixture.outputDir));
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsPropertiesWithoutAutoAlignBeforeSynthesis) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  for (const std::string properties : {
+           "constraints: ['payload > 0']\n",
+           "eventuals: [{cycle: 1, condition: true, equality: 'model.marker == rtl.marker'}]\n",
+           "check_reachability: false\n"}) {
+    SCOPED_TRACE(properties);
+    const auto cfgPath = writeTemporalC2RtlTransformConfig(
+        fixture, "", "sec", properties);
+    auto config = readFileContents(cfgPath);
+    config.replace(config.find("c2rtl_auto_align: true"),
+                   std::string("c2rtl_auto_align: true").size(),
+                   "c2rtl_auto_align: false");
+    {
+      std::ofstream cfg(cfgPath);
+      cfg << config;
+    }
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+    EXPECT_NE(readFileContents(fixture.logPath).find(
+                  "require c2rtl_auto_align: true"),
+              std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(fixture.outputDir));
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsEventualsWithOutputDelaysBeforeSynthesis) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  const auto cfgPath = writeTemporalC2RtlTransformConfig(
+      fixture, "  transformed: 1\n  marker: 1\n", "sec",
+      "eventuals: [{cycle: 1, condition: true, equality: 'model.marker == rtl.marker'}]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  EXPECT_NE(readFileContents(fixture.logPath).find(
+                "eventuals cannot be combined with c2rtl_output_delays"),
+            std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(fixture.outputDir));
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlConstraintsRestrictTheInputDomain) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  auto rtl = readFileContents(fixture.svPath);
+  const std::string original = "transformed <= payload ^ 16'ha55a";
+  rtl.replace(rtl.find(original), original.size(),
+              "transformed <= payload == 0 ? 16'b0 : payload ^ 16'ha55a");
+  {
+    std::ofstream sv(fixture.svPath);
+    sv << rtl;
+  }
+  const auto cfgPath = writeTemporalC2RtlTransformConfig(
+      fixture, "  transformed: 1\n  marker: 1\n", "sec",
+      "constraints:\n  - payload > 0x1000\n  - payload < 0x7fff\n"
+      "check_reachability: true\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+
+  const auto unconstrained = writeTemporalC2RtlTransformConfig(
+      fixture, "  transformed: 1\n  marker: 1\n");
+  EXPECT_EQ(runWithConfigFile(unconstrained), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlContradictoryConstraintsDoNotProveEquivalence) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  const auto cfgPath = writeTemporalC2RtlTransformConfig(
+      fixture, "  transformed: 1\n  marker: 1\n", "sec",
+      "constraints: ['payload > 10', 'payload < 5']\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+  EXPECT_NE(readFileContents(fixture.logPath).find("unsatisfiable"),
+            std::string::npos);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
        ConfigTemporalC2RtlTransformProvesWithExplicitDelays) {
   const auto fixture = createTemporalC2RtlTransformFixture();
   const auto cfgPath = writeTemporalC2RtlTransformConfig(
@@ -5298,6 +5440,58 @@ TEST_F(KeplerFormalCliTests,
 
   EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
 
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlEventualsCheckIndependentConditionalOutputs) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  const auto cfgPath = writeTemporalC2RtlTransformConfig(
+      fixture, "", "sec",
+      "constraints: ['rtl.reset_n']\n"
+      "eventuals:\n"
+      "  - cycle: 1\n"
+      "    condition: 'true'\n"
+      "    equality: 'model.marker == rtl.marker'\n"
+      "  - cycle: 1\n"
+      "    condition: '!model.marker && (rtl.payload == model.payload)'\n"
+      "    equality: 'model.transformed == rtl.transformed'\n"
+      "  - cycle: 1\n"
+      "    condition: 'false'\n"
+      "    equality: 'model.transformed != rtl.transformed'\n"
+      "  - cycle: 4\n"
+      "    condition: 'rtl.reset_n && (rtl.transformed != 0)'\n"
+      "    equality: 'model.transformed[15] == rtl.transformed[15]'\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+
+  // A failing entry must not be overwritten by later entries at the same cycle.
+  auto config = readFileContents(cfgPath);
+  const auto equality = config.find("model.marker == rtl.marker");
+  config.replace(equality, std::string("model.marker == rtl.marker").size(),
+                 "model.marker != rtl.marker");
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << config;
+  }
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlEventualAtWrongCycleFindsCounterexample) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  for (const size_t cycle : {0, 1}) {
+    SCOPED_TRACE(cycle);
+    const auto cfgPath = writeTemporalC2RtlTransformConfig(
+        fixture, "", "sec",
+        "constraints: ['rtl.reset_n']\n"
+        "eventuals:\n"
+        "  - cycle: " + std::to_string(cycle) + "\n"
+        "    condition: 'true'\n"
+        "    equality: 'model.transformed == rtl.transformed'\n");
+    EXPECT_EQ(runWithConfigFile(cfgPath),
+              cycle == 0 ? kSecCounterexampleExitCode : kSecProvedExitCode);
+  }
   std::filesystem::remove_all(fixture.tmpDir);
 }
 

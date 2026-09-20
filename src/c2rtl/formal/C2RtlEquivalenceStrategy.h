@@ -16,10 +16,23 @@ class SNLDesign;
 
 namespace KEPLER_FORMAL::C2RTL {
 
+struct C2RtlEventual {
+  // Cycle zero is the initial RTL state; N counts N active clock events.
+  size_t cycle;
+  std::string condition;
+  // Terminal references in equality must be outputs.
+  std::string equality;
+};
+
 struct C2RtlEquivalenceOptions {
   // Delay zero compares the current combinational reference value. Delay N
   // compares against the reference value sampled N active clock events ago.
   std::unordered_map<std::string, size_t> outputDelays;
+  std::vector<std::string> constraints;
+  // Eventuals hold data inputs fixed at their cycle-zero values and replace
+  // outputDelays. Conditions may read any input or output terminal.
+  std::vector<C2RtlEventual> eventuals;
+  bool checkReachability = true;
 };
 
 enum class C2RtlEquivalenceStatus {
