@@ -63,6 +63,12 @@ nix profile install 'git+https://github.com/keplertech/kepler-formal?ref=main&su
 
 On NixOS, run `sudo nixos-rebuild switch` between these two commands.
 
+The Nix package includes the C++ frontend. LLVM/Clang comes from Nixpkgs;
+Abseil, Protobuf and RE2 use a pinned, matching set of prebuilt conda-forge
+libraries on Linux x86_64 and macOS arm64. Nix verifies their hashes and
+relocates them into the store; it does not compile these libraries or require
+a Conda installation. The pins are in [`nix/xls-prebuilt.nix`](nix/xls-prebuilt.nix).
+
 ## Build Instructions
 
 ### CMake
