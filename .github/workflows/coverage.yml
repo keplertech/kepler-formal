@@ -63,7 +63,10 @@ jobs:
     - name: lcov
       working-directory: ${{github.workspace}}/build
       run: |
-           lcov --directory . --capture --output-file coverage.info
+           # Match the coverage reader to the Clang compiler used above.
+           printf '%s\n' '#!/usr/bin/env bash' 'exec llvm-cov-22 gcov "$@"' > "$RUNNER_TEMP/llvm-gcov"
+           chmod +x "$RUNNER_TEMP/llvm-gcov"
+           lcov --gcov-tool "$RUNNER_TEMP/llvm-gcov" --directory . --capture --output-file coverage.info
            lcov --remove coverage.info --output-file coverage.info '/usr/*' '*/test/*' '*/kepler-formal/thirdparty/*' '*/kepler-formal/build*/thirdparty/*'
 
     - name: Upload coverage to Codecov
