@@ -21,6 +21,9 @@ jobs:
       with:
         submodules: true
 
+    - name: Test SEC summary generation
+      run: python3 -m unittest discover -s test/sec -p test_sec_regress_summary.py
+
     - name: Install dependencies
       run: bash .github/scripts/install-cmake-deps-ubuntu.sh
       # C2RTL also builds dependencies from source; bound the full setup.
@@ -393,6 +396,17 @@ jobs:
 
         bash regress/run_sec_strategies_regress.sh "${args[@]}"
 
+    - name: Upload regression results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-results-${{ github.run_attempt }}-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: |
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.stdout
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.seconds
+        retention-days: 7
+        if-no-files-found: ignore
+
     - name: Upload regression logs
       if: failure()
       uses: actions/upload-artifact@v4
@@ -626,6 +640,17 @@ jobs:
           "engine=${SEC_ENGINE}" \
           "sec-encoding=${SEC_ENCODING}"
 
+    - name: Upload SV2V regression results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-results-${{ github.run_attempt }}-sv2v-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: |
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.stdout
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.seconds
+        retention-days: 7
+        if-no-files-found: ignore
+
     - name: Upload SV2V regression logs
       if: failure()
       uses: actions/upload-artifact@v4
@@ -720,6 +745,17 @@ jobs:
           compact \
           "engine=${SEC_ENGINE}" \
           "sec-encoding=${SEC_ENCODING}"
+
+    - name: Upload SV2V negative regression results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-results-${{ github.run_attempt }}-sv2v-negative-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: |
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.stdout
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.seconds
+        retention-days: 7
+        if-no-files-found: ignore
 
     - name: Upload SV2V negative regression logs
       if: failure()

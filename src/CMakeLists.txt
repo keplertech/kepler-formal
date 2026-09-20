@@ -1,7 +1,9 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
 
-add_subdirectory(c2rtl)
+if(NOT BUILD_KEPLER_PYTHON)
+  add_subdirectory(c2rtl)
+endif()
 add_subdirectory(bin)
 add_subdirectory(formal)
 add_subdirectory(strategies)

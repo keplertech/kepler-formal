@@ -4,8 +4,14 @@ load("//bazel:tbb.bzl", "TBB_DEPS")
 
 cc_library(
     name = "kepler_formal_utils",
-    srcs = ["SNLLogicCone.cpp"],
-    hdrs = ["SNLLogicCone.h"],
+    srcs = [
+        "DesignBoundary.cpp",
+        "SNLLogicCone.cpp",
+    ],
+    hdrs = [
+        "DesignBoundary.h",
+        "SNLLogicCone.h",
+    ],
     copts = NAJA_HEADER_COPTS,
     includes = ["."],
     visibility = ["//visibility:public"],

@@ -10,6 +10,7 @@
 #include "BoolExpr.h"
 #include "clocks/SecClockModel.h"
 #include "common/SignalKey.h"
+#include "../../utils/DesignBoundary.h"
 
 namespace naja::NL {
 class SNLDesign;
@@ -75,10 +76,14 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
 
   // Extract the model from the given top design. Opaque per-output cones are
   // skipped; globally unsupported structures are recorded in unsupportedReasons.
-  static SequentialDesignModel extract(naja::NL::SNLDesign* top);
+  static SequentialDesignModel extract(naja::NL::SNLDesign* top,
+                                       const BoundaryPairs& pairs = {},
+                                       size_t side = 0);
   static SequentialDesignModel extract(
       naja::NL::SNLDesign* top,
-      const SequentialDesignExtractOptions& options);
+      const SequentialDesignExtractOptions& options,
+      const BoundaryPairs& pairs = {},
+      size_t side = 0);
 
   bool hasUnsupportedFeatures() const {
     return !unsupportedReasons.empty();

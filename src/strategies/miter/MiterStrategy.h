@@ -37,6 +37,10 @@ class MiterStrategy {
   void setCnfDump(bool enabled, const std::string& path = "");
   void setPoCnfDump(bool enabled, const std::string& path = "");
   void setAllowBoundaryMismatch(bool allow) { allowBoundaryMismatch_ = allow; }
+  void setBoundaryPairs(const BoundaryPairs& pairs) {
+    builder0_.setBoundaryPairs(pairs, 0);
+    builder1_.setBoundaryPairs(pairs, 1);
+  }
 
   static std::string getActualLogFileName();
   static void cleanupProcessState();

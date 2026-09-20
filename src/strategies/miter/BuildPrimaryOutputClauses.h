@@ -3,8 +3,10 @@
 
 #include <tbb/concurrent_vector.h>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "BoolExpr.h"
+#include "DesignBoundary.h"
 #include "DNL.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <mutex>
@@ -58,6 +60,16 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   BuildPrimaryOutputClauses() = default;
   void collect();
   void build();
+  void setBoundaryPairs(const BoundaryPairs& pairs, size_t side) {
+    boundaryPairs_ = pairs;
+    boundarySide_ = side;
+  }
+  const LeafBoundary* getLeafBoundary() const {
+    return borrowedBoundary_ ? borrowedBoundary_ : leafBoundary_.get();
+  }
+  void setLeafBoundary(const LeafBoundary* boundary) {
+    borrowedBoundary_ = boundary;
+  }
 
   const tbb::concurrent_vector<BoolExpr*>& getPOs() const {
     return POs_;
@@ -120,6 +132,10 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   std::vector<naja::DNL::DNLID> collectOutputs();
   void setOutputs2OutputsIDs();
   void initVarNames();
+  BoundaryPairs boundaryPairs_;
+  size_t boundarySide_ = 0;
+  std::unique_ptr<LeafBoundary> leafBoundary_;
+  const LeafBoundary* borrowedBoundary_ = nullptr;
   
   tbb::concurrent_vector<BoolExpr*> POs_;
   std::vector<naja::DNL::DNLID> inputs_;

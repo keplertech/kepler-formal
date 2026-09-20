@@ -2183,9 +2183,11 @@ void appendExtractedBoundaryReports(
 
 SequentialDesignModel extractSecDesign(naja::NL::SNLDesign* top,
                                        const char* extractedMessage,
-                                       bool secDiagEnabled) {
+                                       bool secDiagEnabled,
+                                       const BoundaryPairs& pairs,
+                                       size_t side) {
   // LCOV_DISABLED_START
-  SequentialDesignModel model = SequentialDesignModel::extract(top);
+  SequentialDesignModel model = SequentialDesignModel::extract(top, pairs, side);
   // LCOV_DISABLED_STOP
   logSecDiagLine(secDiagEnabled, extractedMessage);
   return model;
@@ -3717,12 +3719,18 @@ SequentialEquivalenceStrategy::SequentialEquivalenceStrategy(
 SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) const {
   const bool secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr;
   logSecDiagLine(secDiagEnabled, "SEC diag: start run");
+  if (!boundaryPairs_.empty()) {
+    const BoundarySelection left(top0_, boundaryPairs_, 0);
+    const BoundarySelection right(top1_, boundaryPairs_, 1);
+    validateBoundaryInterfaces(left.getPorts(), right.getPorts());
+  }
 
   // Phase 1: extract both designs into the normalized SEC model used by every
   // downstream engine. If either side cannot be modeled soundly, stop before we
   // spend time aligning interfaces or building proof problems.
   const auto model0 =
-      extractSecDesign(top0_, "SEC diag: extracted design0", secDiagEnabled);
+      extractSecDesign(top0_, "SEC diag: extracted design0", secDiagEnabled,
+                       boundaryPairs_, 0);
   if (model0.hasUnsupportedFeatures()) {
     std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
     appendExtractedBoundaryReports(model0, "design0", extractedBoundaryReports);
@@ -3735,7 +3743,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
   }
 
   const auto model1 =
-      extractSecDesign(top1_, "SEC diag: extracted design1", secDiagEnabled);
+      extractSecDesign(top1_, "SEC diag: extracted design1", secDiagEnabled,
+                       boundaryPairs_, 1);
   return runExtractedModels(model0, model1, maxK);
 }
 

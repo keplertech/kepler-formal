@@ -1,0 +1,65 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+name: regress-python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regress-python-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  source-build:
+    name: Local NajaEDA and Kepler Python regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CC: clang
+      CXX: clang++
+      PYTHONFAULTHANDLER: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # The SDK-selection tests require CMake 3.30 or newer.
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.31.x'
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build clang pkg-config \
+            libboost-dev libboost-iostreams-dev libtbb-dev \
+            capnproto libcapnp-dev zlib1g-dev flex bison libfl-dev \
+            python3-dev python3-venv
+
+      - name: Build pinned sources and run Python regressions
+        run: python regress/run_python_regress.py --jobs 2
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-source-regression-logs
+          path: |
+            build/python-regress/regression.log
+            build/python-regress/**/Testing/Temporary/*.log
+          if-no-files-found: warn
+          retention-days: 7

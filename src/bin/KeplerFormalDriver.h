@@ -3,48 +3,42 @@
 
 #pragma once
 
-#include <cstddef>
-#include <string>
-#include <vector>
+#include <filesystem>
+#include "RunResult.h"
+
+namespace naja::NL {
+class NLLibrary;
+}
 
 namespace KEPLER_FORMAL {
 
-enum class RunStatus {
-  NoResult,
-  Error,
-  Equivalent,
-  Different,
-  PartiallyProved,
-  Inconclusive,
-  Unsupported,
-  Exported,
+// Frontend-specific technology loading. The shared run API invokes prepare
+// once, after configuration validation, before creating any design library.
+class PrimitiveLibraryLoader {
+ public:
+  virtual ~PrimitiveLibraryLoader() = default;
+  virtual void prepare(const char* executable) const = 0;
+  virtual void load(naja::NL::NLLibrary* library,
+                    const std::filesystem::path& path) const = 0;
 };
 
-struct RunResult {
-  RunStatus status = RunStatus::Error;
-  int exitCode = 1;
-  std::string inputFormat;
-  std::string verification;
-  std::string logFile;
-  size_t bound = 0;
-  std::string reason;
-  size_t coveredOutputs = 0;
-  size_t totalOutputs = 0;
-  size_t provenOutputs = 0;
-  std::vector<std::string> unprovenOutputs;
-  std::vector<std::string> skippedObservedOutputs;
-};
+// File workflow: argument/YAML parsing, file loading,
+// LEC/SEC, exports and results. It owns and releases the run's Naja designs.
+// The standalone adapter uses this directly; embedding callers use the guarded
+// API below to preserve their process state and reject a foreign universe.
+int runKeplerFormalWorkflow(int argc, char** argv, RunResult& result,
+                            const PrimitiveLibraryLoader& primitiveLoader);
 
-const char *runStatusName(RunStatus status);
+// Serialize an in-process run and restore its logger/solver/cache state.
+// A live external Naja universe is rejected without being destroyed.
+int runKeplerFormal(int argc, char** argv, RunResult& result,
+                    const PrimitiveLibraryLoader& primitiveLoader);
 
-// Runs one complete verification in the current process. Calls are not
-// reentrant: the implementation owns Naja's process-global universe while it
-// runs. The Python binding serializes access to this entry point.
-int runKeplerFormal(int argc, char **argv, RunResult &result);
+// Compatibility entry point for C++ hosts that do not embed Python primitive
+// loading. Python bindings use verifyBorrowedDesigns instead of this file API.
+int runKeplerFormal(int argc, char** argv, RunResult& result);
 
-// Releases process-global expression caches retained after a run. The native
-// Python binding calls this after every invocation because, unlike the command
-// line program, its process remains alive.
+// Releases process-global expression caches retained after a file-based run.
 void cleanupKeplerFormalState();
 
 } // namespace KEPLER_FORMAL

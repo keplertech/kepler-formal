@@ -256,6 +256,9 @@ run_engine() {
   local engine="$1"
   local tmp_config="${output_dir}/config.${engine}.yaml"
   local stdout_log="${output_dir}/${engine}.stdout"
+  local runtime_log="${output_dir}/${engine}.seconds"
+  local TIMEFORMAT='%R'
+  local LC_NUMERIC=C
   local memory_snapshot_recorded=0
 
   (
@@ -314,7 +317,12 @@ run_engine() {
     # completion.  Large SEC/PDR cases can run for minutes between solver
     # decisions, so emit a lightweight heartbeat to keep GitHub logs obviously
     # alive and to make a true hang easier to distinguish from solver work.
-    "${kepler_formal_bin}" --config "${tmp_config}" > "${stdout_log}" 2>&1 &
+    # Time only the CLI, excluding heartbeat polling and log-draining delays.
+    {
+      # Let time finish on nonzero CLI exits; wait below retains that status.
+      set +e
+      time { "${kepler_formal_bin}" --config "${tmp_config}"; } > "${stdout_log}" 2>&1
+    } 2> "${runtime_log}" &
     local kepler_pid=$!
     tail -n +1 -f "${stdout_log}" &
     local tail_pid=$!

@@ -27,3 +27,13 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "DesignBoundaryTests",
+    srcs = ["DesignBoundaryTests.cpp"],
+    copts = NAJA_HEADER_COPTS,
+    deps = [
+        "//src/utils:kepler_formal_utils",
+        "@googletest//:gtest_main",
+    ],
+)

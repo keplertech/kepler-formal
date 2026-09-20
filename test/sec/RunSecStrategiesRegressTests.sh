@@ -98,3 +98,26 @@ if bash "${tmp_dir}/repo/regress/run_sec_strategies_regress.sh" \
   echo "Strict equivalence unexpectedly accepted a partial proof" >&2
   exit 1
 fi
+
+# Every CLI verdict must retain its own nonnegative, finite decimal runtime,
+# including runs rejected by the helper's expectation checks above.
+for test_name in \
+    partial-expect-equivalent-or-partial \
+    partial-allow-inconclusive \
+    partial-allow-unset-state-inconclusive \
+    equivalent-positive \
+    inconclusive-measurement \
+    different-negative \
+    inconclusive-positive \
+    partial-strict; do
+  seconds_file="${tmp_dir}/repo/regress-output/${test_name}/sec/pdr.seconds"
+  if [[ ! -s "${seconds_file}" ]]; then
+    echo "Missing CLI runtime for ${test_name}" >&2
+    exit 1
+  fi
+  seconds="$(< "${seconds_file}")"
+  if [[ ! "${seconds}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    echo "Invalid CLI runtime for ${test_name}: ${seconds}" >&2
+    exit 1
+  fi
+done

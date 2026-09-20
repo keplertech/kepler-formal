@@ -443,6 +443,11 @@ void appendNetReport(std::ostream& out, const SNLBitNet* net) {
       << " is_constant1=" << (net->isConstant1() ? "true" : "false")
       << " model_is_assign=" << (net->getDesign()->isAssign() ? "true" : "false")
       << " properties=[";
+#ifdef KEPLER_NAJA_PROPERTIES_UNAVAILABLE
+  // NajaEDA 0.7.24's Windows wheel does not export getProperties(). Keep
+  // the remaining net diagnostics and distinguish unavailable from empty.
+  out << "unavailable";
+#else
   bool first = true;
   for (auto* property : net->getProperties()) {
     if (!first) {
@@ -451,6 +456,7 @@ void appendNetReport(std::ostream& out, const SNLBitNet* net) {
     first = false;
     out << property->getName() << "=" << property->getString();
   }
+#endif
   out << "]";
 }
 
@@ -630,6 +636,14 @@ BuildPrimaryOutputClauses::PathNameIDs BuildPrimaryOutputClauses::getPathNameIDs
 BuildPrimaryOutputClauses::PathKey
 BuildPrimaryOutputClauses::getTerminalPathKey(
     const DNLTerminalFull& terminal) const {
+  if (const auto* boundary = getLeafBoundary()) {
+    if (const auto* port = boundary->getPort(terminal.getID())) {
+      return {{PathComponentID{1} << 62,
+               static_cast<PathComponentID>(port->pairIndex),
+               static_cast<PathComponentID>(NLName(port->pinName).getID())},
+              {static_cast<NLID::DesignObjectID>(port->bit)}};
+    }
+  }
   auto pathIDs = getPathNameIDs(terminal.getDNLInstance());
   pathIDs.push_back(static_cast<PathComponentID>(
       terminal.getSnlBitTerm()->getName().getID()));
@@ -640,6 +654,7 @@ BuildPrimaryOutputClauses::getTerminalPathKey(
 
 std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   std::vector<DNLID> inputs;
+  if (const auto* boundary = getLeafBoundary()) inputs = boundary->getInputs();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
 
@@ -655,6 +670,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   }
 
   for (DNLID leaf : dnl->getLeaves()) {
+    if (getLeafBoundary() && getLeafBoundary()->containsInstance(leaf)) continue;
     auto iter = modelCache_.find(dnl->getDNLInstanceFromID(leaf).getSNLModel());
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     if ((iter != modelCache_.end()) && iter->second.analyzedPIs) {
@@ -808,6 +824,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
 std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   std::vector<DNLID> outputs;
   std::set<DNLID> outputsSet;
+  if (const auto* boundary = getLeafBoundary()) {
+    outputsSet.insert(boundary->getOutputs().begin(), boundary->getOutputs().end());
+  }
   skippedOutputs_.clear();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
@@ -824,6 +843,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
   for (DNLID leaf : dnl->getLeaves()) {
+    if (getLeafBoundary() && getLeafBoundary()->containsInstance(leaf)) continue;
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     auto iter = modelCache_.find(instance.getSNLModel());
     if ((iter != modelCache_.end()) && iter->second.analyzedPOs) {
@@ -993,6 +1013,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 void BuildPrimaryOutputClauses::collect() {
   resetOutputConeAcyclicityCache();
   resetIsoExpressionCache();
+  leafBoundary_.reset();
+  if (!boundaryPairs_.empty()) {
+    leafBoundary_ = std::make_unique<LeafBoundary>(
+        *get(), boundaryPairs_, boundarySide_);
+  }
   inputs_ = collectInputs();
   for (const auto& input : inputs_) {
     PathKey key = getTerminalPathKey(naja::DNL::get()->getDNLTerminalFromID(input));
@@ -1019,7 +1044,7 @@ BuildPrimaryOutputClauses::getLecBoundaryInputs() const {
   std::vector<PathKey> boundaries;
   for (const auto& [path, input] : inputsMap_) {
     const auto& term = get()->getDNLTerminalFromID(input);
-    if (term.isTopPort() ||
+    if (term.isTopPort() || (getLeafBoundary() && getLeafBoundary()->isInput(input)) ||
         !SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm()).empty()) {
       boundaries.emplace_back(path);
     }
@@ -1033,7 +1058,7 @@ void BuildPrimaryOutputClauses::initVarNames() {
     // Get Truth Table for terminal
     const DNLTerminalFull& tTerm = naja::DNL::get()->getDNLTerminalFromID(inputs_[i]);
     // If direction is input, skip
-    if (!tTerm.isTopPort() &&
+    if (!(getLeafBoundary() && getLeafBoundary()->isInput(inputs_[i])) && !tTerm.isTopPort() &&
         tTerm.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
       const auto tt = SNLDesignModeling::getTruthTable(
           tTerm.getDNLInstance().getSNLInstance(),
@@ -1368,27 +1393,13 @@ void BuildPrimaryOutputClauses::setInputs2InputsIDs() {
       throw std::runtime_error("Input terminal is null");  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
     }
-    const DNLInstanceFull& currentInstance =
-        get()->getDNLTerminalFromID(input).getDNLInstance();
-    PathKey& pair = inputs2inputsIDs_[input];
-    pair.first = getPathNameIDs(currentInstance);
-    pair.first.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName().getID());
-    pair.second.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit());
+    inputs2inputsIDs_[input] = getTerminalPathKey(get()->getDNLTerminalFromID(input));
   }
 }
 
 void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
   outputs2outputsIDs_.clear();
   for (const auto& output : outputs_) {
-    const DNLInstanceFull& currentInstance =
-        get()->getDNLTerminalFromID(output).getDNLInstance();
-    PathKey& pair = outputs2outputsIDs_[output];
-    pair.first = getPathNameIDs(currentInstance);
-    pair.first.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getName().getID());
-    pair.second.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getBit());
+    outputs2outputsIDs_[output] = getTerminalPathKey(get()->getDNLTerminalFromID(output));
   }
 }

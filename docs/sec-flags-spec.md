@@ -114,6 +114,7 @@ liberty_files:
 | `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
 | `--dump-only` | `dump_only: true` | `false` | boolean | Stops after BTOR2 export. Requires export to be enabled. Success is an export result, not a proof verdict. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
+| `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 
 Accepted values for `sec_engine`:
@@ -165,6 +166,35 @@ removed from the proof surface. SEC never substitutes a free, shared, or
 design-local proof symbol for that element. Other modeled outputs remain
 eligible for proof, so the result is partial when only some outputs are skipped
 and unsupported when no aligned verifiable output remains.
+
+User-defined boundaries provide an explicit alternative when the behavior of a
+paired leaf block is intentionally outside the SEC obligation. Each selected
+instance's model must have no child instances; hierarchical paths to leaves
+are supported, but selecting a nonleaf instance is rejected. For a
+selected instance, its input pins are additional observed outputs and its
+output pins are shared environment inputs. SEC therefore proves
+that the surrounding designs drive the block identically and remain equivalent
+for every possible value returned by the abstracted block. Interface names,
+directions, widths, and bit ranges are validated across the paired paths before
+proof. Verification treats the selected leaf pins as boundaries without
+cloning or rewiring the netlists. The behavior is the same in normal and compact
+SEC, for `v`, `sv`, and `sv2v` inputs. Compact self-model reuse is
+disabled when any paired left/right instance paths differ.
+
+Example:
+
+```sh
+kepler-formal -v sec -verilog rtl.v gate.v \
+  --set-as-boundary u_subsystem/u_sram u_subsystem/u_sram_macro
+```
+
+```yaml
+set_as_boundary:
+  - [u_subsystem/u_sram, u_subsystem/u_sram_macro]
+```
+
+User-defined boundaries cannot currently be combined with scope extraction or
+scope cleaning.
 
 ## Bounds And Results
 
@@ -233,8 +263,9 @@ Current behavior:
 
 1. Load and extract design 1.
 2. Release design 1's database.
-3. If design 2 has the same SEC input specification, reuse the immutable design
-   1 extracted model for design 2.
+3. If design 2 has the same SEC input specification and every configured
+   boundary pair uses the same path on both sides, reuse the immutable design 1
+   extracted model for design 2.
 4. Otherwise load and extract design 2, release it, then run the proof over the
    two extracted models.
 

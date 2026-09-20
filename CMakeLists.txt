@@ -29,6 +29,10 @@ project(kepler-formal
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 
+option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
+
+# Python verifies caller-owned NajaEDA designs without the C2RTL file driver.
+if(NOT BUILD_KEPLER_PYTHON)
 set(KEPLER_XLS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xls)
 set(CPPITERTOOLS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cppitertools)
 
@@ -84,30 +88,36 @@ set_target_properties(re2::re2 PROPERTIES
   IMPORTED_LOCATION "${RE2_LIBRARY}"
   INTERFACE_INCLUDE_DIRECTORIES "${RE2_INCLUDE_DIR}"
 )
+endif()
 
 include(GNUInstallDirs)
 
-option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
+if(WIN32)
+  # The vendored solvers use GNU C/C++ extensions. clang-cl supports those
+  # while retaining the MSVC ABI used by CPython and the vcpkg dependencies.
+  if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang"
+      OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+      OR NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"
+      OR NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+      OR NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    message(FATAL_ERROR
+      "Windows builds require clang-cl for both C and C++ (with the MSVC SDK)")
+  endif()
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+  add_compile_options(/utf-8 "$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
+endif()
+
+option(KEPLER_USE_PUBLISHED_NAJAEDA "Use the tested NajaEDA 0.7.24 wheel compatibility adapter" OFF)
 set(KEPLER_EXTERNAL_PIC_ARG "")
 if(BUILD_KEPLER_PYTHON)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   set(KEPLER_EXTERNAL_PIC_ARG -fPIC)
-  if(BUILD_NAJA_PYTHON)
-    # Wheel builds use Naja's hosted-Python mode and must not require or link
-    # an embeddable libpython.  manylinux CPython intentionally provides only
-    # the extension-module development surface.
-    find_package(
-      Python3 3.10...<3.99
-      COMPONENTS Interpreter Development.Module
-      REQUIRED
-    )
-  else()
-    find_package(
-      Python3 3.10...<3.99
-      COMPONENTS Interpreter Development.Module Development.Embed
-      REQUIRED
-    )
-  endif()
+  # A Python build consumes the installed NajaEDA runtime. Standalone builds
+  # retain the vendored Naja build below and never depend on Python packages.
+  find_package(Python3 3.10...<3.99
+    COMPONENTS Interpreter Development.Module REQUIRED)
+  include(src/python/KeplerSharedNaja.cmake)
 endif()
 
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
@@ -164,6 +174,9 @@ string(JOIN " " CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS
     ${CADICAL_KITTEN_SYMBOL_PREFIX_DEFINES}
 )
 
+if(WIN32)
+  include(src/windows/KeplerWindowsSolvers.cmake)
+else()
 set(CADICAL_CFLAGS "${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}")
 set(CADICAL_CXXFLAGS "${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}")
 if(CMAKE_C_FLAGS)
@@ -253,6 +266,7 @@ set_property(TARGET cadical PROPERTY INTERFACE_INCLUDE_DIRECTORIES
     ${CADICAL_ROOT}/contrib
 )
 add_dependencies(cadical cadical_external)
+endif()
 
 add_subdirectory(src)
 add_subdirectory(thirdparty)
@@ -264,10 +278,10 @@ endif()
 if(TARGET slang_slang)
   # fmt 12 no longer exposes fmt::format through <fmt/core.h>. Keep vendored
   # slang sources untouched and provide the full formatting declarations here.
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(slang_slang PRIVATE -include fmt/format.h)
-  elseif(MSVC)
+  if(MSVC)
     target_compile_options(slang_slang PRIVATE /FIfmt/format.h)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(slang_slang PRIVATE -include fmt/format.h)
   endif()
 endif()
 
@@ -275,7 +289,11 @@ option(ENABLE_UNIT_TESTS "Enable unit tests" ON)
 if(ENABLE_UNIT_TESTS)
  include(CTest)
  enable_testing()
- add_subdirectory(test)
+ if(BUILD_KEPLER_PYTHON)
+   add_subdirectory(test/python)
+ else()
+   add_subdirectory(test)
+ endif()
 endif()
 
 option(KEPLER_STATIC "Statically link libstdc++, libgcc, and Cap'n Proto" OFF)

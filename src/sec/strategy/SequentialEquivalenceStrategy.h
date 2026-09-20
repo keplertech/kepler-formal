@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../../config/Config.h"
+#include "../../utils/DesignBoundary.h"
 #include "export/Btor2ExportOptions.h"
 
 namespace naja::NL {
@@ -111,6 +112,7 @@ class SequentialEquivalenceStrategy {
       Btor2ExportOptions exportOptions = {});
 
   SequentialEquivalenceResult run(size_t maxK) const;
+  void setBoundaryPairs(const BoundaryPairs& pairs) { boundaryPairs_ = pairs; }
   SequentialEquivalenceResult runExtractedModels(
       const SequentialDesignModel& model0,
       const SequentialDesignModel& model1,
@@ -124,6 +126,7 @@ class SequentialEquivalenceStrategy {
   SecEncoding encoding_;
   SecResetSpec resetSpec_;
   Btor2ExportOptions exportOptions_;
+  BoundaryPairs boundaryPairs_;
 };
 
 namespace detail {

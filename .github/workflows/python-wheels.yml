@@ -5,17 +5,31 @@ name: Python wheels
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish tested wheels to PyPI (main only; requires pypi environment approval)
+        type: boolean
+        required: false
+        default: false
+      version:
+        description: Confirm the version in KeplerVersion.h.in when publishing (does not override it)
+        type: string
+        required: false
+        default: ''
   pull_request:
     paths:
       - .github/workflows/python-wheels.yml
+      - .github/workflows/python-wheel-build.yml
       - pyproject.toml
       - CMakeLists.txt
       - LICENSE.rst
       - src/**
-      - ci/check_kepler_wheel.py
+      - ci/**
+      - test/python/**
       - thirdparty/**
       - .gitmodules
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -26,40 +40,100 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
-    name: ${{ matrix.platform }} / ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: manylinux_2_28
-            arch: x86_64
-          # Vendored Slang requires a newer AppleClang than Xcode 15.4 on the
-          # macos-14 image.  The repository's macOS build also uses latest.
-          - os: macos-latest
-            platform: macOS
-            arch: arm64
-    runs-on: ${{ matrix.os }}
-
+  generate-parser:
+    name: Generate portable Verilog parser sources
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           submodules: recursive
-
-      - name: Verify recursive submodules
-        run: git submodule status --recursive
-
-      - name: Build, repair, and test wheels
-        uses: pypa/cibuildwheel@v4.2.0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
         with:
-          package-dir: .
-          output-dir: wheelhouse
-
-      - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v4
+          python-version: '3.14'
+      - name: Check release gates and wheel coverage against NajaEDA
+        run: |
+          python -m pip install cibuildwheel==4.2.0 PyYAML
+          python -m unittest discover -v -s test/python -p test_wheel_workflow.py
+          python ci/check_wheel_matrix.py
+      - name: Install parser generators
+        run: sudo apt-get update && sudo apt-get install -y bison flex libfl-dev
+      - name: Generate parser sources for Windows
+        run: |
+          cmake -S thirdparty/naja/thirdparty/naja-verilog -B parser-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build parser-build --target naja_verilog --parallel 2
+          mkdir -p generated-parser
+          cp parser-build/src/VerilogParser.cpp parser-build/src/VerilogParser.hpp parser-build/src/VerilogScanner.cpp generated-parser/
+          cp parser-build/src/*.hh /usr/include/FlexLexer.h generated-parser/
+      - uses: actions/upload-artifact@v4
         with:
-          name: kepler-formal-${{ matrix.platform }}-${{ matrix.arch }}
-          path: wheelhouse/*.whl
+          name: kepler-verilog-parser
+          path: generated-parser/*
           if-no-files-found: error
+
+  # Default regression stays independent of the opt-in publication path.
+  development:
+    name: development
+    needs: generate-parser
+    uses: ./.github/workflows/python-wheel-build.yml
+    with:
+      provider: development
+
+  published:
+    name: published
+    needs: generate-parser
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    uses: ./.github/workflows/python-wheel-build.yml
+    with:
+      provider: published
+      version: ${{ inputs.version }}
+
+  publish:
+    name: Publish kepler-formal ${{ inputs.version }} to PyPI
+    needs: published
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.publish &&
+      github.repository == 'keplertech/kepler-formal' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Configure required reviewers and restrict this environment to main
+    # before enabling its matching PyPI Trusted Publisher.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kepler-formal/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Only the published-provider matrix gates this job. Development
+      # regression runs independently and never supplies release artifacts.
+      - name: Download Linux wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-published-manylinux_2_28-x86_64
+          path: dist/
+
+      - name: Download macOS wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-published-macOS-arm64
+          path: dist/
+
+      - name: Download Linux ARM64 wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-published-manylinux_2_28-aarch64
+          path: dist/
+
+      - name: Download Windows wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: kepler-formal-published-Windows-AMD64
+          path: dist/
+
+      - name: Publish to PyPI using Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true

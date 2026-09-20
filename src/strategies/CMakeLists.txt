@@ -11,3 +11,14 @@ add_library(formal_strategies STATIC
 # Make headers accessible to other targets
 target_include_directories(formal_strategies PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/miter ${GLUCOSE_ROOT} ${KISSAT_ROOT}/src ${CADICAL_ROOT}/src)
 target_link_libraries(formal_strategies PUBLIC kepler_config kepler_clauses formal_structures naja_dnl glucose naja_snl_visual kepler_formal_utils naja_nl kissat cadical)
+
+if(BUILD_KEPLER_PYTHON)
+  # Python verifies caller-owned designs and must never compile the compact
+  # path that deletes their databases/libraries. NajaEDA 0.7.24's Windows
+  # wheel also does not export the inherited NajaObject::destroy method.
+  target_compile_definitions(formal_strategies PRIVATE KEPLER_BORROWED_DESIGNS_ONLY)
+  if(WIN32 AND KEPLER_USE_PUBLISHED_NAJAEDA)
+    # The published Windows DLLs omit this optional diagnostic API as well.
+    target_compile_definitions(formal_strategies PRIVATE KEPLER_NAJA_PROPERTIES_UNAVAILABLE)
+  endif()
+endif()

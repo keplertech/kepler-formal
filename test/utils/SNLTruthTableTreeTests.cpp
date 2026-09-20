@@ -7,6 +7,7 @@
 #include "Tree2BoolExpr.h"
 #include "BoolExpr.h"
 #include "BoolExprCache.h"
+#include "../../src/config/Config.h"
 #include "DNL.h"
 #include "NLDB.h"
 #include "NLDB0.h"
@@ -20,6 +21,8 @@
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLInstance.h"
+#include "SNLInstParameter.h"
+#include "SNLParameter.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 
@@ -314,6 +317,84 @@ TEST(SNLTruthTableTreeApiTest, AllocateNodeAndEvalInput) {
   tree.allocateNode(node);
 
   EXPECT_THROW(node->eval({true}), std::logic_error);
+}
+
+TEST(SNLTruthTableTreeApiTest,
+     RefreshesParameterizedLutAcrossVerificationGenerations) {
+  const auto initialGeneration = Config::getVerificationGeneration();
+  ASSERT_EQ(NLUniverse::get(), nullptr);
+  // Keep the netlist alive until every node and scoped context is gone, even
+  // when an assertion returns early. The caches own immutable table copies;
+  // their last nonzero generation is invalidated before any subsequent lookup
+  // in the restored generation can reuse a key containing a retired pointer.
+  const auto destroyUniverse = [initialGeneration](NLUniverse* universe) {
+    EXPECT_EQ(Config::getVerificationGeneration(), initialGeneration);
+    naja::DNL::destroy();
+    universe->destroy();
+  };
+  std::unique_ptr<NLUniverse, decltype(destroyUniverse)> universe(
+      NLUniverse::create(), destroyUniverse);
+  auto* db = NLDB::create(universe.get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("LUT1"));
+  auto* input =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("A"));
+  auto* output =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Y"));
+  auto* init = SNLParameter::create(
+      model, NLName("INIT"), SNLParameter::Type::Binary, "2'h2");
+  SNLDesignModeling::setTruthTableFromParameter(model, output, {input}, init);
+  auto* top = SNLDesign::create(library, NLName("top"));
+  auto* instance = SNLInstance::create(top, model, NLName("lut"));
+  auto* parameter = SNLInstParameter::create(instance, init, "2'h2");
+  universe->setTopDesign(top);
+  auto* dnl = naja::DNL::get();
+  const auto termID = findDNLTermIDByInstanceAndTerm("lut", "Y");
+  ASSERT_NE(termID, naja::DNL::DNLID_MAX);
+  const auto* term = &dnl->getDNLTerminalFromID(termID);
+  const auto instanceID = term->getDNLInstance().getID();
+
+  uint64_t previousGeneration = initialGeneration;
+  std::shared_ptr<const SNLTruthTable> previousTable;
+  bool previousInverted = false;
+  for (bool inverted : {false, true, false}) {
+    SCOPED_TRACE(inverted ? "inverter" : "buffer");
+    parameter->setValue(inverted ? "2'h1" : "2'h2");
+    {
+      Config::ScopedVerificationContext context;
+      const auto generation = Config::getVerificationGeneration();
+      EXPECT_NE(generation, 0u);
+      EXPECT_NE(generation, initialGeneration);
+      EXPECT_NE(generation, previousGeneration);
+      previousGeneration = generation;
+
+      // Rebuilding neither SNL nor DNL keeps every cache-key component fixed.
+      ASSERT_EQ(naja::DNL::get(), dnl);
+      EXPECT_EQ(&dnl->getDNLTerminalFromID(termID), term);
+      EXPECT_EQ(term->getDNLInstance().getSNLInstance(), instance);
+      EXPECT_EQ(term->getDNLInstance().getSNLModel(), model);
+      EXPECT_EQ(term->getSnlBitTerm(), output);
+
+      Node first(nullptr, instanceID, termID, Node::Type::Table);
+      EXPECT_EQ(first.getTruthTable(), makeMaskTable(1, inverted ? 0b01 : 0b10));
+      ASSERT_NE(first.truthTable.sharedTruthTable, nullptr);
+      Node second(nullptr, instanceID, termID, Node::Type::Table);
+      EXPECT_EQ(second.getTruthTable(), first.getTruthTable());
+      EXPECT_EQ(second.truthTable.sharedTruthTable, first.truthTable.sharedTruthTable);
+      if (previousTable) {
+        EXPECT_NE(first.truthTable.sharedTruthTable, previousTable);
+        EXPECT_EQ(*previousTable,
+                  makeMaskTable(1, previousInverted ? 0b01 : 0b10));
+      }
+      previousTable = first.truthTable.sharedTruthTable;
+      previousInverted = inverted;
+    }
+    EXPECT_EQ(Config::getVerificationGeneration(), initialGeneration);
+  }
 }
 
 TEST(SNLTruthTableTreeApiTest, ConstantRootHasNoBorderLeavesAndEvaluates) {

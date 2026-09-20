@@ -21,10 +21,15 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include "SNLEquipotential.h"
 #include "SNLLogicCone.h"
 #include "../sat/SATSolverWrapper.h"
@@ -420,7 +425,12 @@ void ensureLoggerInitialized() {
       std::error_code ec;
       auto tmp = std::filesystem::temp_directory_path(ec);
       if (!ec) {
-        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(::getpid()) + ".txt");
+#ifdef _WIN32
+        const auto processId = ::_getpid();
+#else
+        const auto processId = ::getpid();
+#endif
+        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(processId) + ".txt");
         // LCOV_DISABLED_STOP
         try {
           // LCOV_DISABLED_START
@@ -885,6 +895,10 @@ void MiterStrategy::init(bool enableLogging) {
     logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
   }
   builder1_.collect();
+  if (builder0_.getLeafBoundary() && builder1_.getLeafBoundary()) {
+    validateBoundaryInterfaces(builder0_.getLeafBoundary()->getPorts(),
+                               builder1_.getLeafBoundary()->getPorts());
+  }
   if (!allowBoundaryMismatch_) {
     auto boundaryInputs1 = builder1_.getLecBoundaryInputs();
     const size_t commonBoundarySize =
@@ -902,6 +916,11 @@ void MiterStrategy::init(bool enableLogging) {
 }
 
 bool MiterStrategy::run(bool compact) {
+#ifdef KEPLER_BORROWED_DESIGNS_ONLY
+  if (compact) {
+    throw std::invalid_argument("Compact miter mode cannot delete borrowed Python designs");
+  }
+#endif
   NLUniverse* univ = NLUniverse::get();
   // normalize inputs and outputs
   std::vector<naja::DNL::DNLID> inputs0sort;
@@ -931,10 +950,12 @@ bool MiterStrategy::run(bool compact) {
   const auto& inputs2inputsIDs0 = builder0_.getInputs2InputsIDs();
   const auto&outputs2outputsIDs0 = builder0_.getOutputs2OutputsIDs();
   naja::DNL::destroy();
+#ifndef KEPLER_BORROWED_DESIGNS_ONLY
   if (compact) {
     top0_->getDB()->destroy();
     top0_ = nullptr;
-  } 
+  }
+#endif
   univ->setTopDesign(top1_);
   builder1_.setInputs(inputs1sort);
   builder1_.setOutputs(outputs1sort);
@@ -945,10 +966,12 @@ bool MiterStrategy::run(bool compact) {
   const auto& inputs2inputsIDs1 = builder1_.getInputs2InputsIDs();
   const auto& outputs2outputsIDs1 = builder1_.getOutputs2OutputsIDs();
   naja::DNL::destroy();
+#ifndef KEPLER_BORROWED_DESIGNS_ONLY
   if (compact) {
     top1_->getLibrary()->destroy();
     top1_ = nullptr;
   }
+#endif
   // print path to var names
   const auto & inputs2DnlIds = builder0_.getInputs();
   // var names for inputs

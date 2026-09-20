@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <iostream>
 #include <memory>
@@ -33,9 +34,6 @@
 #include "MiterStrategy.h"
 #include "SNLCapnP.h"
 #include "SNLLibertyConstructor.h"
-#ifndef KEPLER_FORMAL_NO_PY_TECH
-#include "SNLPyLoader.h"
-#endif
 #include "SNLSVConstructor.h"
 #include "SNLVRLConstructor.h"
 #include "SNLVRLDumper.h"
@@ -47,6 +45,7 @@
 #include "ScopeExtraction.h"
 #include "Btor2ExportConfig.h"
 #include "Config.h"
+#include "DesignBoundary.h"
 #include "KeplerFormalDriver.h"
 #include "KeplerFormalUtils.h"
 #include "Tree2BoolExpr.h"
@@ -54,14 +53,6 @@
 #include "strategy/SequentialEquivalenceStrategy.h"
 #include "formal/C2RtlEquivalenceStrategy.h"
 #include "KeplerXlsC2Rtl.h"
-
-#if defined(__SANITIZE_ADDRESS__)
-#define KEPLER_FORMAL_ASAN_BUILD 1
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define KEPLER_FORMAL_ASAN_BUILD 1
-#endif
-#endif
 
 static const char* kBoundaryTermsReport = "boundary_terms.txt";
 static const char* kSkippedResetUnanchoredPOReport =
@@ -71,56 +62,6 @@ static const char* kSkippedMultiClockDomainPOReport =
 static const char* kSkippedOpaqueCellPOReport =
     "skipped_opaque_cells_pos.txt";
 
-static void addNajaPythonPath(const char* argv0) {
-  if (!argv0 || !*argv0) {
-    return;
-  }
-
-  std::filesystem::path executable(argv0);
-  std::error_code ec;
-  if (!executable.has_parent_path()) {
-    if (const char* path = std::getenv("PATH")) {
-      std::istringstream paths(path);
-      std::string directory;
-#ifdef _WIN32
-      constexpr char pathSeparator = ';';
-#else
-      constexpr char pathSeparator = ':';
-#endif
-      while (std::getline(paths, directory, pathSeparator)) {
-        auto candidate = std::filesystem::path(directory) / executable;
-        if (std::filesystem::exists(candidate, ec)) {
-          executable = std::move(candidate);
-          break;
-        }
-        ec.clear();
-      }
-    }
-  }
-
-  executable = std::filesystem::weakly_canonical(executable, ec);
-  if (ec || executable.parent_path().empty()) {
-    return;
-  }
-
-  std::string pythonPath = executable.parent_path().string();
-  if (const char* current = std::getenv("PYTHONPATH"); current && *current) {
-#ifdef _WIN32
-    pythonPath += ';';
-#else
-    pythonPath += ':';
-#endif
-    pythonPath += current;
-  }
-#ifdef _WIN32
-  if (_putenv_s("PYTHONPATH", pythonPath.c_str()) != 0) {
-#else
-  if (setenv("PYTHONPATH", pythonPath.c_str(), 1) != 0) {
-#endif
-    throw std::runtime_error("Cannot configure PYTHONPATH for Naja primitives");  // LCOV_EXCL_LINE
-  }
-}
-
 // LCOV_EXCL_START
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
@@ -128,10 +69,12 @@ static void print_usage(const char* prog) {
       "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
       "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
+      "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
+      "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] | "
       "-cc/-cxx --cc_top <function> [--cc_include <dir>...] "
       "[--cc_output_dir <dir>] [-v sec] <source1.cc> <source2.cc> | "
@@ -144,6 +87,7 @@ static void print_usage(const char* prog) {
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
+      "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
@@ -552,6 +496,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "btor2_export_path",
       "dump_only",
       "allow-boundary-mismatch",
+      "set_as_boundary",
       "input_paths",
       "liberty_files",
       "py_tech_files",
@@ -608,42 +553,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
   return true;
 }
 
-// LCOV_EXCL_START
-std::string sanitizeFileToken(const std::string& input) {
-  std::string out;
-  out.reserve(input.size());
-  for (unsigned char ch : input) {
-    if (std::isalnum(ch) || ch == '_' || ch == '-' || ch == '.') {
-      out.push_back(static_cast<char>(ch));
-    } else {
-      out.push_back('_');
-      // LCOV_EXCL_STOP
-    }
-  }
-  // LCOV_EXCL_START
-  if (out.empty()) {
-    out = "scope";
-  }
-  return out;
-}
-// LCOV_EXCL_STOP
-
 namespace {
-
-// LCOV_EXCL_START
-std::string formatStringList(const std::vector<std::string>& values) {
-  std::ostringstream oss;
-  oss << "[";
-  for (size_t i = 0; i < values.size(); ++i) {
-    if (i) {
-      oss << ", ";
-    }
-    oss << values[i];
-  }
-  oss << "]";
-  return oss.str();
-}
-// LCOV_EXCL_STOP
 
 bool secInconclusiveStoppedBeforeMaxK(const std::string& reason) {
   return reason.find("budget") != std::string::npos ||
@@ -652,107 +562,8 @@ bool secInconclusiveStoppedBeforeMaxK(const std::string& reason) {
          reason.find("did not prove any observed output") != std::string::npos;
 }
 
+
 }  // namespace
-
-// LCOV_EXCL_START
-void writeBoundaryTermsReport(
-// LCOV_EXCL_STOP
-    const std::filesystem::path& reportPath,
-    const std::vector<KEPLER_FORMAL::SEC::ExtractedBoundaryReportEntry>& reports) {
-  // LCOV_EXCL_START
-  if (reports.empty()) {
-    return;
-    // LCOV_EXCL_STOP
-  }
-
-  // LCOV_EXCL_START
-  std::ofstream report(reportPath, std::ios::trunc);
-  report << "# SEC boundary terms report\n";
-  report << "# Categories:\n";
-  report << "# - top_input / top_output: original top-level interface terms.\n\n";
-  for (size_t i = 0; i < reports.size(); ++i) {
-    const auto& entry = reports[i];
-    report << "- design: " << entry.design << "\n";
-    report << "  signal: " << entry.signal << "\n";
-    report << "  roles: " << formatStringList(entry.roles) << "\n";
-    if (!entry.connectivitySkip.empty()) {
-      report << "  connectivity_skip: " << entry.connectivitySkip << "\n";
-    }
-    if (i + 1 != reports.size()) {
-      report << "\n";
-    }
-  }
-}
-// LCOV_EXCL_STOP
-
-// LCOV_EXCL_START
-void writeResetUnanchoredSkippedOutputsReport(
-// LCOV_EXCL_STOP
-    const std::filesystem::path& reportPath,
-    const std::vector<std::string>& skippedOutputs) {
-  // LCOV_EXCL_START
-  if (skippedOutputs.empty()) {
-    return;
-    // LCOV_EXCL_STOP
-  }
-
-  // LCOV_EXCL_START
-  std::ofstream report(reportPath, std::ios::trunc);
-  report << "# SEC reset-unanchored skipped observed outputs\n";
-  report << "# These top outputs were removed from the proof surface because\n";
-  report << "# their cones depend on internal state without an inductive\n";
-  report << "# cross-design anchor. SEC does not assume internal flop equality\n";
-  report << "# by name; only top-level interface signals are name-aligned.\n\n";
-  for (const auto& skippedOutput : skippedOutputs) {
-    report << "- " << skippedOutput << "\n";
-    // LCOV_EXCL_STOP
-  }
-// LCOV_EXCL_START
-}
-// LCOV_EXCL_STOP
-
-// LCOV_EXCL_START
-void writeMultiClockDomainSkippedOutputsReport(
-// LCOV_EXCL_STOP
-    const std::filesystem::path& reportPath,
-    const std::vector<std::string>& skippedOutputs) {
-  // LCOV_EXCL_START
-  if (skippedOutputs.empty()) {
-    return;
-    // LCOV_EXCL_STOP
-  }
-
-  // LCOV_EXCL_START
-  std::ofstream report(reportPath, std::ios::trunc);
-  report << "# SEC multi-clock-domain skipped observed outputs\n";
-  report << "# These top outputs were removed from the proof surface because\n";
-  report << "# their cones span more than one extracted clock domain. CDC\n";
-  report << "# modeling is intentionally outside this SEC pass, so the result\n";
-  report << "# is reported as skipped coverage instead of assumed synchronous.\n\n";
-  for (const auto& skippedOutput : skippedOutputs) {
-    report << "- " << skippedOutput << "\n";
-    // LCOV_EXCL_STOP
-  }
-// LCOV_EXCL_START
-}
-// LCOV_EXCL_STOP
-
-void writeOpaqueCellSkippedOutputsReport(
-    const std::filesystem::path& reportPath,
-    const std::vector<std::string>& skippedOutputs) {
-  if (skippedOutputs.empty()) {
-    return;
-  }
-
-  std::ofstream report(reportPath, std::ios::trunc);
-  report << "# SEC opaque-cell skipped top-level outputs\n";
-  report << "# These outputs were not verified because backward cone traversal\n";
-  report << "# reached an internal cell or pin without usable semantics. No free\n";
-  report << "# or shared proof symbol was substituted for the opaque element.\n\n";
-  for (const auto& skippedOutput : skippedOutputs) {
-    report << "- " << skippedOutput << "\n";
-  }
-}
 
 struct DesignInputs {
   std::vector<std::string> design0;
@@ -885,6 +696,40 @@ static bool parseConfigInputPaths(const YAML::Node& node,
   return true;
 }
 
+static bool parseConfigBoundaryPairs(
+    const YAML::Node& node,
+    KEPLER_FORMAL::BoundaryPairs& out,
+    std::string& error) {
+  out.clear();
+  if (!node.IsSequence()) {
+    error = "set_as_boundary must be a sequence of [design1_path, design2_path] pairs";
+    return false;
+  }
+
+  for (size_t pairIndex = 0; pairIndex < node.size(); ++pairIndex) {
+    const auto pairNode = node[pairIndex];
+    if (!pairNode.IsSequence() || pairNode.size() != 2) {
+      error = "set_as_boundary[" + std::to_string(pairIndex) +
+              "] must contain exactly two paths";
+      return false;
+    }
+    if (!pairNode[0].IsScalar() || !pairNode[1].IsScalar()) {
+      error = "set_as_boundary[" + std::to_string(pairIndex) +
+              "] paths must be scalars";
+      return false;
+    }
+    const auto leftPath = pairNode[0].as<std::string>();
+    const auto rightPath = pairNode[1].as<std::string>();
+    if (leftPath.empty() || rightPath.empty()) {
+      error = "set_as_boundary[" + std::to_string(pairIndex) +
+              "] paths must not be empty";
+      return false;
+    }
+    out.emplace_back(leftPath, rightPath);
+  }
+  return true;
+}
+
 static void logDesignPaths(const char* label,
                            const std::vector<std::string>& paths) {
   if (paths.empty()) {
@@ -981,10 +826,16 @@ static bool sameCompactSecDesignSpec(
     bool isSystemVerilog,
     const DesignInputs& designInputs,
     const SystemVerilogOptions& systemVerilogOptions,
-    const VerilogTopOptions& verilogTopOptions) {
+    const VerilogTopOptions& verilogTopOptions,
+    const KEPLER_FORMAL::BoundaryPairs& boundaryPairs) {
   if (normalizeInputListForComparison(designInputs.design0) !=
       normalizeInputListForComparison(designInputs.design1)) {
     return false;
+  }
+  for (const auto& [leftPath, rightPath] : boundaryPairs) {
+    if (leftPath != rightPath) {
+      return false;
+    }
   }
   // LCOV_EXCL_START
   if (!isSystemVerilog) {
@@ -1727,7 +1578,8 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 static int KeplerFormalMainImpl(
     int argc,
     char** argv,
-    KEPLER_FORMAL::RunResult* runResult) {
+    KEPLER_FORMAL::RunResult* runResult,
+    const KEPLER_FORMAL::PrimitiveLibraryLoader& primitiveLoader) {
   using namespace std::chrono;
   enum class FormatType {
     VERILOG,
@@ -1761,6 +1613,7 @@ static int KeplerFormalMainImpl(
   SystemVerilogOptions systemVerilogOptions;
   CcSynthesisOptions ccSynthesisOptions;
   VerilogTopOptions verilogTopOptions;
+  KEPLER_FORMAL::BoundaryPairs boundaryPairs;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
   std::string logLevel = "info";
@@ -2014,6 +1867,16 @@ static int KeplerFormalMainImpl(
             SPDLOG_CRITICAL("Invalid input_paths in config: {}", inputError);
             return EXIT_FAILURE;
             // LCOV_EXCL_STOP
+          }
+        }
+
+        if (cfg["set_as_boundary"]) {
+          std::string boundaryError;
+          if (!parseConfigBoundaryPairs(
+                  cfg["set_as_boundary"], boundaryPairs, boundaryError)) {
+            SPDLOG_CRITICAL(
+                "Invalid set_as_boundary in config: {}", boundaryError);
+            return EXIT_FAILURE;
           }
         }
 
@@ -2323,6 +2186,22 @@ static int KeplerFormalMainImpl(
         ++parseStart;
         continue;
       }
+      if (arg == "--set-as-boundary" || arg == "--set_as_boundary") {
+        if (parseStart + 2 >= argc) {
+          SPDLOG_CRITICAL(
+              "Missing design path pair after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string leftPath = argv[parseStart + 1];
+        const std::string rightPath = argv[parseStart + 2];
+        if (leftPath.empty() || rightPath.empty()) {
+          SPDLOG_CRITICAL("Empty design path provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        boundaryPairs.emplace_back(leftPath, rightPath);
+        parseStart += 3;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "-naja_if") {
         inputFormatType = FormatType::NAJA_IF;
@@ -2502,6 +2381,20 @@ static int KeplerFormalMainImpl(
       }
       if (arg == "--allow-boundary-mismatch") {
         allowBoundaryMismatch = true;
+        continue;
+      }
+      if (arg == "--set-as-boundary" || arg == "--set_as_boundary") {
+        if (i + 2 >= argc) {
+          SPDLOG_CRITICAL("Missing design path pair after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string leftPath = argv[++i];
+        const std::string rightPath = argv[++i];
+        if (leftPath.empty() || rightPath.empty()) {
+          SPDLOG_CRITICAL("Empty design path provided for {}", arg);
+          return EXIT_FAILURE;
+        }
+        boundaryPairs.emplace_back(leftPath, rightPath);
         continue;
       }
       // LCOV_EXCL_START
@@ -2729,6 +2622,13 @@ static int KeplerFormalMainImpl(
   }
   logDesignPaths("Netlist 1", designInputs.design0);
   logDesignPaths("Netlist 2", designInputs.design1);
+  for (size_t pairIndex = 0; pairIndex < boundaryPairs.size(); ++pairIndex) {
+    SPDLOG_INFO(
+        "Boundary pair {}: design 1 `{}`; design 2 `{}`",
+        pairIndex,
+        boundaryPairs[pairIndex].first,
+        boundaryPairs[pairIndex].second);
+  }
 
   const bool isCcLoweringFormat =
       inputFormatType == FormatType::CC ||
@@ -2847,6 +2747,11 @@ static int KeplerFormalMainImpl(
   }
   if (verificationMode == VerificationMode::LEC && secResetExplicit) {
     SPDLOG_CRITICAL("sec_reset/--sec-reset-* is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (!boundaryPairs.empty() && (useScopes || cleanScopes)) {
+    SPDLOG_CRITICAL(
+        "set_as_boundary/--set-as-boundary cannot be combined with scope extraction or cleaning");
     return EXIT_FAILURE;
   }
   if (secResetExplicit) {
@@ -2972,6 +2877,10 @@ static int KeplerFormalMainImpl(
       SPDLOG_CRITICAL("c2rtl_auto_align does not support compact_mode");
       return EXIT_FAILURE;
     }
+    if (!boundaryPairs.empty()) {
+      SPDLOG_CRITICAL("c2rtl_auto_align does not support set_as_boundary/--set-as-boundary");
+      return EXIT_FAILURE;
+    }
     if (secResetExplicit) {
       SPDLOG_CRITICAL("c2rtl_auto_align does not support sec_reset options");
       return EXIT_FAILURE;
@@ -3014,21 +2923,14 @@ static int KeplerFormalMainImpl(
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
   if (!pythonFiles.empty()) {
-    if (runResult != nullptr) {
-      runResult->reason =
-          "py_tech_files are not supported by the in-process Python API";
-      SPDLOG_CRITICAL("{}", runResult->reason);
+    try {
+      primitiveLoader.prepare(argv[0]);
+    } catch (const std::exception& error) {
+      if (runResult != nullptr) runResult->reason = error.what();
+      SPDLOG_CRITICAL("{}", error.what());
       return EXIT_FAILURE;
     }
-#ifdef KEPLER_FORMAL_NO_PY_TECH
-    SPDLOG_CRITICAL(
-        "py_tech_files are not available in this Kepler Formal build");
-    return EXIT_FAILURE;
-#else
-    // LCOV_EXCL_START
-    addNajaPythonPath(argv[0]);
     for (const auto& pf : pythonFiles) SPDLOG_INFO("Python library: {}", pf);
-#endif
   }
   // LCOV_EXCL_STOP
 
@@ -3344,14 +3246,12 @@ static int KeplerFormalMainImpl(
         SNLLibertyConstructor constructor(primitivesLibrary);
         constructor.construct(libraryPath);
       }
-#ifndef KEPLER_FORMAL_NO_PY_TECH
       for (const auto& pythonFile : pythonFiles) {
         // LCOV_EXCL_START
         std::filesystem::path pythonPath(pythonFile);
         SPDLOG_INFO("Loading python primitive file: {}", pythonFile);
-        SNLPyLoader::loadPrimitives(primitivesLibrary, pythonPath);
+        primitiveLoader.load(primitivesLibrary, pythonPath);
       }
-#endif
       // LCOV_EXCL_STOP
       return true;
     };
@@ -3510,12 +3410,17 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         [&](naja::NL::SNLDesign* top,
         // LCOV_EXCL_STOP
-            const char* designLabel) {
+            const char* designLabel, size_t side,
+            std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts) {
           // LCOV_EXCL_START
           KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
+          builder.setBoundaryPairs(boundaryPairs, side);
           NLUniverse::get()->setTopDesign(top);
           naja::DNL::destroy();
           builder.collect();
+          if (const auto* boundary = builder.getLeafBoundary()) {
+            boundaryPorts = boundary->getPorts();
+          }
           SPDLOG_INFO("Collected {} PIs for {}", builder.getInputs().size(), designLabel);
           SPDLOG_INFO("Collected {} POs for {}", builder.getOutputs().size(), designLabel);
           std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey>
@@ -3534,10 +3439,11 @@ static int KeplerFormalMainImpl(
 
     if (compactMode && verificationMode == VerificationMode::LEC && !useScopes) {
       // LCOV_EXCL_START
+      std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts0, boundaryPorts1;
       NLDB* compactDb0 =
           loadOneDesign(designInputs.design0, systemVerilogOptions.design0, 0, 2);
       top0 = compactDb0->getTopDesign();
-      auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0");
+      auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0", 0, boundaryPorts0);
       naja::DNL::destroy();
       compactDb0->destroy();
       top0 = nullptr;
@@ -3547,10 +3453,14 @@ static int KeplerFormalMainImpl(
       NLDB* compactDb1 =
           loadOneDesign(designInputs.design1, systemVerilogOptions.design1, 1, 1);
       top1 = compactDb1->getTopDesign();
-      auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1");
+      auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1", 1, boundaryPorts1);
       naja::DNL::destroy();
       compactDb1->destroy();
       top1 = nullptr;
+      if (!boundaryPairs.empty()) {
+        KEPLER_FORMAL::validateBoundaryInterfaces(
+            boundaryPorts0, boundaryPorts1);
+      }
       // LCOV_EXCL_STOP
 
       try {
@@ -3611,7 +3521,8 @@ static int KeplerFormalMainImpl(
               const SystemVerilogDesignOptions& designOptions,
               int designIndex,
               int dbID,
-              const char* designLabel) {
+              const char* designLabel,
+              std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts) {
             NLDB* db =
                 loadOneDesign(designPaths, designOptions, designIndex, dbID);
             try {
@@ -3624,7 +3535,12 @@ static int KeplerFormalMainImpl(
                     // LCOV_DISABLED_STOP
                 // LCOV_EXCL_STOP
               }
-              auto model = KEPLER_FORMAL::SEC::SequentialDesignModel::extract(top);
+              if (!boundaryPairs.empty()) {
+                boundaryPorts = KEPLER_FORMAL::BoundarySelection(
+                    top, boundaryPairs, static_cast<size_t>(designIndex)).getPorts();
+              }
+              auto model = KEPLER_FORMAL::SEC::SequentialDesignModel::extract(
+                  top, boundaryPairs, static_cast<size_t>(designIndex));
               releaseCompactDb(db);
               return model;
             } catch (...) {
@@ -3643,19 +3559,22 @@ static int KeplerFormalMainImpl(
         SPDLOG_INFO(
             "SEC compact mode: extracting and releasing design 1 before "
             "loading design 2");
+        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts0;
         const auto model0 = extractCompactSecModel(
             designInputs.design0,
             systemVerilogOptions.design0,
             0,
             2,
-            "design 1");
+            "design 1",
+            boundaryPorts0);
         if (inputFormatType != FormatType::SV2V &&
             inputFormatType != FormatType::RTL_VS_GATE &&
             sameCompactSecDesignSpec(
                 inputFormatType == FormatType::SYSTEMVERILOG,
                 designInputs,
                 systemVerilogOptions,
-                verilogTopOptions)) {
+                verilogTopOptions,
+                boundaryPairs)) {
           // CVA6-style smoke runs often compare a design against itself. In
           // compact SEC, extracting that identical second side would require
           // holding the already extracted value model while elaborating the
@@ -3682,12 +3601,18 @@ static int KeplerFormalMainImpl(
         SPDLOG_INFO(
             "SEC compact mode: extracting and releasing design 2 before "
             "starting proof");
+        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts1;
         const auto model1 = extractCompactSecModel(
             designInputs.design1,
             systemVerilogOptions.design1,
             1,
             1,
-            "design 2");
+            "design 2",
+            boundaryPorts1);
+        if (!boundaryPairs.empty()) {
+          KEPLER_FORMAL::validateBoundaryInterfaces(
+              boundaryPorts0, boundaryPorts1);
+        }
 
         KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
             nullptr,
@@ -3967,6 +3892,7 @@ static int KeplerFormalMainImpl(
           secEncoding,
           secResetSpec,
           btor2ExportConfig.options());
+      strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP
     // LCOV_EXCL_START
@@ -4056,6 +3982,7 @@ static int KeplerFormalMainImpl(
       // LCOV_EXCL_START
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
       MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
+      MiterS.setBoundaryPairs(boundaryPairs);
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
         MiterS.setCnfDump(true, outPath);
@@ -4099,35 +4026,31 @@ static int KeplerFormalMainImpl(
 
 namespace KEPLER_FORMAL {
 
-const char* runStatusName(RunStatus status) {
-  switch (status) {
-    case RunStatus::NoResult:
-      return "no_result";
-    case RunStatus::Equivalent:
-      return "equivalent";
-    case RunStatus::Different:
-      return "different";
-    case RunStatus::PartiallyProved:
-      return "partially_proved";
-    case RunStatus::Inconclusive:
-      return "inconclusive";
-    case RunStatus::Unsupported:
-      return "unsupported";
-    case RunStatus::Exported:
-      return "exported";
-    case RunStatus::Error:
-    default:
-      return "error";
-  }
-}
-
 void cleanupKeplerFormalState() {
   MiterStrategy::cleanupProcessState();
   Tree2BoolExpr::iso2boolExpr_.clear();
   BoolExprCache::destroy();
 }
 
-int runKeplerFormal(int argc, char** argv, RunResult& result) {
+int runKeplerFormalWorkflow(int argc, char** argv, RunResult& result,
+                            const PrimitiveLibraryLoader& primitiveLoader) {
+  if (argc == 2 && (std::string_view(argv[1]) == "--version" ||
+                    std::string_view(argv[1]) == "-V")) {
+    std::cout << "kepler-formal version: " << KEPLER_VERSION << '\n'
+              << "kepler-formal git hash: " << KEPLER_GIT_HASH << '\n'
+              << "naja version: " << naja::NAJA_VERSION << '\n'
+              << "naja git hash: " << naja::NAJA_GIT_HASH << '\n';
+    result = RunResult{};
+    result.status = RunStatus::NoResult;
+    result.exitCode = EXIT_SUCCESS;
+    return result.exitCode;
+  }
+  result.exitCode = KeplerFormalMainImpl(argc, argv, &result, primitiveLoader);
+  return result.exitCode;
+}
+
+int runKeplerFormal(int argc, char** argv, RunResult& result,
+                    const PrimitiveLibraryLoader& primitiveLoader) {
   static std::mutex runMutex;
   static thread_local bool runInProgress = false;
   if (runInProgress) {
@@ -4139,6 +4062,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result) {
     ~ReentrancyGuard() { inProgress = false; }
   } reentrancyGuard{runInProgress};
   std::lock_guard<std::mutex> runLock(runMutex);
+  Config::ScopedVerificationContext verificationContext;
 
   if (NLUniverse::get() != nullptr) {
     throw std::runtime_error(
@@ -4189,7 +4113,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result) {
 
   Config::setSolverType(Config::SolverType::KISSAT);
   Config::setReportSkippedPOs(false);
-  const int rc = KeplerFormalMainImpl(argc, argv, &result);
+  const int rc = runKeplerFormalWorkflow(argc, argv, result, primitiveLoader);
   result.exitCode = rc;
   if (rc != EXIT_SUCCESS && result.status == RunStatus::Error &&
       result.reason.empty()) {
@@ -4201,15 +4125,3 @@ int runKeplerFormal(int argc, char** argv, RunResult& result) {
 }
 
 }  // namespace KEPLER_FORMAL
-
-int KeplerFormalMain(int argc, char** argv) {
-  if (argc == 2 && (std::string_view(argv[1]) == "--version" ||
-                    std::string_view(argv[1]) == "-V")) {
-    std::cout << "kepler-formal version: " << KEPLER_FORMAL::KEPLER_VERSION << '\n'
-              << "kepler-formal git hash: " << KEPLER_FORMAL::KEPLER_GIT_HASH << '\n'
-              << "naja version: " << naja::NAJA_VERSION << '\n'
-              << "naja git hash: " << naja::NAJA_GIT_HASH << '\n';
-    return EXIT_SUCCESS;
-  }
-  return KeplerFormalMainImpl(argc, argv, nullptr);
-}
