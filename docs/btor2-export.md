@@ -66,7 +66,8 @@ SEC loading, including the identical-input model reuse path.
   counterexample checker, a complete binary initial-state assignment can
   bypass a configured reset prefix.
 - The file describes the prepared transition-system obligation, rather than
-  an engine's SAT clauses or learned proof state. The selected `max_k` is a KF
+  an engine's SAT clauses. Independently certified internal relations are
+  included as constraints when learning is enabled. The selected `max_k` is a KF
   search bound; it does not bound the exported transition system.
 - Skipped outputs remain excluded. Export coverage is reported, so a dump
   with partial coverage must not be treated as a full-design equivalence

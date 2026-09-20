@@ -146,6 +146,32 @@ class PythonApiTest(unittest.TestCase):
         )
         self.assertEqual(VerificationStatus.EQUIVALENT, repeated.status)
 
+    def test_sec_internal_relation_switches(self):
+        for learn in (False, True):
+            for allow_x in (False, True):
+                with self.subTest(learn=learn, allow_x=allow_x):
+                    result = verify_designs(
+                        self.reference, self.equivalent,
+                        options=VerificationOptions(
+                            mode=VerificationMode.SEC,
+                            learn_internal_relations=learn,
+                            allow_x_equality_in_internal_relations=allow_x,
+                            log_file=self.root / f"relations-{learn}-{allow_x}.log"))
+                    self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+
+    def test_internal_relation_option_validation(self):
+        invalid_options = (
+            (TypeError, "learn_internal_relations", VerificationOptions(
+                mode=VerificationMode.SEC, learn_internal_relations="false")),
+            (TypeError, "allow_x_equality", VerificationOptions(
+                mode=VerificationMode.SEC, allow_x_equality_in_internal_relations=1)),
+            (ValueError, "SEC", VerificationOptions(learn_internal_relations=False)),
+        )
+        for error_type, message, options in invalid_options:
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(error_type, message):
+                    verify_designs(self.reference, self.equivalent, options=options)
+
     def test_validation(self):
         invalid_options = (
             (ValueError, "SEC", VerificationOptions(max_k=2)),

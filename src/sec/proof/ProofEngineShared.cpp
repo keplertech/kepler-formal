@@ -380,7 +380,8 @@ std::unordered_map<size_t, size_t> allocateFreshProofSymbols(
 
 BoolExpr* buildOneStepTransitionFormula(
     const KInductionProblem& problem,
-    const std::unordered_map<size_t, size_t>& nextStateSymbols) {
+    const std::unordered_map<size_t, size_t>& nextStateSymbols,
+    BoolExpr* certifiedStateConstraints) {
   BoolExpr* transition = BoolExpr::createTrue();
   for (const auto& [stateSymbol, expr] : problem.transitions0) {
     transition = BoolExpr::And(
@@ -410,6 +411,11 @@ BoolExpr* buildOneStepTransitionFormula(
         makeEqualityExpr(
             BoolExpr::Var(nextStateSymbols.at(complementedSymbol)),
             BoolExpr::Not(BoolExpr::Var(nextStateSymbols.at(primarySymbol)))));
+  }
+  if (certifiedStateConstraints != nullptr) {
+    transition = BoolExpr::And(transition, BoolExpr::And(
+        certifiedStateConstraints,
+        remapProofFormula(certifiedStateConstraints, nextStateSymbols)));
   }
   return BoolExpr::simplify(transition);
 }
@@ -496,29 +502,36 @@ BoolExpr* selectValidatedStrengtheningInvariant(
 bool invariantExcludesBadStates(
     const KInductionProblem& problem,
     BoolExpr* invariant,
-    KEPLER_FORMAL::Config::SolverType solverType) {
+    KEPLER_FORMAL::Config::SolverType solverType,
+    BoolExpr* certifiedStateConstraints) {
   if (invariant == nullptr || problem.bad == nullptr) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
     // LCOV_EXCL_STOP
   }
-  return !isProofFormulaSatisfiable(
-      BoolExpr::And(invariant, problem.bad), solverType);
-}
-
-bool isInductiveInvariant(
-    const KInductionProblem& problem,
-    BoolExpr* invariant,
-    KEPLER_FORMAL::Config::SolverType solverType) {
-  FormulaSupportCache supportCache;
-  return isInductiveInvariant(problem, invariant, solverType, supportCache);
+  BoolExpr* query = BoolExpr::And(invariant, problem.bad);
+  if (certifiedStateConstraints != nullptr) {
+    query = BoolExpr::And(query, certifiedStateConstraints);
+  }
+  return !isProofFormulaSatisfiable(query, solverType);
 }
 
 bool isInductiveInvariant(
     const KInductionProblem& problem,
     BoolExpr* invariant,
     KEPLER_FORMAL::Config::SolverType solverType,
-    FormulaSupportCache& supportCache) {
+    BoolExpr* certifiedStateConstraints) {
+  FormulaSupportCache supportCache;
+  return isInductiveInvariant(problem, invariant, solverType, supportCache,
+                              certifiedStateConstraints);
+}
+
+bool isInductiveInvariant(
+    const KInductionProblem& problem,
+    BoolExpr* invariant,
+    KEPLER_FORMAL::Config::SolverType solverType,
+    FormulaSupportCache& supportCache,
+    BoolExpr* certifiedStateConstraints) {
   if (invariant == nullptr) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
@@ -527,9 +540,11 @@ bool isInductiveInvariant(
 
   const auto transitionExprByStateSymbol =
       buildTransitionExprByStateSymbol(problem);
+  BoolExpr* hypothesis = certifiedStateConstraints == nullptr ? invariant
+      : BoolExpr::And(invariant, certifiedStateConstraints);
   const auto querySymbols =
       inductiveInvariantQuerySymbols(
-          problem, invariant, transitionExprByStateSymbol, supportCache);
+          problem, hypothesis, transitionExprByStateSymbol, supportCache);
   const auto& invariantSupport = cachedFormulaSupport(invariant, supportCache);
   const auto invariantStateSupport =
       collectStateSupportSymbols(problem, invariantSupport);
@@ -553,10 +568,10 @@ bool isInductiveInvariant(
       invariantStateSupport);
 
   FrameFormulaEncoder currentEncoder(
-      solver, variables.makeLeafLits(0, invariantSupport));
+      solver, variables.makeLeafLits(0, cachedFormulaSupport(hypothesis, supportCache)));
   FrameFormulaEncoder nextEncoder(
       solver, variables.makeLeafLits(1, invariantSupport));
-  solver.addClause({currentEncoder.encode(invariant)});
+  solver.addClause({currentEncoder.encode(hypothesis)});
   solver.addClause({nextEncoder.encode(BoolExpr::Not(invariant))});
   return !solver.solve();
 }

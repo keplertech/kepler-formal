@@ -203,11 +203,17 @@ struct KInductionProblem {
   std::vector<size_t> allSymbols;
   std::vector<std::pair<size_t, size_t>> complementedStatePairs0;
   std::vector<std::pair<size_t, size_t>> complementedStatePairs1;
-  // Same-design state equalities that hold in every frame. Dual-rail SEC uses
-  // this for Q/QN complemented state outputs, where the structural relation is
-  // cross-rail equality rather than Boolean complement on one rail.
+  // State equalities that hold in every frame. In addition to structural
+  // Q/QN cross-rail equalities, vector 0 holds independently certified internal
+  // relations, which may cross designs. They never identify unknown Boolean
+  // values: dual-rail candidates equate complete ternary encodings.
   std::vector<std::pair<size_t, size_t>> sameFrameStateEqualityPairs0;
   std::vector<std::pair<size_t, size_t>> sameFrameStateEqualityPairs1;
+  // Only independently certified learned relations, for exact IMC queries.
+  // Null when learning is disabled or no candidate was proved.
+  // With learning enabled, allow_x_equality_in_internal_relations=false still
+  // permits proved binary-defined relations; true also permits X/X relations.
+  BoolExpr* learnedInternalRelationInvariant = nullptr;
   std::vector<DualRailSymbolPair> dualRailStatePairs;
   std::vector<BoolExpr*> observedOutputExprs0;
   std::vector<BoolExpr*> observedOutputExprs1;

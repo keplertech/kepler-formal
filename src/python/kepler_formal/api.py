@@ -63,6 +63,8 @@ class VerificationOptions:
     set_as_boundary: (
         list[tuple[str, str]] | tuple[tuple[str, str], ...]
     ) = ()
+    learn_internal_relations: bool = True
+    allow_x_equality_in_internal_relations: bool = True
 
 
 NativeDesign = _native.NativeDesign
@@ -176,6 +178,11 @@ def _build_native_design_options(
         for value in (settings.max_k, settings.sec_engine, settings.sec_encoding)
     ):
         raise ValueError("SEC engine, encoding, and max_k cannot be used with LEC")
+    if mode == VerificationMode.LEC.value and (
+        settings.learn_internal_relations is not True
+        or settings.allow_x_equality_in_internal_relations is not True
+    ):
+        raise ValueError("Internal relation options are only supported for SEC")
     if mode == VerificationMode.SEC.value and allow_boundary_mismatch:
         raise ValueError("allow_boundary_mismatch is only supported for LEC")
 
@@ -200,6 +207,11 @@ def _build_native_design_options(
         "max_k": 32 if settings.max_k is None else settings.max_k,
         "sec_engine": sec_engine,
         "sec_encoding": sec_encoding,
+        "learn_internal_relations": _boolean(
+            settings.learn_internal_relations, "learn_internal_relations"),
+        "allow_x_equality_in_internal_relations": _boolean(
+            settings.allow_x_equality_in_internal_relations,
+            "allow_x_equality_in_internal_relations"),
         "allow_boundary_mismatch": allow_boundary_mismatch,
         "set_as_boundary": set_as_boundary,
         "report_skipped_outputs": report_skipped_outputs,

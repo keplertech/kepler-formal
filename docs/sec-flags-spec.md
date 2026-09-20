@@ -109,6 +109,8 @@ liberty_files:
 | `-k <n>`, `--max-k <n>` | `max_k: <n>` | `32` | Non-negative integer | Sets the SEC proof/search bound. |
 | `--sec-engine <engine>` | `sec_engine: <engine>` | `pdr` | `k_induction`, `imc`, `pdr` | Selects the top-level SEC proof engine. Engine names are lowercase. |
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
+| `--learn-internal-relations <bool>` | `learn_internal_relations: <bool>` | `true` | `true`, `false`, `1`, `0` | Discover and prove internal register equalities before the output proof. |
+| `--allow-x-equality-in-internal-relations <bool>` | `allow_x_equality_in_internal_relations: <bool>` | `true` | `true`, `false`, `1`, `0` | Allow X/X in proved internal ternary relations only. Has no effect when learning is disabled or encoding is binary. |
 | `--sec-reset-cycles <n>` | `sec_reset.cycles: <n>` | omitted | Positive integer | Holds user-listed reset ports active for the first `n` SEC cycles. |
 | `--sec-reset-port <name=0\|1>` | `sec_reset.ports` | omitted | Repeatable reset port assignment | Adds a top-level reset input and asserted value. Repeat for multiple reset ports. |
 | `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
@@ -206,6 +208,36 @@ a bad state exists only when both designs' outputs are binary-defined and
 opposite. Cycles where either output is X are outside this property. A proof in
 this encoding therefore establishes equivalence under the steady-state
 abstraction; it does not establish that either output becomes binary-defined.
+
+Internal relation learning is enabled by default. Matching state names and
+shared next-state drivers generate candidates, never assumptions. Candidates
+must hold at the original initial state and their surviving conjunction must
+pass a one-step induction check. A refuted candidate is removed and dependents
+are rechecked. Only the certified equalities are added to the shared problem
+used by KI, IMC, PDR, and BTOR2 export. The pass is bounded (4096 candidates,
+250000 transition expression nodes, at most 64 refinement rounds and bounded SAT
+queries); an unfinished proof adds no relations.
+Exact IMC reuses the certified conjunction in interpolation, reachable-state
+enumeration, and invariant validation. With learning disabled, the conjunction
+is absent and these queries retain their original constraints.
+
+With `allow_x_equality_in_internal_relations: true`, an internal relation accepts
+0/0, 1/1, and X/X, but never X/0 or X/1. Both rails must agree. Disabling the option
+also requires the related registers to remain binary-defined. No relation equates
+the underlying unknown Boolean choices merely because both registers are X.
+Disabling `learn_internal_relations` disables this optional pass; structural
+Q/QN relations remain part of the extracted circuit model. Neither option relaxes
+the final output property.
+
+The YAML spelling `learn_ineternal_relations` is accepted as an alias for
+`learn_internal_relations`; specifying both spellings is an error.
+
+The algorithm follows the candidate/refinement and inductive correspondence
+approach in [Mishchenko et al., ICCAD 2008](https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_seq.pdf).
+The ternary representation follows [Khasidashvili and Hanna, 2003](https://people.eecs.berkeley.edu/~alanmi/courses/2007_290N/papers/sec_intel_bmc03.pdf).
+The X option applies only to the internal candidate check; the existing output
+property and selected engine are unchanged. Turning off both switches retains
+the pre-learning SEC path.
 
 SEC result handling is currently:
 

@@ -172,6 +172,8 @@ Enum fields accept either the exported enum member or its exact string value.
 | `max_k` | native default (32 for SEC) | Non-negative SEC bound |
 | `sec_engine` | native default (`pdr`) | `pdr`, `k_induction`, or `imc` |
 | `sec_encoding` | native default (`dual_rail_steady`) | `dual_rail_steady` or `binary` |
+| `learn_internal_relations` | `True` | Learn proved internal register equalities for SEC |
+| `allow_x_equality_in_internal_relations` | `True` | Allow internal X/X relations without changing the final output property |
 | `allow_boundary_mismatch` | `False` | Permit supported extracted-boundary mismatches |
 | `report_skipped_outputs` | `False` | Ask the native engine to write detailed skipped-output reports |
 | `log_file` | `None` | Requested native log path; LEC selects a default path when omitted |
@@ -179,7 +181,8 @@ Enum fields accept either the exported enum member or its exact string value.
 | `set_as_boundary` | `()` | Ordered `(design1_path, design2_path)` instance-path pairs to treat as shared boundaries |
 
 `max_k`, `sec_engine`, and `sec_encoding` are SEC-only and are rejected when
-`mode` is LEC. `allow_boundary_mismatch` is supported only for LEC.
+`mode` is LEC. Internal relation options may be changed only in SEC mode.
+`allow_boundary_mismatch` is supported only for LEC.
 `log_file` is expanded and resolved relative to the current working directory.
 
 ### Treat selected instances as shared boundaries

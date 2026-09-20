@@ -7029,3 +7029,46 @@ TEST_F(KeplerFormalCliTests,
   }
   std::filesystem::remove_all(fixture.tmpDir);
 }
+
+TEST_F(KeplerFormalCliTests, InternalRelationOptionsReachBothCliParsersAndYaml) {
+  const auto directory = makeUniqueTempDir("kf_internal_relations");
+  const auto source = directory / "design.v";
+  std::ofstream(source) << "module top(input a, output y); assign y = a; endmodule\n";
+  for (const auto* value : {"true", "false"}) {
+    for (bool beforeFormat : {false, true}) {
+      std::vector<std::string> args{"kepler-formal", "-v", "sec"};
+      const std::vector<std::string> flags{
+          "--learn-internal-relations", value,
+          "--allow-x-equality-in-internal-relations", value};
+      if (beforeFormat) args.insert(args.end(), flags.begin(), flags.end());
+      args.insert(args.end(), {"-verilog", source.string(), source.string()});
+      if (!beforeFormat) args.insert(args.end(), flags.begin(), flags.end());
+      EXPECT_EQ(runWithArgs(args), kSecProvedExitCode);
+    }
+    for (const auto* key : {"learn_internal_relations", "learn_ineternal_relations"}) {
+      const auto log = directory / "relations.log";
+      const auto config = writeTempConfig(
+          "format: verilog\nverification: sec\ninput_paths:\n  - " + source.string() +
+          "\n  - " + source.string() + "\n" + key + ": " + value +
+          "\nallow_x_equality_in_internal_relations: " + value +
+          "\nlog_file: " + log.string() + "\n");
+      EXPECT_EQ(runWithConfigFile(config), kSecProvedExitCode);
+      EXPECT_NE(readFileContents(log).find(
+          std::string("SEC internal relations: learn=") + value + " allow_x_equality=" + value),
+          std::string::npos);
+    }
+  }
+  const std::string base = "format: verilog\nverification: sec\ninput_paths:\n  - " +
+      source.string() + "\n  - " + source.string() + "\n";
+  for (const auto* invalid : {"learn_internal_relations: maybe\n",
+                            "allow_x_equality_in_internal_relations: []\n",
+                            "learn_internal_relations: true\nlearn_ineternal_relations: false\n"}) {
+    EXPECT_EQ(runWithConfigFile(writeTempConfig(base + invalid)), EXIT_FAILURE);
+  }
+  for (const auto* flag : {"--learn-internal-relations", "--allow-x-equality-in-internal-relations"}) {
+    EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", flag}), EXIT_FAILURE);
+    EXPECT_EQ(runWithArgs({"kepler-formal", "-verilog", "-v", "sec", flag, "maybe"}), EXIT_FAILURE);
+    EXPECT_EQ(runWithArgs({"kepler-formal", "-verilog", source.string(), source.string(), flag, "false"}), EXIT_FAILURE);
+  }
+  std::filesystem::remove_all(directory);
+}

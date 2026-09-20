@@ -68,12 +68,12 @@ static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
       "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v> --design1 <file...> --design2 "
-      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] | "
@@ -85,7 +85,7 @@ static void print_usage(const char* prog) {
       "-rtl_vs_gate [--sv_design1_top <name>] "
       "[--liberty <library-file>...] [-v sec] <rtl.sv> <gate.v> | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
@@ -492,6 +492,9 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "max_k",
       "sec_engine",
       "sec_encoding",
+      "learn_internal_relations",
+      "learn_ineternal_relations",
+      "allow_x_equality_in_internal_relations",
       "sec_reset",
       "btor2_export",
       "btor2_export_path",
@@ -1729,6 +1732,8 @@ static int KeplerFormalMainImpl(
   KEPLER_FORMAL::Btor2ExportConfig btor2ExportConfig;
   bool secEngineExplicit = false;
   bool secEncodingExplicit = false;
+  KEPLER_FORMAL::SEC::InternalRelationOptions internalRelationOptions;
+  bool internalRelationOptionsExplicit = false;
   bool secResetExplicit = false;
   size_t secMaxK = kDefaultSecMaxK;
   bool secMaxKExplicit = false;
@@ -1955,6 +1960,25 @@ static int KeplerFormalMainImpl(
         if (!parseC2RtlPropertyConfig(cfg, c2rtlOptions, c2rtlPropertyError)) {
           SPDLOG_CRITICAL("Invalid C2RTL property config: {}", c2rtlPropertyError);
           return EXIT_FAILURE;
+        if (cfg["learn_internal_relations"] && cfg["learn_ineternal_relations"]) {
+          SPDLOG_CRITICAL("Specify only one spelling of learn_internal_relations");
+          return EXIT_FAILURE;
+        }
+        for (const auto* name : {"learn_internal_relations", "learn_ineternal_relations",
+                                 "allow_x_equality_in_internal_relations"}) {
+          if (!cfg[name]) {
+            continue;
+          }
+          bool& value = std::string(name) == "allow_x_equality_in_internal_relations"
+              ? internalRelationOptions.allowXEqualityInInternalRelations
+              : internalRelationOptions.learnInternalRelations;
+          std::string error;
+          if (!cfg[name].IsScalar() ||
+              !parseBooleanToken(cfg[name].as<std::string>(), name, value, error)) {
+            SPDLOG_CRITICAL("Invalid {}: expected true or false ({})", name, error);
+            return EXIT_FAILURE;
+          }
+          internalRelationOptionsExplicit = true;
         }
 
         if (cfg["sec_reset"]) {
@@ -2262,6 +2286,24 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
+      if (arg == "--learn-internal-relations" ||
+          arg == "--allow-x-equality-in-internal-relations") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        bool& value = arg == "--learn-internal-relations"
+            ? internalRelationOptions.learnInternalRelations
+            : internalRelationOptions.allowXEqualityInInternalRelations;
+        std::string error;
+        if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        internalRelationOptionsExplicit = true;
+        parseStart += 2;
+        continue;
+      }
       if (arg == "--sec-reset-cycles") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing SEC reset cycle count after {}", arg);
@@ -2461,6 +2503,24 @@ static int KeplerFormalMainImpl(
         }
         // LCOV_EXCL_START
         secEncodingExplicit = true;
+        continue;
+      }
+      if (arg == "--learn-internal-relations" ||
+          arg == "--allow-x-equality-in-internal-relations") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        bool& value = arg == "--learn-internal-relations"
+            ? internalRelationOptions.learnInternalRelations
+            : internalRelationOptions.allowXEqualityInInternalRelations;
+        std::string error;
+        if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        internalRelationOptionsExplicit = true;
+        ++i;
         continue;
       }
       if (arg == "--sec-reset-cycles") {
@@ -2859,6 +2919,10 @@ static int KeplerFormalMainImpl(
     return EXIT_FAILURE;  // LCOV_EXCL_LINE
     // LCOV_EXCL_STOP
   }
+  if (verificationMode == VerificationMode::LEC && internalRelationOptionsExplicit) {
+    SPDLOG_CRITICAL("Internal relation options are only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
   if (verificationMode == VerificationMode::LEC && secResetExplicit) {
     SPDLOG_CRITICAL("sec_reset/--sec-reset-* is only supported with SEC verification");
     return EXIT_FAILURE;
@@ -3030,6 +3094,9 @@ static int KeplerFormalMainImpl(
     SPDLOG_INFO("SEC max_k: {}", secMaxK);
     SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
     SPDLOG_INFO("SEC encoding: {}", secEncodingName(secEncoding));
+    SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={}",
+                internalRelationOptions.learnInternalRelations,
+                internalRelationOptions.allowXEqualityInInternalRelations);
     if (secResetSpec.enabled()) {
       SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
       for (const auto& port : secResetSpec.ports) {
@@ -3717,6 +3784,7 @@ static int KeplerFormalMainImpl(
               secEncoding,
               secResetSpec,
               btor2ExportConfig.options());
+          strategy.setInternalRelationOptions(internalRelationOptions);
           return emitSecResult(
               strategy.runExtractedModels(model0, model0, secMaxK));
               // LCOV_EXCL_STOP
@@ -3745,6 +3813,7 @@ static int KeplerFormalMainImpl(
             secEncoding,
             secResetSpec,
             btor2ExportConfig.options());
+        strategy.setInternalRelationOptions(internalRelationOptions);
         return emitSecResult(
             strategy.runExtractedModels(model0, model1, secMaxK));
       // LCOV_EXCL_START
@@ -4015,6 +4084,7 @@ static int KeplerFormalMainImpl(
           secEncoding,
           secResetSpec,
           btor2ExportConfig.options());
+      strategy.setInternalRelationOptions(internalRelationOptions);
       strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP

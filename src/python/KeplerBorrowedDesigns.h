@@ -20,6 +20,7 @@ struct BorrowedDesignOptions {
   size_t maxK = 32;
   SEC::SecEngine secEngine = SEC::SecEngine::Pdr;
   SEC::SecEncoding secEncoding = SEC::SecEncoding::DualRailSteady;
+  SEC::InternalRelationOptions internalRelationOptions;
   bool allowBoundaryMismatch = false;
   bool reportSkippedOutputs = false;
   std::string logFile;

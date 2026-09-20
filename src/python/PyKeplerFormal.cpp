@@ -351,7 +351,8 @@ bool parseBorrowedOptions(PyObject *object,
   static const std::unordered_set<std::string_view> allowedKeys = {
       "mode",          "solver",          "max_k",
       "sec_engine",    "sec_encoding",    "allow_boundary_mismatch",
-      "set_as_boundary", "report_skipped_outputs", "log_file", "log_level"};
+      "set_as_boundary", "report_skipped_outputs", "log_file", "log_level",
+      "learn_internal_relations", "allow_x_equality_in_internal_relations"};
   Py_ssize_t position = 0;
   PyObject *key = nullptr;
   PyObject *value = nullptr;
@@ -387,6 +388,10 @@ bool parseBorrowedOptions(PyObject *object,
                                options.setAsBoundary) ||
       !dictionaryBoolean(object, "allow_boundary_mismatch",
                          options.allowBoundaryMismatch) ||
+      !dictionaryBoolean(object, "learn_internal_relations",
+                         options.internalRelationOptions.learnInternalRelations) ||
+      !dictionaryBoolean(object, "allow_x_equality_in_internal_relations",
+                         options.internalRelationOptions.allowXEqualityInInternalRelations) ||
       !dictionaryBoolean(object, "report_skipped_outputs",
                          options.reportSkippedOutputs)) {
     return false;
@@ -394,6 +399,12 @@ bool parseBorrowedOptions(PyObject *object,
 
   if (mode == "lec") {
     options.mode = KEPLER_FORMAL::BorrowedVerificationMode::LEC;
+    if (!options.internalRelationOptions.learnInternalRelations ||
+        !options.internalRelationOptions.allowXEqualityInInternalRelations) {
+      PyErr_SetString(PyExc_ValueError,
+                      "Internal relation options are only supported for SEC");
+      return false;
+    }
   } else if (mode == "sec") {
     options.mode = KEPLER_FORMAL::BorrowedVerificationMode::SEC;
   } else {

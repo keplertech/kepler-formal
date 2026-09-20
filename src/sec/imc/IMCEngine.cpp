@@ -560,6 +560,12 @@ bool isStateReachableAtDepth(const KInductionProblem& problem,
   FrameVariableStore variables(solver, problem.allSymbols, depth + 1);
   addComplementedStateRelations(solver, variables, problem.complementedStatePairs0, depth + 1);
   addComplementedStateRelations(solver, variables, problem.complementedStatePairs1, depth + 1);
+  if (problem.learnedInternalRelationInvariant != nullptr) {
+    for (size_t frame = 0; frame <= depth; ++frame) {
+      FrameFormulaEncoder encoder(solver, variables.makeLeafLits(frame));
+      solver.addClause({encoder.encode(problem.learnedInternalRelationInvariant)});
+    }
+  }
   for (size_t frame = 0; frame < depth; ++frame) {
     addTransitionRelation(solver, variables, problem, frame);
   }
@@ -647,8 +653,10 @@ bool provesImcInvariant(const KInductionProblem& problem,
                         BoolExpr* invariant) {
   return invariant != nullptr &&
          initialFrontierImplies(initFormula, invariant, solverType) &&
-         isInductiveInvariant(problem, invariant, solverType) &&
-         invariantExcludesBadStates(problem, invariant, solverType);
+         isInductiveInvariant(problem, invariant, solverType,
+                              problem.learnedInternalRelationInvariant) &&
+         invariantExcludesBadStates(problem, invariant, solverType,
+                                   problem.learnedInternalRelationInvariant);
 }
 
 std::optional<IMCResult> findImcCounterexample(const ImcBaseCounterexampleCache& cache,
@@ -1398,6 +1406,9 @@ IMCResult IMCEngine::run(size_t maxK) const {
   BoolExpr* initFormula =
       shouldBuildExplicitImcInitFormula(problem_) ? buildProofInitFormula(problem_)
                                                   : nullptr;
+  if (initFormula != nullptr && problem_.learnedInternalRelationInvariant != nullptr) {
+    initFormula = BoolExpr::And(initFormula, problem_.learnedInternalRelationInvariant);
+  }
   const BoolExpr* sharedStrengthening =
       buildInitialImcStrengthening(problem_, solverType_, initFormula);
   if (initFormula != nullptr &&

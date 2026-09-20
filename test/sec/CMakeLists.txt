@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_executable(secStrategyTests
+    InternalRelationsTests.cpp
     SequentialEquivalenceStrategyTests.cpp
     Btor2ExportStrategyTests.cpp)
 set_target_properties(secStrategyTests PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)

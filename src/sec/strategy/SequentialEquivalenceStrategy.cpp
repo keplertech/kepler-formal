@@ -50,8 +50,7 @@ namespace KEPLER_FORMAL::SEC {
 // Overall SEC strategy pipeline:
 // 1. Extract both designs into the normalized sequential model used by SEC.
 // 2. Align environment inputs and observed outputs by stable external names.
-// 3. Keep cross-design internal state uncorrelated; only public facts constrain
-//    the two designs before the selected SEC engine proves outputs.
+// 3. Certify optional internal relations before the selected engine proves outputs.
 // 4. Remap both designs into one shared SAT symbol space.
 // 5. Build F[0] from the extracted initial predicate.
 // 6. Build the checked SEC property and the stronger proof invariant.
@@ -3780,8 +3779,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
 
   // Phase 2: align the externally visible SEC interface, then drop any outputs
   // whose cones were already classified as skipped by extraction.
-  // SEC proves only the public interface relation.  Do not mine or assume
-  // same-named internal state across the two independently extracted designs.
+  // Internal names are candidate hints only; relations are certified below.
   AlignedSecInterface aligned = alignSecInterface(
       model0,
       model1,
@@ -3919,6 +3917,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     proofProblem = symbolSpace.problem;
   }
   copyResetBootstrapSpec(symbolSpace.problem, proofProblem);
+  learnInternalStateRelations(model0, model1, proofProblem,
+      internalRelationOptions_, solverType_, secDiagEnabled || secSummaryStatsEnabled());
 
   if (exportOptions_.enabled()) {
     exportSecBtor2File(proofProblem, exportOptions_.path,

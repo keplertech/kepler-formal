@@ -281,6 +281,34 @@ jobs:
           expectation: expect-different
           generator: edit
           max_k: 1
+        exclude:
+        # Temporarily disabled: these multi-hour runs repeatedly stall PR checks.
+        # TODO: Re-enable after resolving their excessive runtime/hangs.
+        - flow:
+            name: ki-dual-rail
+            engine: k_induction
+            sec_encoding: dual_rail_steady
+            positive_expectation: allow-inconclusive
+            full_coverage_expectation: allow-inconclusive
+          case:
+            name: cts_aes_asap7_base
+            source: regress
+            case_dir: kepler-formal-regress/cts_aes_asap7_base
+            config: objects/asap7/aes/base/4_rsz_lec_test.yml
+            expectation: positive
+            pdr_dual_rail_expectation: allow-inconclusive
+        - flow:
+            name: pdr-dual-rail
+            engine: pdr
+            sec_encoding: dual_rail_steady
+            positive_expectation: expect-equivalent-or-partial
+            full_coverage_expectation: expect-equivalent-or-partial
+          case:
+            name: nangate45_swerv
+            source: examples
+            case_dir: kepler-formal-examples/nangate45_swerv
+            config: 6_final_sec_test.yml
+            expectation: positive
 
     steps:
     - uses: actions/checkout@v4

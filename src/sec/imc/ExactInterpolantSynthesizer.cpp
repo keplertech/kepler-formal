@@ -102,11 +102,16 @@ std::optional<BoolExpr*> ExactInterpolantSynthesizer::deriveOneStepReachableStat
       allocateFreshProofSymbols(problem_.inputSymbols, nextSymbol);
 
   BoolExpr* lhs = BoolExpr::And(
-      init, buildOneStepTransitionFormula(problem_, nextStateSymbols));
+      init, buildOneStepTransitionFormula(problem_, nextStateSymbols,
+                                          problem_.learnedInternalRelationInvariant));
 
   std::unordered_map<size_t, size_t> badRemap = nextStateSymbols;
   badRemap.insert(badInputSymbols.begin(), badInputSymbols.end());
-  BoolExpr* rhs = remapProofFormula(problem_.bad, badRemap);
+  BoolExpr* bad = problem_.bad;
+  if (problem_.learnedInternalRelationInvariant != nullptr) {
+    bad = BoolExpr::And(bad, problem_.learnedInternalRelationInvariant);
+  }
+  BoolExpr* rhs = remapProofFormula(bad, badRemap);
 
   std::vector<size_t> sharedSymbols;
   sharedSymbols.reserve(combinedStateSymbols.size());
@@ -130,7 +135,8 @@ std::optional<BoolExpr*> ExactInterpolantSynthesizer::deriveOneStepReachableStat
 
   BoolExpr* restored =
       BoolExpr::simplify(remapProofFormula(interpolant, restoreMap));
-  if (!isInductiveInvariant(problem_, restored, solverType_)) {
+  if (!isInductiveInvariant(problem_, restored, solverType_,
+                            problem_.learnedInternalRelationInvariant)) {
     // Separation alone is not enough for SEC; the candidate must also be an
     // inductive invariant for the full transition relation.
     return std::nullopt;

@@ -256,6 +256,7 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     if (options.mode == BorrowedVerificationMode::SEC) {
       SEC::SequentialEquivalenceStrategy strategy(
           design0, design1, options.solver, options.secEngine, options.secEncoding);
+      strategy.setInternalRelationOptions(options.internalRelationOptions);
       strategy.setBoundaryPairs(options.setAsBoundary);
       const auto proof = strategy.run(options.maxK);
       assignSecResult(proof, result);
