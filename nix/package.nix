@@ -109,7 +109,9 @@ stdenv.mkDerivation {
     "-DLLVM_DIR=${llvmPackages_22.llvm.dev}/lib/cmake/llvm"
     "-DClang_DIR=${llvmPackages_22.libclang.dev}/lib/cmake/clang"
     # Only the OR-Tools graph headers are used; the solver package is not built.
-    "-DCMAKE_CXX_FLAGS=-I${or-tools.src}"
+    # Match GCC-built Abseil's template mangling on Linux while retaining Clang 22.
+    ("-DCMAKE_CXX_FLAGS=-I${or-tools.src}"
+      + lib.optionalString stdenv.hostPlatform.isLinux " -fclang-abi-compat=17")
     # No C++ modules are used; clang-scan-deps bypasses Nix's include flags.
     "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
   ];
