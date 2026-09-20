@@ -1939,6 +1939,38 @@ TEST_F(KeplerFormalCliTests, ConfigCcIncludePathsMustBeSequence) {
   std::filesystem::remove(cfgPath);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigCcRejectsMalformedSynthesisOptions) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"cc_top: []\n", "cc_top must be a scalar"},
+      {"cc_top: ''\n", "cc_top must not be empty"},
+      {"cc_include_paths: [[]]\n", "cc_include_paths entries must be scalar paths"},
+  };
+  for (const auto& [option, expectedError] : cases) {
+    SCOPED_TRACE(option);
+    std::ostringstream captured;
+    NamedLoggerGuard logger("cc_config_validation");
+    logger.installed_->sinks().clear();
+    logger.installed_->sinks().push_back(
+        std::make_shared<spdlog::sinks::ostream_sink_mt>(captured));
+    const auto cfgPath = writeTempConfig(
+        "format: cc\nverification: sec\ninput_paths: [a.cc, b.cc]\n" + option);
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+    EXPECT_NE(captured.str().find(expectedError), std::string::npos);
+    std::filesystem::remove(cfgPath);
+  }
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCcRejectsMultipleTranslationUnitsPerSide) {
+  const auto cfgPath = writeTempConfig(
+      "format: cc\nverification: sec\ncc_top: top\n"
+      "input_paths: [[a.cc, helper.cc], [b.cc]]\n");
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+  EXPECT_NE(readFileContents(run.result.logFile).find("exactly one translation unit"),
+            std::string::npos);
+  std::filesystem::remove(cfgPath);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSystemVerilogAccepted) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",
@@ -5158,6 +5190,69 @@ TEST_F(KeplerFormalCliTests, CliCcFormatRequiresSec) {
       EXIT_FAILURE);
 }
 
+TEST_F(KeplerFormalCliTests, CliMixedFormatsRequireBothDesignSides) {
+  for (const std::string format : {"-cc", "-c_vs_rtl", "-rtl_vs_gate"}) {
+    SCOPED_TRACE(format);
+    const auto run = runStructuredWithArgs(
+        {"kepler-formal", "-v", "sec", format, "only_one_input"});
+    EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+    EXPECT_NE(readFileContents(run.result.logFile).find("Need "), std::string::npos);
+  }
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCcReusesOnlyIdenticalSynthesisOptions) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_cc_reuse");
+  const auto includeDir = tmpDir / "include";
+  std::filesystem::create_directory(includeDir);
+  {
+    std::ofstream header(includeDir / "transform_mask.h");
+    header << "#define TRANSFORM_MASK 0x1256\n";
+    std::ofstream cc(tmpDir / "transform.cc");
+    cc << "#include \"transform_mask.h\"\n"
+          "unsigned short transform(unsigned short value) {\n"
+          "  return value ^ TRANSFORM_MASK;\n}\n"
+          "unsigned short changed(unsigned short value) {\n"
+          "  return value ^ (TRANSFORM_MASK ^ 1);\n}\n";
+  }
+  const std::vector<std::string> options = {
+      "", "cc_design2_module_name: transform_copy\n", "cc_design2_top: changed\n"};
+  for (size_t index = 0; index < options.size(); ++index) {
+    SCOPED_TRACE(options[index]);
+    const auto runDir = tmpDir / std::to_string(index);
+    std::filesystem::create_directory(runDir);
+    const auto logPath = runDir / "run.log";
+    const auto cfgPath = writeTempConfig(
+        "format: cc\nverification: sec\nsec_encoding: binary\nmax_k: 2\n"
+        "cc_top: transform\n" + options[index] +
+        "cc_include_paths: ['" + includeDir.string() + "', '', '" +
+        includeDir.string() + "']\n"
+        "input_paths: ['" + (tmpDir / "transform.cc").string() + "', '" +
+        (tmpDir / "." / "transform.cc").string() + "']\n"
+        "log_file: " + logPath.string() + "\n");
+    {
+      CurrentPathGuard currentPathGuard;
+      std::filesystem::current_path(runDir);
+      EXPECT_EQ(runWithConfigFile(cfgPath),
+                index == 2 ? kSecCounterexampleExitCode : kSecProvedExitCode);
+    }
+    const auto outputDir = runDir / "kepler_formal_c2rtl";
+    EXPECT_TRUE(std::filesystem::exists(outputDir / "design1_transform.sv"));
+    EXPECT_EQ(std::filesystem::exists(outputDir / "design2_transform.sv"),
+              index != 0);
+    EXPECT_EQ(readFileContents(logPath).find("Reusing design1 C/C++ synthesis") !=
+                  std::string::npos,
+              index == 0);
+    if (index == 1) {
+      EXPECT_NE(readFileContents(outputDir / "design2_transform.sv")
+                    .find("module transform_copy"),
+                std::string::npos);
+    }
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests,
        CliCVsRtlPreservesWriteOnlyReferenceOutputNames) {
   const auto tmpDir =
@@ -5308,6 +5403,8 @@ TEST_F(KeplerFormalCliTests,
       {"eventuals: {}\n", "eventuals must be a non-empty sequence"},
       {"eventuals: []\n", "eventuals must be a non-empty sequence"},
       {"eventuals: [true]\n", "eventuals[0] must be a map"},
+      {"eventuals:\n  - ? [cycle]\n    : 1\n",
+       "eventuals[0] keys must be cycle, condition, or equality"},
       {"eventuals: [{cycle: 1, condition: true, equality: true, delay: 1}]\n",
        "eventuals[0]: unknown key delay"},
       {"eventuals: [{cycle: 1, cycle: 2, condition: true, equality: true}]\n",
@@ -5353,6 +5450,141 @@ TEST_F(KeplerFormalCliTests,
     EXPECT_NE(captured.str().find(expectedError), std::string::npos);
     EXPECT_FALSE(std::filesystem::exists(fixture.outputDir));
   }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsMalformedAlignmentOptionsBeforeSynthesis) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"c2rtl_auto_align: []\n", "c2rtl_auto_align must be a boolean scalar"},
+      {"c2rtl_auto_align: invalid\n", "c2rtl_auto_align must be true or false"},
+      {"c2rtl_output_delays: [1]\n", "c2rtl_output_delays must be a map"},
+      {"c2rtl_output_delays: {out: []}\n", "entries must be scalar output names"},
+      {"c2rtl_output_delays: {'': 1}\n", "output names must not be empty"},
+      {"c2rtl_output_delays: {out: 1, out: 2}\n", "Duplicate C2RTL output delay setting for out"},
+  };
+  for (const auto& [options, expectedError] : cases) {
+    SCOPED_TRACE(options);
+    std::ostringstream captured;
+    NamedLoggerGuard logger("c2rtl_alignment_validation");
+    logger.installed_->sinks().clear();
+    logger.installed_->sinks().push_back(
+        std::make_shared<spdlog::sinks::ostream_sink_mt>(captured));
+    const auto cfgPath = writeTempConfig(
+        "format: c_vs_rtl\nverification: sec\ncc_top: top\n"
+        "input_paths: [model.cc, rtl.sv]\n" + options);
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+    EXPECT_NE(captured.str().find(expectedError), std::string::npos);
+    std::filesystem::remove(cfgPath);
+  }
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlRejectsIncompatibleOptionsBeforeSynthesis) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"c2rtl_auto_align: false\nc2rtl_output_delays: {transformed: 1}\n",
+       "c2rtl_output_delays requires c2rtl_auto_align"},
+      {"c2rtl_auto_align: true\nsec_engine: imc\n",
+       "requires sec_engine: pdr"},
+      {"c2rtl_auto_align: true\nsec_encoding: dual_rail_steady\n",
+       "requires sec_encoding: binary"},
+      {"c2rtl_auto_align: true\ncompact_mode: true\n",
+       "does not support compact_mode"},
+      {"c2rtl_auto_align: true\nsec_reset: {cycles: 1, ports: [{name: reset_n, active_value: 0}]}\n",
+       "does not support sec_reset options"},
+      {"c2rtl_auto_align: true\nbtor2_export: true\nbtor2_export_path: '" +
+           (fixture.tmpDir / "unused.btor2").string() + "'\n",
+       "does not support BTOR2 export"},
+  };
+  for (const auto& [options, expectedError] : cases) {
+    SCOPED_TRACE(options);
+    const std::string encoding = options.find("sec_encoding:") == std::string::npos
+        ? "sec_encoding: binary\n" : "";
+    const auto cfgPath = writeTempConfig(
+        "format: c_vs_rtl\nverification: sec\ncc_top: word_transform\n" +
+        encoding + options + "cc_output_dir: " + fixture.outputDir.string() + "\n"
+        "log_file: " + fixture.logPath.string() + "\n"
+        "input_paths: ['" + fixture.ccPath.string() + "', '" +
+        fixture.svPath.string() + "']\n");
+    EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+    EXPECT_NE(readFileContents(fixture.logPath).find(expectedError),
+              std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(fixture.outputDir));
+    std::filesystem::remove(cfgPath);
+  }
+  const auto wrongFormat = writeTempConfig(
+      "format: verilog\nverification: sec\nc2rtl_auto_align: true\n"
+      "input_paths: [first.v, second.v]\nlog_file: " +
+      fixture.logPath.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(wrongFormat), EXIT_FAILURE);
+  EXPECT_NE(readFileContents(fixture.logPath).find("only supported with format: c_vs_rtl"),
+            std::string::npos);
+  std::filesystem::remove(wrongFormat);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigCcSynthesisFailuresReportTheirCause) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  const auto blockedDir = fixture.tmpDir / "blocked";
+  {
+    std::ofstream blocked(blockedDir);
+    blocked << "An output directory cannot be created below a regular file.\n";
+  }
+  for (const bool invalidSource : {false, true}) {
+    SCOPED_TRACE(invalidSource);
+    if (invalidSource) {
+      std::ofstream cc(fixture.ccPath);
+      cc << "void word_transform( {\n";
+    }
+    const auto outputDir = invalidSource ? fixture.outputDir : blockedDir / "output";
+    const auto cfgPath = writeTempConfig(
+        "format: c_vs_rtl\nverification: sec\ncc_top: word_transform\n"
+        "cc_output_dir: " + outputDir.string() + "\n"
+        "input_paths: ['" + fixture.ccPath.string() + "', '" +
+        fixture.svPath.string() + "']\nlog_file: " + fixture.logPath.string() + "\n");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+    EXPECT_NE(readFileContents(fixture.logPath).find(invalidSource
+                  ? "XLS C2RTL synthesis failed for design1"
+                  : "Failed to create cc_output_dir"),
+              std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(outputDir / "design1_word_transform.sv"));
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       ConfigTemporalC2RtlReportsBoundedInconclusiveWithoutReset) {
+  const auto fixture = createTemporalC2RtlTransformFixture();
+  {
+    std::ofstream sv(fixture.svPath);
+    sv << "module word_transform_rtl(input logic clock, input logic [15:0] payload,\n"
+          "  output logic [15:0] transformed, output logic marker);\n"
+          "  always_ff @(posedge clock) begin\n"
+          "    transformed <= payload ^ 16'ha55a;\n"
+          "    marker <= payload == 16'h3c5a;\n"
+          "  end\nendmodule\n";
+  }
+  const auto cfgPath = writeTemporalC2RtlTransformConfig(
+      fixture, "  transformed: 1\n  marker: 1\n");
+  auto config = readFileContents(cfgPath);
+  config.replace(config.find("max_k: 8"), std::string("max_k: 8").size(), "max_k: 0");
+  {
+    std::ofstream cfg(cfgPath);
+    cfg << config;
+  }
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Inconclusive);
+  EXPECT_EQ(run.result.bound, 0);
+  EXPECT_EQ(run.result.coveredOutputs, 17);
+  EXPECT_EQ(run.result.totalOutputs, 17);
+  EXPECT_NE(run.result.reason.find("configured frame bound"), std::string::npos);
+  EXPECT_NE(readFileContents(fixture.logPath).find("C2RTL reset: none"),
+            std::string::npos);
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
