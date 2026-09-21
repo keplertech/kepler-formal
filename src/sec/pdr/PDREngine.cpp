@@ -3084,7 +3084,11 @@ int PredecessorAssumptionSolver::q2SelectorFor(
     // Figure 6 blocking targets recur while obligations move through frames.
     // Prefer retiring least-recently-used status-only targets from Figures 7
     // and 9; this changes cache retention only, never the exact SAT query.
-    const bool retireStatusOnly = !q2StatusSelectorRecency.empty();
+    // The selector being returned must stay live: retiring it would make the
+    // caller's query trivially UNSAT.
+    const bool retireStatusOnly =
+        !q2StatusSelectorRecency.empty() &&
+        q2StatusSelectorRecency.back() != &inserted->first;
     auto& retiredRecency = retireStatusOnly
                                ? q2StatusSelectorRecency
                                : q2BlockingSelectorRecency;
