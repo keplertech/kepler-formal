@@ -1960,7 +1960,8 @@ static int KeplerFormalMainImpl(
         if (!parseC2RtlPropertyConfig(cfg, c2rtlOptions, c2rtlPropertyError)) {
           SPDLOG_CRITICAL("Invalid C2RTL property config: {}", c2rtlPropertyError);
           return EXIT_FAILURE;
-		}
+        }
+
         if (cfg["learn_internal_relations"] && cfg["learn_ineternal_relations"]) {
           SPDLOG_CRITICAL("Specify only one spelling of learn_internal_relations");
           return EXIT_FAILURE;
