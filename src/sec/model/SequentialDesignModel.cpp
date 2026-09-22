@@ -27,7 +27,11 @@
 #include "NLDB0.h"
 #include "NLName.h"
 #include "NLUniverse.h"
+#include "SNLBusTerm.h"
+#include "SNLBusTermBit.h"
 #include "SNLDesignModeling.h"
+#include "SNLInstParameter.h"
+#include "SNLInstance.h"
 #include "SNLPath.h"
 #include "../../clauses/SNLLogicCloud.h"
 #include "../../clauses/Tree2BoolExpr.h"
@@ -3165,6 +3169,96 @@ void appendPendingTransitionsForInstance(
   }
 }
 
+// Reads the DFF INIT instance parameter (written by the slang frontend when a
+// constant initial block or declaration initializer sets a register's
+// power-on value) for the given state output terminal. Returns the stored
+// digit for the terminal's bit in the storage element's own polarity, or
+// nullopt when the instance carries no explicit INIT or the digit is x/z.
+std::optional<bool> readDFFInitDigitForStateTerm(
+    const naja::DNL::DNLTerminalFull& term) {
+  if (term.isNull() || term.isTopPort()) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  const auto* snlInstance = term.getDNLInstance().getSNLInstance();
+  if (snlInstance == nullptr) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  const auto* initParam =
+      snlInstance->getInstParameter(naja::NL::NLName("INIT"));
+  if (initParam == nullptr) {
+    return std::nullopt;
+  }
+  const std::string value = initParam->getValue();
+  const auto basePos = value.find('\'');
+  if (basePos == std::string::npos || basePos + 2 >= value.size()) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  if (value[basePos + 1] != 'b' && value[basePos + 1] != 'B') {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  size_t width = 0;
+  try {
+    width = std::stoul(value.substr(0, basePos));
+  } catch (...) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  const std::string digits = value.substr(basePos + 2);
+  if (width == 0 || digits.size() != width) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  // INIT digits are written MSB first (NLDB0::formatDFFInitValue), so the
+  // digit for bus bit b of a Q[msb:lsb] output sits at index msb-b.
+  size_t digitIndex = 0;
+  const auto* bitTerm = term.getSnlBitTerm();
+  if (const auto* busBit =
+          dynamic_cast<const naja::NL::SNLBusTermBit*>(bitTerm)) {
+    const auto* bus = busBit->getBus();
+    const auto offset =
+        static_cast<int64_t>(bus->getMSB()) - busBit->getBit();
+    if (offset < 0 || static_cast<size_t>(offset) >= width) {
+      return std::nullopt;  // LCOV_EXCL_LINE
+    }
+    digitIndex = static_cast<size_t>(offset);
+  } else if (width != 1) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  switch (std::tolower(static_cast<unsigned char>(digits[digitIndex]))) {
+    case '0':
+      return false;
+    case '1':
+      return true;
+    default:
+      return std::nullopt;  // x/z leave the state unconstrained
+  }
+}
+
+// Transfers DFF INIT metadata onto the extracted model. Each state key holds
+// values in its own observed pin polarity: the primary key follows
+// stateOutputIsComplemented (mirroring the next-state build) and complemented
+// keys get the opposite value.
+void harvestInitialStateValues(ExtractContext& ctx, SequentialDesignModel& model) {
+  size_t harvested = 0;
+  for (const auto& pending : ctx.pendingTransitions) {
+    const auto& term = ctx.dnl->getDNLTerminalFromID(pending.stateTermID);
+    const auto digit = readDFFInitDigitForStateTerm(term);
+    if (!digit.has_value()) {
+      continue;
+    }
+    const bool value = pending.stateOutputIsComplemented ? !*digit : *digit;
+    model.initialStateValueByKey.emplace(pending.stateKey, value);
+    for (const auto& complementedKey : pending.complementedStateKeys) {
+      model.initialStateValueByKey.emplace(complementedKey, !value);
+    }
+    ++harvested;
+  }
+  if (ctx.secDiagEnabled && harvested > 0) {
+    fprintf(stderr,
+            "SEC diag: extract(%s) harvested initial state values=%zu\n",
+            ctx.topName.c_str(), harvested);
+    fflush(stderr);
+  }
+}
+
 void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& model) {
   // Record enough pin information to reconstruct Q' after the combinational
   // Boolean expressions have been built.
@@ -3187,6 +3281,7 @@ void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& mo
     }
     appendPendingTransitionsForInstance(ctx, model, *scan);
   }
+  harvestInitialStateValues(ctx, model);
 }
 
 std::vector<naja::DNL::DNLID> collectInitialObservedTerms(const ExtractContext& ctx) {
