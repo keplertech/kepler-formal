@@ -16165,6 +16165,24 @@ TEST_F(SequentialEquivalenceStrategyTests,
       findKeyByDisplayName(negativeDecimalModel, "ff0.Q[1]")));
   EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
       findKeyByDisplayName(negativeDecimalModel, "ff0.Q[0]")));
+
+  // An unknown digit under the negation carry makes the carry and all higher
+  // bits unknown: -4'b0x00 = 4'bxx00, so only the low two bits constrain.
+  const auto negativeUnknownModel = extractWideDFFInit("-4'b0x00");
+  EXPECT_FALSE(negativeUnknownModel.hasUnsupportedFeatures());
+  ASSERT_EQ(negativeUnknownModel.initialStateValueByKey.size(), 2u);
+  EXPECT_EQ(
+      negativeUnknownModel.initialStateValueByKey.find(
+          findKeyByDisplayName(negativeUnknownModel, "ff0.Q[3]")),
+      negativeUnknownModel.initialStateValueByKey.end());
+  EXPECT_EQ(
+      negativeUnknownModel.initialStateValueByKey.find(
+          findKeyByDisplayName(negativeUnknownModel, "ff0.Q[2]")),
+      negativeUnknownModel.initialStateValueByKey.end());
+  EXPECT_FALSE(negativeUnknownModel.initialStateValueByKey.at(
+      findKeyByDisplayName(negativeUnknownModel, "ff0.Q[1]")));
+  EXPECT_FALSE(negativeUnknownModel.initialStateValueByKey.at(
+      findKeyByDisplayName(negativeUnknownModel, "ff0.Q[0]")));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

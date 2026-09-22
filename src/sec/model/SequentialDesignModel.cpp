@@ -3300,6 +3300,14 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
         carry = false;
       } else if (bits[i] == '1') {
         bits[i] = '0';
+      } else {
+        // An unknown digit with an incoming carry makes the carry unknown, so
+        // every more-significant result bit is unknown as well.
+        bits[i] = 'x';
+        for (size_t j = i + 1; j < bits.size(); ++j) {
+          bits[j] = 'x';
+        }
+        break;
       }
     }
   }
