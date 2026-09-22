@@ -831,10 +831,14 @@ jobs:
         script: |
           const fs = require('fs');
           const path = require('path');
-          const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+          // Listing every attempt of a re-run run (filter: 'all') fails with a
+          // persistent 502 from the API once the run has several attempts, so
+          // only the current attempt is listed. Jobs carried over from earlier
+          // attempts keep their own run_attempt, which the summary honours.
+          const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
             ...context.repo,
             run_id: context.runId,
-            filter: 'all',
+            attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT),
             per_page: 100,
           });
           fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'sec-jobs.json'), JSON.stringify(jobs));
