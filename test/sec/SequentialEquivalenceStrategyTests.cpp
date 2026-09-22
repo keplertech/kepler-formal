@@ -16024,6 +16024,85 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractExpandsNonBinaryDFFInitLiterals) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  int designCounter = 0;
+  auto extractWideDFFInit = [&](const char* initValue) {
+    auto* top = SNLDesign::create(
+        library,
+        SNLDesign::Type::Standard,
+        NLName("top" + std::to_string(designCounter++)));
+    auto* topIn = SNLBusTerm::create(
+        top, SNLTerm::Direction::Input, 3, 0, NLName("in"));
+    auto* topClock = SNLScalarTerm::create(
+        top, SNLTerm::Direction::Input, NLName("clk"));
+    auto* topOut = SNLBusTerm::create(
+        top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
+    auto* dffModel = NLDB0::getOrCreateDFF(4);
+    auto* ff = SNLInstance::create(top, dffModel, NLName("ff0"));
+    auto* netIn = SNLBusNet::create(top, 3, 0, NLName("net_in"));
+    auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+    auto* netQ = SNLBusNet::create(top, 3, 0, NLName("net_q"));
+    auto* dataTerm = dffModel->getBusTerm(NLName("D"));
+    auto* outputTerm = dffModel->getBusTerm(NLName("Q"));
+    topClock->setNet(netClock);
+    ff->getInstTerm(dffModel->getScalarTerm(NLName("C")))->setNet(netClock);
+    for (int bit = 0; bit <= 3; ++bit) {
+      topIn->getBit(bit)->setNet(netIn->getBit(bit));
+      ff->getInstTerm(dataTerm->getBit(bit))->setNet(netIn->getBit(bit));
+      ff->getInstTerm(outputTerm->getBit(bit))->setNet(netQ->getBit(bit));
+      topOut->getBit(bit)->setNet(netQ->getBit(bit));
+    }
+    SNLInstParameter::create(
+        ff, dffModel->getParameter(NLName("INIT")), initValue);
+    return SequentialDesignModel::extract(top);
+  };
+
+  // Hex digits expand to four bits each: 4'h6 = 4'b0110.
+  const auto hexModel = extractWideDFFInit("4'h6");
+  EXPECT_FALSE(hexModel.hasUnsupportedFeatures());
+  ASSERT_EQ(hexModel.initialStateValueByKey.size(), 4u);
+  EXPECT_FALSE(hexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(hexModel, "ff0.Q[3]")));
+  EXPECT_TRUE(hexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(hexModel, "ff0.Q[2]")));
+  EXPECT_TRUE(hexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(hexModel, "ff0.Q[1]")));
+  EXPECT_FALSE(hexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(hexModel, "ff0.Q[0]")));
+
+  // Short binary literals zero-extend: 4'b1 = 4'b0001.
+  const auto shortModel = extractWideDFFInit("4'b1");
+  EXPECT_FALSE(shortModel.hasUnsupportedFeatures());
+  ASSERT_EQ(shortModel.initialStateValueByKey.size(), 4u);
+  EXPECT_FALSE(shortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(shortModel, "ff0.Q[3]")));
+  EXPECT_FALSE(shortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(shortModel, "ff0.Q[2]")));
+  EXPECT_FALSE(shortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(shortModel, "ff0.Q[1]")));
+  EXPECT_TRUE(shortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(shortModel, "ff0.Q[0]")));
+
+  // Decimal literals convert to bits: 4'd5 = 4'b0101.
+  const auto decimalModel = extractWideDFFInit("4'd5");
+  EXPECT_FALSE(decimalModel.hasUnsupportedFeatures());
+  ASSERT_EQ(decimalModel.initialStateValueByKey.size(), 4u);
+  EXPECT_FALSE(decimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(decimalModel, "ff0.Q[3]")));
+  EXPECT_TRUE(decimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(decimalModel, "ff0.Q[2]")));
+  EXPECT_FALSE(decimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(decimalModel, "ff0.Q[1]")));
+  EXPECT_TRUE(decimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(decimalModel, "ff0.Q[0]")));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractHarvestsComplementedDFFInitParameter) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
