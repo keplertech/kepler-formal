@@ -80,6 +80,11 @@ without an explicit initializer keep a free initial state, so designs that
 initialize state through a reset sequence still need
 [sec-reset-bootstrap](../sec-reset-bootstrap.md).
 
+Sized bit-literal parameters (such as `INIT`) are stored in SNL in a canonical
+form — `<width>'b<msb...lsb>` with lowercase `0`/`1`/`x`/`z` digits — produced
+by the naja frontends at load time. SEC extraction only consumes this canonical
+form; any other string form leaves the state unconstrained.
+
 Limitations:
 
 - Initial blocks with multiple statements, non-blocking assignments, or

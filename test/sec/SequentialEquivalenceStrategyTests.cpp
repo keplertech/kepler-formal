@@ -16024,7 +16024,31 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractExpandsNonBinaryDFFInitLiterals) {
+       SequentialDesignModelExtractIgnoresNonCanonicalDFFInit) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top = createDffTop(library, "top", invModel, false, false);
+  auto* ff = top->getInstance(NLName("ff0"));
+  ASSERT_NE(ff, nullptr);
+  auto* initParam = ff->getModel()->getParameter(NLName("INIT"));
+  ASSERT_NE(initParam, nullptr);
+  // Only the canonical sized-binary form (written by the naja frontends) is
+  // harvested; anything else leaves the state unconstrained.
+  SNLInstParameter::create(ff, initParam, "1'h1");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.initialStateValueByKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractExtendsNarrowDFFInitLiterals) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* library =
@@ -16062,142 +16086,27 @@ TEST_F(SequentialEquivalenceStrategyTests,
     return SequentialDesignModel::extract(top);
   };
 
-  // Hex digits expand to four bits each: 4'h6 = 4'b0110.
-  const auto hexModel = extractWideDFFInit("4'h6");
-  EXPECT_FALSE(hexModel.hasUnsupportedFeatures());
-  ASSERT_EQ(hexModel.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(hexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(hexModel, "ff0.Q[3]")));
-  EXPECT_TRUE(hexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(hexModel, "ff0.Q[2]")));
-  EXPECT_TRUE(hexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(hexModel, "ff0.Q[1]")));
-  EXPECT_FALSE(hexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(hexModel, "ff0.Q[0]")));
+  // A narrower literal zero-extends to the storage width: 2'b11 on a 4-bit
+  // register initializes Q[1:0] to 1 and Q[3:2] to 0.
+  const auto zeroExtended = extractWideDFFInit("2'b11");
+  EXPECT_FALSE(zeroExtended.hasUnsupportedFeatures());
+  ASSERT_EQ(zeroExtended.initialStateValueByKey.size(), 4u);
+  EXPECT_FALSE(zeroExtended.initialStateValueByKey.at(
+      findKeyByDisplayName(zeroExtended, "ff0.Q[3]")));
+  EXPECT_FALSE(zeroExtended.initialStateValueByKey.at(
+      findKeyByDisplayName(zeroExtended, "ff0.Q[2]")));
+  EXPECT_TRUE(zeroExtended.initialStateValueByKey.at(
+      findKeyByDisplayName(zeroExtended, "ff0.Q[1]")));
+  EXPECT_TRUE(zeroExtended.initialStateValueByKey.at(
+      findKeyByDisplayName(zeroExtended, "ff0.Q[0]")));
 
-  // Short binary literals zero-extend: 4'b1 = 4'b0001.
-  const auto shortModel = extractWideDFFInit("4'b1");
-  EXPECT_FALSE(shortModel.hasUnsupportedFeatures());
-  ASSERT_EQ(shortModel.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(shortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(shortModel, "ff0.Q[3]")));
-  EXPECT_FALSE(shortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(shortModel, "ff0.Q[2]")));
-  EXPECT_FALSE(shortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(shortModel, "ff0.Q[1]")));
-  EXPECT_TRUE(shortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(shortModel, "ff0.Q[0]")));
-
-  // Decimal literals convert to bits: 4'd5 = 4'b0101.
-  const auto decimalModel = extractWideDFFInit("4'd5");
-  EXPECT_FALSE(decimalModel.hasUnsupportedFeatures());
-  ASSERT_EQ(decimalModel.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(decimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(decimalModel, "ff0.Q[3]")));
-  EXPECT_TRUE(decimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(decimalModel, "ff0.Q[2]")));
-  EXPECT_FALSE(decimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(decimalModel, "ff0.Q[1]")));
-  EXPECT_TRUE(decimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(decimalModel, "ff0.Q[0]")));
-
-  // Digit separators are ignored: 4'b1_010 = 4'b1010.
-  const auto separatedModel = extractWideDFFInit("4'b1_010");
-  EXPECT_FALSE(separatedModel.hasUnsupportedFeatures());
-  ASSERT_EQ(separatedModel.initialStateValueByKey.size(), 4u);
-  EXPECT_TRUE(separatedModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedModel, "ff0.Q[3]")));
-  EXPECT_FALSE(separatedModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedModel, "ff0.Q[2]")));
-  EXPECT_TRUE(separatedModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedModel, "ff0.Q[1]")));
-  EXPECT_FALSE(separatedModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedModel, "ff0.Q[0]")));
-
-  // Separators in decimal literals: 4'd1_0 = 10 = 4'b1010.
-  const auto separatedDecimalModel = extractWideDFFInit("4'd1_0");
-  EXPECT_FALSE(separatedDecimalModel.hasUnsupportedFeatures());
-  ASSERT_EQ(separatedDecimalModel.initialStateValueByKey.size(), 4u);
-  EXPECT_TRUE(separatedDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[3]")));
-  EXPECT_FALSE(separatedDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[2]")));
-  EXPECT_TRUE(separatedDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[1]")));
-  EXPECT_FALSE(separatedDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[0]")));
-
-  // Separators in the width field are ignored too: 0_4'h6 = 4'b0110.
-  const auto separatedWidthModel = extractWideDFFInit("0_4'h6");
-  EXPECT_FALSE(separatedWidthModel.hasUnsupportedFeatures());
-  ASSERT_EQ(separatedWidthModel.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(separatedWidthModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedWidthModel, "ff0.Q[3]")));
-  EXPECT_TRUE(separatedWidthModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedWidthModel, "ff0.Q[2]")));
-  EXPECT_TRUE(separatedWidthModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedWidthModel, "ff0.Q[1]")));
-  EXPECT_FALSE(separatedWidthModel.initialStateValueByKey.at(
-      findKeyByDisplayName(separatedWidthModel, "ff0.Q[0]")));
-
-  // The signed marker does not change the bit pattern: 4'sh6 = 4'b0110.
-  const auto signedHexModel = extractWideDFFInit("4'sh6");
-  EXPECT_FALSE(signedHexModel.hasUnsupportedFeatures());
-  ASSERT_EQ(signedHexModel.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(signedHexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedHexModel, "ff0.Q[3]")));
-  EXPECT_TRUE(signedHexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedHexModel, "ff0.Q[2]")));
-  EXPECT_TRUE(signedHexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedHexModel, "ff0.Q[1]")));
-  EXPECT_FALSE(signedHexModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedHexModel, "ff0.Q[0]")));
-
-  // Negative decimals are stored as two's complement: -4'd3 = 4'b1101.
-  const auto negativeDecimalModel = extractWideDFFInit("-4'd3");
-  EXPECT_FALSE(negativeDecimalModel.hasUnsupportedFeatures());
-  ASSERT_EQ(negativeDecimalModel.initialStateValueByKey.size(), 4u);
-  EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[3]")));
-  EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[2]")));
-  EXPECT_FALSE(negativeDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[1]")));
-  EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
-      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[0]")));
-
-  // An unknown digit under the negation carry makes the carry and all higher
-  // bits unknown: -4'b0x00 = 4'bxx00, so only the low two bits constrain.
-  const auto negativeUnknownModel = extractWideDFFInit("-4'b0x00");
-  EXPECT_FALSE(negativeUnknownModel.hasUnsupportedFeatures());
-  ASSERT_EQ(negativeUnknownModel.initialStateValueByKey.size(), 2u);
-  EXPECT_EQ(
-      negativeUnknownModel.initialStateValueByKey.find(
-          findKeyByDisplayName(negativeUnknownModel, "ff0.Q[3]")),
-      negativeUnknownModel.initialStateValueByKey.end());
-  EXPECT_EQ(
-      negativeUnknownModel.initialStateValueByKey.find(
-          findKeyByDisplayName(negativeUnknownModel, "ff0.Q[2]")),
-      negativeUnknownModel.initialStateValueByKey.end());
-  EXPECT_FALSE(negativeUnknownModel.initialStateValueByKey.at(
-      findKeyByDisplayName(negativeUnknownModel, "ff0.Q[1]")));
-  EXPECT_FALSE(negativeUnknownModel.initialStateValueByKey.at(
-      findKeyByDisplayName(negativeUnknownModel, "ff0.Q[0]")));
-
-  // The signed marker does not change the literal's own bit pattern:
-  // 4'sb1 = 4'b0001 (extension is per literal width, sign extension only
-  // applies when a later context widens the value).
-  const auto signedShortModel = extractWideDFFInit("4'sb1");
-  EXPECT_FALSE(signedShortModel.hasUnsupportedFeatures());
-  ASSERT_EQ(signedShortModel.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(signedShortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedShortModel, "ff0.Q[3]")));
-  EXPECT_FALSE(signedShortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedShortModel, "ff0.Q[2]")));
-  EXPECT_FALSE(signedShortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedShortModel, "ff0.Q[1]")));
-  EXPECT_TRUE(signedShortModel.initialStateValueByKey.at(
-      findKeyByDisplayName(signedShortModel, "ff0.Q[0]")));
+  // A narrower literal whose top digit is unknown x-extends instead: 2'bx1
+  // initializes Q[0] and leaves Q[3:1] unconstrained.
+  const auto xExtended = extractWideDFFInit("2'bx1");
+  EXPECT_FALSE(xExtended.hasUnsupportedFeatures());
+  ASSERT_EQ(xExtended.initialStateValueByKey.size(), 1u);
+  EXPECT_TRUE(xExtended.initialStateValueByKey.at(
+      findKeyByDisplayName(xExtended, "ff0.Q[0]")));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

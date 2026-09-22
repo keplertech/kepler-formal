@@ -3169,162 +3169,12 @@ void appendPendingTransitionsForInstance(
   }
 }
 
-// Expands a sized Verilog literal ("[-]<width>'[s]<base><digits>", base
-// b/d/o/h) into width digit chars indexed LSB first ('0','1','x','z'). Digit
-// separators are ignored. Shorter digit strings are zero-extended ('x'/'z'
-// extended when the leftmost digit is x/z) up to the declared width; longer
-// strings lose their upper bits. A leading '-' negates the value (two's
-// complement); the optional signed marker only governs later expression
-// context extension and does not change the literal's own bit pattern.
-std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
-  const auto basePos = value.find('\'');
-  if (basePos == std::string::npos || basePos + 2 >= value.size()) {
-    return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  const std::string widthField = value.substr(0, basePos);
-  const bool negative = widthField.find('-') != std::string::npos;
-  size_t width = 0;
-  try {
-    std::string widthText;
-    for (const char c : widthField) {
-      if (c != '_' && c != '-') {
-        widthText.push_back(c);
-      }
-    }
-    width = std::stoul(widthText);
-  } catch (...) {
-    return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  if (width == 0) {
-    return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  size_t baseIndex = basePos + 1;
-  // The signed marker only affects how the value is interpreted and extended
-  // in a wider expression context; the literal's own bit pattern is fixed by
-  // the declared width, so it is accepted and ignored here.
-  if (value[baseIndex] == 's' || value[baseIndex] == 'S') {
-    ++baseIndex;
-  }
-  if (baseIndex >= value.size()) {
-    return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  const char base =
-      static_cast<char>(std::tolower(static_cast<unsigned char>(value[baseIndex])));
-  std::string digits;
-  for (const char c : value.substr(baseIndex + 1)) {
-    if (c != '_') {
-      digits.push_back(c);
-    }
-  }
-  if (digits.empty()) {
-    return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  std::string bits;  // LSB first
-  switch (base) {
-    case 'b':
-      for (auto it = digits.rbegin(); it != digits.rend(); ++it) {
-        bits.push_back(
-            static_cast<char>(std::tolower(static_cast<unsigned char>(*it))));
-      }
-      break;
-    case 'o':
-    case 'h': {
-      const size_t bitsPerDigit = base == 'h' ? 4 : 3;
-      for (auto it = digits.rbegin(); it != digits.rend(); ++it) {
-        const char digit =
-            static_cast<char>(std::tolower(static_cast<unsigned char>(*it)));
-        if (digit == 'x' || digit == 'z') {
-          bits.append(bitsPerDigit, digit);
-          continue;
-        }
-        int digitValue = -1;
-        if (digit >= '0' && digit <= '9') {
-          digitValue = digit - '0';
-        } else if (base == 'h' && digit >= 'a' && digit <= 'f') {
-          digitValue = 10 + digit - 'a';
-        }
-        if (digitValue < 0 || digitValue >= (1 << bitsPerDigit)) {
-          return std::nullopt;  // LCOV_EXCL_LINE
-        }
-        for (size_t i = 0; i < bitsPerDigit; ++i) {
-          bits.push_back((digitValue >> i) & 1 ? '1' : '0');
-        }
-      }
-      break;
-    }
-    case 'd': {
-      std::string remaining = digits;
-      for (char c : remaining) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) {
-          return std::nullopt;  // LCOV_EXCL_LINE
-        }
-      }
-      bits.assign(width, '0');
-      for (size_t i = 0; i < width && remaining != "0"; ++i) {
-        int carry = 0;
-        std::string quotient;
-        for (char c : remaining) {
-          const int current = carry * 10 + (c - '0');
-          carry = current % 2;
-          if (!quotient.empty() || current >= 2) {
-            quotient.push_back(static_cast<char>('0' + current / 2));
-          }
-        }
-        bits[i] = carry ? '1' : '0';
-        remaining = quotient.empty() ? "0" : quotient;
-      }
-      break;
-    }
-    default:
-      return std::nullopt;  // LCOV_EXCL_LINE
-  }
-  if (base != 'd') {
-    const char front =
-        static_cast<char>(std::tolower(static_cast<unsigned char>(digits.front())));
-    const char pad = front == 'x' || front == 'z' ? front : '0';
-    if (bits.size() < width) {
-      bits.append(width - bits.size(), pad);
-    } else if (bits.size() > width) {
-      bits.resize(width);
-    }
-  }
-  if (negative) {
-    // Two's complement: invert every bit, then add one starting from the LSB.
-    for (auto& c : bits) {
-      if (c == '0') {
-        c = '1';
-      } else if (c == '1') {
-        c = '0';
-      }
-    }
-    bool carry = true;
-    for (size_t i = 0; i < bits.size() && carry; ++i) {
-      if (bits[i] == '0') {
-        bits[i] = '1';
-        carry = false;
-      } else if (bits[i] == '1') {
-        bits[i] = '0';
-      } else {
-        // An unknown digit with an incoming carry makes the carry unknown, so
-        // every more-significant result bit is unknown as well.
-        bits[i] = 'x';
-        for (size_t j = i + 1; j < bits.size(); ++j) {
-          bits[j] = 'x';
-        }
-        break;
-      }
-    }
-  }
-  return bits;
-}
-
-// Reads the DFF INIT instance parameter (written by the slang frontend when a
-// constant initial block or declaration initializer sets a register's
-// power-on value) for the given state output terminal. Returns the stored
-// digit for the terminal's bit in the storage element's own polarity, or
-// nullopt when the instance carries no explicit INIT or the digit is x/z.
-// initDigitsByInstance caches the expanded literal so a wide DFF converts it
-// once per instance instead of once per output bit.
+// Reads the DFF INIT instance parameter for the given state output terminal.
+// The naja frontends store INIT in a canonical form ("<width>'b<msb...lsb>",
+// lowercase digits in 0/1/x/z); anything else leaves the state unconstrained.
+// Returns the digit for the terminal's bit in the storage element's own
+// polarity. initDigitsByInstance caches the LSB-first digit string so a wide
+// DFF converts it once per instance instead of once per output bit.
 std::optional<bool> readDFFInitDigitForStateTerm(
     const naja::DNL::DNLTerminalFull& term,
     std::unordered_map<const naja::NL::SNLInstance*,
@@ -3338,32 +3188,47 @@ std::optional<bool> readDFFInitDigitForStateTerm(
   }
   auto cached = initDigitsByInstance.find(snlInstance);
   if (cached == initDigitsByInstance.end()) {
-    std::optional<std::string> expanded;
+    std::optional<std::string> digits;
     if (const auto* initParam =
             snlInstance->getInstParameter(naja::NL::NLName("INIT"))) {
-      expanded = expandSizedLiteralDigits(initParam->getValue());
+      const std::string value = initParam->getValue();
+      const auto basePos = value.find('\'');
+      if (basePos != std::string::npos && basePos + 2 < value.size() &&
+          (value[basePos + 1] == 'b' || value[basePos + 1] == 'B')) {
+        // Flip to LSB-first so bit i sits at index i.
+        std::string reversed(value.substr(basePos + 2));
+        std::reverse(reversed.begin(), reversed.end());
+        digits = std::move(reversed);
+      }
     }
-    cached = initDigitsByInstance.emplace(snlInstance, std::move(expanded)).first;
+    cached = initDigitsByInstance.emplace(snlInstance, std::move(digits)).first;
   }
   const auto& digits = cached->second;
-  if (!digits.has_value()) {
+  if (!digits.has_value() || digits->empty()) {
     return std::nullopt;
   }
-  // Bit 0 of the literal is the LSB of the Q[msb:lsb] output.
   size_t bitIndex = 0;
   const auto* bitTerm = term.getSnlBitTerm();
   if (const auto* busBit =
           dynamic_cast<const naja::NL::SNLBusTermBit*>(bitTerm)) {
     const auto offset = static_cast<int64_t>(busBit->getBit()) -
                         busBit->getBus()->getLSB();
-    if (offset < 0 || static_cast<size_t>(offset) >= digits->size()) {
+    if (offset < 0) {
       return std::nullopt;  // LCOV_EXCL_LINE
     }
     bitIndex = static_cast<size_t>(offset);
-  } else if (digits->size() != 1) {
-    return std::nullopt;  // LCOV_EXCL_LINE
   }
-  switch (digits->at(bitIndex)) {
+  if (bitIndex >= digits->size()) {
+    // A literal narrower than the Q bus extends per Verilog rules: with zero,
+    // or with x/z when its most-significant digit is unknown.
+    const char top = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(digits->back())));
+    if (top == '0' || top == '1') {
+      return false;
+    }
+    return std::nullopt;
+  }
+  switch (std::tolower(static_cast<unsigned char>(digits->at(bitIndex)))) {
     case '0':
       return false;
     case '1':
