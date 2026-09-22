@@ -16100,6 +16100,32 @@ TEST_F(SequentialEquivalenceStrategyTests,
       findKeyByDisplayName(decimalModel, "ff0.Q[1]")));
   EXPECT_TRUE(decimalModel.initialStateValueByKey.at(
       findKeyByDisplayName(decimalModel, "ff0.Q[0]")));
+
+  // Digit separators are ignored: 4'b1_010 = 4'b1010.
+  const auto separatedModel = extractWideDFFInit("4'b1_010");
+  EXPECT_FALSE(separatedModel.hasUnsupportedFeatures());
+  ASSERT_EQ(separatedModel.initialStateValueByKey.size(), 4u);
+  EXPECT_TRUE(separatedModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedModel, "ff0.Q[3]")));
+  EXPECT_FALSE(separatedModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedModel, "ff0.Q[2]")));
+  EXPECT_TRUE(separatedModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedModel, "ff0.Q[1]")));
+  EXPECT_FALSE(separatedModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedModel, "ff0.Q[0]")));
+
+  // Separators in decimal literals: 4'd1_0 = 10 = 4'b1010.
+  const auto separatedDecimalModel = extractWideDFFInit("4'd1_0");
+  EXPECT_FALSE(separatedDecimalModel.hasUnsupportedFeatures());
+  ASSERT_EQ(separatedDecimalModel.initialStateValueByKey.size(), 4u);
+  EXPECT_TRUE(separatedDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[3]")));
+  EXPECT_FALSE(separatedDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[2]")));
+  EXPECT_TRUE(separatedDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[1]")));
+  EXPECT_FALSE(separatedDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedDecimalModel, "ff0.Q[0]")));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

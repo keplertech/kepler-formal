@@ -3170,9 +3170,10 @@ void appendPendingTransitionsForInstance(
 }
 
 // Expands a sized Verilog literal ("<width>'<base><digits>", base b/d/o/h)
-// into width digit chars indexed LSB first ('0','1','x','z'). Shorter digit
-// strings are extended per Verilog rules: with 'x'/'z' when the leftmost
-// digit is x/z, with '0' otherwise; longer strings lose their upper bits.
+// into width digit chars indexed LSB first ('0','1','x','z'). Digit
+// separators are ignored. Shorter digit strings are extended per Verilog
+// rules: with 'x'/'z' when the leftmost digit is x/z, with '0' otherwise;
+// longer strings lose their upper bits.
 std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   const auto basePos = value.find('\'');
   if (basePos == std::string::npos || basePos + 2 >= value.size()) {
@@ -3189,7 +3190,12 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   }
   const char base =
       static_cast<char>(std::tolower(static_cast<unsigned char>(value[basePos + 1])));
-  const std::string digits = value.substr(basePos + 2);
+  std::string digits;
+  for (const char c : value.substr(basePos + 2)) {
+    if (c != '_') {
+      digits.push_back(c);
+    }
+  }
   if (digits.empty()) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
@@ -3270,8 +3276,12 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
 // power-on value) for the given state output terminal. Returns the stored
 // digit for the terminal's bit in the storage element's own polarity, or
 // nullopt when the instance carries no explicit INIT or the digit is x/z.
+// initDigitsByInstance caches the expanded literal so a wide DFF converts it
+// once per instance instead of once per output bit.
 std::optional<bool> readDFFInitDigitForStateTerm(
-    const naja::DNL::DNLTerminalFull& term) {
+    const naja::DNL::DNLTerminalFull& term,
+    std::unordered_map<const naja::NL::SNLInstance*,
+                       std::optional<std::string>>& initDigitsByInstance) {
   if (term.isNull() || term.isTopPort()) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
@@ -3279,14 +3289,18 @@ std::optional<bool> readDFFInitDigitForStateTerm(
   if (snlInstance == nullptr) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
-  const auto* initParam =
-      snlInstance->getInstParameter(naja::NL::NLName("INIT"));
-  if (initParam == nullptr) {
-    return std::nullopt;
+  auto cached = initDigitsByInstance.find(snlInstance);
+  if (cached == initDigitsByInstance.end()) {
+    std::optional<std::string> expanded;
+    if (const auto* initParam =
+            snlInstance->getInstParameter(naja::NL::NLName("INIT"))) {
+      expanded = expandSizedLiteralDigits(initParam->getValue());
+    }
+    cached = initDigitsByInstance.emplace(snlInstance, std::move(expanded)).first;
   }
-  const auto digits = expandSizedLiteralDigits(initParam->getValue());
+  const auto& digits = cached->second;
   if (!digits.has_value()) {
-    return std::nullopt;  // LCOV_EXCL_LINE
+    return std::nullopt;
   }
   // Bit 0 of the literal is the LSB of the Q[msb:lsb] output.
   size_t bitIndex = 0;
@@ -3318,9 +3332,11 @@ std::optional<bool> readDFFInitDigitForStateTerm(
 // keys get the opposite value.
 void harvestInitialStateValues(ExtractContext& ctx, SequentialDesignModel& model) {
   size_t harvested = 0;
+  std::unordered_map<const naja::NL::SNLInstance*, std::optional<std::string>>
+      initDigitsByInstance;
   for (const auto& pending : ctx.pendingTransitions) {
     const auto& term = ctx.dnl->getDNLTerminalFromID(pending.stateTermID);
-    const auto digit = readDFFInitDigitForStateTerm(term);
+    const auto digit = readDFFInitDigitForStateTerm(term, initDigitsByInstance);
     if (!digit.has_value()) {
       continue;
     }
