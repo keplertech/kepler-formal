@@ -65,6 +65,30 @@ unit (Verilator always does) need `--sv_single_unit` (YAML:
 `sv_single_unit: true`), which compiles all sources of each design, flist
 entries included, as a single unit in source order.
 
+## Initial values
+
+The slang frontend lowers constant register initialization to DFF `INIT`
+metadata, and SEC extraction adopts it as an exact initial-state constraint:
+
+- `initial q = 1'b0;` — an initial block holding a single blocking constant
+  assignment to a register
+- `logic q = 1'b0;` — a declaration initializer (semantically an implicit
+  initial block)
+
+`x`/`z` digits leave the corresponding state bit unconstrained. Registers
+without an explicit initializer keep a free initial state, so designs that
+initialize state through a reset sequence still need
+[sec-reset-bootstrap](../sec-reset-bootstrap.md).
+
+Limitations:
+
+- Initial blocks with multiple statements, non-blocking assignments, or
+  non-constant right-hand sides are rejected by the frontend at load time.
+- Memory initialization (`$readmemh`/`$readmemb`, memory `INIT` parameters) is
+  not adopted by SEC extraction yet.
+- The `-verilog` flow uses a structural Verilog parser and does not process
+  initial blocks; use `-systemverilog`/`-sv` for designs that rely on them.
+
 ## Flist mode
 
 For SystemVerilog designs that are already driven by a slang command file or flist, use:
