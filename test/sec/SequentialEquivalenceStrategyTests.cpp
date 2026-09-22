@@ -15898,6 +15898,40 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_TRUE(model.initialStateValueByKey.empty());
 }
 
+SNLDesign* createWideDffTopWithInit(
+    NLLibrary* library,
+    const std::string& name,
+    const char* initValue) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topIn = SNLBusTerm::create(
+      top, SNLTerm::Direction::Input, 3, 0, NLName("in"));
+  auto* topClock = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topOut = SNLBusTerm::create(
+      top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
+
+  auto* dffModel = NLDB0::getOrCreateDFF(4);
+  auto* ff = SNLInstance::create(top, dffModel, NLName("ff0"));
+  auto* netIn = SNLBusNet::create(top, 3, 0, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netQ = SNLBusNet::create(top, 3, 0, NLName("net_q"));
+
+  auto* dataTerm = dffModel->getBusTerm(NLName("D"));
+  auto* outputTerm = dffModel->getBusTerm(NLName("Q"));
+  topClock->setNet(netClock);
+  ff->getInstTerm(dffModel->getScalarTerm(NLName("C")))->setNet(netClock);
+  for (int bit = 0; bit <= 3; ++bit) {
+    topIn->getBit(bit)->setNet(netIn->getBit(bit));
+    ff->getInstTerm(dataTerm->getBit(bit))->setNet(netIn->getBit(bit));
+    ff->getInstTerm(outputTerm->getBit(bit))->setNet(netQ->getBit(bit));
+    topOut->getBit(bit)->setNet(netQ->getBit(bit));
+  }
+  SNLInstParameter::create(
+      ff, dffModel->getParameter(NLName("INIT")), initValue);
+  return top;
+}
+
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractHarvestsDFFInitParameter) {
   NLUniverse::create();
@@ -15973,38 +16007,8 @@ TEST_F(SequentialEquivalenceStrategyTests,
   auto* db = NLDB::create(NLUniverse::get());
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
-  auto* top =
-      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
-  auto* topIn = SNLBusTerm::create(
-      top, SNLTerm::Direction::Input, 3, 0, NLName("in"));
-  auto* topClock = SNLScalarTerm::create(
-      top, SNLTerm::Direction::Input, NLName("clk"));
-  auto* topOut = SNLBusTerm::create(
-      top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
-
-  auto* dffModel = NLDB0::getOrCreateDFF(4);
-  ASSERT_NE(dffModel, nullptr);
-  auto* ff = SNLInstance::create(top, dffModel, NLName("ff0"));
-  auto* netIn = SNLBusNet::create(top, 3, 0, NLName("net_in"));
-  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
-  auto* netQ = SNLBusNet::create(top, 3, 0, NLName("net_q"));
-
-  auto* dataTerm = dffModel->getBusTerm(NLName("D"));
-  auto* outputTerm = dffModel->getBusTerm(NLName("Q"));
-  ASSERT_NE(dataTerm, nullptr);
-  ASSERT_NE(outputTerm, nullptr);
-  topClock->setNet(netClock);
-  ff->getInstTerm(dffModel->getScalarTerm(NLName("C")))->setNet(netClock);
-  for (int bit = 0; bit <= 3; ++bit) {
-    topIn->getBit(bit)->setNet(netIn->getBit(bit));
-    ff->getInstTerm(dataTerm->getBit(bit))->setNet(netIn->getBit(bit));
-    ff->getInstTerm(outputTerm->getBit(bit))->setNet(netQ->getBit(bit));
-    topOut->getBit(bit)->setNet(netQ->getBit(bit));
-  }
-  auto* initParam = dffModel->getParameter(NLName("INIT"));
-  ASSERT_NE(initParam, nullptr);
   // INIT digits are MSB first: bit3=0, bit2=1, bit1=x (unconstrained), bit0=0.
-  SNLInstParameter::create(ff, initParam, "4'b01x0");
+  auto* top = createWideDffTopWithInit(library, "top", "4'b01x0");
 
   const auto extracted = SequentialDesignModel::extract(top);
 
@@ -16048,65 +16052,19 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       SequentialDesignModelExtractExtendsNarrowDFFInitLiterals) {
+       SequentialDesignModelExtractIgnoresWidthMismatchedDFFInit) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  // The canonical form always covers the whole Q output; a width-mismatched
+  // INIT did not come from a naja frontend and leaves the state unconstrained.
+  auto* top = createWideDffTopWithInit(library, "top", "2'b11");
 
-  int designCounter = 0;
-  auto extractWideDFFInit = [&](const char* initValue) {
-    auto* top = SNLDesign::create(
-        library,
-        SNLDesign::Type::Standard,
-        NLName("top" + std::to_string(designCounter++)));
-    auto* topIn = SNLBusTerm::create(
-        top, SNLTerm::Direction::Input, 3, 0, NLName("in"));
-    auto* topClock = SNLScalarTerm::create(
-        top, SNLTerm::Direction::Input, NLName("clk"));
-    auto* topOut = SNLBusTerm::create(
-        top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
-    auto* dffModel = NLDB0::getOrCreateDFF(4);
-    auto* ff = SNLInstance::create(top, dffModel, NLName("ff0"));
-    auto* netIn = SNLBusNet::create(top, 3, 0, NLName("net_in"));
-    auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
-    auto* netQ = SNLBusNet::create(top, 3, 0, NLName("net_q"));
-    auto* dataTerm = dffModel->getBusTerm(NLName("D"));
-    auto* outputTerm = dffModel->getBusTerm(NLName("Q"));
-    topClock->setNet(netClock);
-    ff->getInstTerm(dffModel->getScalarTerm(NLName("C")))->setNet(netClock);
-    for (int bit = 0; bit <= 3; ++bit) {
-      topIn->getBit(bit)->setNet(netIn->getBit(bit));
-      ff->getInstTerm(dataTerm->getBit(bit))->setNet(netIn->getBit(bit));
-      ff->getInstTerm(outputTerm->getBit(bit))->setNet(netQ->getBit(bit));
-      topOut->getBit(bit)->setNet(netQ->getBit(bit));
-    }
-    SNLInstParameter::create(
-        ff, dffModel->getParameter(NLName("INIT")), initValue);
-    return SequentialDesignModel::extract(top);
-  };
+  const auto extracted = SequentialDesignModel::extract(top);
 
-  // A narrower literal zero-extends to the storage width: 2'b11 on a 4-bit
-  // register initializes Q[1:0] to 1 and Q[3:2] to 0.
-  const auto zeroExtended = extractWideDFFInit("2'b11");
-  EXPECT_FALSE(zeroExtended.hasUnsupportedFeatures());
-  ASSERT_EQ(zeroExtended.initialStateValueByKey.size(), 4u);
-  EXPECT_FALSE(zeroExtended.initialStateValueByKey.at(
-      findKeyByDisplayName(zeroExtended, "ff0.Q[3]")));
-  EXPECT_FALSE(zeroExtended.initialStateValueByKey.at(
-      findKeyByDisplayName(zeroExtended, "ff0.Q[2]")));
-  EXPECT_TRUE(zeroExtended.initialStateValueByKey.at(
-      findKeyByDisplayName(zeroExtended, "ff0.Q[1]")));
-  EXPECT_TRUE(zeroExtended.initialStateValueByKey.at(
-      findKeyByDisplayName(zeroExtended, "ff0.Q[0]")));
-
-  // A narrower literal whose top digit is unknown x-extends instead: 2'bx1
-  // initializes Q[0] and leaves Q[3:1] unconstrained.
-  const auto xExtended = extractWideDFFInit("2'bx1");
-  EXPECT_FALSE(xExtended.hasUnsupportedFeatures());
-  ASSERT_EQ(xExtended.initialStateValueByKey.size(), 1u);
-  EXPECT_TRUE(xExtended.initialStateValueByKey.at(
-      findKeyByDisplayName(xExtended, "ff0.Q[0]")));
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.initialStateValueByKey.empty());
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

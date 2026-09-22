@@ -3169,16 +3169,13 @@ void appendPendingTransitionsForInstance(
   }
 }
 
-// Reads the DFF INIT instance parameter for the given state output terminal.
-// The naja frontends store INIT in a canonical form ("<width>'b<msb...lsb>",
-// lowercase digits in 0/1/x/z); anything else leaves the state unconstrained.
-// Returns the digit for the terminal's bit in the storage element's own
-// polarity. initDigitsByInstance caches the LSB-first digit string so a wide
-// DFF converts it once per instance instead of once per output bit.
+// Reads the canonical INIT digit ("<width>'b<msb...lsb>", lowercase 0/1/x/z)
+// for the given state output terminal, in the storage element's own polarity.
+// The naja frontends always store INIT in this form with the width of the Q
+// output; anything else is treated as absent and leaves the state
+// unconstrained.
 std::optional<bool> readDFFInitDigitForStateTerm(
-    const naja::DNL::DNLTerminalFull& term,
-    std::unordered_map<const naja::NL::SNLInstance*,
-                       std::optional<std::string>>& initDigitsByInstance) {
+    const naja::DNL::DNLTerminalFull& term) {
   if (term.isNull() || term.isTopPort()) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
@@ -3186,49 +3183,30 @@ std::optional<bool> readDFFInitDigitForStateTerm(
   if (snlInstance == nullptr) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
-  auto cached = initDigitsByInstance.find(snlInstance);
-  if (cached == initDigitsByInstance.end()) {
-    std::optional<std::string> digits;
-    if (const auto* initParam =
-            snlInstance->getInstParameter(naja::NL::NLName("INIT"))) {
-      const std::string value = initParam->getValue();
-      const auto basePos = value.find('\'');
-      if (basePos != std::string::npos && basePos + 2 < value.size() &&
-          (value[basePos + 1] == 'b' || value[basePos + 1] == 'B')) {
-        // Flip to LSB-first so bit i sits at index i.
-        std::string reversed(value.substr(basePos + 2));
-        std::reverse(reversed.begin(), reversed.end());
-        digits = std::move(reversed);
-      }
-    }
-    cached = initDigitsByInstance.emplace(snlInstance, std::move(digits)).first;
-  }
-  const auto& digits = cached->second;
-  if (!digits.has_value() || digits->empty()) {
+  const auto* initParam =
+      snlInstance->getInstParameter(naja::NL::NLName("INIT"));
+  if (initParam == nullptr) {
     return std::nullopt;
   }
-  size_t bitIndex = 0;
-  const auto* bitTerm = term.getSnlBitTerm();
+  const std::string value = initParam->getValue();
+  const auto basePos = value.find('\'');
+  if (basePos == std::string::npos || basePos + 2 >= value.size() ||
+      (value[basePos + 1] != 'b' && value[basePos + 1] != 'B')) {
+    return std::nullopt;  // non-canonical INIT
+  }
+  const size_t width = value.size() - (basePos + 2);
+  size_t digitIndex = 0;  // into the MSB-first digit string
   if (const auto* busBit =
-          dynamic_cast<const naja::NL::SNLBusTermBit*>(bitTerm)) {
-    const auto offset = static_cast<int64_t>(busBit->getBit()) -
-                        busBit->getBus()->getLSB();
-    if (offset < 0) {
-      return std::nullopt;  // LCOV_EXCL_LINE
+          dynamic_cast<const naja::NL::SNLBusTermBit*>(term.getSnlBitTerm())) {
+    const auto* bus = busBit->getBus();
+    if (width != static_cast<size_t>(bus->getWidth())) {
+      return std::nullopt;  // INIT width must match the Q output width
     }
-    bitIndex = static_cast<size_t>(offset);
+    digitIndex = width - 1 - static_cast<size_t>(busBit->getBit() - bus->getLSB());
+  } else if (width != 1) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
-  if (bitIndex >= digits->size()) {
-    // A literal narrower than the Q bus extends per Verilog rules: with zero,
-    // or with x/z when its most-significant digit is unknown.
-    const char top = static_cast<char>(
-        std::tolower(static_cast<unsigned char>(digits->back())));
-    if (top == '0' || top == '1') {
-      return false;
-    }
-    return std::nullopt;
-  }
-  switch (std::tolower(static_cast<unsigned char>(digits->at(bitIndex)))) {
+  switch (std::tolower(static_cast<unsigned char>(value[basePos + 2 + digitIndex]))) {
     case '0':
       return false;
     case '1':
@@ -3244,11 +3222,9 @@ std::optional<bool> readDFFInitDigitForStateTerm(
 // keys get the opposite value.
 void harvestInitialStateValues(ExtractContext& ctx, SequentialDesignModel& model) {
   size_t harvested = 0;
-  std::unordered_map<const naja::NL::SNLInstance*, std::optional<std::string>>
-      initDigitsByInstance;
   for (const auto& pending : ctx.pendingTransitions) {
     const auto& term = ctx.dnl->getDNLTerminalFromID(pending.stateTermID);
-    const auto digit = readDFFInitDigitForStateTerm(term, initDigitsByInstance);
+    const auto digit = readDFFInitDigitForStateTerm(term);
     if (!digit.has_value()) {
       continue;
     }
