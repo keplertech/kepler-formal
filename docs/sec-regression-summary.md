@@ -1,9 +1,12 @@
 # SEC regression summary
 
-After each `regress-sec` workflow finishes, **SEC regression summary** generates
-a Markdown table in its GitHub Actions run summary and saves it as the
-`sec-regression-summary` artifact. This includes unsuccessful or cancelled runs,
-and covers the regular, SV2V, and SV2V negative matrix jobs.
+The last job of every `regress-sec` run, **SEC regression summary**, generates a
+Markdown table in that run's GitHub Actions summary and saves it as the
+`sec-regression-summary` artifact. Because it is part of the run it reports on,
+each pull request gets the table for its own regression: it is listed in the
+pull request's checks and opens from there, the same way as for a push to
+`main`. This includes unsuccessful or cancelled runs, and covers the regular,
+SV2V, and SV2V negative matrix jobs.
 
 Each row shows the case, flow (engine and encoding), CLI runtime, SEC verdict,
 checked-output coverage (percentage and covered/total counts), and CI status.
@@ -21,10 +24,27 @@ attempts. Raw result artifacts are kept for seven days; the table for thirty.
 If the runtime build fails before GitHub expands the matrices, the report shows
 the build failure and explains that no SEC case results are available.
 
-The follow-up uses GitHub's `workflow_run` trigger, so it becomes automatic once
-the workflow file is on the repository's default branch. It uses read-only
-repository permissions and treats downloaded results as data, never executable
-code.
+## Comparison with main
+
+The artifact also holds the rows as `sec-regression-summary.json`. Each run
+looks up the newest completed `regress-sec` push run on `main` that still has
+this artifact and compares itself with it:
+
+- **Changes vs main** lists only the rows whose SEC result, output coverage, or
+  CI status differ, shown as `main → this run`, plus cases that exist on one
+  side only. It also gives the total runtime over the rows measured in both.
+- **All results** keeps the usual columns and adds the main runtime and the
+  relative runtime change for every row.
+
+Only `kepler-formal` wall times are compared; a labeled SEC-step fallback on
+either side is shown but not compared. Runtimes come from different runners, so
+small differences are noise, and pull-request jobs that run at a bounded smoke
+depth are not comparable with their full-depth run on `main`. If no baseline is
+available, for example before the first `main` run with this job or after the
+thirty-day retention, the report says so and shows the plain table.
+
+The job uses read-only repository permissions and treats downloaded results
+and the baseline as data, never executable code.
 
 To test the report generator locally:
 

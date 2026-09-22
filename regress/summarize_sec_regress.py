@@ -31,6 +31,10 @@ VERDICTS = (
 ERROR = re.compile(
     r"\[(?:error|critical)\]|(?:SEC (?:compact )?)?[Ww]orkflow failed:|\bError:"
 )
+FIELDS = ("case", "flow", "runtime", "result", "coverage", "status")
+RUNTIME_SECONDS = re.compile(r"^(\d+(?:\.\d+)?) s")
+STEP_RUNTIME_SUFFIX = " (SEC step)"
+COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def escape(value):
@@ -119,13 +123,14 @@ def step_runtime(step):
             end = datetime.fromisoformat(step["completed_at"].replace("Z", "+00:00"))
             seconds = (end - start).total_seconds()
             if seconds >= 0:
-                return f"{seconds:.2f} s (SEC step)"
+                return f"{seconds:.2f} s{STEP_RUNTIME_SUFFIX}"
         except (KeyError, TypeError, ValueError, AttributeError):
             pass
     return "—"
 
 
-def summarize(jobs, artifacts, run_url=None, run_attempt=None):
+def collect(jobs, artifacts, run_attempt=None):
+    """Return the selected jobs and one sorted row of FIELDS per matrix job."""
     selected = list(latest_jobs(jobs, run_attempt))
     rows = []
     for job in selected:
@@ -145,6 +150,87 @@ def summarize(jobs, artifacts, run_url=None, run_attempt=None):
             result, coverage, runtime = "Skipped (SEC not run)", "—", "—"
         status = job.get("conclusion") or job.get("status", "unknown")
         rows.append((case, flow, runtime, result, coverage, status))
+    return selected, sorted(rows)
+
+
+def load_baseline(path):
+    """Read another run's JSON rows as data: plain strings, keyed by case and flow."""
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))["rows"]
+        baseline = {}
+        for row in rows:
+            values = tuple(row[field] for field in FIELDS)
+            if not all(isinstance(value, str) for value in values):
+                return None
+            baseline[values[:2]] = values
+        return baseline
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+        return None
+
+
+def cli_seconds(runtime):
+    """Only kepler-formal wall time is comparable; SEC-step fallbacks are not."""
+    match = RUNTIME_SECONDS.match(runtime)
+    if match is None or runtime.endswith(STEP_RUNTIME_SUFFIX):
+        return None
+    return float(match[1])
+
+
+def runtime_change(now, before):
+    if now is None or before is None or before <= 0:
+        return "—"
+    return f"{(now - before) / before * 100:+.1f}%"
+
+
+def compare(rows, baseline, baseline_url=None, baseline_sha=None):
+    """Report rows whose result, coverage, or CI status differ from the baseline."""
+    source = "latest main run"
+    if baseline_url and urlsplit(baseline_url).scheme in ("http", "https"):
+        source = f"[{source}]({quote(baseline_url, safe=':/?=&%#')})"
+    if baseline_sha and COMMIT.match(baseline_sha):
+        source += f" at `{baseline_sha[:7]}`"
+    lines = ["## Changes vs main", "", f"Baseline: {source}.", ""]
+
+    current = {row[:2]: row for row in rows}
+    shared = [key for key in current if key in baseline]
+    timed = [(cli_seconds(current[key][2]), cli_seconds(baseline[key][2])) for key in shared]
+    timed = [(now, before) for now, before in timed if now is not None and before is not None]
+    if timed:
+        now, before = sum(t[0] for t in timed), sum(t[1] for t in timed)
+        lines.extend([
+            f"Total kepler-formal runtime over {len(timed)} rows measured in both runs: "
+            f"{now:.2f} s vs {before:.2f} s on main ({runtime_change(now, before)}).", ""])
+
+    def cell(before, now):
+        return escape(now) if before == now else f"{escape(before)} → {escape(now)}"
+
+    changes = []
+    for key in sorted(set(current) | set(baseline)):
+        now, before = current.get(key), baseline.get(key)
+        if now is None:
+            change, cells = "Not in this run", [escape(value) for value in before[3:]]
+        elif before is None:
+            change, cells = "Not in main", [escape(value) for value in now[3:]]
+        elif now[3:] != before[3:]:
+            change, cells = "Changed", [cell(b, n) for b, n in zip(before[3:], now[3:])]
+        else:
+            continue
+        changes.append((escape(key[0]), escape(key[1]), change, *cells))
+    if changes:
+        lines.extend([
+            "| Case | Flow | Change | SEC result | Output coverage | CI status |",
+            "| --- | --- | --- | --- | ---: | --- |",
+        ])
+        lines.extend("| " + " | ".join(row) + " |" for row in changes)
+    else:
+        lines.append("No SEC result, output coverage, or CI status differences from main "
+                     f"across {len(shared)} shared rows.")
+    return lines + [""]
+
+
+def summarize(jobs, artifacts, run_url=None, run_attempt=None,
+              baseline=None, baseline_url=None, baseline_sha=None):
+    selected, rows = collect(jobs, artifacts, run_attempt)
 
     lines = ["# SEC regression results", ""]
     if run_url and urlsplit(run_url).scheme in ("http", "https"):
@@ -160,12 +246,25 @@ def summarize(jobs, artifacts, run_url=None, run_attempt=None):
         "Each row uses the latest job attempt; missing measurements are shown as —.",
         "",
     ])
-    if rows:
+    if rows and baseline is not None:
+        lines.extend(compare(rows, baseline, baseline_url, baseline_sha))
+        lines.extend([
+            "## All results", "",
+            "| Case | Flow | Runtime | SEC result | Output coverage | CI status "
+            "| Main runtime | Runtime vs main |",
+            "| --- | --- | ---: | --- | ---: | --- | ---: | ---: |",
+        ])
+        for row in rows:
+            before = baseline.get(row[:2])
+            main_runtime = before[2] if before else "—"
+            change = runtime_change(cli_seconds(row[2]), cli_seconds(main_runtime))
+            lines.append("| " + " | ".join(map(escape, (*row, main_runtime, change))) + " |")
+    elif rows:
         lines.extend([
             "| Case | Flow | Runtime | SEC result | Output coverage | CI status |",
             "| --- | --- | ---: | --- | ---: | --- |",
         ])
-        lines.extend("| " + " | ".join(map(escape, row)) + " |" for row in sorted(rows))
+        lines.extend("| " + " | ".join(map(escape, row)) + " |" for row in rows)
     else:
         lines.append("No SEC matrix jobs were available; no proof results can be reported.")
     return "\n".join(lines) + "\n"
@@ -178,11 +277,25 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--run-url")
     parser.add_argument("--run-attempt", type=int)
+    parser.add_argument("--json-output", type=Path,
+                        help="also write the rows as JSON, for use as a later --baseline")
+    parser.add_argument("--baseline", type=Path,
+                        help="--json-output of the main run to compare against")
+    parser.add_argument("--baseline-url")
+    parser.add_argument("--baseline-sha")
     args = parser.parse_args()
     jobs = json.loads(args.jobs.read_text(encoding="utf-8"))
-    args.output.write_text(
-        summarize(jobs, args.artifacts, args.run_url, args.run_attempt), encoding="utf-8"
-    )
+    baseline = load_baseline(args.baseline) if args.baseline else None
+    report = summarize(jobs, args.artifacts, args.run_url, args.run_attempt,
+                       baseline, args.baseline_url, args.baseline_sha)
+    if args.baseline and baseline is None:
+        report += "\nNo main baseline summary was available, so this run is not compared with main.\n"
+    args.output.write_text(report, encoding="utf-8")
+    if args.json_output:
+        rows = collect(jobs, args.artifacts, args.run_attempt)[1]
+        args.json_output.write_text(
+            json.dumps({"version": 1, "rows": [dict(zip(FIELDS, row)) for row in rows]}),
+            encoding="utf-8")
 
 
 if __name__ == "__main__":

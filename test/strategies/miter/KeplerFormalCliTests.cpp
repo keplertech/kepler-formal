@@ -4206,6 +4206,208 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+namespace {
+
+// Issue #250 reproducer: `n` independent 8-bit accumulators behind a free
+// (unconstrained) reset input, each driving one parity output bit. Every
+// register boots as X, so the two SEC copies share no reset anchor and the
+// proof has to relate corresponding registers of the two sides itself.
+std::string accumulatorBankSource(size_t n) {
+  std::string source =
+      "module top (\n"
+      "  input wire clk,\n"
+      "  input wire rst,\n"
+      "  input wire [7:0] din,\n"
+      "  output wire [" + std::to_string(n - 1) + ":0] dout\n"
+      ");\n";
+  for (size_t i = 0; i < n; ++i) {
+    source += "  reg [7:0] acc" + std::to_string(i) + ";\n";
+  }
+  source += "  always @(posedge clk) begin\n";
+  for (size_t i = 0; i < n; ++i) {
+    const auto acc = "acc" + std::to_string(i);
+    source += "    if (rst) " + acc + " <= 8'd0; else " + acc + " <= " + acc +
+        " + din + 8'd" + std::to_string(i) + ";\n";
+  }
+  source += "  end\n";
+  for (size_t i = 0; i < n; ++i) {
+    source += "  assign dout[" + std::to_string(i) + "] = ^acc" +
+        std::to_string(i) + ";\n";
+  }
+  source += "endmodule\n";
+  return source;
+}
+
+// Issue #250, second report: the tinyalu example (single-cycle ALU next to a
+// three-stage multiplier pipeline, 85 X-initialized state bits, 17 outputs).
+// Reproduced as attached, without its commented-out dump and formal-checker
+// stubs.
+const char* const kTinyAluSource = R"(typedef enum logic [2:0] {
+    NOP = 3'b000,
+    ADD = 3'b001,
+    AND = 3'b010,
+    XOR = 3'b011,
+    MUL = 3'b100
+} alu_op_t;
+
+module tinyalu (input [7:0] A,
+		input [7:0] B,
+		input alu_op_t op,
+		input clk,
+		input reset_n,
+		input start,
+		output done,
+		output [15:0] result);
+
+   wire [15:0] 		      result_aax, result_mult;
+   wire 		          start_single, start_mult;
+   wire                   done_aax;
+   wire                   done_mult;
+
+   logic [23:0] op_string;
+
+   always_comb begin
+       case (op)
+           ADD     : op_string = "ADD";
+           AND     : op_string = "AND";
+           XOR     : op_string = "XOR";
+           MUL     : op_string = "MUL";
+           default : op_string = "NOP";
+       endcase
+   end
+
+   int test_case_id = 0;
+
+   assign start_single = start & ~op[2];
+   assign start_mult   = start & op[2];
+
+   single_cycle and_add_xor (.A, .B, .op, .clk, .reset_n, .start(start_single),
+			     .done(done_aax), .result(result_aax));
+
+   three_cycle mult (.A, .B, .op, .clk, .reset_n, .start(start_mult),
+		    .done(done_mult), .result(result_mult));
+
+   assign done = (op[2]) ? done_mult : done_aax;
+
+   assign result = (op[2]) ? result_mult : result_aax;
+endmodule // tinyalu
+
+module single_cycle(input [7:0] A,
+		   input [7:0] B,
+		   input [2:0] op,
+		   input clk,
+		   input reset_n,
+		   input start,
+		   output logic done,
+		   output logic [15:0] result);
+
+  always @(posedge clk)
+    if (!reset_n)
+      result <= 0;
+    else
+      case(op)
+		ADD : result <= {8'd0,A} + {8'd0,B};
+		AND : result <= {8'd0,A} & {8'd0,B};
+		XOR : result <= {8'd0,A} ^ {8'd0,B};
+		default : result <= {A,B};
+      endcase // case (op)
+
+   always @(posedge clk)
+     if (!reset_n)
+       done <= 0;
+     else
+       done <= ((start == 1'b1) && (op != 3'b000));
+
+endmodule : single_cycle
+
+module three_cycle(input [7:0] A,
+		   input [7:0] B,
+		   input [2:0] op,
+		   input clk,
+		   input reset_n,
+		   input start,
+		   output logic done,
+		   output logic [15:0] result);
+
+   logic [7:0] 			       a_int, b_int;
+   logic [15:0] 		       mult1, mult2;
+   logic 			       done1, done2, done3;
+
+   always @(posedge clk)
+     if (!reset_n) begin
+	done  <= 0;
+	done3 <= 0;
+	done2 <= 0;
+	done1 <= 0;
+	a_int <= 0;
+	b_int <= 0;
+	mult1 <= 0;
+	mult2 <= 0;
+	result<= 0;
+     end else begin // if (!reset_n)
+	a_int  <= A;
+	b_int  <= B;
+	mult1  <= a_int * b_int;
+	mult2  <= mult1;
+	result <= mult2;
+	done3  <= start & !done;
+	done2  <= done3 & !done;
+	done1  <= done2 & !done;
+	done   <= done1 & !done;
+     end // else: !if(!reset_n)
+endmodule : three_cycle
+)";
+
+// Runs the issue #250 command line: the same file on both sides, dual-rail
+// PDR with default options, and checks that every output is proved.
+void expectSelfCompareProvesAllOutputs(
+    const std::string& source,
+    const std::string& top,
+    size_t expectedOutputs) {
+  const auto fixture = createEquivalentDesignFixture("sv", source);
+  const auto runDir = fixture.tmpDir / "self_compare_run";
+  std::filesystem::create_directories(runDir);
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    const auto run = runStructuredWithArgs(
+        {"kepler-formal", "-sv",
+         "--design1", fixture.design0Path.string(),
+         "--design2", fixture.design0Path.string(),
+         "--sv_design1_top", top, "--sv_design2_top", top,
+         "-v", "sec", "--sec-engine", "pdr", "--report-skipped-pos"});
+    EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+    EXPECT_EQ(run.result.totalOutputs, expectedOutputs);
+    EXPECT_EQ(run.result.coveredOutputs, expectedOutputs);
+    EXPECT_EQ(run.result.provenOutputs, expectedOutputs);
+    EXPECT_TRUE(run.result.unprovenOutputs.empty());
+    EXPECT_TRUE(run.result.skippedObservedOutputs.empty());
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+}  // namespace
+
+// Issue #250: a self-compare is the one SEC query whose answer is known before
+// it runs, so it can be gated on full coverage. Sizes 7, 8, 10 and 12 are the
+// ones that used to lose an output (dout[5] / dout[9] / dout[10]) although
+// larger and smaller banks proved; 4 and 32 bracket them.
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSelfCompareAccumulatorBankProvesEveryOutput) {
+  for (const size_t n : {4u, 7u, 8u, 10u, 12u, 32u}) {
+    SCOPED_TRACE("accumulator bank N=" + std::to_string(n));
+    expectSelfCompareProvesAllOutputs(accumulatorBankSource(n), "top", n);
+  }
+}
+
+// Issue #250: tinyalu self-compare used to stop at 8/17 with result[7..15]
+// inconclusive after ~2 minutes; it must prove all 17 outputs.
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSelfCompareTinyAluProvesEveryOutput) {
+  expectSelfCompareProvesAllOutputs(kTinyAluSource, "tinyalu", 17u);
+}
+
 TEST_F(KeplerFormalCliTests,
        CliSystemVerilogVariableIndexMatchesExplicitMux) {
   const auto fixture = createDesignFixture(
@@ -4688,7 +4890,7 @@ TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {
       "  - " + lib2.string() + "\n"
       "  - " + lib3.string() + "\n");
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecPartiallyProvedExitCode);
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
   std::filesystem::remove(cfgPath);
 }
 

@@ -185,6 +185,101 @@ SEC partially proved equivalence at k = 2: 2/4 outputs proved.
                       output.read_text(encoding="utf-8"))
         self.assertNotIn("javascript:", SUMMARY.summarize([], self.root, "javascript:alert(1)"))
 
+    def baseline(self, *rows):
+        return {row[:2]: row for row in rows}
+
+    def test_baseline_reports_only_changed_new_and_removed_rows(self):
+        same, changed, added = (self.job("pdr-dual-rail / same"),
+                                self.job("pdr-dual-rail / changed", conclusion="failure"),
+                                self.job("pdr-dual-rail / added"))
+        self.artifact(same, "SEC proved equivalence", "2")
+        self.artifact(changed, "SEC checked-output coverage: 87.50% (7/8 covered/existing outputs).\n"
+                               "SEC partially proved equivalence", "30")
+        self.artifact(added, "SEC proved equivalence")
+        baseline = self.baseline(
+            ("same", "pdr-dual-rail", "1.00 s", "Proved", "—", "success"),
+            ("changed", "pdr-dual-rail", "10.00 s", "Proved", "100.00% (8/8)", "success"),
+            ("removed", "pdr-dual-rail", "5.00 s", "Proved", "—", "success"))
+        report = SUMMARY.summarize([same, changed, added], self.root, baseline=baseline,
+                                   baseline_url="https://github.com/org/repo/actions/runs/7",
+                                   baseline_sha="c7b8fe6db94d605acd6c4c2ae9b349dc272b1106")
+        changes, results = report.split("## All results")
+        self.assertIn("Baseline: [latest main run](https://github.com/org/repo/actions/runs/7)"
+                      " at `c7b8fe6`.", changes)
+        self.assertIn("| changed | pdr-dual-rail | Changed | Proved → Partially proved "
+                      "| 100.00% (8/8) → 87.50% (7/8) | success → failure |", changes)
+        self.assertIn("| added | pdr-dual-rail | Not in main | Proved | — | success |", changes)
+        self.assertIn("| removed | pdr-dual-rail | Not in this run | Proved | — | success |", changes)
+        self.assertNotIn("| same |", changes)
+        self.assertIn("over 2 rows measured in both runs: 32.00 s vs 11.00 s on main (+190.9%)",
+                      changes)
+        self.assertIn("| same | pdr-dual-rail | 2.00 s | Proved | — | success | 1.00 s | +100.0% |",
+                      results)
+        self.assertIn("| added | pdr-dual-rail | 1.23 s | Proved | — | success | — | — |", results)
+
+    def test_baseline_without_differences_and_incomparable_runtimes(self):
+        job = self.job(conclusion="timed_out")
+        job["steps"] = [{"name": "Run SEC regression", "conclusion": "timed_out",
+                         "started_at": "2026-09-19T12:00:00Z",
+                         "completed_at": "2026-09-19T12:01:05Z"}]
+        baseline = self.baseline(("example", "pdr-dual-rail", "0.00 s",
+                                  "No result (log unavailable)", "—", "timed_out"))
+        report = SUMMARY.summarize([job], self.root, baseline=baseline,
+                                   baseline_url="javascript:alert(1)", baseline_sha="`x`")
+        self.assertIn("No SEC result, output coverage, or CI status differences from main "
+                      "across 1 shared rows.", report)
+        self.assertIn("Baseline: latest main run.", report)
+        self.assertNotIn("javascript:", report)
+        self.assertNotIn("measured in both runs", report)
+        self.assertIn("| 65.00 s (SEC step) | No result (log unavailable) | — | timed\\_out "
+                      "| 0.00 s | — |", report)
+
+    def test_baseline_text_is_escaped(self):
+        job = self.job()
+        self.artifact(job, "SEC proved equivalence")
+        baseline = self.baseline(("example", "pdr-dual-rail", "<b>", "<img>|x", "—", "success"))
+        report = SUMMARY.summarize([job], self.root, baseline=baseline)
+        self.assertIn("&lt;img&gt;\\|x → Proved", report)
+        self.assertIn("| &lt;b&gt; | — |", report)
+        self.assertNotIn("<img>", report)
+
+    def test_cli_json_output_round_trips_as_baseline(self):
+        jobs_path = self.root / "jobs.json"
+        job = self.job()
+        self.artifact(job, "SEC proved equivalence")
+        jobs_path.write_text(json.dumps([job]), encoding="utf-8")
+        base = [sys.executable, str(SCRIPT), "--jobs", str(jobs_path), "--artifacts", str(self.root)]
+        subprocess.run(base + ["--output", str(self.root / "main.md"),
+                               "--json-output", str(self.root / "main.json")], check=True)
+        self.assertEqual(json.loads((self.root / "main.json").read_text(encoding="utf-8")), {
+            "version": 1, "rows": [{"case": "example", "flow": "pdr-dual-rail",
+                                    "runtime": "1.23 s", "result": "Proved",
+                                    "coverage": "—", "status": "success"}]})
+        self.assertNotIn("vs main", (self.root / "main.md").read_text(encoding="utf-8"))
+        subprocess.run(base + ["--output", str(self.root / "pr.md"),
+                               "--baseline", str(self.root / "main.json")], check=True)
+        report = (self.root / "pr.md").read_text(encoding="utf-8")
+        self.assertIn("across 1 shared rows", report)
+        self.assertIn("| 1.23 s | Proved | — | success | 1.23 s | +0.0% |", report)
+
+    def test_missing_or_malformed_baseline_is_reported_not_trusted(self):
+        jobs_path, output = self.root / "jobs.json", self.root / "report.md"
+        jobs_path.write_text(json.dumps([self.job()]), encoding="utf-8")
+        malformed = self.root / "malformed.json"
+        for content in (None, "not json", "[]", '{"rows": [{"case": "example"}]}',
+                        json.dumps({"rows": [dict.fromkeys(SUMMARY.FIELDS, 1)]})):
+            with self.subTest(content=content):
+                if content is not None:
+                    malformed.write_text(content, encoding="utf-8")
+                self.assertIsNone(SUMMARY.load_baseline(malformed))
+                subprocess.run([sys.executable, str(SCRIPT), "--jobs", str(jobs_path),
+                                "--artifacts", str(self.root), "--output", str(output),
+                                "--baseline", str(malformed)], check=True)
+                report = output.read_text(encoding="utf-8")
+                self.assertIn("No main baseline summary was available", report)
+                self.assertIn("| Case | Flow | Runtime | SEC result | Output coverage | CI status |\n",
+                              report)
+
 
 if __name__ == "__main__":
     unittest.main()

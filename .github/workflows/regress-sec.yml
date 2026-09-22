@@ -793,3 +793,137 @@ jobs:
         path: ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec
         retention-days: 7
         if-no-files-found: ignore
+
+  # Runs inside the triggering run, so a pull request gets the table for its
+  # own regression: in its checks, on this run's summary page, and as an
+  # artifact. Results and the main baseline are read as data, never executed.
+  summarize-sec-regress:
+    name: SEC regression summary
+    if: always()
+    needs:
+    - build-sec-regress
+    - run-sec-regress
+    - run-sv2v-sec-regress
+    - run-sv2v-sec-negative-regress
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Read regression job results
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          // Listing every attempt at once (filter: 'all') fails with a persistent
+          // 502 from the API once a run has several attempts, so the attempts
+          // are listed one by one. A job appears from the attempt it ran in
+          // onward, so its first appearance is its attempt; the summary then
+          // keeps the latest attempt of each job and its result artifact.
+          const attempts = Number(process.env.GITHUB_RUN_ATTEMPT);
+          const jobsById = new Map();
+          for (let attempt = 1; attempt <= attempts; attempt++) {
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              ...context.repo,
+              run_id: context.runId,
+              attempt_number: attempt,
+              per_page: 100,
+            });
+            for (const job of jobs) {
+              if (!jobsById.has(job.id)) {
+                jobsById.set(job.id, { ...job, run_attempt: attempt });
+              }
+            }
+          }
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'sec-jobs.json'), JSON.stringify([...jobsById.values()]));
+
+    - name: Download regression results
+      id: results
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        pattern: sec-regress-results-*
+        path: ${{ runner.temp }}/sec-results
+
+    # The baseline is the newest completed main run that still has a summary,
+    # so every pull request is compared with the same kind of run.
+    - name: Find main baseline summary
+      id: baseline
+      uses: actions/github-script@v7
+      continue-on-error: true
+      with:
+        script: |
+          const runs = await github.rest.actions.listWorkflowRuns({
+            ...context.repo,
+            workflow_id: 'regress-sec.yml',
+            branch: context.payload.repository.default_branch,
+            event: 'push',
+            status: 'completed',
+            per_page: 20,
+          });
+          for (const run of runs.data.workflow_runs) {
+            if (run.id === context.runId) continue;
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              ...context.repo,
+              run_id: run.id,
+              name: 'sec-regression-summary',
+            });
+            if (artifacts.data.artifacts.some((artifact) => !artifact.expired)) {
+              core.setOutput('run-id', run.id);
+              core.setOutput('run-url', run.html_url);
+              core.setOutput('sha', run.head_sha);
+              return;
+            }
+          }
+          core.notice('No main SEC regression summary is available to compare with.');
+
+    - name: Download main baseline summary
+      if: steps.baseline.outputs.run-id != ''
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: sec-regression-summary
+        path: ${{ runner.temp }}/sec-baseline
+        run-id: ${{ steps.baseline.outputs.run-id }}
+        github-token: ${{ github.token }}
+
+    - name: Generate results table
+      env:
+        SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        DOWNLOAD_OUTCOME: ${{ steps.results.outcome }}
+        BASELINE_RUN_URL: ${{ steps.baseline.outputs.run-url }}
+        BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+      run: |
+        python3 regress/summarize_sec_regress.py \
+          --jobs "${RUNNER_TEMP}/sec-jobs.json" \
+          --artifacts "${RUNNER_TEMP}/sec-results" \
+          --run-url "${SOURCE_RUN_URL}" \
+          --run-attempt "${SOURCE_RUN_ATTEMPT}" \
+          --baseline "${RUNNER_TEMP}/sec-baseline/sec-regression-summary.json" \
+          --baseline-url "${BASELINE_RUN_URL}" \
+          --baseline-sha "${BASELINE_SHA}" \
+          --json-output "${RUNNER_TEMP}/sec-regression-summary.json" \
+          --output "${RUNNER_TEMP}/sec-regression-summary.md"
+        if [[ "${DOWNLOAD_OUTCOME}" != "success" ]]; then
+          printf '\nWarning: result artifacts could not all be downloaded; unavailable measurements are shown as missing.\n' >> "${RUNNER_TEMP}/sec-regression-summary.md"
+        fi
+        cat "${RUNNER_TEMP}/sec-regression-summary.md" >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Save results table
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regression-summary
+        path: |
+          ${{ runner.temp }}/sec-regression-summary.md
+          ${{ runner.temp }}/sec-regression-summary.json
+        retention-days: 30
+        overwrite: true
+        if-no-files-found: error
