@@ -4878,8 +4878,7 @@ TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {
   const auto cfgPath = writeTempConfig(
       "format: verilog\n"
       "verification: sec\n"
-      "sec_encoding: binary\n"
-      "sec_engine: k_induction\n"
+      "sec_encoding: dual_rail_steady\n"
       "max_k: 1\n"
       "input_paths:\n"
       "  - " + design.string() + "\n"
