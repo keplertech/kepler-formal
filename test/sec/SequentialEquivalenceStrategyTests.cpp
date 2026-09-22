@@ -16126,6 +16126,19 @@ TEST_F(SequentialEquivalenceStrategyTests,
       findKeyByDisplayName(separatedDecimalModel, "ff0.Q[1]")));
   EXPECT_FALSE(separatedDecimalModel.initialStateValueByKey.at(
       findKeyByDisplayName(separatedDecimalModel, "ff0.Q[0]")));
+
+  // Separators in the width field are ignored too: 0_4'h6 = 4'b0110.
+  const auto separatedWidthModel = extractWideDFFInit("0_4'h6");
+  EXPECT_FALSE(separatedWidthModel.hasUnsupportedFeatures());
+  ASSERT_EQ(separatedWidthModel.initialStateValueByKey.size(), 4u);
+  EXPECT_FALSE(separatedWidthModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedWidthModel, "ff0.Q[3]")));
+  EXPECT_TRUE(separatedWidthModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedWidthModel, "ff0.Q[2]")));
+  EXPECT_TRUE(separatedWidthModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedWidthModel, "ff0.Q[1]")));
+  EXPECT_FALSE(separatedWidthModel.initialStateValueByKey.at(
+      findKeyByDisplayName(separatedWidthModel, "ff0.Q[0]")));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

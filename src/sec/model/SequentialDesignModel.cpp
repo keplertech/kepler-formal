@@ -3181,7 +3181,13 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   }
   size_t width = 0;
   try {
-    width = std::stoul(value.substr(0, basePos));
+    std::string widthText;
+    for (const char c : value.substr(0, basePos)) {
+      if (c != '_') {
+        widthText.push_back(c);
+      }
+    }
+    width = std::stoul(widthText);
   } catch (...) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
