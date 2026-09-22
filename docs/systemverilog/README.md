@@ -88,6 +88,8 @@ Limitations:
   not adopted by SEC extraction yet.
 - The `-verilog` flow uses a structural Verilog parser and does not process
   initial blocks; use `-systemverilog`/`-sv` for designs that rely on them.
+  In `-sv2v` comparisons, design 1 is parsed by the slang frontend and supports
+  these initializers, while design 2 (Verilog) does not.
 
 ## Flist mode
 
