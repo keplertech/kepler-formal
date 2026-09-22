@@ -16184,15 +16184,20 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_FALSE(negativeUnknownModel.initialStateValueByKey.at(
       findKeyByDisplayName(negativeUnknownModel, "ff0.Q[0]")));
 
-  // Signed literals sign-extend: 4'sb1 = 4'b1111 (contrast with 4'b1 = 0001).
+  // The signed marker does not change the literal's own bit pattern:
+  // 4'sb1 = 4'b0001 (extension is per literal width, sign extension only
+  // applies when a later context widens the value).
   const auto signedShortModel = extractWideDFFInit("4'sb1");
   EXPECT_FALSE(signedShortModel.hasUnsupportedFeatures());
   ASSERT_EQ(signedShortModel.initialStateValueByKey.size(), 4u);
-  for (int bit = 0; bit <= 3; ++bit) {
-    EXPECT_TRUE(signedShortModel.initialStateValueByKey.at(
-        findKeyByDisplayName(
-            signedShortModel, "ff0.Q[" + std::to_string(bit) + "]")));
-  }
+  EXPECT_FALSE(signedShortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedShortModel, "ff0.Q[3]")));
+  EXPECT_FALSE(signedShortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedShortModel, "ff0.Q[2]")));
+  EXPECT_FALSE(signedShortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedShortModel, "ff0.Q[1]")));
+  EXPECT_TRUE(signedShortModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedShortModel, "ff0.Q[0]")));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

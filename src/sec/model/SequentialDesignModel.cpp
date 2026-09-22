@@ -3171,10 +3171,11 @@ void appendPendingTransitionsForInstance(
 
 // Expands a sized Verilog literal ("[-]<width>'[s]<base><digits>", base
 // b/d/o/h) into width digit chars indexed LSB first ('0','1','x','z'). Digit
-// separators are ignored. Shorter digit strings are extended per Verilog
-// rules: with 'x'/'z' when the leftmost digit is x/z, with '0' otherwise;
-// longer strings lose their upper bits. Negative literals are converted to
-// two's complement; the signed marker only affects that decimal value.
+// separators are ignored. Shorter digit strings are zero-extended ('x'/'z'
+// extended when the leftmost digit is x/z) up to the declared width; longer
+// strings lose their upper bits. A leading '-' negates the value (two's
+// complement); the optional signed marker only governs later expression
+// context extension and does not change the literal's own bit pattern.
 std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   const auto basePos = value.find('\'');
   if (basePos == std::string::npos || basePos + 2 >= value.size()) {
@@ -3198,9 +3199,10 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
   size_t baseIndex = basePos + 1;
-  const bool signedLiteral =
-      value[baseIndex] == 's' || value[baseIndex] == 'S';
-  if (signedLiteral) {
+  // The signed marker only affects how the value is interpreted and extended
+  // in a wider expression context; the literal's own bit pattern is fixed by
+  // the declared width, so it is accepted and ignored here.
+  if (value[baseIndex] == 's' || value[baseIndex] == 'S') {
     ++baseIndex;
   }
   if (baseIndex >= value.size()) {
@@ -3279,15 +3281,7 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   if (base != 'd') {
     const char front =
         static_cast<char>(std::tolower(static_cast<unsigned char>(digits.front())));
-    // Unsigned literals zero-extend; signed literals sign-extend from the MSB
-    // of the given digits (bits.back(), since bits is LSB first); a leftmost
-    // x/z digit always extends with x/z regardless of signedness.
-    char pad = '0';
-    if (front == 'x' || front == 'z') {
-      pad = front;
-    } else if (signedLiteral && !bits.empty()) {
-      pad = bits.back();
-    }
+    const char pad = front == 'x' || front == 'z' ? front : '0';
     if (bits.size() < width) {
       bits.append(width - bits.size(), pad);
     } else if (bits.size() > width) {
