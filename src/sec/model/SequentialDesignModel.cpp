@@ -3198,8 +3198,10 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
   size_t baseIndex = basePos + 1;
-  if (value[baseIndex] == 's' || value[baseIndex] == 'S') {
-    ++baseIndex;  // signed marker: bits are unchanged, only interpretation
+  const bool signedLiteral =
+      value[baseIndex] == 's' || value[baseIndex] == 'S';
+  if (signedLiteral) {
+    ++baseIndex;
   }
   if (baseIndex >= value.size()) {
     return std::nullopt;  // LCOV_EXCL_LINE
@@ -3277,7 +3279,15 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   if (base != 'd') {
     const char front =
         static_cast<char>(std::tolower(static_cast<unsigned char>(digits.front())));
-    const char pad = front == 'x' || front == 'z' ? front : '0';
+    // Unsigned literals zero-extend; signed literals sign-extend from the MSB
+    // of the given digits (bits.back(), since bits is LSB first); a leftmost
+    // x/z digit always extends with x/z regardless of signedness.
+    char pad = '0';
+    if (front == 'x' || front == 'z') {
+      pad = front;
+    } else if (signedLiteral && !bits.empty()) {
+      pad = bits.back();
+    }
     if (bits.size() < width) {
       bits.append(width - bits.size(), pad);
     } else if (bits.size() > width) {
