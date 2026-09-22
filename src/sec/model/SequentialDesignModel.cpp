@@ -3169,21 +3169,24 @@ void appendPendingTransitionsForInstance(
   }
 }
 
-// Expands a sized Verilog literal ("<width>'<base><digits>", base b/d/o/h)
-// into width digit chars indexed LSB first ('0','1','x','z'). Digit
+// Expands a sized Verilog literal ("[-]<width>'[s]<base><digits>", base
+// b/d/o/h) into width digit chars indexed LSB first ('0','1','x','z'). Digit
 // separators are ignored. Shorter digit strings are extended per Verilog
 // rules: with 'x'/'z' when the leftmost digit is x/z, with '0' otherwise;
-// longer strings lose their upper bits.
+// longer strings lose their upper bits. Negative literals are converted to
+// two's complement; the signed marker only affects that decimal value.
 std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   const auto basePos = value.find('\'');
   if (basePos == std::string::npos || basePos + 2 >= value.size()) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
+  const std::string widthField = value.substr(0, basePos);
+  const bool negative = widthField.find('-') != std::string::npos;
   size_t width = 0;
   try {
     std::string widthText;
-    for (const char c : value.substr(0, basePos)) {
-      if (c != '_') {
+    for (const char c : widthField) {
+      if (c != '_' && c != '-') {
         widthText.push_back(c);
       }
     }
@@ -3194,10 +3197,17 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
   if (width == 0) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
+  size_t baseIndex = basePos + 1;
+  if (value[baseIndex] == 's' || value[baseIndex] == 'S') {
+    ++baseIndex;  // signed marker: bits are unchanged, only interpretation
+  }
+  if (baseIndex >= value.size()) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
   const char base =
-      static_cast<char>(std::tolower(static_cast<unsigned char>(value[basePos + 1])));
+      static_cast<char>(std::tolower(static_cast<unsigned char>(value[baseIndex])));
   std::string digits;
-  for (const char c : value.substr(basePos + 2)) {
+  for (const char c : value.substr(baseIndex + 1)) {
     if (c != '_') {
       digits.push_back(c);
     }
@@ -3272,6 +3282,25 @@ std::optional<std::string> expandSizedLiteralDigits(const std::string& value) {
       bits.append(width - bits.size(), pad);
     } else if (bits.size() > width) {
       bits.resize(width);
+    }
+  }
+  if (negative) {
+    // Two's complement: invert every bit, then add one starting from the LSB.
+    for (auto& c : bits) {
+      if (c == '0') {
+        c = '1';
+      } else if (c == '1') {
+        c = '0';
+      }
+    }
+    bool carry = true;
+    for (size_t i = 0; i < bits.size() && carry; ++i) {
+      if (bits[i] == '0') {
+        bits[i] = '1';
+        carry = false;
+      } else if (bits[i] == '1') {
+        bits[i] = '0';
+      }
     }
   }
   return bits;

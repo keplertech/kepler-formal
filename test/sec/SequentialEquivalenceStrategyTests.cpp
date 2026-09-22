@@ -16139,6 +16139,32 @@ TEST_F(SequentialEquivalenceStrategyTests,
       findKeyByDisplayName(separatedWidthModel, "ff0.Q[1]")));
   EXPECT_FALSE(separatedWidthModel.initialStateValueByKey.at(
       findKeyByDisplayName(separatedWidthModel, "ff0.Q[0]")));
+
+  // The signed marker does not change the bit pattern: 4'sh6 = 4'b0110.
+  const auto signedHexModel = extractWideDFFInit("4'sh6");
+  EXPECT_FALSE(signedHexModel.hasUnsupportedFeatures());
+  ASSERT_EQ(signedHexModel.initialStateValueByKey.size(), 4u);
+  EXPECT_FALSE(signedHexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedHexModel, "ff0.Q[3]")));
+  EXPECT_TRUE(signedHexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedHexModel, "ff0.Q[2]")));
+  EXPECT_TRUE(signedHexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedHexModel, "ff0.Q[1]")));
+  EXPECT_FALSE(signedHexModel.initialStateValueByKey.at(
+      findKeyByDisplayName(signedHexModel, "ff0.Q[0]")));
+
+  // Negative decimals are stored as two's complement: -4'd3 = 4'b1101.
+  const auto negativeDecimalModel = extractWideDFFInit("-4'd3");
+  EXPECT_FALSE(negativeDecimalModel.hasUnsupportedFeatures());
+  ASSERT_EQ(negativeDecimalModel.initialStateValueByKey.size(), 4u);
+  EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[3]")));
+  EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[2]")));
+  EXPECT_FALSE(negativeDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[1]")));
+  EXPECT_TRUE(negativeDecimalModel.initialStateValueByKey.at(
+      findKeyByDisplayName(negativeDecimalModel, "ff0.Q[0]")));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
