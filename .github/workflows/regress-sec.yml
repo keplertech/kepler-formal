@@ -831,17 +831,27 @@ jobs:
         script: |
           const fs = require('fs');
           const path = require('path');
-          // Listing every attempt of a re-run run (filter: 'all') fails with a
-          // persistent 502 from the API once the run has several attempts, so
-          // only the current attempt is listed. Jobs carried over from earlier
-          // attempts keep their own run_attempt, which the summary honours.
-          const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
-            ...context.repo,
-            run_id: context.runId,
-            attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT),
-            per_page: 100,
-          });
-          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'sec-jobs.json'), JSON.stringify(jobs));
+          // Listing every attempt at once (filter: 'all') fails with a persistent
+          // 502 from the API once a run has several attempts, so the attempts
+          // are listed one by one. A job appears from the attempt it ran in
+          // onward, so its first appearance is its attempt; the summary then
+          // keeps the latest attempt of each job and its result artifact.
+          const attempts = Number(process.env.GITHUB_RUN_ATTEMPT);
+          const jobsById = new Map();
+          for (let attempt = 1; attempt <= attempts; attempt++) {
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              ...context.repo,
+              run_id: context.runId,
+              attempt_number: attempt,
+              per_page: 100,
+            });
+            for (const job of jobs) {
+              if (!jobsById.has(job.id)) {
+                jobsById.set(job.id, { ...job, run_attempt: attempt });
+              }
+            }
+          }
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'sec-jobs.json'), JSON.stringify([...jobsById.values()]));
 
     - name: Download regression results
       id: results
