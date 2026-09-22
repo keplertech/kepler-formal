@@ -3202,7 +3202,11 @@ std::optional<bool> readDFFInitDigitForStateTerm(
     if (width != static_cast<size_t>(bus->getWidth())) {
       return std::nullopt;  // INIT width must match the Q output width
     }
-    digitIndex = width - 1 - static_cast<size_t>(busBit->getBit() - bus->getLSB());
+    // Digit 0 of the canonical form is the bus MSB, for either ascending or
+    // descending ranges.
+    const auto msb = bus->getMSB();
+    const auto bit = busBit->getBit();
+    digitIndex = static_cast<size_t>(msb >= bit ? msb - bit : bit - msb);
   } else if (width != 1) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }

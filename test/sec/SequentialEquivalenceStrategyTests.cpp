@@ -16028,6 +16028,87 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsAscendingBusDFFInitParameter) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  // A flip-flop primitive with ascending D/Q buses [0:3].
+  auto* model = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("DFF_ASC"));
+  auto* clock =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("C"));
+  auto* data =
+      SNLBusTerm::create(model, SNLTerm::Direction::Input, 0, 3, NLName("D"));
+  auto* output =
+      SNLBusTerm::create(model, SNLTerm::Direction::Output, 0, 3, NLName("Q"));
+  SNLParameter::create(
+      model, NLName("INIT"), SNLParameter::Type::Binary, "4'bxxxx");
+  SNLDesignModeling::BitTerms outputBits;
+  SNLDesignModeling::BitTerms dataBits;
+  for (int bit = 0; bit <= 3; ++bit) {
+    outputBits.push_back(output->getBit(bit));
+    dataBits.push_back(data->getBit(bit));
+  }
+  SNLDesignModeling::addClockToOutputsArcs(clock, outputBits);
+  SNLDesignModeling::addInputsToClockArcs(dataBits, clock);
+  SNLDesignModeling::SequentialModel sequentialModel;
+  sequentialModel.kind = SNLDesignModeling::SequentialModel::Kind::FlipFlop;
+  sequentialModel.clockedOn = makeSequentialTermExpression(clock);
+  for (int bit = 0; bit <= 3; ++bit) {
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(data->getBit(bit));
+    sequentialModel.states.push_back(std::move(state));
+    sequentialModel.outputs.push_back(
+        {output->getBit(bit), makeSequentialStateExpression(bit)});
+  }
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* topIn = SNLBusTerm::create(
+      top, SNLTerm::Direction::Input, 0, 3, NLName("in"));
+  auto* topClock = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topOut = SNLBusTerm::create(
+      top, SNLTerm::Direction::Output, 0, 3, NLName("out"));
+  auto* ff = SNLInstance::create(top, model, NLName("ff0"));
+  auto* netIn = SNLBusNet::create(top, 0, 3, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netQ = SNLBusNet::create(top, 0, 3, NLName("net_q"));
+  topClock->setNet(netClock);
+  ff->getInstTerm(model->getScalarTerm(NLName("C")))->setNet(netClock);
+  for (int bit = 0; bit <= 3; ++bit) {
+    topIn->getBit(bit)->setNet(netIn->getBit(bit));
+    ff->getInstTerm(data->getBit(bit))->setNet(netIn->getBit(bit));
+    ff->getInstTerm(output->getBit(bit))->setNet(netQ->getBit(bit));
+    topOut->getBit(bit)->setNet(netQ->getBit(bit));
+  }
+  // Canonical digit 0 is the declared leftmost index (bit 0 for [0:3]).
+  SNLInstParameter::create(
+      ff, model->getParameter(NLName("INIT")), "4'b01x0");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.stateBits.size(), 4u);
+  EXPECT_EQ(extracted.initialStateValueByKey.size(), 3u);
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[0]")));
+  EXPECT_TRUE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[1]")));
+  EXPECT_EQ(
+      extracted.initialStateValueByKey.find(
+          findKeyByDisplayName(extracted, "ff0.Q[2]")),
+      extracted.initialStateValueByKey.end());
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[3]")));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractIgnoresNonCanonicalDFFInit) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
