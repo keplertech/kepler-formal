@@ -23,10 +23,12 @@ class SNLLogicCloud {
   SNLLogicCloud(naja::DNL::DNLID seedOutputTerm,
                 const std::vector<bool>& PIs,
                 const std::vector<bool>& POs,
-                bool stopAtOpaqueInternalOutputs = false)
+                bool stopAtOpaqueInternalOutputs = false,
+                bool outputConeAcyclic = false)
       : seedOutputTerm_(seedOutputTerm), dnl_(*naja::DNL::get()),
         PIs_(PIs), POs_(POs),
-        stopAtOpaqueInternalOutputs_(stopAtOpaqueInternalOutputs) {
+        stopAtOpaqueInternalOutputs_(stopAtOpaqueInternalOutputs),
+        outputConeAcyclic_(outputConeAcyclic) {
   }
   void compute();
   static void flushSkippedPOReports();
@@ -110,6 +112,7 @@ class SNLLogicCloud {
   const std::vector<bool>& PIs_;
   const std::vector<bool>& POs_;
   bool stopAtOpaqueInternalOutputs_ = false;
+  bool outputConeAcyclic_ = false;
   SkipReason skipReason_ = SkipReason::None;
   std::string skipReasonText_;
   naja::DNL::DNLID opaqueInternalTerm_ = naja::DNL::DNLID_MAX;

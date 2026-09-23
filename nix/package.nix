@@ -16,11 +16,25 @@
   zlib,
   fmt,
   tomlplusplus,
+  callPackage,
+  openssl,
+  llvmPackages_22,
+  z3,
+  gtest,
+  or-tools,
   autoPatchelfHook,
   makeWrapper,
   src,
 }:
 
+let
+  compiler = if stdenv.hostPlatform.isDarwin
+    then llvmPackages_22.libcxxClang else llvmPackages_22.clang;
+  xlsDependencies = callPackage ./xls-prebuilt.nix
+    (lib.optionalAttrs stdenv.hostPlatform.isDarwin {
+      libcxx = llvmPackages_22.libcxx;
+    });
+in
 assert lib.assertMsg (lib.versionAtLeast boost.version "1.87") "Kepler requires Boost >= 1.87 for an offline Slang build";
 assert lib.assertMsg (lib.versionAtLeast fmt.version "12.2") "Kepler requires fmt >= 12.2 for an offline Slang build";
 assert lib.assertMsg (lib.versionAtLeast tomlplusplus.version "3.4") "Kepler requires tomlplusplus >= 3.4 for an offline Slang build";
@@ -41,6 +55,8 @@ stdenv.mkDerivation {
     bison
     flex
     python312
+    xlsDependencies
+    compiler
     makeWrapper
   ] ++ lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
   buildInputs = [
@@ -51,6 +67,12 @@ stdenv.mkDerivation {
     fmt
     tomlplusplus
     python312
+    xlsDependencies
+    openssl
+    llvmPackages_22.llvm
+    llvmPackages_22.libclang
+    z3
+    gtest
   ] ++ lib.optional stdenv.hostPlatform.isLinux (lib.getLib stdenv.cc.cc);
 
   postPatch = ''
@@ -70,6 +92,14 @@ stdenv.mkDerivation {
       --replace-fail 'DIR="`pwd`"' 'DIR="."'
   '';
 
+  preConfigure = ''
+    # Use an array to preserve spaces in CMake's C++ flags. Only OR-Tools
+    # headers are needed; Linux also needs GCC-built Abseil's template ABI.
+    cmakeFlagsArray+=("-DCMAKE_CXX_FLAGS=-I${or-tools.src}${
+      lib.optionalString stdenv.hostPlatform.isLinux " -fclang-abi-compat=17"
+    }")
+  '';
+
   cmakeFlags = [
     "-DENABLE_UNIT_TESTS=OFF"
     "-DBUILD_KEPLER_PYTHON=OFF"
@@ -82,7 +112,10 @@ stdenv.mkDerivation {
     "-DPython3_EXECUTABLE=${lib.getExe python312}"
     "-DPython_EXECUTABLE=${lib.getExe python312}"
     "-DCMAKE_INSTALL_LIBDIR=lib"
-  ] ++ lib.optionals stdenv.hostPlatform.isDarwin [
+    "-DCMAKE_C_COMPILER=${compiler}/bin/clang"
+    "-DCMAKE_CXX_COMPILER=${compiler}/bin/clang++"
+    "-DLLVM_DIR=${llvmPackages_22.llvm.dev}/lib/cmake/llvm"
+    "-DClang_DIR=${llvmPackages_22.libclang.dev}/lib/cmake/clang"
     # No C++ modules are used; clang-scan-deps bypasses Nix's include flags.
     "-DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
   ];

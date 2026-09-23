@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include "../../src/config/Config.h"
 
 #include <algorithm>
 #include <array>
@@ -1138,6 +1139,12 @@ class SequentialEquivalenceStrategyTests : public ::testing::Test {
 
   void expectUnreferencedSequentialStateWithoutOutputIgnored();
 
+  // Each test builds a fresh universe whose designs and DNL scratch vectors
+  // can land on the addresses of the previous test's. The per-DNL logic-cloud
+  // caches are keyed by those addresses, so give every test its own cache
+  // generation exactly as the CLI does for every run.
+  void SetUp() override { verificationContext_.emplace(); }
+
   void TearDown() override {
     naja::DNL::destroy();
     if (auto* universe = NLUniverse::get()) {
@@ -1145,7 +1152,12 @@ class SequentialEquivalenceStrategyTests : public ::testing::Test {
     }
     KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
     KEPLER_FORMAL::BoolExprCache::destroy();
+    verificationContext_.reset();
   }
+
+ private:
+  std::optional<KEPLER_FORMAL::Config::ScopedVerificationContext>
+      verificationContext_;
 };
 
 SequentialEquivalenceStrategy makeBinarySecStrategy(
@@ -3919,6 +3931,52 @@ SNLDesign* createPartialCoverageMultiDriverTop(
 
   ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
   ff->getInstTerm(NLDB0::getDFFData())->setNet(netMulti);
+  ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ);
+
+  return top;
+}
+
+SNLDesign* createBatchedDirectMultiDriverOutputTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* invModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topInA =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in_a"));
+  auto* topInB =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in_b"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topCovered = SNLBusTerm::create(
+      top, SNLTerm::Direction::Output, 128, 0, NLName("covered"));
+  auto* topSkipped =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("skipped"));
+
+  auto* inv0 = SNLInstance::create(top, invModel, NLName("inv0"));
+  auto* inv1 = SNLInstance::create(top, invModel, NLName("inv1"));
+  auto* ff = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff0"));
+  auto* netInA = SNLScalarNet::create(top, NLName("net_in_a"));
+  auto* netInB = SNLScalarNet::create(top, NLName("net_in_b"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netMulti = SNLScalarNet::create(top, NLName("net_multi"));
+  auto* netQ = SNLScalarNet::create(top, NLName("net_q"));
+
+  topInA->setNet(netInA);
+  topInB->setNet(netInB);
+  topClock->setNet(netClock);
+  for (int bit = 0; bit < 129; ++bit) {
+    topCovered->getBit(bit)->setNet(netInA);
+  }
+  topSkipped->setNet(netMulti);
+
+  inv0->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netInA);
+  inv0->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(netMulti);
+  inv1->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netInB);
+  inv1->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(netMulti);
+
+  ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  ff->getInstTerm(NLDB0::getDFFData())->setNet(netInA);
   ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ);
 
   return top;
@@ -17188,6 +17246,59 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractPreservesSkippedOutputsAcrossBatches) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top =
+      createBatchedDirectMultiDriverOutputTop(library, "top", invModel);
+  auto* covered = top->getBusTerm(NLName("covered"));
+  for (int bit = 1; bit < 129; bit += 2) {
+    covered->getBit(bit)->setNet(top->getScalarTerm(NLName("in_b"))->getNet());
+  }
+
+  ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStderr();
+  const auto extracted = SequentialDesignModel::extract(top);
+  const auto diagnostics = testing::internal::GetCapturedStderr();
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_EQ(extracted.totalObservedOutputCount(), 130u);
+  EXPECT_EQ(extracted.coveredObservedOutputCount(), 129u);
+  ASSERT_EQ(extracted.skippedObservedOutputs.size(), 1u);
+  const auto skippedKey = findKeyByDisplayName(extracted, "skipped[0]");
+  EXPECT_EQ(extracted.skippedObservedOutputs.front(), skippedKey);
+  ASSERT_NE(extracted.connectivitySkipInfoByKey.find(skippedKey),
+            extracted.connectivitySkipInfoByKey.end());
+  EXPECT_EQ(
+      extracted.connectivitySkipInfoByKey.at(skippedKey).origin,
+      ConnectivitySkipOrigin::MultiDriver);
+  expectAllExpressionSupportIsPublished(extracted);
+  const auto inA = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "in_a[0]"));
+  const auto inB = extracted.inputVarByKey.at(
+      findKeyByDisplayName(extracted, "in_b[0]"));
+  EXPECT_NE(inA, inB);
+  for (int bit = 0; bit < 129; ++bit) {
+    const auto key = findKeyByDisplayName(
+        extracted, "covered[" + std::to_string(bit) + "]");
+    const auto* expr = extracted.observedOutputExprByKey.at(key);
+    EXPECT_EQ(expr->evaluate({{inA, true}, {inB, false}}), bit % 2 == 0);
+    EXPECT_EQ(expr->evaluate({{inA, false}, {inB, true}}), bit % 2 != 0);
+  }
+  EXPECT_NE(diagnostics.find("batched begin outputs=129 batch_size=128"),
+            std::string::npos);
+  EXPECT_NE(diagnostics.find("batched end outputs=129 exprs=129"),
+            std::string::npos);
+  EXPECT_NE(diagnostics.find("SEC diag: extract(top) build end"),
+            std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractPropagatesLogicalLoopSkipsToStateAndOutputs) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
@@ -17498,6 +17609,110 @@ TEST_F(SequentialEquivalenceStrategyTests,
     ASSERT_NE(nameIt, extracted.displayNameByKey.end());
     EXPECT_NE(nameIt->second, "ff0.D[0]");
   }
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DeferredCombinationalExtractionPreservesBoundaryAndRestoresTop) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top = createCombinationalInvTop(library, "top", invModel);
+  auto* previousTop = createCombinationalInvTop(library, "previous", invModel);
+  auto* constantModel = createConstantLowModel(primitives);
+  auto* constant = SNLInstance::create(top, constantModel, NLName("constant"));
+  auto* zero = SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("zero"));
+  auto* zeroNet = SNLScalarNet::create(top, NLName("net_zero"));
+  zero->setNet(zeroNet);
+  constant->getInstTerm(constantModel->getScalarTerm(NLName("LO")))->setNet(zeroNet);
+  NLUniverse::get()->setTopDesign(previousTop);
+
+  SequentialDesignExtractOptions options;
+  options.deferCombinationalObservedOutputs = true;
+  ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStderr();
+  const auto deferred = SequentialDesignModel::extract(top, options);
+  const auto diagnostics = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(NLUniverse::get()->getTopDesign(), previousTop);
+  EXPECT_FALSE(deferred.hasUnsupportedFeatures());
+  EXPECT_FALSE(deferred.observedOutputExprsMaterialized);
+  EXPECT_TRUE(deferred.observedOutputExprByKey.empty());
+  EXPECT_TRUE(deferred.nextStateExprByStateKey.empty());
+  EXPECT_TRUE(deferred.stateBits.empty());
+  EXPECT_TRUE(deferred.skippedObservedOutputs.empty());
+  EXPECT_EQ(deferred.observedOutputs, deferred.allObservedOutputs);
+  EXPECT_EQ(deferred.coveredObservedOutputCount(), 2u);
+  const auto inKey = findKeyByDisplayName(deferred, "in[0]");
+  EXPECT_EQ(deferred.environmentInputs, std::vector<SignalKey>{inKey});
+  ASSERT_EQ(deferred.inputVarByKey.size(), 1u);
+  EXPECT_GE(deferred.inputVarByKey.at(inKey), 2u);
+  EXPECT_NE(diagnostics.find("deferred boundary vars=1"), std::string::npos);
+  EXPECT_NE(diagnostics.find("deferred observed output materialization outputs=2"),
+            std::string::npos);
+
+  // The ordinary extraction remains eager and reuses the deferred input symbols.
+  const auto eager = SequentialDesignModel::extract(top);
+  EXPECT_EQ(NLUniverse::get()->getTopDesign(), previousTop);
+  EXPECT_TRUE(eager.observedOutputExprsMaterialized);
+  EXPECT_EQ(eager.topInputKeys, deferred.topInputKeys);
+  EXPECT_EQ(eager.topOutputKeys, deferred.topOutputKeys);
+  EXPECT_EQ(eager.observedOutputs, deferred.observedOutputs);
+  EXPECT_EQ(eager.inputVarByKey, deferred.inputVarByKey);
+  expectAllExpressionSupportIsPublished(eager);
+  const auto* out = eager.observedOutputExprByKey.at(
+      findKeyByDisplayName(eager, "out[0]"));
+  EXPECT_TRUE(out->evaluate({{eager.inputVarByKey.at(inKey), false}}));
+  EXPECT_FALSE(out->evaluate({{eager.inputVarByKey.at(inKey), true}}));
+  EXPECT_FALSE(eager.observedOutputExprByKey.at(
+      findKeyByDisplayName(eager, "zero[0]"))->evaluate({}));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DeferredExtractionFallsBackForStateAndOpaqueOutputs) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* sequential = createDffTop(library, "sequential", nullptr, false, false);
+  auto* opaque = createOpaqueBoundaryTop(
+      library, "opaque", createOpaqueLeafModel(primitives));
+  SequentialDesignExtractOptions options;
+  options.deferCombinationalObservedOutputs = true;
+
+  const auto stateModel = SequentialDesignModel::extract(sequential, options);
+  EXPECT_FALSE(stateModel.hasUnsupportedFeatures());
+  EXPECT_TRUE(stateModel.observedOutputExprsMaterialized);
+  ASSERT_EQ(stateModel.stateBits.size(), 1u);
+  ASSERT_EQ(stateModel.nextStateExprByStateKey.size(), 1u);
+  EXPECT_EQ(stateModel.observedOutputExprByKey.size(), 1u);
+  expectAllExpressionSupportIsPublished(stateModel);
+  const auto input = stateModel.inputVarByKey.at(
+      findKeyByDisplayName(stateModel, "in[0]"));
+  const auto* next = stateModel.nextStateExprByStateKey.at(stateModel.stateBits.front());
+  EXPECT_FALSE(next->evaluate({{input, false}}));
+  EXPECT_TRUE(next->evaluate({{input, true}}));
+
+  const auto opaqueModel = SequentialDesignModel::extract(opaque, options);
+  EXPECT_FALSE(opaqueModel.hasUnsupportedFeatures());
+  EXPECT_TRUE(opaqueModel.observedOutputExprsMaterialized);
+  EXPECT_EQ(opaqueModel.totalObservedOutputCount(), 2u);
+  EXPECT_EQ(opaqueModel.coveredObservedOutputCount(), 1u);
+  const auto skipped = findKeyByDisplayName(opaqueModel, "out[0]");
+  EXPECT_EQ(opaqueModel.skippedObservedOutputs, std::vector<SignalKey>{skipped});
+  EXPECT_EQ(opaqueModel.connectivitySkipInfoByKey.at(skipped).origin,
+            ConnectivitySkipOrigin::OpaqueInternal);
+  expectAllExpressionSupportIsPublished(opaqueModel);
+  const auto good = findKeyByDisplayName(opaqueModel, "good[0]");
+  const auto opaqueInput = opaqueModel.inputVarByKey.at(
+      findKeyByDisplayName(opaqueModel, "in[0]"));
+  EXPECT_FALSE(opaqueModel.observedOutputExprByKey.at(good)->evaluate({{opaqueInput, false}}));
+  EXPECT_TRUE(opaqueModel.observedOutputExprByKey.at(good)->evaluate({{opaqueInput, true}}));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

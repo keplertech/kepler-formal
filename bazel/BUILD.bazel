@@ -2,6 +2,9 @@
 
 exports_files([
     "export_deps.sh",
+    "xls_llvm.patch",
+    "xls_llvm_run_lit.patch",
+    "xls_llvm_zlib_header.patch",
     "naja_cc_library.bzl",
     "naja_ff_scan.patch",
     "naja_verilog_bazel9.patch",

@@ -41,6 +41,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
+| `-cc`, `-cxx`, `-cpp` | Synthesize one C/C++ translation unit per design to SystemVerilog through XLS, then run SEC on the generated RTL. |
 | `--help`, `-h` | Print usage and exit. |
 | `--version`, `-V` | Print the embedded Kepler Formal and Naja versions and Git hashes to stdout and exit successfully. Use as a standalone option. |
 | `--config <file>`, `-c <file>` | Load a YAML config file. Config mode cannot be combined with other command-line options. |
@@ -48,6 +49,14 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
+| `--cc_top <function>` | C/C++ top function for both designs. |
+| `--cc_design1_top <function>` | C/C++ top function for design 1 when it differs from `--cc_top`. |
+| `--cc_design2_top <function>` | C/C++ top function for design 2 when it differs from `--cc_top`. |
+| `--cc_module_name <name>` | Generated SystemVerilog module name for both designs. |
+| `--cc_design1_module_name <name>` | Generated SystemVerilog module name for design 1. |
+| `--cc_design2_module_name <name>` | Generated SystemVerilog module name for design 2. |
+| `--cc_include <dir>`, `--cc_include_path <dir>`, `-I<dir>` | Add an include directory for XLS C/C++ synthesis. May be repeated. |
+| `--cc_output_dir <dir>` | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
 | `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
@@ -58,7 +67,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. If omitted, the implementation defaults to `verilog`. |
+| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. If omitted, the implementation defaults to `verilog`. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
@@ -75,6 +84,22 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
+| `cc_top` | string | C/C++ top function for both designs. Required for `cc` unless both design-specific tops are set. |
+| `cc_design1_top` | string | C/C++ top function for design 1. |
+| `cc_design2_top` | string | C/C++ top function for design 2. |
+| `cc_module_name` | string | Generated SystemVerilog module name for both designs. Defaults to the resolved C/C++ top name. |
+| `cc_design1_module_name` | string | Generated SystemVerilog module name for design 1. |
+| `cc_design2_module_name` | string | Generated SystemVerilog module name for design 2. |
+| `cc_block_proto_path` | string | Optional XLSCC block proto path for both designs. |
+| `cc_design1_block_proto_path` | string | Optional XLSCC block proto path for design 1. |
+| `cc_design2_block_proto_path` | string | Optional XLSCC block proto path for design 2. |
+| `cc_include_paths` | list[string] | Include directories passed to XLS C/C++ synthesis. |
+| `cc_output_dir` | string | Directory for generated SystemVerilog. Defaults to `./kepler_formal_c2rtl`. |
+| `c2rtl_auto_align` | bool | Enable temporal C++ model versus RTL proofs. Requires `format: c_vs_rtl`, `verification: sec`, `sec_engine: pdr`, and `sec_encoding: binary`. |
+| `c2rtl_output_delays` | map[string, integer] | Per-output delay in active clock events. Cannot be combined with `eventuals`. |
+| `constraints` | list[string] | Non-empty list of input assumptions, all of which must hold. Requires `c2rtl_auto_align: true`. |
+| `eventuals` | list[map] | Non-empty list of conditional output relations, each containing exactly `cycle`, `condition`, and `equality`. Replaces automatic output equality; requires `c2rtl_auto_align: true`. |
+| `check_reachability` | bool | Check input assumptions for satisfiability before proving equivalence. Defaults to `true`; requires `c2rtl_auto_align: true`. |
 | `log_level` | string | `debug` and `info` are handled explicitly. Other values currently fall back to `info`. |
 | `log_file` | string | Output path for the miter log file. If omitted, the tool writes `miter_log_<n>.txt` in the current working directory. |
 | `use_scopes` | bool | Enable scoped verification for `naja_if` inputs. |
@@ -112,6 +137,78 @@ cnf_export_path: ./miter.cnf
 po_cnf_export: true
 po_cnf_export_path: ./po_cnfs
 ```
+
+Example C/C++ C2RTL config:
+
+```yaml
+format: cc
+verification: sec
+cc_top: top_function
+cc_include_paths:
+  - include
+cc_output_dir: build/c2rtl
+input_paths:
+  - design0.cc
+  - design1.cc
+```
+
+The `kepler-formal` CMake build compiles the KF C2RTL bridge as the normal
+`kepler_xls_c2rtl` library target and links it into the binary:
+
+```bash
+cmake --build build --target kepler-formal
+```
+
+For conditional C++ model versus sequential RTL comparisons:
+
+```yaml
+format: c_vs_rtl
+verification: sec
+sec_engine: pdr
+sec_encoding: binary
+c2rtl_auto_align: true
+cc_top: calculate
+sv_design2_top: calculate_rtl
+input_paths: [calculate.cc, calculate.sv]
+constraints:
+  - A_in > 0x10000000
+  - A_in < 0x7FFFF000
+  - "!rtl.rst"  # If the RTL has an active-high reset, hold it inactive.
+eventuals:
+  - cycle: 4
+    condition: "true"
+    equality: "model.nan == rtl.nan"
+  - cycle: 4
+    condition: "!model.nan && !model.inf"
+    equality: "model.mantissa == rtl.mantissa"
+```
+
+Every eventual requires `condition -> equality` at its specified cycle. Entries
+at the same cycle are independent; a false condition imposes no requirement for
+that entry. Both designs receive one symbolic data-input vector held fixed from
+cycle 0, so the combinational C++ result stays fixed. Cycle 0 is the initial RTL
+state; cycle N is after N active clock transitions. Conditions read input or
+output terminal values at that cycle using `model.` and `rtl.`. The `equality`
+field may reference **only output terminals**.
+
+Eventuals have no implicit reset masking. Constrain reset inactive as above or
+include the intended reset condition explicitly. Constraints may reference only
+inputs and must hold at every cycle; unqualified names refer to aligned data
+inputs. Without eventuals, the existing output-delay mode retains its streaming
+inputs and reset behavior.
+
+Expressions support `==`, `!=`, `<`, `>`, `<=`, `>=`, `!`, `&&`, `||`,
+parentheses, bit selection such as `rtl.mantissa[40]`, `true`/`false`, and
+non-negative decimal, hexadecimal (`0x`) or binary (`0b`) constants. Comparisons
+are unsigned and zero-extend the narrower operand; constants are never
+truncated. Boolean expressions treat nonzero vectors as true. Quote expressions
+containing YAML-special characters, particularly a leading `!`.
+
+Contradictory constraints produce an inconclusive result rather than a vacuous
+equivalence result. `check_reachability: false` disables this extra check while
+retaining the assumptions, so an empty input domain can then prove vacuously.
+This check concerns the allowed input domain, not arbitrary internal RTL state
+reachability.
 
 SEC `sv2v` example:
 

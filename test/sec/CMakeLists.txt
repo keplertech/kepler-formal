@@ -43,6 +43,15 @@ add_executable(SecBtor2ExporterTests
 target_link_libraries(SecBtor2ExporterTests kepler_sec GTest::gtest_main)
 GTEST_DISCOVER_TESTS(SecBtor2ExporterTests)
 
+if(TARGET kepler_c2rtl_formal)
+  add_executable(C2RtlFormalTests
+      C2RtlExpressionTests.cpp
+      C2RtlEquivalenceTests.cpp)
+  target_link_libraries(C2RtlFormalTests
+      kepler_c2rtl_formal kepler_clauses GTest::gtest_main)
+  GTEST_DISCOVER_TESTS(C2RtlFormalTests)
+endif()
+
 add_test(
     NAME SecRegressHelperTests.PartialProofExpectationModes
     COMMAND bash

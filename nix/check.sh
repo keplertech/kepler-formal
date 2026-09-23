@@ -96,4 +96,30 @@ py_tech_files:
 log_file: python-tech.log
 EOF
 run_case python-tech 0 "No difference was found."
-echo "Installed package smoke checks passed (SEC equivalence, SEC mismatch, Python technology)."
+
+# Exercise XLS, Clang and the C++ dependency libraries in the installed CLI.
+cat > invert.cc <<'EOF'
+void invert(bool a, bool& y) { y = !a; }
+EOF
+cat > invert.sv <<'EOF'
+module invert_rtl(input logic a, output logic y);
+  assign y = ~a;
+endmodule
+EOF
+cat > c2rtl.yaml <<'EOF'
+format: c_vs_rtl
+verification: sec
+sec_engine: pdr
+sec_encoding: binary
+max_k: 2
+cc_top: invert
+cc_design1_module_name: invert_c
+cc_output_dir: c2rtl
+sv_design2_top: invert_rtl
+input_paths:
+  - invert.cc
+  - invert.sv
+log_file: c2rtl.log
+EOF
+run_case c2rtl 0 "SEC proved equivalence"
+echo "Installed package smoke checks passed (SEC equivalence, SEC mismatch, Python technology, C2RTL)."

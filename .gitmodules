@@ -13,3 +13,9 @@
 [submodule "thirdparty/cadical"]
 	path = thirdparty/cadical
 	url = https://github.com/arminbiere/cadical
+[submodule "thirdparty/xls"]
+	path = thirdparty/xls
+	url = https://github.com/keplertech/xls
+[submodule "thirdparty/cppitertools"]
+	path = thirdparty/cppitertools
+	url = https://github.com/ryanhaining/cppitertools.git

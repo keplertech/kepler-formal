@@ -48,6 +48,7 @@ cc_binary(
     deps = [
         ":kepler_version",
         "//src/config:kepler_config",
+        "//src/c2rtl:kepler_c2rtl_formal",
         "//src/sec:kepler_sec",
         "//src/scope:scope_extraction",
         "//src/strategies:formal_strategies",
@@ -56,6 +57,7 @@ cc_binary(
         "@naja",
         "@naja//:naja_extra_headers",
         "@spdlog",
+        "//src/c2rtl:kepler_xls_c2rtl",
         "@yaml-cpp",
     ],
 )

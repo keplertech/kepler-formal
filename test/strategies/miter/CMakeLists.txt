@@ -32,6 +32,7 @@ add_executable(keplerFormalCliTests
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)
 
 target_link_libraries(keplerFormalCliTests
+    PRIVATE
     kepler_formal_driver
     kepler_version
     kepler_config
@@ -44,15 +45,17 @@ target_link_libraries(keplerFormalCliTests
     scope_extraction
     yaml-cpp
     ${SPDLOG_TARGET}
+    kepler_c2rtl_formal
+    kepler_xls_c2rtl
     pthread
 )
 
 if (TARGET GTest::gtest_main)
-    target_link_libraries(keplerFormalCliTests GTest::gtest_main)
+    target_link_libraries(keplerFormalCliTests PRIVATE GTest::gtest_main)
 elseif (DEFINED GTEST_MAIN_LIBRARIES)
-    target_link_libraries(keplerFormalCliTests ${GTEST_MAIN_LIBRARIES})
+    target_link_libraries(keplerFormalCliTests PRIVATE ${GTEST_MAIN_LIBRARIES})
 else()
-    target_link_libraries(keplerFormalCliTests ${GTEST_LIBRARIES})
+    target_link_libraries(keplerFormalCliTests PRIVATE ${GTEST_LIBRARIES})
 endif()
 
 add_dependencies(keplerFormalCliTests kepler-formal)

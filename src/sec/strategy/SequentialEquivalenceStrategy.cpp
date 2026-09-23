@@ -2627,8 +2627,9 @@ void attachLazyDualRailTransitions(
 BoolExpr* buildDualRailBinaryDefinedExpr(const DualRailBoolExpr& value) {
   // In the paper's encoding, 01 and 10 are binary values while 11 is X.
   // Legal-state constraints separately exclude the empty value 00.
-  return BoolExpr::simplify(
-      BoolExpr::Xor(value.mayBeOne, value.mayBeZero));
+  // BoolExpr factories eagerly fold and hash-cons each node, so traversing the
+  // complete DAG here cannot simplify it further.
+  return BoolExpr::Xor(value.mayBeOne, value.mayBeZero);
 }
 
 struct DualRailOutputProperties {
@@ -2639,12 +2640,12 @@ struct DualRailOutputProperties {
 DualRailOutputProperties buildDualRailOutputProperties(
     const DualRailBoolExpr& value0,
     const DualRailBoolExpr& value1) {
-  BoolExpr* bothValuesDefined = BoolExpr::simplify(BoolExpr::And(
+  BoolExpr* bothValuesDefined = BoolExpr::And(
       buildDualRailBinaryDefinedExpr(value0),
-      buildDualRailBinaryDefinedExpr(value1)));
-  BoolExpr* strictEquality = BoolExpr::simplify(BoolExpr::And(
+      buildDualRailBinaryDefinedExpr(value1));
+  BoolExpr* strictEquality = BoolExpr::And(
       makeEqualityExpr(value0.mayBeOne, value1.mayBeOne),
-      makeEqualityExpr(value0.mayBeZero, value1.mayBeZero)));
+      makeEqualityExpr(value0.mayBeZero, value1.mayBeZero));
   // Steady-state dual-rail SEC ignores cycles where either value is X and
   // rejects only opposite binary values. Strict rail equality remains metadata
   // for shared exact query surfaces.
@@ -2652,7 +2653,7 @@ DualRailOutputProperties buildDualRailOutputProperties(
       bothValuesDefined,
       BoolExpr::Xor(value0.mayBeOne, value1.mayBeOne));
   return {
-      BoolExpr::simplify(BoolExpr::Not(binaryMismatch)),
+      BoolExpr::Not(binaryMismatch),
       strictEquality};
 }
 
@@ -2690,7 +2691,11 @@ constexpr size_t kDefaultDualRailPdrSingletonTickBudget =
 // Treat multi-output runs as bounded scheduling probes. They may still prove
 // the whole conjunction, but a hard one is split into smaller exact properties
 // instead of monopolizing the complete PDR budget.
-constexpr size_t kDualRailPdrBatchPredecessorQueryLimit = 1000;
+// Only mandatory Figure 6 blocking queries count against this probe budget;
+// optional generalization and propagation queries run on their own small
+// per-query limits. A shared batch proof is far cheaper than proving the same
+// invariant once per singleton, so the probe is allowed real blocking work.
+constexpr size_t kDualRailPdrBatchPredecessorQueryLimit = 20000;
 
 PDRResult runPdrOutputBatch(const PDREngine& engine,
                             size_t maxFrames,
@@ -3064,6 +3069,48 @@ SequentialEquivalenceResult runPdrSecEngine(
     const OutputCoverageSelection& outputCoverage,
     // LCOV_DISABLED_START
     const std::vector<ExtractedBoundaryReportEntry>& extractedBoundaryReports) {
+  if (problem.combinedStateSymbols().empty()) {
+    std::vector<size_t> nonIdenticalOutputIndices;
+    nonIdenticalOutputIndices.reserve(problem.observedOutputExprs0.size());
+    for (size_t outputIndex = 0;
+         outputIndex < problem.observedOutputExprs0.size();
+         ++outputIndex) {
+      if (problem.observedOutputExprs0[outputIndex] !=
+          problem.observedOutputExprs1[outputIndex]) {
+        nonIdenticalOutputIndices.push_back(outputIndex);
+      }
+    }
+
+    if (!nonIdenticalOutputIndices.empty()) {
+      const KInductionProblem statelessProblem =
+          makeOutputSubsetProblem(problem, nonIdenticalOutputIndices);
+      if (auto witness =
+              SEC::findBaseCounterexample(statelessProblem, solverType, 0);
+          witness.has_value()) {
+        KInductionResult witnessResult{
+            KInductionStatus::Different,
+            witness->badFrame,
+            std::move(witness)};
+        return makeSecResult(
+            SequentialEquivalenceStatus::Different,
+            witnessResult.bound,
+            formatCounterexampleWitness(
+                witnessResult, model0, model1, top0, top1),
+            outputCoverage,
+            extractedBoundaryReports);
+      }
+    }
+
+    return makeSecResult(
+    // LCOV_DISABLED_STOP
+        SequentialEquivalenceStatus::Equivalent,
+        // LCOV_DISABLED_START
+        0,
+        "",
+        outputCoverage,
+        extractedBoundaryReports);
+  }
+
 // LCOV_DISABLED_STOP
   const std::vector<size_t> dualRailEngineOutputIndices =
       // LCOV_DISABLED_START
@@ -3172,7 +3219,9 @@ SequentialEquivalenceResult runPdrSecEngine(
       const size_t outputCount = endOutput - firstOutput;
       const size_t predecessorQueryLimit =
           problem.usesDualRailStateEncoding && outputCount > 1
-              ? kDualRailPdrBatchPredecessorQueryLimit
+              ? secStrategySizeLimitFromEnv(
+                    "KEPLER_SEC_PDR_DUAL_RAIL_BATCH_PREDECESSOR_QUERY_LIMIT",
+                    kDualRailPdrBatchPredecessorQueryLimit)
               : 0;
       PDREngine pdrEngine(
           exactBatchProblem,
@@ -3747,6 +3796,17 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         0,
         "No aligned observed outputs remain after skipping unverifiable cones, "
         "including opaque internal cells and connectivity failures.",
+        aligned.outputCoverage,
+        extractedBoundaryReports);
+  }
+
+  // Compact self-comparison passes the same immutable extracted model twice.
+  // Its aligned outputs are identical without constructing a proof problem.
+  if (&model0 == &model1 && !exportOptions_.enabled()) {
+    return makeSecResult(
+        SequentialEquivalenceStatus::Equivalent,
+        0,
+        "",
         aligned.outputCoverage,
         extractedBoundaryReports);
   }
