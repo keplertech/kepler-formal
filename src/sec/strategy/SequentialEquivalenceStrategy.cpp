@@ -2691,7 +2691,11 @@ constexpr size_t kDefaultDualRailPdrSingletonTickBudget =
 // Treat multi-output runs as bounded scheduling probes. They may still prove
 // the whole conjunction, but a hard one is split into smaller exact properties
 // instead of monopolizing the complete PDR budget.
-constexpr size_t kDualRailPdrBatchPredecessorQueryLimit = 1000;
+// Only mandatory Figure 6 blocking queries count against this probe budget;
+// optional generalization and propagation queries run on their own small
+// per-query limits. A shared batch proof is far cheaper than proving the same
+// invariant once per singleton, so the probe is allowed real blocking work.
+constexpr size_t kDualRailPdrBatchPredecessorQueryLimit = 20000;
 
 PDRResult runPdrOutputBatch(const PDREngine& engine,
                             size_t maxFrames,
@@ -3215,7 +3219,9 @@ SequentialEquivalenceResult runPdrSecEngine(
       const size_t outputCount = endOutput - firstOutput;
       const size_t predecessorQueryLimit =
           problem.usesDualRailStateEncoding && outputCount > 1
-              ? kDualRailPdrBatchPredecessorQueryLimit
+              ? secStrategySizeLimitFromEnv(
+                    "KEPLER_SEC_PDR_DUAL_RAIL_BATCH_PREDECESSOR_QUERY_LIMIT",
+                    kDualRailPdrBatchPredecessorQueryLimit)
               : 0;
       PDREngine pdrEngine(
           exactBatchProblem,

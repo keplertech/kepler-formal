@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include "../../src/config/Config.h"
 
 #include <algorithm>
 #include <array>
@@ -1138,6 +1139,12 @@ class SequentialEquivalenceStrategyTests : public ::testing::Test {
 
   void expectUnreferencedSequentialStateWithoutOutputIgnored();
 
+  // Each test builds a fresh universe whose designs and DNL scratch vectors
+  // can land on the addresses of the previous test's. The per-DNL logic-cloud
+  // caches are keyed by those addresses, so give every test its own cache
+  // generation exactly as the CLI does for every run.
+  void SetUp() override { verificationContext_.emplace(); }
+
   void TearDown() override {
     naja::DNL::destroy();
     if (auto* universe = NLUniverse::get()) {
@@ -1145,7 +1152,12 @@ class SequentialEquivalenceStrategyTests : public ::testing::Test {
     }
     KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
     KEPLER_FORMAL::BoolExprCache::destroy();
+    verificationContext_.reset();
   }
+
+ private:
+  std::optional<KEPLER_FORMAL::Config::ScopedVerificationContext>
+      verificationContext_;
 };
 
 SequentialEquivalenceStrategy makeBinarySecStrategy(

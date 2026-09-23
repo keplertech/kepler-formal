@@ -1600,6 +1600,15 @@ unsigned dualRailPredecessorConflictLimit(PredecessorQueryPurpose purpose) {
   const unsigned configuredLimit = envUnsignedLimitOrDefaultAllowZero(
       kDualRailPredecessorConflictLimitEnv,
       kDefaultDualRailPredecessorConflictLimit);
+  if (purpose == PredecessorQueryPurpose::GeneralizeBlocker) {
+    // Figure 7 literal removal is optional strengthening. Keep every attempt
+    // on the narrow probe budget so one hard literal cannot spend the
+    // cumulative output budget that the mandatory blocking queries need.
+    return configuredLimit == 0
+               ? kNarrowGeneralizationProbeConflictLimit
+               : std::min(configuredLimit,
+                          kNarrowGeneralizationProbeConflictLimit);
+  }
   if (std::getenv(kDualRailPredecessorConflictLimitEnv) != nullptr ||
       purpose != PredecessorQueryPurpose::BlockObligation) {
     return configuredLimit;
@@ -1616,6 +1625,12 @@ unsigned dualRailPredecessorDecisionLimit(PredecessorQueryPurpose purpose) {
   const unsigned configuredLimit = envUnsignedLimitOrDefaultAllowZero(
       kDualRailPredecessorDecisionLimitEnv,
       kDefaultDualRailPredecessorDecisionLimit);
+  if (purpose == PredecessorQueryPurpose::GeneralizeBlocker) {
+    return configuredLimit == 0
+               ? kNarrowGeneralizationProbeDecisionLimit
+               : std::min(configuredLimit,
+                          kNarrowGeneralizationProbeDecisionLimit);
+  }
   if (std::getenv(kDualRailPredecessorDecisionLimitEnv) != nullptr ||
       purpose != PredecessorQueryPurpose::BlockObligation) {
     return configuredLimit;
@@ -6159,7 +6174,11 @@ PredecessorQueryOutcome findPredecessorCube(
       return {};
     }
   }
-  if (!consumePdrPredecessorQueryBudget(predecessorQueryBudget)) {
+  // Figure 7 literal removal runs on its own small per-query limits and is
+  // not scheduling work: it must not starve the batch probe of the blocking
+  // and propagation queries that its query count is meant to bound.
+  if (purpose != PredecessorQueryPurpose::GeneralizeBlocker &&
+      !consumePdrPredecessorQueryBudget(predecessorQueryBudget)) {
     return {};  // LCOV_EXCL_LINE
   }
   const size_t statsQueryNumber = nextPdrPredecessorQueryNumber();
@@ -6879,6 +6898,7 @@ class BlockedCubeReductionChecker {
       return std::nullopt;
     }
     // Figure 7 generalizes with Q2: F[k-1] & !s & T & s'.
+    const bool exhaustedBefore = hasPdrBudgetExhaustion();
     const auto predecessor = findPredecessorCube(
         problem_,
         solverType_,
@@ -6895,7 +6915,17 @@ class BlockedCubeReductionChecker {
         predecessorQueryBudget_,
         supportCache_,
         narrowGeneralizationProbeCache_);
-    if (hasPdrBudgetExhaustion() || predecessor.hasPredecessor) {
+    if (hasPdrBudgetExhaustion()) {
+      // A budget-limited Q2 answer only means this literal stays. Keeping a
+      // literal is always sound, so an optional Figure 7 probe must not turn
+      // the whole proof inconclusive.
+      if (!exhaustedBefore &&
+          pdrBudgetExhaustion == PdrBudgetExhaustion::LocalQuery) {
+        resetPdrBudgetExhaustion();
+      }
+      return std::nullopt;
+    }
+    if (predecessor.hasPredecessor) {
       return std::nullopt;
     }
     if (const auto core = cachedCore(reduced); core.has_value()) {
