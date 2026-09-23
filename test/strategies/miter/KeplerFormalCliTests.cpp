@@ -2062,6 +2062,239 @@ TEST_F(KeplerFormalCliTests, ConfigCVsRtlRejectsDesign1SystemVerilogOptions) {
   std::filesystem::remove(cfgPath);
 }
 
+namespace {
+
+// Tagged-record encoder: a combinational C++ model against a three-stage
+// pipelined RTL that deliberately differs wherever a result is unused, so the
+// proof needs input constraints, conditional output relations, the
+// reachability check and a non-vacuity witness.
+constexpr const char* kTaggedRecordModelSource = R"cc(
+void encode_record(unsigned int operand,
+                   bool& invalid,
+                   bool& overflow,
+                   unsigned long long& payload,
+                   unsigned char& tag) {
+  const unsigned int kind = operand >> 28;
+  const unsigned int level = (operand >> 20) & 0xff;
+  const unsigned long long top = (operand >> 19) & 1;
+  const unsigned long long low = operand & 0x7ffff;
+
+  invalid = kind >= 0xe;
+  overflow = !invalid && level == 0xff;
+
+  unsigned long long value = 0;
+  if (!invalid) {
+    if (overflow) {
+      value = top << 40;
+    } else if (kind == 0 && level == 0) {
+      value = (top << 40) | low;
+    } else {
+      value = (top << 40) | (low << 21) | (low << 1);
+    }
+  }
+  payload = value;
+  tag = (invalid || overflow || value == 0)
+      ? 0
+      : static_cast<unsigned char>(level ^ 0x80);
+}
+)cc";
+
+constexpr const char* kTaggedRecordRtlSource = R"sv(
+module encode_record_rtl (
+  input  logic        clk,
+  input  logic        rst_n,
+  input  logic [31:0] operand,
+  output logic        invalid,
+  output logic        overflow,
+  output logic [40:0] payload,
+  output logic [7:0]  tag
+);
+  logic [3:0]  kind_q;
+  logic [7:0]  level_q;
+  logic        top_q;
+  logic [18:0] low_q;
+  logic        invalid_q;
+  logic        overflow_q;
+  logic [40:0] payload_q;
+  logic [7:0]  tag_q;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      kind_q     <= '0;
+      level_q    <= '0;
+      top_q      <= 1'b0;
+      low_q      <= '0;
+      invalid_q  <= 1'b0;
+      overflow_q <= 1'b0;
+      payload_q  <= '0;
+      tag_q      <= '0;
+      invalid    <= 1'b0;
+      overflow   <= 1'b0;
+      payload    <= '0;
+      tag        <= '0;
+    end else begin
+      kind_q     <= operand[31:28];
+      level_q    <= operand[27:20];
+      top_q      <= operand[19];
+      low_q      <= operand[18:0];
+
+      // Reserved kinds and the compact layout are not built, and the unused
+      // fields of an invalid, overflowed or zero record keep the datapath value.
+      invalid_q  <= kind_q == 4'hE;
+      overflow_q <= level_q == 8'hFF;
+      payload_q  <= level_q == 8'hFF
+                        ? {top_q, {40{1'b1}}}
+                        : {top_q, low_q, 1'b0, low_q, 1'b0};
+      tag_q      <= level_q ^ 8'h80;
+
+      invalid    <= invalid_q;
+      overflow   <= overflow_q;
+      payload    <= payload_q;
+      tag        <= tag_q;
+    end
+  end
+endmodule
+)sv";
+
+constexpr const char* kTaggedRecordConstraints =
+    "  - operand > 0x000FFFFF\n"
+    "  - operand < 0xF0000000\n"
+    "  - rtl.rst_n\n";
+
+// Each entry requires condition -> equality three clock events after the
+// cycle-0 inputs, which is the RTL's register depth.
+constexpr const char* kTaggedRecordEventuals =
+    "  - cycle: 3\n"
+    "    condition: \"true\"\n"
+    "    equality: \"model.invalid == rtl.invalid\"\n"
+    "  - cycle: 3\n"
+    "    condition: \"!model.invalid\"\n"
+    "    equality: \"(model.overflow == rtl.overflow) && "
+    "(model.payload[40] == rtl.payload[40])\"\n"
+    "  - cycle: 3\n"
+    "    condition: \"!model.invalid && !model.overflow\"\n"
+    "    equality: \"model.payload == rtl.payload\"\n"
+    "  - cycle: 3\n"
+    "    condition: \"!model.invalid && !model.overflow && "
+    "(model.payload != 0)\"\n"
+    "    equality: \"model.tag == rtl.tag\"\n";
+
+std::string taggedRecordConfig(const std::string& constraints,
+                               const std::string& eventuals,
+                               const std::string& checkReachability = "true") {
+  return "format: c_vs_rtl\n"
+         "verification: sec\n"
+         "sec_engine: pdr\n"
+         "sec_encoding: binary\n"
+         "c2rtl_auto_align: true\n"
+         "max_k: 8\n"
+         "cc_top: encode_record\n"
+         "sv_design2_top: encode_record_rtl\n"
+         "cc_output_dir: kepler_formal_c2rtl\n"
+         "input_paths:\n"
+         "  - encode_record.cc\n"
+         "  - encode_record.sv\n"
+         "constraints:\n" + constraints +
+         "check_reachability: " + checkReachability + "\n"
+         "eventuals:\n" + eventuals;
+}
+
+StructuredRun runTaggedRecord(const std::string& config,
+                              const std::string& rtlSource = kTaggedRecordRtlSource) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_tagged_record");
+  {
+    std::ofstream model(tmpDir / "encode_record.cc");
+    model << kTaggedRecordModelSource;
+    std::ofstream rtl(tmpDir / "encode_record.sv");
+    rtl << rtlSource;
+    std::ofstream cfg(tmpDir / "encode_record.yaml");
+    cfg << config;
+  }
+  StructuredRun run;
+  {
+    // The generated SystemVerilog for the model lands in the working directory.
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(tmpDir);
+    run = runStructuredWithConfigFile(tmpDir / "encode_record.yaml");
+  }
+  KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
+  KEPLER_FORMAL::BoolExprCache::destroy();
+  std::filesystem::remove_all(tmpDir);
+  return run;
+}
+
+}  // namespace
+
+TEST_F(KeplerFormalCliTests, CliCVsRtlTaggedRecordProvesConditionalRelations) {
+  const auto run = runTaggedRecord(
+      taggedRecordConfig(kTaggedRecordConstraints, kTaggedRecordEventuals));
+  EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(run.result.provenOutputs, 4u);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCVsRtlTaggedRecordWithoutOperandRangeFindsCounterexample) {
+  const auto run = runTaggedRecord(
+      taggedRecordConfig("  - rtl.rst_n\n", kTaggedRecordEventuals));
+  EXPECT_EQ(run.exitCode, kSecCounterexampleExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCVsRtlTaggedRecordUnconditionalEqualityFindsCounterexample) {
+  // The RTL leaves the unused fields as its datapath computed them, so
+  // comparing every output unconditionally must fail.
+  const auto run = runTaggedRecord(taggedRecordConfig(
+      kTaggedRecordConstraints,
+      "  - cycle: 3\n"
+      "    condition: \"true\"\n"
+      "    equality: \"model.invalid == rtl.invalid\"\n"
+      "  - cycle: 3\n"
+      "    condition: \"true\"\n"
+      "    equality: \"model.overflow == rtl.overflow\"\n"
+      "  - cycle: 3\n"
+      "    condition: \"true\"\n"
+      "    equality: \"model.payload == rtl.payload\"\n"
+      "  - cycle: 3\n"
+      "    condition: \"true\"\n"
+      "    equality: \"model.tag == rtl.tag\"\n"));
+  EXPECT_EQ(run.exitCode, kSecCounterexampleExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCVsRtlTaggedRecordContradictoryConstraintsAreNotProvedVacuously) {
+  const std::string contradictory =
+      "  - operand < 0x000FFFFF\n"
+      "  - operand > 0xF0000000\n"
+      "  - rtl.rst_n\n";
+  const auto rejected = runTaggedRecord(
+      taggedRecordConfig(contradictory, kTaggedRecordEventuals));
+  EXPECT_EQ(rejected.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(rejected.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+
+  // Without the reachability check the empty input domain proves anything.
+  const auto vacuous = runTaggedRecord(
+      taggedRecordConfig(contradictory, kTaggedRecordEventuals, "false"));
+  EXPECT_EQ(vacuous.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(vacuous.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+}
+
+TEST_F(KeplerFormalCliTests, CliCVsRtlTaggedRecordPlantedTagBugFindsCounterexample) {
+  // A wrong tag inside the legal domain must be caught, so the conditional
+  // relations are not vacuous.
+  std::string rtl = kTaggedRecordRtlSource;
+  const std::string good = "tag_q      <= level_q ^ 8'h80;";
+  const auto at = rtl.find(good);
+  ASSERT_NE(at, std::string::npos);
+  rtl.replace(at, good.size(), "tag_q      <= level_q ^ 8'h81;");
+  const auto run = runTaggedRecord(
+      taggedRecordConfig(kTaggedRecordConstraints, kTaggedRecordEventuals), rtl);
+  EXPECT_EQ(run.exitCode, kSecCounterexampleExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSystemVerilogLecRejected) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",
