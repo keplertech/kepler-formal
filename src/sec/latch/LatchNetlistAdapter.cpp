@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <map>
 #include <set>
-#include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include "DNL.h"
 #include "NLDB.h"
 #include "NLName.h"
@@ -19,6 +19,7 @@
 #include "latch/LatchConstantNet.h"
 #include "latch/LatchDependencyGraph.h"
 #include "latch/LatchInputHistory.h"
+#include "latch/LatchInitialState.h"
 #include "latch/LatchResetAdapter.h"
 #include "latch/LatchResetClock.h"
 #include "latch/LatchSupportOptions.h"
@@ -53,6 +54,22 @@ std::string name(const Term& term) {
 }
 struct Port { SignalKey key; std::string name; size_t net; };
 struct CellInfo { SignalKey key; std::string name, error; };
+
+bool containsModeledLatch(naja::NL::SNLDesign* top) {
+  using Modeling = naja::NL::SNLDesignModeling;
+  std::set<naja::NL::SNLDesign*> visited;
+  std::vector<naja::NL::SNLDesign*> pending{top};
+  while (!pending.empty()) {
+    auto* design = pending.back();
+    pending.pop_back();
+    if (!visited.insert(design).second) continue;
+    if (Modeling::hasSequentialModel(design) &&
+        Modeling::getSequentialModel(design).kind == Modeling::SequentialModel::Kind::Latch)
+      return true;
+    for (auto* instance : design->getInstances()) pending.push_back(instance->getModel());
+  }
+  return false;
+}
 
 // Keep the caller's flattened graph and selected top intact (including borrowed
 // designs). The compiled result owns no pointers into this temporary graph.
@@ -112,8 +129,8 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
   SequentialDesignModel model;
   model.eventContract = std::string("boolean-epochs-v1;") +
       (options.singleInputChange ? "single;" : "any;") +
-      "initial_inputs=" + std::to_string(*options.initialInputs) +
-      ";initial_storage=" + std::to_string(*options.initialStorage);
+      "initial_inputs=" + (options.initialInputs ? std::to_string(*options.initialInputs) : "symbolic") +
+      ";initial_storage=" + (options.initialStorage ? std::to_string(*options.initialStorage) : "symbolic");
   DnlScope scope(top);
   const auto* dnl = naja::DNL::get();
   DriverlessConstantResolver driverlessConstants(*dnl);
@@ -246,7 +263,7 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     resetInterface->inputKeys.push_back(input.key);
     resetInterface->inputNames.push_back(input.name);
   }
-  resetInterface->currentInputs.assign(inputs.size(), BoolExpr::Var(*options.initialInputs ? 1 : 0));
+  resetInterface->currentInputs.resize(inputs.size());
   std::vector<BoolExpr*> inputExpressions, selector;
   BoolExpr* eventValue = nullptr;
   if (!options.singleInputChange) {
@@ -265,6 +282,27 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     for (auto* bit : selector) resetInterface->selectorSymbols.push_back(bit->getId());
     resetInterface->valueSymbol = eventValue->getId();
     inputExpressions.assign(inputs.size(), BoolExpr::createFalse());
+  }
+
+  model.initialCondition = BoolExpr::createTrue();
+  const auto initialize = [&](const SignalKey& stateKey, BoolExpr* initial) {
+    auto* state = BoolExpr::Var(model.inputVarByKey.at(stateKey));
+    model.initialCondition = BoolExpr::And(model.initialCondition,
+        BoolExpr::Not(BoolExpr::Xor(state, initial)));
+    if (initial->getOp() == Op::VAR && initial->getId() < 2)
+      model.initialStateValueByKey.emplace(stateKey, initial->getId() != 0);
+  };
+  std::vector<BoolExpr*> inputOrigins(inputs.size());
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (options.initialInputs) inputOrigins[i] = BoolExpr::Var(*options.initialInputs);
+    else {
+      // Categories 4 and 5 are reserved for reset counter/order symbols.
+      const auto originKey = syntheticKey(7, i);
+      auto* origin = variable(model, originKey, "$event.initial.input." + inputs[i].name, true, nextVar);
+      model.nextStateExprByStateKey.emplace(originKey, origin);
+      model.initialInputStateKeyByInputKey.emplace(inputs[i].key, originKey);
+      inputOrigins[i] = origin;
+    }
   }
 
   for (size_t componentID = 0; componentID < graph.components.size(); ++componentID) {
@@ -305,7 +343,8 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     std::string symbolicFailure;
     if (failure.empty()) {
       SymbolicCompileOptions compile;
-      compile.initialInputs.assign(local.externalInputs.size(), *options.initialInputs);
+      compile.initialInputValues.assign(local.externalInputs.size(),
+          options.initialInputs ? std::optional<uint8_t>(*options.initialInputs) : std::nullopt);
       compile.singleExternalInputChange = options.singleInputChange;
       compile.maxWaves = options.limits.maxWaves;
       compile.maxNodes = options.maxSymbolicNodes;
@@ -313,21 +352,29 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       compile.maxSatDecisions = options.maxSatDecisions;
       compile.workers = options.workers;
       for (const auto& primitive : local.primitives)
-        compile.initialStorage.emplace_back(primitive.storageBits, uint8_t(*options.initialStorage));
+        compile.initialStorageValues.emplace_back(primitive.storageBits,
+            options.initialStorage ? std::optional<uint8_t>(*options.initialStorage) : std::nullopt);
       auto result = compileSymbolicNetwork({local, std::move(localSymbolic)}, compile);
       if (result.certified()) symbolic = std::move(result.model);
       else symbolicFailure = result.detail;
     }
     std::optional<TransitionTable> table;
+    const bool concreteInitials = (options.initialInputs || local.externalInputs.empty()) &&
+        (options.initialStorage || std::all_of(local.primitives.begin(), local.primitives.end(),
+            [](const auto& primitive) { return !primitive.storageBits; }));
+    if (failure.empty() && !symbolic && !concreteInitials)
+      failure = "symbolic initialization has no certified macro: " + symbolicFailure;
     if (failure.empty() && !symbolic) {
       try {
         EventModel reference(local, {}, options.workers);
         CompileOptions compile;
-        compile.initialInputs.assign(local.externalInputs.size(), *options.initialInputs);
+        // Missing options occur here only for zero-width input/storage vectors;
+        // a symbolic origin is never replaced by a finite compiler's zero bit.
+        compile.initialInputs.assign(local.externalInputs.size(), options.initialInputs.value_or(false));
         compile.singleExternalInputChange = options.singleInputChange;
         compile.limits = options.limits;
         for (const auto& primitive : local.primitives)
-          compile.initialStorage.emplace_back(primitive.storageBits, uint8_t(*options.initialStorage));
+          compile.initialStorage.emplace_back(primitive.storageBits, uint8_t(options.initialStorage.value_or(false)));
         auto result = compileTransitionTable(reference, compile);
         if (result.certified()) table = std::move(result.table);
         else failure = std::string(certificationStatusName(result.status)) + ": " + result.detail +
@@ -353,7 +400,47 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       const auto stateKey = syntheticKey(2, componentID, bit);
       stateKeys.push_back(stateKey);
       state.push_back(variable(model, stateKey, "$event.component[" + std::to_string(componentID) + "].state[" + std::to_string(bit) + "]", true, nextVar));
-      model.initialStateValueByKey.emplace(stateKey, symbolic ? symbolic->initialState.at(bit) : (table->initials[0].boundary >> bit) & 1);
+      if (!symbolic) initialize(stateKey, BoolExpr::Var((table->initials[0].boundary >> bit) & 1));
+    }
+    if (symbolic) {
+      // Each symbolic BOOT parameter becomes a fixed-once state variable. PI
+      // origins are shared across islands; storage origins remain design-local.
+      std::unordered_map<size_t, BoolExpr*> sharedOrigins;
+      for (size_t i = 0; i < globalInputIndices.size(); ++i)
+        if (const auto parameter = symbolic->initialInputSymbols.at(i))
+          sharedOrigins.emplace(*parameter, inputOrigins.at(globalInputIndices[i]));
+      SymbolicBits parameters;
+      std::unordered_map<size_t, size_t> directProjections;
+      for (size_t bit = 0; bit < symbolic->initialStateExpressions.size(); ++bit) {
+        auto* expression = symbolic->initialStateExpressions[bit];
+        if (expression->getOp() == Op::VAR && expression->getId() >= 2)
+          directProjections.try_emplace(expression->getId(), bit);
+      }
+      for (size_t i = 0; i < symbolic->initialParameterSymbols.size(); ++i) {
+        const auto found = sharedOrigins.find(symbolic->initialParameterSymbols[i]);
+        if (found != sharedOrigins.end()) parameters.push_back(found->second);
+        else {
+          // If BOOT retains this origin verbatim in a boundary bit, that bit
+          // is an exact existential representative. No fixed-once copy is
+          // needed; the equality is used only in the initial relation.
+          const auto projection = directProjections.find(symbolic->initialParameterSymbols[i]);
+          if (projection != directProjections.end()) {
+            parameters.push_back(state.at(projection->second));
+            continue;
+          }
+          const auto originKey = syntheticKey(8, componentID, i);
+          auto* origin = variable(model, originKey, "$event.initial.component[" +
+              std::to_string(componentID) + "].storage[" + std::to_string(i) + "]", true, nextVar);
+          model.nextStateExprByStateKey.emplace(originKey, origin);
+          parameters.push_back(origin);
+        }
+      }
+      model.initialCondition = BoolExpr::And(model.initialCondition,
+          encodeSymbolicInitialRelation(*symbolic, state, parameters));
+      const auto initial = encodeSymbolicInitialState(*symbolic, parameters);
+      for (size_t bit = 0; bit < state.size(); ++bit)
+        if (initial[bit]->getOp() == Op::VAR && initial[bit]->getId() < 2)
+          model.initialStateValueByKey.emplace(stateKeys[bit], initial[bit]->getId() != 0);
     }
     const auto encoded = symbolic
         ? encodeSymbolicMacro(*symbolic, local, state, localInputs, options.singleInputChange, selector, eventValue, globalInputIndices)
@@ -368,6 +455,23 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       model.observedOutputs.push_back(output.key);
       model.observedOutputExprByKey.emplace(output.key, encoded.observedNets.at(localNet.at(output.net)));
     }
+  }
+  // Reuse certified islands' input history rather than duplicating state. Only
+  // inputs outside those islands need separate remembered levels for reset.
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (resetInterface->currentInputs[i]) continue;
+    const auto historyKey = syntheticKey(6, i);
+    auto* current = variable(model, historyKey, "$event.history." + inputs[i].name, true, nextVar);
+    resetInterface->currentInputs[i] = current;
+    initialize(historyKey, inputOrigins[i]);
+    auto* next = inputExpressions[i];
+    if (options.singleInputChange) {
+      auto* selected = BoolExpr::createTrue();
+      for (size_t bit = 0; bit < selector.size(); ++bit)
+        selected = BoolExpr::And(selected, (i >> bit) & 1 ? selector[bit] : BoolExpr::Not(selector[bit]));
+      next = symbolicMux(selected, eventValue, current);
+    }
+    model.nextStateExprByStateKey.emplace(historyKey, next);
   }
   for (const auto& output : outputs) {
     if (owner[output.net] != absent) continue;
@@ -386,7 +490,12 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
   const auto clock = discoverResetClock(network, resetClocks);
   resetInterface->clockInputIndex = clock.externalInputIndex;
   if (!clock.resolved()) resetInterface->clockError = clock.detail;
+  reuseInitialInputHistory(model, resetInterface->inputKeys, resetInterface->currentInputs);
   model.eventResetInterface = std::move(resetInterface);
+  // Preserve the existing unit-fact fast path for genuinely concrete BOOTs.
+  // Only a set-valued start needs the general relation in the proof engines.
+  if (model.initialStateValueByKey.size() == model.stateBits.size())
+    model.initialCondition = nullptr;
   applyOpaquePolicy(model, top->getName().getString(), side);
   return model;
 }
@@ -396,12 +505,13 @@ std::optional<SequentialDesignModel> extractEventDesign(
     naja::NL::SNLDesign* top, const BoundaryPairs& pairs, size_t side) {
   const auto& options = supportOptions();
   if (!options.enabled) return {};
-  if (!options.initialInputs && !options.initialStorage) return {};
-  if (!options.initialInputs || !options.initialStorage || !pairs.empty()) {
+  // Automatic support must not turn an ordinary flop-only SEC run into an
+  // event protocol. Explicit low-level overrides also count as a request.
+  if (!options.explicitConfiguration && !options.initialInputs && !options.initialStorage &&
+      !options.singleInputChange && !containsModeledLatch(top)) return {};
+  if (!pairs.empty()) {
     SequentialDesignModel result;
-    result.unsupportedReasons.push_back(!pairs.empty()
-        ? "event semantics do not yet support selected leaf boundaries"
-        : "event semantics require explicit Boolean initial_inputs and initial_storage");
+    result.unsupportedReasons.push_back("event semantics do not yet support selected leaf boundaries");
     return result;
   }
   return extract(top, side);

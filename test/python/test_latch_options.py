@@ -39,22 +39,26 @@ class LatchOptionsTest(unittest.TestCase):
                         self.assertEqual(inputs, result["latch_initial_inputs"])
                         self.assertEqual(storage, result["latch_initial_storage"])
 
-    def test_tuning_requires_a_contract_and_cannot_override_explicit_false(self):
+    def test_optional_settings_do_not_invent_initialization_or_override_explicit_false(self):
         for key, value in (("latch_input_changes", "any"), ("latch_initial_inputs", 0),
                            ("latch_initial_storage", 1), ("latch_workers", 0),
                            ("latch_max_waves", 1), ("latch_max_states", 1),
                            ("latch_max_transactions", 1)):
             with self.subTest(key=key):
-                with self.assertRaisesRegex(ValueError, "requires explicit"):
-                    _build_native_design_options(VerificationOptions(mode="sec", **{key: value}))
+                result = _build_native_design_options(VerificationOptions(mode="sec", **{key: value}))
+                self.assertEqual(value, result[key])
+                for initial in ("latch_initial_inputs", "latch_initial_storage"):
+                    if initial != key:
+                        self.assertIsNone(result[initial])
                 with self.assertRaisesRegex(ValueError, "requires latch_support"):
                     _build_native_design_options(VerificationOptions(
                         mode="sec", latch_support=False, **{key: value}))
 
-    def test_enabled_requires_each_contract_field(self):
+    def test_each_semantic_field_can_be_omitted_independently(self):
         for key in ("latch_input_changes", "latch_initial_inputs", "latch_initial_storage"):
-            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "requires explicit"):
-                _build_native_design_options(self.contract(**{key: None}))
+            with self.subTest(key=key):
+                result = _build_native_design_options(self.contract(**{key: None}))
+                self.assertIsNone(result[key])
 
     def test_enabled_lec_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "only supported for SEC"):
@@ -123,8 +127,10 @@ class LatchOptionsTest(unittest.TestCase):
         for key in ("latch_max_symbolic_nodes", "latch_max_sat_conflicts", "latch_max_sat_decisions"):
             with self.subTest(key=key):
                 self.assertEqual(123, _build_native_design_options(self.contract(**{key: 123}))[key])
-                with self.assertRaisesRegex(ValueError, "requires explicit"):
-                    _build_native_design_options(VerificationOptions(mode="sec", **{key: 123}))
+                result = _build_native_design_options(VerificationOptions(mode="sec", **{key: 123}))
+                self.assertEqual(123, result[key])
+                self.assertIsNone(result["latch_initial_inputs"])
+                self.assertIsNone(result["latch_initial_storage"])
                 with self.assertRaisesRegex(ValueError, "requires latch_support"):
                     _build_native_design_options(VerificationOptions(
                         mode="sec", latch_support=False, **{key: 123}))

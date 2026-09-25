@@ -51,13 +51,14 @@ class VerificationOptions:
     models have no child instances. Hierarchical paths to leaves are valid;
     selecting a nonleaf instance is rejected.
 
-    ``latch_support`` is enabled by default. Without event settings, legacy
-    LEC/SEC behavior is preserved and latches remain opaque. Modeling latches
-    requires SEC, an explicit ``latch_input_changes`` contract (``"any"`` or
-    ``"single"``), and initial inputs/storage given as integer 0 or 1. No
-    initial values are assumed implicitly. Each SEC step then
-    represents an external transaction followed by settling, not a clock
-    cycle. It consumes declared Naja models; it never infers cells by name.
+    ``latch_support`` is enabled by default for SEC and has no effect on LEC
+    without event options. Input changes default to unrestricted ``"any"``;
+    ``"single"`` explicitly restricts each transaction to one changing input.
+    Initial inputs/storage remain symbolic unless their independent options
+    are explicitly set to integer 0 or 1; reset is not required. In latch
+    event mode each SEC step represents an external transaction followed by
+    settling, not a clock cycle. It consumes declared Naja models; it never
+    infers cells by name.
     """
 
     mode: VerificationMode | str = VerificationMode.LEC

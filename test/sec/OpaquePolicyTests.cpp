@@ -15,6 +15,7 @@
 #include "Tree2BoolExpr.h"
 #include "model/OpaquePolicy.h"
 #include "model/SequentialDesignModel.h"
+#include "latch/LatchSupportOptions.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
 namespace {
@@ -162,6 +163,9 @@ TEST_F(OpaquePolicyTests, EnabledExtractionRejectsDisconnectedNonLatchCell) {
 }
 
 TEST_F(OpaquePolicyTests, EnabledExtractionRejectsDisconnectedLatch) {
+  LATCH::SupportOptions legacy;
+  legacy.enabled = false;
+  LATCH::ScopedSupportOptions scope(legacy);
   createLibraries();
   Config::setErrorOnOpaque(true);
   const auto model = SequentialDesignModel::extract(top("candidate", NLDB0::getDLatch()));

@@ -248,7 +248,8 @@ void exportSecBtor2(const KInductionProblem& problem,
 
   const bool initialize = resetFrames != 0 ? problem.usesDualRailStateEncoding
       : problem.hasSequentialState() && problem.hasExplicitInitialState();
-  if (initialize && (resetFrames != 0 || problem.initialCondition != nullptr)) {
+  if (initialize && (resetFrames != 0 || problem.initialCondition != nullptr ||
+                     problem.hasExactRelationalInitialState)) {
     if (!problem.initialStateAssignments.empty()) {
       std::map<size_t, bool> values;
       for (const auto& [symbol, value] : problem.initialStateAssignments) {
@@ -260,7 +261,10 @@ void exportSecBtor2(const KInductionProblem& problem,
       for (const auto& [symbol, value] : values) {
         writer.init(nodeForState(symbol), writer.constant(value));
       }
-    } else if (resetFrames == 0 && problem.initialCondition != BoolExpr::createTrue()) {
+    }
+    if ((problem.initialStateAssignments.empty() || problem.hasExactRelationalInitialState) &&
+        resetFrames == 0 && problem.initialCondition != nullptr &&
+        problem.initialCondition != BoolExpr::createTrue()) {
       constrainWhen(writer, timeline.firstFrame(), writer.expression(problem.initialCondition));
     }
   }

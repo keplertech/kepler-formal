@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <gtest/gtest.h>
 #include <iomanip>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 #include "BoolExprCache.h"
@@ -183,6 +184,53 @@ TEST_F(LatchSymbolicIntegrationTests, EncoderCannotBroadenCertificateOrRelabelIn
   EXPECT_THROW(encodeSymbolicMacro(macro, network, state, input, true, selector, BoolExpr::Var(14), {0}), std::invalid_argument);
   network.externalInputs = {0};
   EXPECT_THROW(encodeSymbolicMacro(macro, network, state, input, true, {nullptr}, BoolExpr::Var(14), {0}), std::invalid_argument);
+}
+
+TEST_F(LatchSymbolicIntegrationTests, InitialRelationPreservesAllOriginsAndSharedInputCorrelation) {
+  SymbolicMacro macro;
+  macro.stateSymbols = {2, 3};
+  macro.inputSymbols = {4};
+  macro.initialParameterSymbols = {5, 6};
+  macro.initialStateExpressions = {BoolExpr::Var(5), BoolExpr::Xor(BoolExpr::Var(5), BoolExpr::Var(6))};
+  const SymbolicBits state{BoolExpr::Var(10), BoolExpr::Var(11)};
+  const SymbolicBits origins{BoolExpr::Var(12), BoolExpr::Var(13)};
+  auto* relation = encodeSymbolicInitialRelation(macro, state, origins);
+  for (size_t code = 0; code < 16; ++code) {
+    const bool first = code & 1, second = (code >> 1) & 1;
+    const bool input = (code >> 2) & 1, stored = (code >> 3) & 1;
+    EXPECT_EQ(relation->evaluate({{10, first}, {11, second}, {12, input}, {13, stored}}),
+        first == input && second == (input != stored));
+  }
+  // Two components can share input origin 12 while their storage origins 13/14
+  // stay distinct; the compiler never imposes an unintended storage equality.
+  const auto other = encodeSymbolicInitialState(macro, {origins[0], BoolExpr::Var(14)});
+  EXPECT_EQ(other[0], origins[0]);
+  EXPECT_EQ(other[1]->getSupportVars(), (std::set<size_t>{12, 14}));
+  // Replacement IDs may collide with local IDs; substitution is simultaneous.
+  const auto swapped = encodeSymbolicInitialState(macro, {BoolExpr::Var(6), BoolExpr::Var(5)});
+  EXPECT_EQ(swapped[0], BoolExpr::Var(6));
+  EXPECT_EQ(swapped[1], BoolExpr::Xor(BoolExpr::Var(6), BoolExpr::Var(5)));
+}
+
+TEST_F(LatchSymbolicIntegrationTests, InitialEncodingRejectsHiddenChoicesAndOrdinaryFrameInputs) {
+  SymbolicMacro macro;
+  macro.stateSymbols = {2}; macro.inputSymbols = {3};
+  macro.initialParameterSymbols = {4};
+  macro.initialStateExpressions = {BoolExpr::Var(4)};
+  EXPECT_THROW(encodeSymbolicInitialState(macro, {}), std::invalid_argument);
+  EXPECT_THROW(encodeSymbolicInitialState(macro, {nullptr}), std::invalid_argument);
+  for (size_t illegal : {size_t(2), size_t(3), size_t(99)}) {
+    macro.initialStateExpressions[0] = BoolExpr::Var(illegal);
+    EXPECT_THROW(encodeSymbolicInitialState(macro, {BoolExpr::Var(20)}), std::invalid_argument);
+  }
+  macro.initialStateExpressions = {BoolExpr::Var(4)};
+  macro.initialParameterSymbols = {2};
+  EXPECT_THROW(encodeSymbolicInitialState(macro, {BoolExpr::Var(20)}), std::invalid_argument);
+  macro.initialParameterSymbols = {4, 4};
+  EXPECT_THROW(encodeSymbolicInitialState(macro, {BoolExpr::Var(20), BoolExpr::Var(21)}), std::invalid_argument);
+  macro.initialParameterSymbols.clear(); macro.initialStateExpressions.clear();
+  macro.initialState = {1};
+  EXPECT_EQ(encodeSymbolicInitialState(macro, {}), (SymbolicBits{BoolExpr::createTrue()}));
 }
 }  // namespace
 }  // namespace KEPLER_FORMAL::SEC::LATCH

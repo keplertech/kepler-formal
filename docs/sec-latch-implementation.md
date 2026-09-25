@@ -10,20 +10,16 @@ required by, or enabled in, this implementation.
 
 The master switch `latch_support` is **on by default**. Disable it with YAML
 `latch_support: false`, CLI `--no-latch_support`, or Python `latch_support=False`.
-Default enablement does not invent an initialization or input-event contract:
-with no latch-event settings supplied, the existing SEC path and opaque-latch
-behavior remain in use. New latch extraction and supplemental Liberty latch
-modeling require the complete explicit contract below. With the switch off, or
-with no event contract supplied, `sec_reset` uses the unchanged legacy
-reset-bootstrap path; none of the event adapter's clock-discovery,
-initialization, or single-reset-port requirements apply. Ordinary LEC behavior
-also remains unchanged.
+No initialization settings are required. Designs with explicitly modeled latches
+use the event path with arbitrary Boolean starting inputs and storage, and `any`
+input changes. Unsupported components remain opaque. With the switch off,
+`sec_reset` uses the unchanged legacy reset-bootstrap path. Latch-free designs
+also retain that path unless event settings are explicitly supplied. Ordinary
+LEC behavior remains unchanged.
 
-## 1. Enabling the model requires an explicit contract
+## 1. Defaults and optional restrictions
 
-The master switch does not select an initialization or input-event assumption.
-To activate event modeling, provide all three fields below; an explicit
-`latch_support: true` is optional because it is already the default:
+No `sec_latch_events` map or explicit `latch_support: true` is needed:
 
 ```yaml
 format: verilog
@@ -31,17 +27,15 @@ verification: sec
 input_paths: [reference.v, implementation.v]
 liberty_files: [cells.lib]
 
-sec_latch_events:
-  input_changes: any
-  initial_inputs: 0
-  initial_storage: 0
 ```
 
-`initial_inputs` sets **every external input** to the specified Boolean value
-before initialization. `initial_storage` sets **every modeled primitive storage
-bit** to its specified value. Each accepts only `0` or `1`; these are separate
-choices, not per-port mappings. They describe a particular initial-state
-contract, not a proof that arbitrary power-up state reaches reset.
+Each unspecified input and storage bit retains both Boolean possibilities,
+including mixed initial values. Matching external input levels are shared between
+the designs; internal storage origins are independent, not assumed equal.
+Optional `initial_inputs` and `initial_storage` restrictions remain available
+only when explicitly requested: each fixes all bits of its category to `0` or
+`1`, independently of whether the other setting is supplied. Neither is a reset.
+Without `sec_reset`, no reset sequence is inserted.
 
 | Purpose | YAML | Command-line option |
 | --- | --- | --- |
@@ -52,17 +46,15 @@ contract, not a proof that arbitrary power-up state reaches reset.
 | Initial value of all primitive storage bits | `sec_latch_events.initial_storage: 0` or `1` | `--sec-latch-initial-storage 0` or `1` |
 | Optional strict opacity policy, default off | `error_on_opaque: true` | `--error-on-opaque` |
 
-Providing the complete contract activates event modeling under the default-on
-switch. Providing any contract or tuning settings while explicitly disabling
-the switch is rejected. Partial contracts, including resource tuning without
-all three required contract fields, are also rejected; they do not fall back
-silently. Supplying no latch-event settings at all preserves the legacy path.
+Event and resource settings can be supplied independently; no initialization
+field is mandatory. Explicit event tuning also selects the event path for a
+latch-free design. Tuning while explicitly disabling the switch is rejected.
 The strict opaque policy is independent of the master latch switch: it can
 also be used with ordinary SEC.
 
 ### `any` and `single` are different verification assumptions
 
-- `any` permits every Boolean valuation of a component's external inputs at
+- `any` (the default) permits every Boolean valuation of a component's external inputs at
   each transaction, including several simultaneous changes and no change.
 - `single` permits at most one original top-level input bit to change per
   transaction, including no change. It is an explicit restriction on the
@@ -117,8 +109,6 @@ The existing reset configuration can be used with latch support:
 latch_support: true
 sec_latch_events:
   input_changes: single
-  initial_inputs: 0
-  initial_storage: 0
 sec_reset:
   cycles: 3
   ports:
@@ -215,7 +205,7 @@ argument.
 
 ## 3. Extraction and primitive modeling
 
-The ordinary Liberty reader is augmented, only in the enabled file-based path,
+The ordinary Liberty reader is augmented, only in the enabled SEC file-based path,
 with explicit scalar `latch` groups. The supplemental reader preserves data,
 enable, asynchronous clear/preset, conflict behavior, and physical output
 expressions. An integrated clock gate is supported through its actual latch
@@ -274,7 +264,8 @@ arbitrary independently settling local islands or final-output-only summaries.
 
 Initialization is itself a checked settling episode:
 
-1. Install the explicit initial external values and primitive storage values.
+1. Give each unspecified external input and primitive storage bit an independent
+   symbolic Boolean origin. Apply a concrete value only if explicitly specified.
 2. Initialize physical storage outputs from their model; universally quantify
    auxiliary internal net seeds rather than choosing convenient values. The
    finite reference compiler enumerates them; the symbolic compiler uses
@@ -286,17 +277,42 @@ Initialization is itself a checked settling episode:
    invented edge. Generated clock changes from that update remain real modeled
    events in subsequent waves.
 5. Certify that all auxiliary seed choices and permitted event orders settle
-   to the same complete boundary for the prescribed intended initialization.
+   to the same complete boundary for **each** intended input/storage origin.
+   Different genuine origins may produce different boundaries; uniqueness is
+   required only across artificial seeds and event orders for the same origin.
 
 When a physical output's initial projection reads input pins, certification
 also quantifies seeds of other storage-output nets that the projection can
 read before they are overwritten. Otherwise those hidden seed choices could
 determine the retained result.
 
-The standalone compiler can enumerate unspecified initial storage and retain
-every origin mapping. The first integrated CLI path instead requires explicit
-fixed Boolean input/storage settings and one initialized boundary per component;
-it does not select a favorable member of an unspecified initial relation.
+The integrated symbolic compiler preserves the settled boundary as a function of
+the genuine origins. SEC receives that exact initial relation, plus any derived
+constant facts; it never chooses one favorable boundary. All engines and BTOR2
+must retain the relation even when constant initial facts also exist. The initial
+relation applies only at frame zero. A reset prefix is composed only when
+`sec_reset` is configured, and storage that reset does not determine remains
+unspecified. In particular, a closed, unreset latch is not forced to zero merely
+because other cells have reset.
+
+This event model remains Boolean: unspecified storage means an arbitrary fixed
+Boolean starting value, not a literal Verilog X. In dual-rail encoding its initial
+rails are complementary symbolic bits, not the `11` encoding of X. Explicit X/Z
+behavior remains unsupported here; legacy dual-rail initialization is unchanged
+when the event path is inactive. Independent unreset storage can therefore
+produce a startup mismatch even for identical designs; no hidden equality or
+automatic reset is assumed to make such a comparison pass.
+
+Symbolic starts can also enlarge the proof problem. In particular, IMC can return
+inconclusive on a reset-plus-transparent-latch example that KI and PDR prove:
+its exact reachable-state path has a small state-count limit and its larger
+interpolation path is resource bounded. This is not a requirement to provide
+initial values. No initialization restriction is added to obtain a proof.
+
+The finite fallback is currently used only for fully concrete BOOT inputs and
+storage. If symbolic certification cannot establish the required settling
+properties with unspecified origins, the component remains opaque; no origins
+are discarded to make a certificate succeed.
 
 Within an ordinary wave, activated primitives read the same frozen snapshot.
 A sequential primitive processes every permitted ordering of changed input
@@ -487,9 +503,11 @@ does not justify restricting the event or reset-input contract.
 
 ## 7. Opacity, errors, and coverage
 
-With latch support disabled, or with no event contract supplied, the existing
-extraction path remains in use. With it enabled and a complete contract supplied,
-a certified component is modeled; an unsupported or uncertified component remains
+With latch support disabled, the existing extraction path remains in use.
+Latch-free designs also retain that path unless event settings are supplied.
+With support enabled, designs containing modeled latches use event extraction
+without requiring initialization settings. A certified component is modeled;
+an unsupported or uncertified component remains
 opaque, with reasons and affected output skipping. Independent supported outputs
 can still be checked. Skipped outputs are not proved, and a partial result is not
 a claim that an excluded nonsettling component terminates.
@@ -511,26 +529,24 @@ inherit a caller's ambient event contract or leak their settings back to it.
 
 ## 8. Borrowed C++ and Python APIs
 
-The Python interface uses the same default-on gate and explicit contract:
+The Python interface uses the same default-on gate and symbolic starts:
 
 ```python
 from kepler_formal import VerificationOptions
 
 options = VerificationOptions(
     mode="sec",
-    latch_input_changes="single",
-    latch_initial_inputs=0,
-    latch_initial_storage=0,
 )
 ```
 
 Optional fields are `latch_workers`, `latch_max_waves`, `latch_max_states`,
 `latch_max_transactions`, `latch_max_symbolic_nodes`, `latch_max_sat_conflicts`,
 and `latch_max_sat_decisions`. `latch_workers=0` selects automatic parallelism;
-proof budgets must be positive. Invalid types, partial contracts, tuning while
+proof budgets must be positive. `latch_input_changes`, `latch_initial_inputs`,
+and `latch_initial_storage` are independently optional restrictions. Invalid types, tuning while
 explicitly disabled, and event settings in non-SEC mode or with selected leaf
-boundaries are rejected. With no event settings supplied, ordinary SEC/LEC
-behavior is retained. Use `latch_support=False` to explicitly disable the feature;
+boundaries are rejected. Ordinary LEC and latch-free SEC retain legacy behavior
+without event tuning. Use `latch_support=False` to explicitly disable the feature;
 it must not be combined with event settings. The independent `error_on_opaque`
 option remains default-off.
 
@@ -546,7 +562,8 @@ after success or failure. Matching-runtime native and Python tests run through
 | File | Responsibility |
 | --- | --- |
 | `src/bin/LatchEventConfig.*` | Master enable, explicit contract, tuning, and CLI/YAML validation |
-| `src/bin/LibertyLatchModels.*` | Supplemental scalar Liberty latch descriptions for explicitly configured event modeling |
+| `src/bin/LibertyLatchModels.*` | Supplemental scalar Liberty latch descriptions when SEC latch support is enabled |
+| `src/sec/latch/LatchInitialState.*` | Exact symbolic BOOT relations and shared initial external levels in SEC |
 | `src/sec/latch/NajaEventPrimitive.*` | Copy supported Naja primitive expressions into immutable callbacks |
 | `src/sec/latch/LatchConstantNet.h` | Read-only resolution of driverless Boolean constants, preserving conflict diagnostics |
 | `src/sec/latch/LatchEventModel.*` | Boolean BOOT/admission/wave semantics, complete state, parallel primitive evaluation |

@@ -40,7 +40,9 @@ TEST(LatchEventConfigTests, EnabledByDefaultWithoutAnImplicitContract) {
   EXPECT_TRUE(config.parseYaml(YAML::Load("{}"), error));
   EXPECT_TRUE(config.options().enabled);
   EXPECT_FALSE(config.options().initialInputs.has_value());
-  EXPECT_FALSE(config.options().hasEventContract());
+  EXPECT_FALSE(config.options().initialStorage.has_value());
+  EXPECT_FALSE(config.options().singleInputChange);
+  EXPECT_FALSE(config.options().explicitConfiguration);
   EXPECT_TRUE(config.validate(false, false, false, error));
   EXPECT_TRUE(config.validate(true, true, true, error));
   EXPECT_EQ(parseArgument(config, {"--unrelated"}, error), Result::NotHandled);
@@ -61,7 +63,7 @@ TEST(LatchEventConfigTests, CompleteEventContractUsesDefaultEnableUnlessExplicit
     const std::string gate = disabled ? "latch_support: false\n" : "";
     ASSERT_TRUE(config.parseYaml(YAML::Load(gate + "sec_latch_events: " + complete), error));
     EXPECT_EQ(config.options().enabled, !disabled);
-    EXPECT_EQ(config.options().hasEventContract(), !disabled);
+    EXPECT_TRUE(config.options().explicitConfiguration);
     EXPECT_EQ(config.validate(true, false, false, error), !disabled);
     if (disabled) EXPECT_NE(error.find("latch_support"), std::string::npos);
   }
@@ -69,7 +71,7 @@ TEST(LatchEventConfigTests, CompleteEventContractUsesDefaultEnableUnlessExplicit
   std::string error;
   ASSERT_EQ(parseArgument(config, {"--sec-latch-events", "single"}, error), Result::Parsed);
   EXPECT_TRUE(config.options().enabled);
-  EXPECT_FALSE(config.validate(true, false, false, error));
+  EXPECT_TRUE(config.validate(true, false, false, error));
 }
 
 TEST(LatchEventConfigTests, DisableFlagPreservesLegacyAndCanBeOverridden) {
@@ -80,7 +82,7 @@ TEST(LatchEventConfigTests, DisableFlagPreservesLegacyAndCanBeOverridden) {
   EXPECT_TRUE(config.validate(true, true, true, error));
   ASSERT_EQ(parseArgument(config, {"--latch_support"}, error), Result::Parsed);
   EXPECT_TRUE(config.options().enabled);
-  EXPECT_FALSE(config.options().hasEventContract());
+  EXPECT_FALSE(config.options().explicitConfiguration);
 }
 
 TEST(LatchEventConfigTests, MasterGateRequiresExactBooleanYamlValues) {
@@ -99,10 +101,13 @@ TEST(LatchEventConfigTests, MasterEnableAloneDoesNotInventAnEventContract) {
   ASSERT_EQ(parseArgument(config, {"--latch_support"}, error), Result::Parsed);
   EXPECT_TRUE(config.options().enabled);
   EXPECT_TRUE(config.validate(true, false, false, error));
-  EXPECT_FALSE(config.options().hasEventContract());
+  EXPECT_FALSE(config.options().explicitConfiguration);
   ASSERT_EQ(parseArgument(config, {"--sec-latch-initial-inputs", "0"}, error), Result::Parsed);
+  EXPECT_TRUE(config.validate(true, false, false, error));
+  EXPECT_FALSE(config.options().initialStorage.has_value());
   ASSERT_EQ(parseArgument(config, {"--sec-latch-initial-storage", "0"}, error), Result::Parsed);
-  EXPECT_FALSE(config.validate(true, false, false, error));
+  EXPECT_TRUE(config.validate(true, false, false, error));
+  EXPECT_FALSE(config.options().singleInputChange);
   ASSERT_EQ(parseArgument(config, {"--sec-latch-events", "single"}, error), Result::Parsed);
   EXPECT_TRUE(config.validate(true, false, false, error));
 }
@@ -115,8 +120,9 @@ TEST(LatchEventConfigTests, MasterEnableCanFollowTuningFlags) {
   EXPECT_TRUE(config.validate(true, false, false, error));
 }
 
-TEST(LatchEventConfigTests, RequiresExplicitInputChangeAndBothInitializationChoices) {
+TEST(LatchEventConfigTests, EventModeAndInitializationOverridesAreIndependentlyOptional) {
   for (const auto* body : {"{}", "{input_changes: single}",
+      "{initial_inputs: 0}", "{initial_storage: 1}", "{workers: 2}",
       "{input_changes: single, initial_inputs: 0}",
       "{input_changes: single, initial_storage: 0}",
       "{initial_inputs: 0, initial_storage: 0}"}) {
@@ -124,8 +130,14 @@ TEST(LatchEventConfigTests, RequiresExplicitInputChangeAndBothInitializationChoi
     LatchEventConfig config;
     std::string error;
     ASSERT_TRUE(parseYaml(config, body, error));
-    EXPECT_FALSE(config.validate(true, false, false, error));
-    EXPECT_NE(error.find("explicit"), std::string::npos);
+    EXPECT_TRUE(config.validate(true, false, false, error)) << error;
+    EXPECT_TRUE(config.validate(true, true, false, error)) << error;
+    EXPECT_TRUE(config.options().explicitConfiguration);
+    const auto supplied = YAML::Load(body);
+    EXPECT_EQ(config.options().initialInputs.has_value(), bool(supplied["initial_inputs"]));
+    EXPECT_EQ(config.options().initialStorage.has_value(), bool(supplied["initial_storage"]));
+    EXPECT_EQ(config.options().singleInputChange,
+              supplied["input_changes"] && supplied["input_changes"].as<std::string>() == "single");
   }
 }
 
@@ -200,15 +212,17 @@ TEST(LatchEventConfigTests, RejectsNegativeOverflowAndZeroResourceLimits) {
   EXPECT_EQ(parseArgument(config, {"--sec-latch-workers", "0"}, error), Result::Parsed);
 }
 
-TEST(LatchEventConfigTests, SymbolicBudgetsAreCheckedAndDoNotSupplyAnEventContract) {
+TEST(LatchEventConfigTests, SymbolicBudgetsDoNotRequireOrInventInitialization) {
   for (const auto* flag : {"--sec-latch-sat-conflicts", "--sec-latch-sat-decisions"}) {
     LatchEventConfig config;
     std::string error;
     EXPECT_EQ(parseArgument(config, {flag, "4294967296"}, error), Result::Error);
     EXPECT_EQ(parseArgument(config, {flag, "42"}, error), Result::Parsed);
     EXPECT_TRUE(config.options().enabled);
-    EXPECT_FALSE(config.options().hasEventContract());
-    EXPECT_FALSE(config.validate(true, false, false, error));
+    EXPECT_FALSE(config.options().initialInputs.has_value());
+    EXPECT_FALSE(config.options().initialStorage.has_value());
+    EXPECT_TRUE(config.options().explicitConfiguration);
+    EXPECT_TRUE(config.validate(true, false, false, error));
   }
   for (const auto* key : {"max_symbolic_nodes", "max_sat_conflicts", "max_sat_decisions"}) {
     LatchEventConfig config;
@@ -219,7 +233,7 @@ TEST(LatchEventConfigTests, SymbolicBudgetsAreCheckedAndDoNotSupplyAnEventContra
   std::string error;
   ASSERT_EQ(parseArgument(config, {"--sec-latch-max-nodes", "99"}, error), Result::Parsed);
   EXPECT_EQ(config.options().maxSymbolicNodes, 99u);
-  EXPECT_FALSE(config.validate(true, false, false, error));
+  EXPECT_TRUE(config.validate(true, false, false, error));
 }
 
 TEST(LatchEventConfigTests, RejectsMissingFlagValueAndIncompatibleWorkflows) {
@@ -329,7 +343,7 @@ TEST_F(LatchEventCliTests, MasterDisabledRetainsOpaqueLatchesAndIndependentStric
   EXPECT_NE(strict.reason.find("error-on-opaque"), std::string::npos);
 }
 
-TEST_F(LatchEventCliTests, DisableFlagBeforeAndAfterFormatMatchesDefaultWithoutContract) {
+TEST_F(LatchEventCliTests, DisableFlagBeforeAndAfterFormatKeepsUnsupportedRaceOpaque) {
   const std::vector<std::string> base{
       "-verilog", "-v", "sec", "race.v", "race.v", "cells.lib"};
   const auto implicit = run(base);
@@ -342,8 +356,37 @@ TEST_F(LatchEventCliTests, DisableFlagBeforeAndAfterFormatMatchesDefaultWithoutC
     EXPECT_EQ(disabled.status, implicit.status) << disabled.reason;
     EXPECT_EQ(disabled.exitCode, implicit.exitCode);
     EXPECT_EQ(disabled.coveredOutputs, implicit.coveredOutputs);
-    EXPECT_EQ(disabled.skippedObservedOutputs, implicit.skippedObservedOutputs);
+    EXPECT_EQ(disabled.skippedObservedOutputs.size(), implicit.skippedObservedOutputs.size());
+    ASSERT_FALSE(implicit.skippedObservedOutputs.empty());
+    EXPECT_NE(implicit.skippedObservedOutputs.front().find("uniqueness"), std::string::npos);
   }
+}
+
+TEST_F(LatchEventCliTests, DefaultModelsTransparentLatchWithoutAnyInitializationSettings) {
+  write("open.v", "module top(input d, output q); LATCH l(.D(d),.E(1'b1),.Q(q)); endmodule\n");
+  for (const auto* encoding : {"binary", "dual_rail_steady"}) {
+    const auto result = run({"-verilog", "-v", "sec", "--sec-encoding", encoding,
+                            "open.v", "open.v", "cells.lib"});
+    EXPECT_EQ(result.status, KEPLER_FORMAL::RunStatus::Equivalent) << result.reason;
+    EXPECT_EQ(result.coveredOutputs, 1u);
+    const auto disabled = run({"--no-latch_support", "-verilog", "-v", "sec",
+                              "open.v", "open.v", "cells.lib"});
+    EXPECT_EQ(disabled.coveredOutputs, 0u);
+  }
+}
+
+TEST_F(LatchEventCliTests, UnspecifiedStorageDoesNotAcquireACommonPowerUpValue) {
+  for (const auto* encoding : {"binary", "dual_rail_steady"}) {
+    for (const auto* engine : {"k_induction", "pdr", "imc"}) {
+      const auto result = run({"-verilog", "-v", "sec", "--sec-engine", engine,
+          "--sec-encoding", encoding, "self.v", "self.v", "cells.lib"});
+      EXPECT_EQ(result.status, KEPLER_FORMAL::RunStatus::Different) << result.reason;
+      EXPECT_EQ(result.coveredOutputs, 1u);
+    }
+  }
+  const auto explicitStorage = run({"--sec-latch-initial-storage", "0", "-verilog",
+      "-v", "sec", "self.v", "self.v", "cells.lib"});
+  EXPECT_EQ(explicitStorage.status, KEPLER_FORMAL::RunStatus::Equivalent) << explicitStorage.reason;
 }
 
 TEST_F(LatchEventCliTests, SelfFeedbackRetainsExplicitInitialStorage) {
@@ -416,8 +459,9 @@ TEST_F(LatchEventCliTests, WorkflowRestoresOuterEventContractWithoutInheritingIt
   EXPECT_TRUE(Latch::supportOptions().enabled);
   EXPECT_EQ(Latch::supportOptions().initialInputs, true);
   EXPECT_EQ(Latch::supportOptions().workers, 3u);
-  const auto legacy = run({"-verilog", "-v", "sec", "self.v", "self.v", "cells.lib"});
-  EXPECT_EQ(legacy.coveredOutputs, 0u);
+  const auto unspecified = run({"-verilog", "-v", "sec", "self.v", "self.v", "cells.lib"});
+  EXPECT_EQ(unspecified.status, KEPLER_FORMAL::RunStatus::Different) << unspecified.reason;
+  EXPECT_EQ(unspecified.coveredOutputs, 1u);
   EXPECT_TRUE(Latch::supportOptions().enabled);
   EXPECT_EQ(Latch::supportOptions().initialStorage, true);
 }

@@ -9,6 +9,8 @@
 #include <map>
 #include <random>
 #include <sstream>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 
 #include "BoolExprCache.h"
@@ -145,6 +147,39 @@ class LatchNetlistAdapterTests : public ::testing::Test {
     return result;
   }
 
+  std::vector<std::unordered_map<size_t, bool>> initialStates(const SequentialDesignModel& model) {
+    // Small fixtures only: enumerate the actual initial relation, not just its
+    // unit facts, so lost correlations and accidentally fixed origins fail.
+    EXPECT_LT(model.stateBits.size(), 20u);
+    if (model.stateBits.size() >= 20) return {};
+    std::vector<std::unordered_map<size_t, bool>> result;
+    for (size_t code = 0; code < (size_t(1) << model.stateBits.size()); ++code) {
+      std::unordered_map<size_t, bool> state;
+      bool matches = true;
+      for (size_t i = 0; i < model.stateBits.size(); ++i) {
+        const auto& key = model.stateBits[i];
+        const bool value = (code >> i) & 1;
+        state.emplace(model.inputVarByKey.at(key), value);
+        const auto fixed = model.initialStateValueByKey.find(key);
+        if (fixed != model.initialStateValueByKey.end() && fixed->second != value) matches = false;
+      }
+      if (matches && (!model.initialCondition || model.initialCondition->evaluate(state)))
+        result.push_back(std::move(state));
+    }
+    return result;
+  }
+
+  bool inputOrigin(const SequentialDesignModel& model,
+      const std::unordered_map<size_t, bool>& state, const std::string& name) {
+    for (const auto& [input, origin] : model.initialInputStateKeyByInputKey) {
+      const auto& display = model.displayNameByKey.at(input);
+      if (display == name || display == "$event.interface." + name)
+        return state.at(model.inputVarByKey.at(origin));
+    }
+    ADD_FAILURE() << "Missing shared initial input origin: " << name;
+    return false;
+  }
+
   std::map<std::string, bool> step(const SequentialDesignModel& model,
       std::unordered_map<size_t, bool>& state, size_t selector, bool value) {
     auto environment = state;
@@ -176,34 +211,51 @@ class LatchNetlistAdapterTests : public ::testing::Test {
     };
     for (const auto& [key, expression] : model.nextStateExprByStateKey) check(expression);
     for (const auto& [key, expression] : model.observedOutputExprByKey) check(expression);
+    if (model.initialCondition) check(model.initialCondition);
   }
 
   NLLibrary* designs = nullptr;
   NLLibrary* primitives = nullptr;
 };
 
-TEST_F(LatchNetlistAdapterTests, DefaultOptionsLeaveExistingExtractionUntouched) {
+TEST_F(LatchNetlistAdapterTests, DefaultAnyChangeAttemptKeepsUnprovedRaceOpaque) {
   EXPECT_TRUE(supportOptions().enabled);
-  EXPECT_FALSE(supportOptions().hasEventContract());
+  EXPECT_TRUE(supportOptions().hasEventContract());
+  EXPECT_FALSE(supportOptions().initialInputs);
+  EXPECT_FALSE(supportOptions().initialStorage);
   auto* top = directTop("top", NLDB0::getDLatch());
-  EXPECT_FALSE(extractEventDesign(top, {}, 0).has_value());
+  EXPECT_TRUE(extractEventDesign(top, {}, 0).has_value());
   const auto model = SequentialDesignModel::extract(top);
   EXPECT_TRUE(model.observedOutputs.empty());
   EXPECT_EQ(model.skippedObservedOutputs.size(), 1u);
 }
 
-TEST_F(LatchNetlistAdapterTests, ExplicitContractRejectsUnspecifiedInitialization) {
+TEST_F(LatchNetlistAdapterTests, UnspecifiedInitializationRetainsEveryStableLatchStart) {
   auto setting = options();
   setting.initialInputs.reset();
+  setting.initialStorage.reset();
   ScopedSupportOptions scope(setting);
   const auto model = SequentialDesignModel::extract(directTop("top", NLDB0::getDLatch()));
-  EXPECT_TRUE(model.hasUnsupportedFeatures());
-  EXPECT_TRUE(model.observedOutputs.empty());
+  ASSERT_FALSE(model.hasUnsupportedFeatures());
+  ASSERT_EQ(model.observedOutputs.size(), 1u);
+  ASSERT_NE(model.initialCondition, nullptr);
+  expectPublishedSupport(model);
+  const auto starts = initialStates(model);
+  ASSERT_EQ(starts.size(), 8u);  // Two inputs and an independent stored origin.
+  std::set<std::tuple<bool, bool, bool>> observations;
+  for (auto state : starts) {
+    const bool data = inputOrigin(model, state, "data[0]");
+    const bool enable = inputOrigin(model, state, "enable[0]");
+    const bool output = step(model, state, 3, false).at("out[0]");
+    if (enable) EXPECT_EQ(output, data);
+    observations.emplace(data, enable, output);
+  }
+  EXPECT_EQ(observations.size(), 6u);  // Closed holds 0 or 1; open follows D.
 }
 
 TEST_F(LatchNetlistAdapterTests, ScopedOptionsRestorePreviousSemanticContract) {
   EXPECT_TRUE(supportOptions().enabled);
-  EXPECT_FALSE(supportOptions().hasEventContract());
+  EXPECT_TRUE(supportOptions().hasEventContract());
   {
     ScopedSupportOptions outer(options());
     EXPECT_TRUE(supportOptions().enabled);
@@ -218,7 +270,63 @@ TEST_F(LatchNetlistAdapterTests, ScopedOptionsRestorePreviousSemanticContract) {
     EXPECT_TRUE(supportOptions().singleInputChange);
   }
   EXPECT_TRUE(supportOptions().enabled);
-  EXPECT_FALSE(supportOptions().hasEventContract());
+  EXPECT_TRUE(supportOptions().hasEventContract());
+}
+
+TEST_F(LatchNetlistAdapterTests, OptionalInputRestrictionDoesNotInitializeStorage) {
+  auto setting = options();
+  setting.initialStorage.reset();
+  ScopedSupportOptions scope(setting);
+  const auto model = SequentialDesignModel::extract(directTop("top", NLDB0::getDLatch()));
+  ASSERT_EQ(model.observedOutputs.size(), 1u);
+  const auto starts = initialStates(model);
+  ASSERT_EQ(starts.size(), 2u);
+  std::set<bool> outputValues;
+  for (auto state : starts) outputValues.insert(step(model, state, 3, false).at("out[0]"));
+  EXPECT_EQ(outputValues, (std::set<bool>{false, true}));
+}
+
+TEST_F(LatchNetlistAdapterTests, IndependentComponentsShareInitialInputLevels) {
+  auto* top = directTop("top", NLDB0::getDLatch());
+  auto* second = SNLInstance::create(top, NLDB0::getDLatch(), NLName("second"));
+  second->getInstTerm(NLDB0::getDLatchData())->setNet(top->getScalarNet(NLName("data")));
+  second->getInstTerm(NLDB0::getDLatchEnable())->setNet(top->getScalarNet(NLName("enable")));
+  second->getInstTerm(NLDB0::getDLatchOutput())->setNet(port(top, "other", SNLTerm::Direction::Output));
+  auto setting = options();
+  setting.initialInputs.reset();
+  ScopedSupportOptions scope(setting);
+  const auto model = SequentialDesignModel::extract(top);
+  ASSERT_EQ(model.observedOutputs.size(), 2u);
+  EXPECT_EQ(model.initialInputStateKeyByInputKey.size(), 2u);
+  const auto starts = initialStates(model);
+  ASSERT_EQ(starts.size(), 4u);  // Shared D/E, not four unrelated component inputs.
+  for (auto state : starts) {
+    const bool data = inputOrigin(model, state, "data[0]");
+    const bool enable = inputOrigin(model, state, "enable[0]");
+    const auto outputs = step(model, state, 3, false);
+    EXPECT_EQ(outputs.at("out[0]"), data && enable);
+    EXPECT_EQ(outputs.at("other[0]"), outputs.at("out[0]"));
+  }
+}
+
+TEST_F(LatchNetlistAdapterTests, UnknownInitialClockDoesNotCaptureWithoutAnEdge) {
+  auto setting = options();
+  setting.initialInputs.reset();
+  setting.initialStorage.reset();
+  ScopedSupportOptions scope(setting);
+  const auto model = SequentialDesignModel::extract(directTop("top", NLDB0::getDFF(), "C"));
+  ASSERT_EQ(model.observedOutputs.size(), 1u);
+  const auto starts = initialStates(model);
+  ASSERT_EQ(starts.size(), 8u);
+  std::set<std::tuple<bool, bool, bool>> observations;
+  for (auto state : starts) {
+    const bool data = inputOrigin(model, state, "data[0]");
+    const bool clock = inputOrigin(model, state, "enable[0]");
+    const bool stored = step(model, state, 3, false).at("out[0]");
+    observations.emplace(data, clock, stored);
+    EXPECT_EQ(step(model, state, 1, !clock).at("out[0]"), clock ? stored : data);
+  }
+  EXPECT_EQ(observations.size(), 8u);  // Initial high clock did not reset/capture.
 }
 
 TEST_F(LatchNetlistAdapterTests, Db0LatchFollowsOpenDataAndRetainsClosingValue) {
@@ -464,6 +572,30 @@ TEST_F(LatchNetlistAdapterTests, ProofEnginesAcceptSelfEquivalentLatchInBothEnco
       const auto result = strategy.run(16);
       EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
       EXPECT_EQ(result.coveredOutputs, 1u);
+    }
+  }
+}
+
+TEST_F(LatchNetlistAdapterTests, ProofEnginesShareUnknownInitialInputsButNotIndependentStorage) {
+  auto* first = directTop("first", NLDB0::getDLatch());
+  auto* second = directTop("second", NLDB0::getDLatch());
+  for (bool unknownStorage : {false, true}) {
+    auto setting = options();
+    if (unknownStorage) setting.initialStorage.reset();
+    else setting.initialInputs.reset();
+    ScopedSupportOptions scope(setting);
+    for (auto engine : {SecEngine::KInduction, SecEngine::Imc, SecEngine::Pdr}) {
+      for (auto encoding : {SecEncoding::Binary, SecEncoding::DualRailSteady}) {
+        SCOPED_TRACE(::testing::Message() << "unknownStorage=" << unknownStorage
+            << " engine=" << int(engine) << " encoding=" << int(encoding));
+        SequentialEquivalenceStrategy strategy(first, second, Config::SolverType::KISSAT, engine, encoding);
+        const auto result = strategy.run(16);
+        // Fixed storage with shared arbitrary D/E is equivalent. Independently
+        // uninitialized, closed latches can differ before any capture/reset.
+        EXPECT_EQ(result.status, unknownStorage ? SequentialEquivalenceStatus::Different
+                                                : SequentialEquivalenceStatus::Equivalent) << result.reason;
+        EXPECT_EQ(result.coveredOutputs, 1u);
+      }
     }
   }
 }

@@ -6,8 +6,8 @@
 #include "model/SequentialDesignModel.h"
 
 namespace KEPLER_FORMAL::SEC::LATCH {
-// Empty only when the explicit event contract is disabled. In event mode even
-// a latch-free comparison side must use the same external-event semantics.
+// Empty when disabled, or when a latch-free design has no explicitly requested
+// event configuration. Omitted BOOT values stay symbolic, never default to zero.
 std::optional<SequentialDesignModel> extractEventDesign(
     naja::NL::SNLDesign* top, const BoundaryPairs& pairs, size_t side);
 }  // namespace KEPLER_FORMAL::SEC::LATCH

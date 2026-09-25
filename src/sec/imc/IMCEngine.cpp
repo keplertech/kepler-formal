@@ -533,6 +533,12 @@ void addTransitionRelation(SATSolverWrapper& solver,
         variables.getLiteral(stateSymbol, frame + 1),
         encoder.encode(expr));
   }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
+    addLiteralEquivalence(
+        solver,
+        variables.getLiteral(stateSymbol, frame + 1),
+        encoder.encode(expr));
+  }
 }
 
 BoolExpr* buildStateAssignmentCube(const std::vector<size_t>& symbols, size_t assignment) {
@@ -879,9 +885,11 @@ std::optional<IMCResult> findLargeDualRailCounterexampleUpTo(
   size_t skippedStateDependent = 0;
   size_t skippedProjectionSupport = 0;
   std::unordered_set<size_t> stateSymbols;
-  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size() +
+                       problem.auxiliaryStateSymbols.size());
   stateSymbols.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   stateSymbols.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  stateSymbols.insert(problem.auxiliaryStateSymbols.begin(), problem.auxiliaryStateSymbols.end());
   const size_t stateCount = problem.effectiveTotalStateCount();
   for (size_t output = 0; output < problem.observedOutputExprs0.size(); ++output) {
     const std::unordered_set<size_t> support =

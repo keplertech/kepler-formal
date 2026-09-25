@@ -399,5 +399,32 @@ TEST_F(LatchResetAdapterTests, CompositionBudgetFailsWithoutPublishingPartialMod
   }
 }
 
+TEST_F(LatchResetAdapterTests, OnlyUnobservableUnconstrainedSyntheticHistoryIsRemoved) {
+  const SignalKey history{{uint64_t(1) << 61, 6, 99}, {0}};
+  for (size_t reader = 0; reader < 5; ++reader) {
+    SCOPED_TRACE(reader);
+    auto source = synthetic(true);
+    source.stateBits.push_back(history);
+    source.inputVarByKey.emplace(history, 40);
+    source.displayNameByKey.emplace(history, "$event.history.unused");
+    source.initialStateValueByKey.emplace(history, false);
+    source.nextStateExprByStateKey.emplace(history, BoolExpr::Var(40));
+    if (reader == 1)
+      source.observedOutputExprByKey.at(source.observedOutputs[0]) = BoolExpr::Var(40);
+    else if (reader == 2)
+      source.nextStateExprByStateKey.at(source.stateBits[4]) = BoolExpr::Var(40);
+    else if (reader == 3)
+      source.initialCondition = BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(40), BoolExpr::Var(20)));
+    else if (reader == 4)
+      source.initialInputStateKeyByInputKey.emplace(source.eventResetInterface->inputKeys[1], history);
+    const auto result = adaptResetCycles(source, {1, {{"reset", true}}});
+    ASSERT_TRUE(result.model) << result.error;
+    EXPECT_EQ(result.model->inputVarByKey.count(history), reader ? 1u : 0u);
+    EXPECT_EQ(result.model->nextStateExprByStateKey.count(history), reader ? 1u : 0u);
+    EXPECT_EQ(result.model->initialStateValueByKey.count(history), reader ? 1u : 0u);
+    EXPECT_EQ(source.inputVarByKey.count(history), 1u);  // Input model stays complete.
+  }
+}
+
 }  // namespace
 }  // namespace KEPLER_FORMAL::SEC::LATCH

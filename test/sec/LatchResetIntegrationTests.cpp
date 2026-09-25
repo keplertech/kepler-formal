@@ -273,6 +273,7 @@ TEST_F(LatchResetIntegrationTests, ResetSensitivePhysicalSequentialOutputIsMaske
   for (auto engine : {SecEngine::KInduction, SecEngine::Imc, SecEngine::Pdr}) {
     for (auto encoding : {SecEncoding::Binary, SecEncoding::DualRailSteady}) {
       if (engine == SecEngine::Imc && encoding == SecEncoding::DualRailSteady) continue;
+      SCOPED_TRACE(::testing::Message() << "engine=" << int(engine) << " encoding=" << int(encoding));
       const auto result = compare(first, second, engine, encoding, {1, {{"reset", true}}});
       EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
       EXPECT_EQ(result.coveredOutputs, 1u);

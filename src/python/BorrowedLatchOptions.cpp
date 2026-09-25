@@ -13,24 +13,22 @@ SEC::LATCH::SupportOptions BorrowedLatchOptions::validated(
   result.enabled = enabled;
   const bool hasTuning = inputChanges || initialInputs || initialStorage || workers || maxWaves ||
       maxStates || maxTransactions || maxSymbolicNodes || maxSatConflicts || maxSatDecisions;
+  result.explicitConfiguration = hasTuning;
   if (!enabled) {
     if (hasTuning) {
       throw std::invalid_argument("latch event tuning requires latch_support=true");
     }
     return result;
   }
-  // No supplied event contract keeps legacy LEC/SEC semantics, including
-  // opaque latches. Do not silently constrain initial inputs or stored state.
-  if (!hasTuning) return result;
-  if (!isSec) throw std::invalid_argument("latch_support is only supported for SEC");
-  if (!inputChanges || !initialInputs || !initialStorage) {
-    throw std::invalid_argument(
-        "latch_support requires explicit latch_input_changes, latch_initial_inputs and latch_initial_storage");
+  if (!isSec) {
+    if (hasTuning) throw std::invalid_argument("latch_support is only supported for SEC");
+    result.enabled = false;
+    return result;
   }
-  if (*inputChanges != LatchInputChanges::Any && *inputChanges != LatchInputChanges::Single) {
+  if (inputChanges && *inputChanges != LatchInputChanges::Any && *inputChanges != LatchInputChanges::Single) {
     throw std::invalid_argument("latch_input_changes must be any or single");
   }
-  if (hasLeafBoundaries) {
+  if (hasTuning && hasLeafBoundaries) {
     throw std::invalid_argument(
         "latch_support requires the complete top interface, not selected leaf boundaries");
   }
@@ -47,7 +45,7 @@ SEC::LATCH::SupportOptions BorrowedLatchOptions::validated(
     throw std::invalid_argument("latch SAT limits must fit a positive unsigned int");
   }
   result.enabled = true;
-  result.singleInputChange = *inputChanges == LatchInputChanges::Single;
+  result.singleInputChange = inputChanges && *inputChanges == LatchInputChanges::Single;
   result.initialInputs = initialInputs;
   result.initialStorage = initialStorage;
   if (workers) result.workers = *workers;

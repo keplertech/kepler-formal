@@ -2,8 +2,9 @@
 
 Status: architectural design and conditional correctness arguments, with the
 deterministic Boolean-event path implemented behind the default-on `latch_support`
-switch, with an explicit event contract still required to activate that path.
-The implementation, explicit admission/initialization contract, symbolic
+switch. Starting inputs and storage remain symbolic unless explicitly constrained;
+initialization settings are not required and reset is never inserted implicitly.
+The implementation, admission/initial-state semantics, symbolic
 certifier, finite fallback, and scoped limitations are documented separately in
 [SEC Latch Event Implementation](sec-latch-implementation.md). Optional phase
 abstraction and stronger scheduling reductions remain extensions. This document records the

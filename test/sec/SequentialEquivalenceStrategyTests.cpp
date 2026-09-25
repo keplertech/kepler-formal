@@ -52,6 +52,7 @@
 #include "kinduction/BaseCaseSolver.h"
 #include "kinduction/SatEncoding.h"
 #include "kinduction/InductionStepSolver.h"
+#include "latch/LatchSupportOptions.h"
 #include "model/SecNetlistChecks.h"
 #include "model/SequentialDesignModel.h"
 #include "proof/TransitionExprResolver.h"
@@ -17318,6 +17319,9 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractTreatsNajaLatchModelAsOpaque) {
+  LATCH::SupportOptions legacy;
+  legacy.enabled = false;
+  LATCH::ScopedSupportOptions scope(legacy);
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* library =
@@ -17355,6 +17359,9 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractTreatsModeledClockGateLatchAsOpaque) {
+  LATCH::SupportOptions legacy;
+  legacy.enabled = false;
+  LATCH::ScopedSupportOptions scope(legacy);
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* primitives =

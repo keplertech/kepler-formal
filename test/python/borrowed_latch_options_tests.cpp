@@ -38,8 +38,9 @@ void cppOptions() {
   for (bool sec : {false, true}) {
     for (bool boundaries : {false, true}) {
       auto defaults = BorrowedLatchOptions{}.validated(sec, boundaries);
-      check(defaults.enabled && !defaults.initialInputs && !defaults.initialStorage,
-            "default-on support invented an event contract");
+      check(defaults.enabled == sec && !defaults.initialInputs && !defaults.initialStorage &&
+            !defaults.singleInputChange && !defaults.explicitConfiguration,
+            "default-on support invented assumptions or enabled LEC event semantics");
       BorrowedLatchOptions disabled;
       disabled.enabled = false;
       check(!disabled.validated(sec, boundaries).enabled, "explicit false ignored");
@@ -73,7 +74,11 @@ void cppOptions() {
     if (field == 0) options.inputChanges.reset();
     if (field == 1) options.initialInputs.reset();
     if (field == 2) options.initialStorage.reset();
-    invalid(options, "requires explicit");
+    const auto partial = options.validated(true, false);
+    check(partial.enabled && partial.initialInputs == options.initialInputs &&
+          partial.initialStorage == options.initialStorage &&
+          partial.singleInputChange == (options.inputChanges == LatchInputChanges::Single) &&
+          partial.explicitConfiguration, "optional semantic field was required or defaulted");
   }
   options = contract();
   options.inputChanges = static_cast<LatchInputChanges>(999);
@@ -90,7 +95,10 @@ void cppOptions() {
   }
   options = {};
   options.workers = 0;
-  invalid(options, "requires explicit");
+  result = options.validated(true, false);
+  check(result.enabled && result.explicitConfiguration && !result.singleInputChange &&
+        !result.initialInputs && !result.initialStorage && result.workers == 0,
+        "resource-only tuning invented initialization");
   options.enabled = false;
   invalid(options, "requires latch_support");
   for (int field = 0; field < 3; ++field) {
@@ -130,9 +138,11 @@ void parsed(const std::string& expression, bool success, PyObject* exception = n
   } else {
     check(!PyErr_Occurred(), "success retained Python exception");
     check(options.enabled == expectedEnabled, "parser changed the master gate");
-    check(options.inputChanges.has_value() == options.initialInputs.has_value() &&
-          options.initialInputs.has_value() == options.initialStorage.has_value(),
-          "parser invented incomplete contract");
+    const auto validated = options.validated(sec, boundaries);
+    check(validated.initialInputs == options.initialInputs &&
+          validated.initialStorage == options.initialStorage &&
+          validated.singleInputChange == (options.inputChanges == LatchInputChanges::Single),
+          "parser invented an omitted semantic setting");
   }
 }
 
@@ -153,7 +163,7 @@ void pythonOptions() {
   for (const char* value : {"None", "0", "1", "'true'", "[]"})
     parsed(good + " | {'latch_support': " + value + "}", false, PyExc_TypeError);
   for (const char* key : {"latch_input_changes", "latch_initial_inputs", "latch_initial_storage"})
-    parsed(good + " | {'" + key + "': None}", false, PyExc_ValueError);
+    parsed(good + " | {'" + key + "': None}", true);
   for (const char* value : {"''", "'ANY'", "'single\\x00tail'"})
     parsed(good + " | {'latch_input_changes': " + value + "}", false, PyExc_ValueError);
   for (const char* value : {"True", "1", "[]"})
@@ -170,7 +180,8 @@ void pythonOptions() {
       parsed(good + " | {'" + key + "': " + value + "}", false, PyExc_TypeError);
     parsed(good + " | {'" + key + "': 2**128}", false, PyExc_OverflowError);
     parsed(good + " | {'" + key + "': -1}", false, PyExc_OverflowError);
-    parsed("{'" + std::string(key) + "': 1}", false, PyExc_ValueError);
+    parsed("{'" + std::string(key) + "': 1}", true);
+    parsed("{'latch_support': False, '" + std::string(key) + "': 1}", false, PyExc_ValueError);
   }
   parsed(good + " | {'latch_workers': 2**31}", false, PyExc_ValueError);
   for (const char* key : {"latch_max_waves", "latch_max_states", "latch_max_transactions",
@@ -178,9 +189,9 @@ void pythonOptions() {
     parsed(good + " | {'" + key + "': 0}", false, PyExc_ValueError);
   for (const char* key : {"latch_max_sat_conflicts", "latch_max_sat_decisions"})
     parsed(good + " | {'" + key + "': 2**32}", false, PyExc_ValueError);
-  parsed("{'latch_input_changes': 'any'}", false, PyExc_ValueError);
-  parsed("{'latch_initial_inputs': 0}", false, PyExc_ValueError);
-  parsed("{'latch_initial_storage': 0}", false, PyExc_ValueError);
+  parsed("{'latch_input_changes': 'any'}", true);
+  parsed("{'latch_initial_inputs': 0}", true);
+  parsed("{'latch_initial_storage': 0}", true);
 }
 }  // namespace
 

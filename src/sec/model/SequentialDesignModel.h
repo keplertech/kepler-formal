@@ -56,6 +56,12 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> observedOutputExprByKey;
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> nextStateExprByStateKey;
   std::unordered_map<SignalKey, bool, SignalKeyHash> initialStateValueByKey;
+  // An exact initial relation can represent unspecified, independent Boolean
+  // storage and correlated settled event signals without fixing their values.
+  // It is applied only at frame zero, in addition to any unit initial facts.
+  BoolExpr* initialCondition = nullptr;
+  std::unordered_map<SignalKey, SignalKey, SignalKeyHash>
+      initialInputStateKeyByInputKey;
   // Variables proven during extraction to be pure routed clock carriers.
   // Downstream SEC matching can classify them with the top clock without
   // making any name-based assumption about internal sequential state.

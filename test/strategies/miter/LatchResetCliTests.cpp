@@ -213,10 +213,47 @@ TEST_F(LatchResetCliTests, OffOnOffPreservesLegacyResetSemanticsForEveryEngine) 
       EXPECT_EQ(implicit.skippedObservedOutputs, before.skippedObservedOutputs);
       EXPECT_EQ(implicit.reason, before.reason);
       EXPECT_TRUE(KEPLER_FORMAL::SEC::LATCH::supportOptions().enabled);
-      EXPECT_FALSE(KEPLER_FORMAL::SEC::LATCH::supportOptions().hasEventContract());
+      EXPECT_FALSE(KEPLER_FORMAL::SEC::LATCH::supportOptions().explicitConfiguration);
       EXPECT_FALSE(KEPLER_FORMAL::SEC::LATCH::supportOptions().initialInputs.has_value());
     }
   }
+}
+
+TEST_F(LatchResetCliTests, ResetCanFlushSymbolicStorageWithoutPowerUpSettings) {
+  // The open latch follows a synchronously reset flop. Unlike the independent
+  // enable fixture, this really does flush every state affecting the output.
+  write("open_reset.v", "module top(input clock, data, reset, output out); wire q;"
+      " DFF f(.D(data),.C(clock),.R(reset),.Q(q));"
+      " LATCH l(.D(q),.E(1'b1),.Q(out)); endmodule\n");
+  // This positive end-to-end property exceeds IMC's exact-frontier threshold
+  // and its current interpolant budget. KI/PDR prove it in both encodings;
+  // cross-engine relational BOOT semantics have separate focused tests.
+  for (const auto* engine : {"k_induction", "pdr"}) {
+    for (const auto* encoding : {"binary", "dual_rail_steady"}) {
+      for (const bool compact : {false, true}) {
+        write("symbolic.yaml", std::string("format: verilog\nverification: sec\nsec_engine: ") + engine +
+            "\nsec_encoding: " + encoding + "\nmax_k: 12\n"
+            "input_paths: [open_reset.v, open_reset.v]\nliberty_files: [cells.lib]\n"
+            "compact_mode: " + (compact ? "true" : "false") + "\n"
+            "sec_latch_events: {input_changes: single}\n"
+            "sec_reset: {cycles: 2, ports: [{name: reset, active_value: 1}]}\n");
+        const auto result = run({"--config", "symbolic.yaml"});
+        EXPECT_EQ(result.status, KEPLER_FORMAL::RunStatus::Equivalent) << result.reason;
+        EXPECT_EQ(result.coveredOutputs, 1u);
+      }
+    }
+  }
+}
+
+TEST_F(LatchResetCliTests, ResetDoesNotInitializeAClosedUnresetLatch) {
+  write("closed_reset.v", "module top(input clock, data, reset, output out); wire q;"
+      " DFF f(.D(data),.C(clock),.R(reset),.Q(q));"
+      " LATCH l(.D(q),.E(1'b0),.Q(out)); endmodule\n");
+  const auto result = run({"--sec-latch-events", "single", "--sec-reset-cycles", "2",
+      "--sec-reset-port", "reset=1", "-verilog", "-v", "sec", "--sec-encoding", "binary",
+      "closed_reset.v", "closed_reset.v", "cells.lib"});
+  EXPECT_EQ(result.status, KEPLER_FORMAL::RunStatus::Different) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, 1u);
 }
 
 }  // namespace

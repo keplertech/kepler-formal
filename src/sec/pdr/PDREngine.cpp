@@ -1399,6 +1399,8 @@ struct PDRExactInitCache::Impl {
         sourceProblem->resetBootstrapInputs == candidate.resetBootstrapInputs &&
         sourceProblem->initialStateAssignments ==
             candidate.initialStateAssignments &&
+        sourceProblem->hasExactRelationalInitialState ==
+            candidate.hasExactRelationalInitialState &&
         sourceProblem->bootstrapStateAssignments ==
             candidate.bootstrapStateAssignments &&
         sourceProblem->state0Symbols == candidate.state0Symbols &&

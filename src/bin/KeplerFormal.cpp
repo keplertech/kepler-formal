@@ -84,12 +84,12 @@ static void print_usage(const char* prog) {
       "[--report-skipped-pos] [--error-on-opaque] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
-  SPDLOG_INFO("Latch support is on by default (--no-latch_support disables it). Boolean event SEC requires: --sec-latch-events <any|single> "
-      "--sec-latch-initial-inputs <0|1> --sec-latch-initial-storage <0|1> "
+  SPDLOG_INFO("Latch support is on by default (--no-latch_support disables it). Optional Boolean event SEC settings: [--sec-latch-events <any|single>] "
+      "[--sec-latch-initial-inputs <0|1>] [--sec-latch-initial-storage <0|1>] "
       "[--sec-latch-workers <n>] [--sec-latch-max-waves <n>] "
       "[--sec-latch-max-states <n>] [--sec-latch-max-transactions <n>] "
       "[--sec-latch-max-nodes <n>] [--sec-latch-sat-conflicts <n>] [--sec-latch-sat-decisions <n>]. "
-      "Without an event contract, latches stay opaque and legacy behavior is unchanged. "
+      "Input changes default to any; unspecified starting inputs and storage remain symbolic. "
       "Normal event-mode steps are settled external events; sec_reset counts clock cycles.");
 // LCOV_EXCL_START
 }
@@ -2358,9 +2358,8 @@ static int KeplerFormalMainImpl(
     if (const auto& latch = latchEventConfig.options(); latch.hasEventContract()) {
       SPDLOG_INFO("SEC latch_support: enabled; Boolean external events={}; initial_inputs={}; initial_storage={}; bounds count events, not clock cycles",
                   latch.singleInputChange ? "single" : "any",
-                  *latch.initialInputs ? 1 : 0, *latch.initialStorage ? 1 : 0);
-    } else if (latch.enabled) {
-      SPDLOG_INFO("SEC latch_support: enabled; no explicit event contract, retaining legacy extraction and opaque latch cones");
+                  latch.initialInputs ? (*latch.initialInputs ? "1" : "0") : "unspecified",
+                  latch.initialStorage ? (*latch.initialStorage ? "1" : "0") : "unspecified");
     }
     if (secResetSpec.enabled()) {
       SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
@@ -2601,7 +2600,7 @@ static int KeplerFormalMainImpl(
         std::filesystem::path libraryPath(libraryFile);
         SPDLOG_INFO("Loading library file: {}", libraryFile);
         SNLLibertyConstructor constructor(primitivesLibrary);
-        if (latchEventConfig.options().hasEventContract())
+        if (verificationMode == VerificationMode::SEC && latchEventConfig.options().enabled)
           KEPLER_FORMAL::constructLibertyWithLatchModels(primitivesLibrary, libraryPath);
         else constructor.construct(libraryPath);
       }

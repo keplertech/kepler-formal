@@ -28,6 +28,7 @@ cc_test(
 cc_test(
     name = "SequentialEquivalenceStrategyTests",
     srcs = [
+        "RelationalInitializationTests.cpp",
         "PdrTernaryMemoTests.cpp",
         "LatchBoundaryEncodingTests.cpp",
         "LatchConstantNetTests.cpp",

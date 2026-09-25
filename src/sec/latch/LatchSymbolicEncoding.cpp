@@ -57,12 +57,54 @@ SymbolicBits rewrite(const SymbolicBits& roots, const std::unordered_map<size_t,
 }
 }  // namespace
 
+SymbolicBits encodeSymbolicInitialState(const SymbolicMacro& macro,
+                                      const SymbolicBits& parameters) {
+  if (parameters.size() != macro.initialParameterSymbols.size() ||
+      (!macro.initialState.empty() && macro.initialState.size() != macro.stateSymbols.size()) ||
+      (!macro.initialStateExpressions.empty() && macro.initialStateExpressions.size() != macro.stateSymbols.size()))
+    throw std::invalid_argument("symbolic initial interface mismatch");
+  if (macro.initialStateExpressions.empty()) {
+    if (macro.initialState.size() != macro.stateSymbols.size() || !parameters.empty())
+      throw std::invalid_argument("symbolic macro lacks its initialization relation");
+    SymbolicBits result;
+    for (auto bit : macro.initialState) {
+      if (bit > 1) throw std::invalid_argument("non-Boolean initial state");
+      result.push_back(BoolExpr::Var(bit));
+    }
+    return result;
+  }
+  std::set<size_t> ordinary(macro.stateSymbols.begin(), macro.stateSymbols.end());
+  ordinary.insert(macro.inputSymbols.begin(), macro.inputSymbols.end());
+  std::unordered_map<size_t, BoolExpr*> replacements;
+  for (size_t i = 0; i < parameters.size(); ++i) {
+    const size_t id = macro.initialParameterSymbols[i];
+    if (id < 2 || ordinary.count(id) || !parameters[i] || !parameters[i]->isValid() ||
+        !replacements.emplace(id, parameters[i]).second)
+      throw std::invalid_argument("invalid or duplicate symbolic initial parameter");
+  }
+  return rewrite(macro.initialStateExpressions, replacements);
+}
+
+BoolExpr* encodeSymbolicInitialRelation(const SymbolicMacro& macro,
+    const SymbolicBits& state, const SymbolicBits& parameters) {
+  if (state.size() != macro.stateSymbols.size())
+    throw std::invalid_argument("symbolic initial state width mismatch");
+  const auto initial = encodeSymbolicInitialState(macro, parameters);
+  auto* relation = BoolExpr::createTrue();
+  for (size_t i = 0; i < state.size(); ++i) {
+    if (!state[i] || !state[i]->isValid()) throw std::invalid_argument("invalid symbolic initial state");
+    relation = BoolExpr::And(relation, BoolExpr::Not(BoolExpr::Xor(state[i], initial[i])));
+  }
+  return relation;
+}
+
 BoundaryEncoding encodeSymbolicMacro(const SymbolicMacro& macro, const Network& network,
     const SymbolicBits& state, const SymbolicBits& inputs, bool singleInputChange,
     const SymbolicBits& selector, BoolExpr* eventValue,
     const std::vector<size_t>& globalInputIndices) {
   if (state.size() != macro.stateSymbols.size() || state.size() < network.netCount ||
-      macro.nextState.size() != state.size() || macro.initialState.size() != state.size() ||
+      macro.nextState.size() != state.size() ||
+      (macro.initialState.size() != state.size() && macro.initialStateExpressions.size() != state.size()) ||
       inputs.size() != macro.inputSymbols.size() || inputs.size() != network.externalInputs.size() ||
       macro.observedNets.size() != network.netCount ||
       macro.singleExternalInputChange != singleInputChange ||

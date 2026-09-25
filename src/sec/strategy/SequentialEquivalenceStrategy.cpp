@@ -42,6 +42,7 @@
 #include "kinduction/SatEncoding.h"
 #include "model/SequentialDesignModel.h"
 #include "latch/LatchEventContract.h"
+#include "latch/LatchInitialState.h"
 #include "latch/LatchResetAdapter.h"
 #include "pdr/PDREngine.h"
 #include "proof/DualRailEncoding.h"
@@ -2531,6 +2532,7 @@ void addDualRailInitialAssignments(
   for (const auto& key : model.stateBits) {
     const auto rails = railsByKey.at(key);
     const auto value = lookupStateValue(model.initialStateValueByKey, key);
+    if (model.initialCondition && !value.has_value()) continue;
     addDualRailStateAssignment(problem.initialStateAssignments, rails, value);
     problem.initializedStateCount += 2;
   }
@@ -2886,6 +2888,19 @@ KInductionProblem buildDualRailSecProblem(
   // existing base-case encoders enter their structured-init path without
   // materializing a huge duplicate conjunction over every rail.
   problem.initialCondition = BoolExpr::createTrue();
+
+  if (model0.initialCondition || model1.initialCondition) {
+    auto symbols0 = symbolSpace.localToCombined0;
+    auto symbols1 = symbolSpace.localToCombined1;
+    for (const auto& [local, rails] : railMaps.localState0BySymbol)
+      symbols0[local] = rails.mayBeOne;
+    for (const auto& [local, rails] : railMaps.localState1BySymbol)
+      symbols1[local] = rails.mayBeOne;
+    LATCH::integrateEventInitialState(model0, model1, alignedInputs,
+                                     symbols0, symbols1, problem);
+    LATCH::constrainEventInitialRails(model0, railMaps.localState0BySymbol, problem);
+    LATCH::constrainEventInitialRails(model1, railMaps.localState1BySymbol, problem, true);
+  }
 
 // LCOV_DISABLED_START
 
@@ -3803,6 +3818,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       symbolSpace.state0Symbols,
       symbolSpace.state1Symbols,
       symbolSpace.problem);
+  LATCH::integrateEventInitialState(model0, model1, aligned.inputs,
+      symbolSpace.localToCombined0, symbolSpace.localToCombined1, symbolSpace.problem);
   if (auto resetError = applyResetBootstrapSpec(
           resetSpec_, aligned.inputs, symbolSpace.problem, secDiagEnabled)) {
     return makeSecResult(
@@ -3813,7 +3830,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         extractedBoundaryReports);
   }
   if (encoding_ == SecEncoding::Binary) {
-    if (symbolSpace.problem.hasResetBootstrap()) {
+    if (symbolSpace.problem.hasResetBootstrap() ||
+        symbolSpace.problem.hasExactRelationalInitialState) {
       logSecDiagLine(
           secDiagEnabled,
           "SEC diag: reset bootstrap keeps reset-unanchored outputs in the "

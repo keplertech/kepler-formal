@@ -59,6 +59,16 @@ class LatchSymbolicCompilerTests : public ::testing::Test {
     return result;
   }
 
+  Bits initialValues(const SymbolicMacro& macro, const Bits& parameters) {
+    std::unordered_map<size_t, bool> values;
+    for (size_t i = 0; i < parameters.size(); ++i)
+      values.emplace(macro.initialParameterSymbols.at(i), parameters[i]);
+    Bits result;
+    for (auto* expression : macro.initialStateExpressions)
+      result.push_back(expression->evaluate(values));
+    return result;
+  }
+
   void compareWithFinite(const Network& network, bool single = true) {
     const auto settings = options(network, single);
     const auto symbolic = compileSymbolicNetwork(lifted(network), settings);
@@ -302,7 +312,140 @@ TEST_F(LatchSymbolicCompilerTests, InvalidInitializationIsRejected) {
   settings.initialStorage = {{2}};
   EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
   settings = options(network);
+  settings.initialStorage = {{}};
+  EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
+}
+
+TEST_F(LatchSymbolicCompilerTests, UnspecifiedInputsAndStorageRetainEveryBooleanBootstrapOrigin) {
+  const auto network = latchNetwork();
+  SymbolicCompileOptions settings;
+  settings.singleExternalInputChange = true;
+  const auto compiled = compileSymbolicNetwork(lifted(network), settings);
+  ASSERT_TRUE(compiled.certified()) << compiled.detail;
+  const auto& macro = *compiled.model;
+  EXPECT_TRUE(macro.initialState.empty());
+  ASSERT_EQ(macro.initialParameterSymbols.size(), 3u);
+  ASSERT_EQ(macro.initialInputSymbols.size(), 2u);
+  ASSERT_EQ(macro.initialStorageSymbols.size(), 1u);
+  EXPECT_EQ(macro.initialInputSymbols[0], macro.initialParameterSymbols[0]);
+  EXPECT_EQ(macro.initialInputSymbols[1], macro.initialParameterSymbols[1]);
+  EXPECT_EQ(macro.initialStorageSymbols[0][0], macro.initialParameterSymbols[2]);
+  for (size_t code = 0; code < 8; ++code) {
+    const Bits input{uint8_t(code & 1), uint8_t((code >> 1) & 1)};
+    const Bits stored{uint8_t((code >> 2) & 1)};
+    const auto expected = certifyBootstrap(EventModel(network), input, {stored});
+    ASSERT_TRUE(expected.certified()) << expected.detail;
+    const auto state = initialValues(macro, {input[0], input[1], stored[0]});
+    EXPECT_EQ(state, flatten(expected.stableStates.front()));
+    EXPECT_EQ(evaluate(macro.nextState, macro, state, input), state);
+    EXPECT_EQ(state[2], input[1] ? input[0] : stored[0]);
+  }
+}
+
+TEST_F(LatchSymbolicCompilerTests, MixedPerBitRestrictionsDoNotFixUnspecifiedOrigins) {
+  SymbolicCompileOptions settings;
+  settings.singleExternalInputChange = true;
+  settings.initialInputValues = {std::nullopt, uint8_t(0)};
+  settings.initialStorageValues = {{uint8_t(1)}};
+  const auto compiled = compileSymbolicNetwork(lifted(latchNetwork()), settings);
+  ASSERT_TRUE(compiled.certified()) << compiled.detail;
+  const auto& macro = *compiled.model;
+  ASSERT_EQ(macro.initialParameterSymbols.size(), 1u);
+  EXPECT_TRUE(macro.initialInputSymbols[0]);
+  EXPECT_FALSE(macro.initialInputSymbols[1]);
+  EXPECT_FALSE(macro.initialStorageSymbols[0][0]);
+  EXPECT_EQ(initialValues(macro, {0}), (Bits{0, 0, 1, 1}));
+  EXPECT_EQ(initialValues(macro, {1}), (Bits{1, 0, 1, 1}));
+}
+
+TEST_F(LatchSymbolicCompilerTests, UnknownSelfHeldStorageIsHistoryNotSchedulerNondeterminism) {
+  Network network{2, {}, {latch("self", 0, 1, 0)}};
+  network.constantByNet = {std::nullopt, true};
+  const auto compiled = compileSymbolicNetwork(lifted(network), {});
+  ASSERT_TRUE(compiled.certified()) << compiled.detail;
+  const auto& macro = *compiled.model;
+  ASSERT_EQ(macro.initialParameterSymbols.size(), 1u);
+  EXPECT_TRUE(macro.initialInputSymbols.empty());
+  for (bool value : {false, true}) {
+    const auto state = initialValues(macro, {uint8_t(value)});
+    EXPECT_EQ(state, (Bits{uint8_t(value), 1, uint8_t(value)}));
+    EXPECT_EQ(evaluate(macro.nextState, macro, state, {}), state);
+  }
+}
+
+TEST_F(LatchSymbolicCompilerTests, UnknownInitialClockDoesNotFabricateAnEdge) {
+  Network network{3, {0, 1}, {flipFlop("ff", 0, 1, 2)}};
+  SymbolicCompileOptions settings;
+  settings.singleExternalInputChange = true;
+  const auto compiled = compileSymbolicNetwork(lifted(network), settings);
+  ASSERT_TRUE(compiled.certified()) << compiled.detail;
+  const auto& macro = *compiled.model;
+  for (size_t code = 0; code < 8; ++code) {
+    const uint8_t data = code & 1, clock = (code >> 1) & 1, stored = (code >> 2) & 1;
+    const auto state = initialValues(macro, {data, clock, stored});
+    EXPECT_EQ(state, (Bits{data, clock, stored, stored}));
+    EXPECT_EQ(evaluate(macro.nextState, macro, state, {data, clock}), state);
+    const auto changed = evaluate(macro.nextState, macro, state, {data, uint8_t(!clock)});
+    EXPECT_EQ(changed[2], clock ? stored : data);
+  }
+}
+
+TEST_F(LatchSymbolicCompilerTests, BootstrapResetCanEliminateUnknownStorageWithoutChoosingItsValue) {
+  Primitive cell;
+  cell.name = "async_clear";
+  cell.inputs = {0}; cell.outputs = {1}; cell.storageBits = 1;
+  cell.react = [](const Bits& storage, const Bits&, const Bits& pins,
+                  std::optional<size_t>, bool) {
+    const Bits next{uint8_t(pins[0] ? 0 : storage[0])};
+    return Reaction{next, next};
+  };
+  Network network{2, {0}, {cell}};
+  SymbolicCompileOptions settings;
+  settings.initialInputValues = {uint8_t(1)};
+  const auto compiled = compileSymbolicNetwork(lifted(network), settings);
+  ASSERT_TRUE(compiled.certified()) << compiled.detail;
+  const auto& macro = *compiled.model;
+  ASSERT_EQ(macro.initialParameterSymbols.size(), 1u);
+  EXPECT_EQ(macro.initialState, (Bits{1, 0, 0}));
+  EXPECT_EQ(initialValues(macro, {0}), macro.initialState);
+  EXPECT_EQ(initialValues(macro, {1}), macro.initialState);
+}
+
+TEST_F(LatchSymbolicCompilerTests, AnInvalidUnknownBootstrapOriginCannotDisappear) {
+  auto cell = latch("reject_one", 0, 1, 2);
+  const auto react = cell.react;
+  cell.react = [react](const Bits& storage, const Bits& before, const Bits& pins,
+                      std::optional<size_t> pin, bool boot) {
+    auto result = react(storage, before, pins, pin, boot);
+    result.error = boot && storage[0];
+    return result;
+  };
+  Network network{3, {0, 1}, {cell}};
+  auto settings = options(network);
   settings.initialStorage.clear();
+  settings.maxWaves = 4;
+  const auto compiled = compileSymbolicNetwork(lifted(network), settings);
+  EXPECT_EQ(compiled.status, CertificationStatus::UnprovedBound) << compiled.detail;
+  EXPECT_FALSE(compiled.model);
+}
+
+TEST_F(LatchSymbolicCompilerTests, OriginRestrictionShapesAndConflictingFormsAreRejected) {
+  const auto network = latchNetwork();
+  auto settings = options(network);
+  settings.initialInputValues = {std::nullopt, std::nullopt};
+  EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
+  settings = options(network);
+  settings.initialStorageValues = {{std::nullopt}};
+  EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
+  settings = {};
+  settings.initialInputValues = {std::nullopt};
+  EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
+  settings.initialInputValues = {uint8_t(2), std::nullopt};
+  EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
+  settings = {};
+  settings.initialStorageValues = {{}};
+  EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
+  settings.initialStorageValues = {{uint8_t(2)}};
   EXPECT_EQ(compileSymbolicNetwork(lifted(network), settings).status, CertificationStatus::Invalid);
 }
 

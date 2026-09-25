@@ -296,9 +296,11 @@ bool shouldAddSimplePathConstraint(const KInductionProblem& problem,
 
 std::unordered_set<size_t> buildStateSymbolSet(const KInductionProblem& problem) {
   std::unordered_set<size_t> stateSymbols;
-  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size() +
+                       problem.auxiliaryStateSymbols.size());
   stateSymbols.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   stateSymbols.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  stateSymbols.insert(problem.auxiliaryStateSymbols.begin(), problem.auxiliaryStateSymbols.end());
   return stateSymbols;
 }
 

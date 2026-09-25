@@ -94,7 +94,7 @@ void run(const std::filesystem::path& directory) {
   };
   verifyBorrowedDesigns(first, second, options, result);
   check(result.status == RunStatus::Unsupported && result.coveredOutputs == 0,
-        "default did not preserve opaque-latch behavior");
+        "default any-change mode certified an ambiguous latch race");
   unchanged();
 
   check(options.latchSupport.enabled, "latch support is not enabled by default");
@@ -127,10 +127,30 @@ void run(const std::filesystem::path& directory) {
   unchanged();
   options.latchSupport.inputChanges = LatchInputChanges::Single;
   options.latchSupport.initialStorage.reset();
-  check(verifyBorrowedDesigns(first, second, options, result) != 0 &&
-        result.status == RunStatus::Error && result.reason.find("requires explicit") != std::string::npos,
-        "incomplete event contract accepted");
+  for (auto engine : {SEC::SecEngine::Pdr, SEC::SecEngine::KInduction, SEC::SecEngine::Imc}) {
+    for (auto encoding : {SEC::SecEncoding::Binary, SEC::SecEncoding::DualRailSteady}) {
+      options.secEngine = engine;
+      options.secEncoding = encoding;
+      check(verifyBorrowedDesigns(first, second, options, result) != 0 &&
+            result.status == RunStatus::Different && result.coveredOutputs == 1,
+            "independent unknown storage was initialized or paired without justification: " + result.reason);
+      unchanged();
+    }
+  }
+  options.secEngine = SEC::SecEngine::KInduction;
+  options.secEncoding = SEC::SecEncoding::Binary;
+  options.latchSupport.initialStorage = false;
+  options.latchSupport.initialInputs.reset();
+  check(verifyBorrowedDesigns(first, second, options, result) == 0 &&
+        result.status == RunStatus::Equivalent && result.coveredOutputs == 1,
+        "shared unspecified initial input levels were not correlated: " + result.reason);
   unchanged();
+  options.latchSupport.initialStorage.reset();
+  check(verifyBorrowedDesigns(first, second, options, result) != 0 &&
+        result.status == RunStatus::Different && result.coveredOutputs == 1,
+        "omitting both initial restrictions fixed an unknown storage value: " + result.reason);
+  unchanged();
+  options.latchSupport.initialInputs = false;
   options.latchSupport.initialStorage = false;
   options.latchSupport.enabled = false;
   check(verifyBorrowedDesigns(first, second, options, result) != 0 &&

@@ -64,7 +64,7 @@ class BorrowedLatchApiTest(unittest.TestCase):
         self.assertEqual(1, len(list(self.second.getInstances())))
         self.assertTrue(self.model.hasSequentialModel())
 
-    def test_default_then_enabled_then_default_do_not_leak(self):
+    def test_default_any_race_then_single_then_default_do_not_leak(self):
         default = verify_designs(self.first, self.second, options=self.options(False))
         self.assertEqual(VerificationStatus.UNSUPPORTED, default.status)
         self.assertEqual(0, default.covered_outputs)
@@ -117,8 +117,32 @@ class BorrowedLatchApiTest(unittest.TestCase):
         self.assertEqual(1, result.covered_outputs)
         self.unchanged()
 
+    def test_unspecified_storage_is_independent_and_not_an_implicit_reset(self):
+        for engine in ("k_induction", "imc", "pdr"):
+            for encoding in ("binary", "dual_rail_steady"):
+                with self.subTest(engine=engine, encoding=encoding):
+                    result = verify_designs(self.first, self.second, options=self.options(
+                        latch_initial_storage=None, sec_engine=engine, sec_encoding=encoding))
+                    self.assertEqual(VerificationStatus.DIFFERENT, result.status)
+                    self.assertEqual(1, result.covered_outputs)
+                    self.unchanged()
+
+    def test_unspecified_initial_inputs_are_shared_across_designs(self):
+        result = verify_designs(self.first, self.second,
+                                options=self.options(latch_initial_inputs=None))
+        self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+        self.assertEqual(1, result.covered_outputs)
+        self.unchanged()
+
+    def test_both_initial_restrictions_can_be_omitted(self):
+        result = verify_designs(self.first, self.second, options=self.options(
+            latch_initial_inputs=None, latch_initial_storage=None))
+        self.assertEqual(VerificationStatus.DIFFERENT, result.status)
+        self.assertEqual(1, result.covered_outputs)
+        self.unchanged()
+
     def test_invalid_contract_preserves_live_designs(self):
-        for changes in (dict(latch_initial_storage=None), dict(latch_support=False),
+        for changes in (dict(latch_initial_storage=2), dict(latch_support=False),
                         dict(mode="lec", sec_engine=None, sec_encoding=None),
                         dict(set_as_boundary=(("latch", "latch"),))):
             with self.subTest(changes=changes), self.assertRaises(ValueError):

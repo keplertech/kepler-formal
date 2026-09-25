@@ -16,10 +16,9 @@ bool number(const std::string& text, size_t& value) {
 }
 }
 bool LatchEventConfig::set(const std::string& key, const std::string& value, std::string& error) {
-  explicitTuning_ = true;
+  options_.explicitConfiguration = true;
   if (key == "input_changes") {
     if (value == "any" || value == "single") {
-      inputChangesExplicit_ = true;
       options_.singleInputChange = value == "single";
       return true;
     }
@@ -64,7 +63,7 @@ bool LatchEventConfig::parseYaml(const YAML::Node& config, std::string& error) {
   }
   const auto node = config["sec_latch_events"];
   if (!node) return true;
-  explicitTuning_ = true;
+  options_.explicitConfiguration = true;
   if (!node.IsMap()) { error = "sec_latch_events must be a map"; return false; }
   for (auto item : node) {
     if (!item.first.IsScalar() || !item.second.IsScalar()) {
@@ -104,16 +103,15 @@ bool LatchEventConfig::validate(bool isSec, bool hasResetCycles, bool hasLeafBou
                                 std::string& error) const {
   (void)hasResetCycles;  // Clock discovery and cycle expansion need the extracted models.
   if (!options_.enabled) {
-    if (!explicitTuning_) return true;
+    if (!options_.explicitConfiguration) return true;
     error = "latch event tuning requires latch_support: true or --latch_support";
     return false;
   }
-  // The default enables the capability, not assumptions about initial state.
-  // Existing workflows without an event contract keep their legacy semantics.
-  if (!explicitTuning_) return true;
+  // No tuning is required: unrestricted input changes and symbolic initial
+  // values are the default. LEC and selected-leaf workflows stay unchanged
+  // unless the user explicitly supplies SEC event options.
+  if (!options_.explicitConfiguration) return true;
   if (!isSec) error = "latch event options require SEC verification";
-  else if (!inputChangesExplicit_ || !options_.initialInputs || !options_.initialStorage)
-    error = "latch events require explicit input_changes, initial_inputs and initial_storage";
   else if (hasLeafBoundaries)
     error = "latch events currently require the complete top interface, not selected leaf boundaries";
   else return true;

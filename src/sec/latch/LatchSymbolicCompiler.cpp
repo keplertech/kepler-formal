@@ -75,16 +75,6 @@ class DagBudget {
   std::unordered_set<BoolExpr*> seen_;
 };
 
-SymbolicBits constants(const Bits& values) {
-  SymbolicBits result;
-  result.reserve(values.size());
-  for (const auto bit : values) {
-    if (bit > 1) throw std::invalid_argument("Non-Boolean symbolic initialization");
-    result.push_back(BoolExpr::Var(bit));
-  }
-  return result;
-}
-
 BoolExpr* differs(const SymbolicBits& left, const SymbolicBits& right) {
   if (left.size() != right.size()) {
     throw std::invalid_argument("Symbolic boundary layout changed during propagation");
@@ -147,9 +137,8 @@ Bits groundValues(const SymbolicBits& roots) {
   return result;
 }
 
-void checkFinalLeaves(const SymbolicBits& roots, const SymbolicMacro& macro) {
-  std::unordered_set<size_t> retained(macro.stateSymbols.begin(), macro.stateSymbols.end());
-  retained.insert(macro.inputSymbols.begin(), macro.inputSymbols.end());
+bool checkFinalLeaves(const SymbolicBits& roots, const std::unordered_set<size_t>& retained) {
+  bool ground = true;
   std::unordered_set<BoolExpr*> seen;
   std::vector<BoolExpr*> pending(roots.begin(), roots.end());
   while (!pending.empty()) {
@@ -157,6 +146,7 @@ void checkFinalLeaves(const SymbolicBits& roots, const SymbolicMacro& macro) {
     pending.pop_back();
     if (!seen.insert(node).second) continue;
     if (node->getOp() == Op::VAR) {
+      if (node->getId() > 1) ground = false;
       if (node->getId() > 1 && !retained.contains(node->getId())) {
         throw std::invalid_argument("Uneliminated seed or ordering choice in compiled macrostate");
       }
@@ -165,6 +155,7 @@ void checkFinalLeaves(const SymbolicBits& roots, const SymbolicMacro& macro) {
       if (node->getRight()) pending.push_back(node->getRight());
     }
   }
+  return ground;
 }
 
 class Compiler {
@@ -180,20 +171,29 @@ class Compiler {
       resource("Symbolic certification requires a nonzero DAG and SAT work budget");
     }
     const auto& reference = network_.reference;
-    if (options_.initialInputs.size() != reference.externalInputs.size() ||
-        options_.initialStorage.size() != reference.primitives.size()) {
-      throw std::invalid_argument("Explicit symbolic initialization has the wrong shape");
-    }
-    const auto bootInputs = constants(options_.initialInputs);
-    std::vector<SymbolicBits> bootStorage;
-    for (size_t i = 0; i < reference.primitives.size(); ++i) {
-      if (options_.initialStorage[i].size() != reference.primitives[i].storageBits) {
-        throw std::invalid_argument("Explicit symbolic primitive storage has the wrong width");
-      }
-      bootStorage.push_back(constants(options_.initialStorage[i]));
-    }
-
     SymbolicMacro result;
+    const auto bootInputs = initialBits(reference.externalInputs.size(), options_.initialInputs,
+        options_.initialInputValues, result.initialInputSymbols, result.initialParameterSymbols);
+    if ((!options_.initialStorage.empty() && !options_.initialStorageValues.empty()) ||
+        (!options_.initialStorage.empty() && options_.initialStorage.size() != reference.primitives.size()) ||
+        (!options_.initialStorageValues.empty() && options_.initialStorageValues.size() != reference.primitives.size())) {
+      throw std::invalid_argument("Symbolic storage initialization has conflicting forms or wrong shape");
+    }
+    std::vector<SymbolicBits> bootStorage;
+    result.initialStorageSymbols.resize(reference.primitives.size());
+    for (size_t i = 0; i < reference.primitives.size(); ++i) {
+      const auto width = reference.primitives[i].storageBits;
+      // A supplied outer vector describes every primitive, including explicit
+      // empty entries for combinational cells; missing storage widths are not
+      // silently treated as unspecified.
+      if ((!options_.initialStorage.empty() && options_.initialStorage[i].size() != width) ||
+          (!options_.initialStorageValues.empty() && options_.initialStorageValues[i].size() != width))
+        throw std::invalid_argument("Symbolic primitive storage has the wrong width");
+      bootStorage.push_back(initialBits(width,
+          options_.initialStorage.empty() ? Bits{} : options_.initialStorage[i],
+          options_.initialStorageValues.empty() ? std::vector<std::optional<uint8_t>>{} : options_.initialStorageValues[i],
+          result.initialStorageSymbols[i], result.initialParameterSymbols));
+    }
     result.singleExternalInputChange = options_.singleExternalInputChange;
     result.externalInputNets = reference.externalInputs;
     SymbolicBits current = variables(reference.netCount, &result.stateSymbols);
@@ -242,21 +242,53 @@ class Compiler {
     auto canonicalBoot = model_.bootstrap(bootInputs, bootStorage,
         SymbolicBits(reference.netCount, BoolExpr::createFalse()));
     advance(canonicalBoot, result.bootstrapWaves, true);
-    result.initialState = groundValues(flattenSymbolicBoundary(canonicalBoot));
+    result.initialStateExpressions = flattenSymbolicBoundary(canonicalBoot);
+    const std::unordered_set<size_t> initialParameters(result.initialParameterSymbols.begin(),
+                                                      result.initialParameterSymbols.end());
+    if (checkFinalLeaves(result.initialStateExpressions, initialParameters))
+      result.initialState = groundValues(result.initialStateExpressions);
     auto canonicalNext = model_.admit(boundary, input);
     advance(canonicalNext, result.transitionWaves, true);
     result.nextState = flattenSymbolicBoundary(canonicalNext);
     result.observedNets = canonicalNext.current;
-    if (result.initialState.size() != result.stateSymbols.size() ||
+    if (result.initialStateExpressions.size() != result.stateSymbols.size() ||
         result.nextState.size() != result.stateSymbols.size()) {
       throw std::invalid_argument("Symbolic macro layout does not preserve the complete boundary");
     }
     dag_.inspect(result.nextState);
-    checkFinalLeaves(result.nextState, result);
+    std::unordered_set<size_t> retained(result.stateSymbols.begin(), result.stateSymbols.end());
+    retained.insert(result.inputSymbols.begin(), result.inputSymbols.end());
+    checkFinalLeaves(result.nextState, retained);
     return result;
   }
 
  private:
+  SymbolicBits initialBits(size_t count, const Bits& concrete,
+      const std::vector<std::optional<uint8_t>>& restrictions,
+      std::vector<std::optional<size_t>>& symbols, std::vector<size_t>& parameters) {
+    if ((!concrete.empty() && !restrictions.empty()) ||
+        (!concrete.empty() && concrete.size() != count) ||
+        (!restrictions.empty() && restrictions.size() != count))
+      throw std::invalid_argument("Symbolic initialization has conflicting forms or wrong width");
+    if (count > options_.maxNodes) resource("Symbolic initial interface exceeds the DAG budget");
+    SymbolicBits result;
+    symbols.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+      const auto value = !concrete.empty() ? std::optional<uint8_t>{concrete[i]}
+          : !restrictions.empty() ? restrictions[i] : std::nullopt;
+      if (value) {
+        if (*value > 1) throw std::invalid_argument("Non-Boolean symbolic initialization");
+        result.push_back(BoolExpr::Var(*value));
+      } else {
+        auto* origin = fresh();
+        symbols[i] = origin->getId();
+        parameters.push_back(origin->getId());
+        result.push_back(origin);
+      }
+    }
+    return result;
+  }
+
   BoolExpr* fresh() {
     if (nextSymbol_ == std::numeric_limits<size_t>::max()) {
       resource("Symbolic variable identifier space exhausted");

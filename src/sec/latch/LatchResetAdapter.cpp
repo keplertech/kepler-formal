@@ -45,6 +45,42 @@ BoolExpr* mux(BoolExpr* select, BoolExpr* yes, BoolExpr* no) {
   return BoolExpr::Or(BoolExpr::And(select, yes), BoolExpr::And(BoolExpr::Not(select), no));
 }
 
+// Composition needs accurate input history even for a pin unused by every
+// certified island. Once the reset interface is consumed, a self-only history
+// register is unobservable and can be projected out exactly. Do not remove an
+// origin or a state participating in an initial relation/cross-design pairing.
+void removeDeadInputHistory(SequentialDesignModel& model) {
+  std::unordered_set<size_t> retained;
+  const auto retain = [&](BoolExpr* expression) {
+    if (expression)
+      for (auto id : expression->getSupportVars()) retained.insert(id);
+  };
+  retain(model.initialCondition);
+  for (const auto& [key, expression] : model.observedOutputExprByKey) retain(expression);
+  for (const auto& [input, origin] : model.initialInputStateKeyByInputKey)
+    retained.insert(model.inputVarByKey.at(origin));
+  std::unordered_map<size_t, size_t> readers;
+  for (const auto& [key, expression] : model.nextStateExprByStateKey)
+    for (auto id : expression->getSupportVars()) ++readers[id];
+  std::unordered_set<SignalKey, SignalKeyHash> discarded;
+  for (const auto& key : model.stateBits) {
+    if (key.first.size() != 3 || key.first[0] != (uint64_t(1) << 61) || key.first[1] != 6)
+      continue;
+    const auto id = model.inputVarByKey.at(key);
+    if (retained.count(id)) continue;
+    const auto ownSupport = model.nextStateExprByStateKey.at(key)->getSupportVars();
+    if (readers[id] == ownSupport.count(id)) discarded.insert(key);
+  }
+  model.stateBits.erase(std::remove_if(model.stateBits.begin(), model.stateBits.end(),
+      [&](const auto& key) { return discarded.count(key); }), model.stateBits.end());
+  for (const auto& key : discarded) {
+    model.nextStateExprByStateKey.erase(key);
+    model.initialStateValueByKey.erase(key);
+    model.inputVarByKey.erase(key);
+    model.displayNameByKey.erase(key);
+  }
+}
+
 // Simultaneous substitution: replacement expressions are not themselves
 // substituted. One memo is shared across every output and state in a stage.
 class Substitute {
@@ -248,8 +284,9 @@ std::string validate(const SequentialDesignModel& model, const SecResetSpec& res
     const auto found = model.inputVarByKey.find(key);
     if (found == model.inputVarByKey.end() || found->second < 2 ||
         !stateSymbols.insert(found->second).second ||
-        !model.nextStateExprByStateKey.count(key) || !model.initialStateValueByKey.count(key))
-      return "Latch reset cycles require fully initialized event state";
+        !model.nextStateExprByStateKey.count(key) ||
+        (!model.initialCondition && !model.initialStateValueByKey.count(key)))
+      return "Latch reset cycles require a valid event initial relation and transitions";
   }
   for (const auto& key : model.environmentInputs) {
     const auto found = model.inputVarByKey.find(key);
@@ -383,6 +420,7 @@ ResetCycleAdaptation adaptResetCycles(const SequentialDesignModel& model, const 
     adapted.eventResetCycles = reset.cycles;
     // A second adaptation must not accidentally apply another prefix.
     adapted.eventResetInterface.reset();
+    removeDeadInputHistory(adapted);
     return {std::move(adapted), {}};
   } catch (const std::exception& error) {
     return {{}, std::string("Cannot compose latch reset cycles: ") + error.what()};

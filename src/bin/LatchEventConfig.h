@@ -14,8 +14,6 @@ class LatchEventConfig {
   const SEC::LATCH::SupportOptions& options() const { return options_; }
  private:
   SEC::LATCH::SupportOptions options_;
-  bool explicitTuning_ = false;
-  bool inputChangesExplicit_ = false;
   bool set(const std::string& key, const std::string& value, std::string& error);
 };
 }  // namespace KEPLER_FORMAL

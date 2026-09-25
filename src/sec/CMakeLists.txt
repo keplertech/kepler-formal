@@ -22,6 +22,7 @@ add_library(kepler_sec STATIC
     latch/LatchResetClock.cpp
     latch/LatchBoundaryEncoding.cpp
     latch/LatchSupportOptions.cpp
+    latch/LatchInitialState.cpp
     latch/NajaEventPrimitive.cpp
     latch/LatchNetlistAdapter.cpp
     model/SequentialDesignModel.cpp

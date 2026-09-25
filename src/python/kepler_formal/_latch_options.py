@@ -1,7 +1,7 @@
 # Copyright 2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validation of default-on latch support with an explicit event contract."""
+"""Validation of default-on latch support and optional event assumptions."""
 
 import ctypes
 
@@ -45,14 +45,8 @@ def build_latch_options(settings, *, mode: str, has_boundaries: bool) -> dict:
     if not enabled:
         if has_tuning:
             raise ValueError("latch event tuning requires latch_support=True")
-    elif not has_tuning:
-        pass  # Preserve legacy extraction without inventing initialization.
-    elif mode != "sec":
+    elif has_tuning and mode != "sec":
         raise ValueError("latch_support is only supported for SEC")
-    elif any(values[name] is None for name in names[:3]):
-        raise ValueError(
-            "latch_support requires explicit latch_input_changes, latch_initial_inputs and latch_initial_storage"
-        )
-    elif has_boundaries:
+    elif has_tuning and has_boundaries:
         raise ValueError("latch_support requires the complete top interface, not selected leaf boundaries")
     return {"latch_support": enabled, **values}

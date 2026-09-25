@@ -25,24 +25,24 @@ class NativeLatchOptionsTest(unittest.TestCase):
         for options in ({}, {"latch_support": False}, {"latch_support": True}, {"mode": "sec"}):
             self.rejected(options, TypeError, "design1 must be a NativeDesign")
 
-    def test_native_tuning_requires_contract_and_cannot_override_explicit_false(self):
+    def test_native_optional_settings_cannot_override_explicit_false(self):
         for key, value in (("latch_input_changes", "any"), ("latch_initial_inputs", 0),
                            ("latch_initial_storage", 0), ("latch_workers", 0),
                            ("latch_max_waves", 1), ("latch_max_states", 1),
                            ("latch_max_transactions", 1)):
             with self.subTest(key=key):
-                self.rejected({"mode": "sec", key: value}, ValueError, "requires explicit")
+                self.rejected({"mode": "sec", key: value}, TypeError, "design1 must be a NativeDesign")
                 self.rejected({"mode": "sec", "latch_support": False, key: value},
                               ValueError, "requires latch_support")
 
-    def test_native_requires_complete_contract(self):
+    def test_native_semantic_fields_can_be_omitted_independently(self):
         for key in ("latch_input_changes", "latch_initial_inputs", "latch_initial_storage"):
             for remove in (False, True):
                 options = self.contract(**{key: None})
                 if remove:
                     options.pop(key)
                 with self.subTest(key=key, remove=remove):
-                    self.rejected(options, ValueError, "requires explicit")
+                    self.rejected(options, TypeError, "design1 must be a NativeDesign")
 
     def test_native_requires_real_boolean_gate(self):
         for value in (None, 0, 1, "true", []):

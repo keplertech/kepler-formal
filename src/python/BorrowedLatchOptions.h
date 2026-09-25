@@ -11,7 +11,8 @@ namespace KEPLER_FORMAL {
 enum class LatchInputChanges { Any, Single };
 
 // Optional members distinguish an explicitly stated event contract from an
-// omitted setting. Default-on support never invents an initial-state contract.
+// omitted setting. Omitted initialization stays symbolic; omitted inputChanges
+// permits any input changes. Overrides never become implicit assumptions.
 struct BorrowedLatchOptions {
   bool enabled = true;
   std::optional<LatchInputChanges> inputChanges;
