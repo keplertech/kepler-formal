@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -17,6 +18,7 @@ class SNLDesign;
 }
 
 namespace KEPLER_FORMAL::SEC {
+namespace LATCH { struct EventResetInterface; }
 
 struct ComplementedStateRelation {  // LCOV_EXCL_LINE
   SignalKey primaryKey;
@@ -67,6 +69,10 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   // Empty for legacy clock-cycle extraction; event models retain their contract
   // after compact mode releases the netlists.
   std::string eventContract;
+  // Copied input-level/clock metadata for reset-cycle expansion after compact
+  // extraction; never retains pointers into the source netlist.
+  std::shared_ptr<const LATCH::EventResetInterface> eventResetInterface;
+  size_t eventResetCycles = 0;
 
   // Extract the model from the given top design. Opaque per-output cones are
   // skipped; globally unsupported structures are recorded in unsupportedReasons.

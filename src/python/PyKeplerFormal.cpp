@@ -15,6 +15,7 @@
 
 #include "KeplerBorrowedDesigns.h"
 #include "KeplerNajaRuntime.h"
+#include "PyLatchOptions.h"
 #include "SNLDesign.h"
 
 #ifndef KEPLER_FORMAL_VERSION
@@ -362,11 +363,13 @@ bool parseBorrowedOptions(PyObject *object,
                       "verify_designs() option names must be strings");
       return false;
     }
-    const char *name = PyUnicode_AsUTF8(key);
+    Py_ssize_t nameLength = 0;
+    const char *name = PyUnicode_AsUTF8AndSize(key, &nameLength);
     if (name == nullptr) {
       return false;
     }
-    if (!allowedKeys.contains(name)) {
+    const std::string_view optionName(name, size_t(nameLength));
+    if (!allowedKeys.contains(optionName) && !KEPLER_FORMAL::isBorrowedLatchOption(optionName)) {
       PyErr_Format(PyExc_TypeError,
                    "unknown verify_designs() native option: %s", name);
       return false;
@@ -454,7 +457,9 @@ bool parseBorrowedOptions(PyObject *object,
                     "log_level must be 'debug', 'info', or None");
     return false;
   }
-  return true;
+  return KEPLER_FORMAL::parseBorrowedLatchOptions(
+      object, options.latchSupport, options.mode == KEPLER_FORMAL::BorrowedVerificationMode::SEC,
+      !options.setAsBoundary.empty());
 }
 
 PyObject *fromNajaeda(PyObject *, PyObject *args) {

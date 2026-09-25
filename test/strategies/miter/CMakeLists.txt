@@ -30,6 +30,7 @@ add_executable(keplerFormalCliTests
     OpaquePolicyCliTests.cpp
     LibertyLatchModelsTests.cpp
     LatchEventConfigTests.cpp
+    LatchResetCliTests.cpp
 )
 
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)

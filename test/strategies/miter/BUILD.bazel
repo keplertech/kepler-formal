@@ -37,6 +37,7 @@ cc_test(
     name = "LatchEventCliTests",
     srcs = [
         "LatchEventConfigTests.cpp",
+        "LatchResetCliTests.cpp",
         "LibertyLatchModelsTests.cpp",
         "OpaquePolicyCliTests.cpp",
     ],

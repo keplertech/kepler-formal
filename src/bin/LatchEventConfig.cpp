@@ -43,6 +43,9 @@ bool LatchEventConfig::set(const std::string& key, const std::string& value, std
   else if (key == "max_waves" && count) options_.limits.maxWaves = count;
   else if (key == "max_states" && count) options_.limits.maxBoundaryStates = count;
   else if (key == "max_transactions" && count) options_.limits.maxTransactions = count;
+  else if (key == "max_symbolic_nodes" && count) options_.maxSymbolicNodes = count;
+  else if (key == "max_sat_conflicts" && count && count <= std::numeric_limits<unsigned>::max()) options_.maxSatConflicts = count;
+  else if (key == "max_sat_decisions" && count && count <= std::numeric_limits<unsigned>::max()) options_.maxSatDecisions = count;
   else {
     error = "unknown or invalid sec_latch_events option: " + key;
     return false;
@@ -86,7 +89,10 @@ LatchEventConfig::ArgumentResult LatchEventConfig::parseArgument(
       {"--sec-latch-workers", "workers"},
       {"--sec-latch-max-waves", "max_waves"},
       {"--sec-latch-max-states", "max_states"},
-      {"--sec-latch-max-transactions", "max_transactions"}};
+      {"--sec-latch-max-transactions", "max_transactions"},
+      {"--sec-latch-max-nodes", "max_symbolic_nodes"},
+      {"--sec-latch-sat-conflicts", "max_sat_conflicts"},
+      {"--sec-latch-sat-decisions", "max_sat_decisions"}};
   const auto option = names.find(argv[index]);
   if (option == names.end()) return ArgumentResult::NotHandled;
   if (index + 1 == argc) { error = option->first + " requires a value"; return ArgumentResult::Error; }
@@ -95,6 +101,7 @@ LatchEventConfig::ArgumentResult LatchEventConfig::parseArgument(
 
 bool LatchEventConfig::validate(bool isSec, bool hasResetCycles, bool hasLeafBoundaries,
                                 std::string& error) const {
+  (void)hasResetCycles;  // Clock discovery and cycle expansion need the extracted models.
   if (!options_.enabled) {
     if (!explicitTuning_) return true;
     error = "latch event tuning requires latch_support: true or --latch_support";
@@ -103,8 +110,6 @@ bool LatchEventConfig::validate(bool isSec, bool hasResetCycles, bool hasLeafBou
   if (!isSec) error = "latch event options require SEC verification";
   else if (!inputChangesExplicit_ || !options_.initialInputs || !options_.initialStorage)
     error = "latch events require explicit input_changes, initial_inputs and initial_storage";
-  else if (hasResetCycles)
-    error = "latch event steps are external transactions, not reset cycles; drive resets as external events";
   else if (hasLeafBoundaries)
     error = "latch events currently require the complete top interface, not selected leaf boundaries";
   else return true;

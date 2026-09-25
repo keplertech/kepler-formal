@@ -130,7 +130,8 @@ TEST(LatchEventConfigTests, AnyChangesAndExplicitHighInitializationAreAccepted) 
   std::string error;
   ASSERT_TRUE(parseYaml(config,
       "{input_changes: any, initial_inputs: 1, initial_storage: 1, workers: 2, "
-      "max_waves: 7, max_states: 9, max_transactions: 11}", error));
+      "max_waves: 7, max_states: 9, max_transactions: 11, max_symbolic_nodes: 123, "
+      "max_sat_conflicts: 45, max_sat_decisions: 67}", error));
   EXPECT_TRUE(config.validate(true, false, false, error));
   EXPECT_FALSE(config.options().singleInputChange);
   EXPECT_EQ(config.options().initialInputs, true);
@@ -139,6 +140,9 @@ TEST(LatchEventConfigTests, AnyChangesAndExplicitHighInitializationAreAccepted) 
   EXPECT_EQ(config.options().limits.maxWaves, 7u);
   EXPECT_EQ(config.options().limits.maxBoundaryStates, 9u);
   EXPECT_EQ(config.options().limits.maxTransactions, 11u);
+  EXPECT_EQ(config.options().maxSymbolicNodes, 123u);
+  EXPECT_EQ(config.options().maxSatConflicts, 45u);
+  EXPECT_EQ(config.options().maxSatDecisions, 67u);
 }
 
 TEST(LatchEventConfigTests, RejectsUnknownKeysAndMalformedYamlShapes) {
@@ -166,7 +170,8 @@ TEST(LatchEventConfigTests, RejectsBadEnumsAndNonBinaryInitialization) {
 
 TEST(LatchEventConfigTests, RejectsNegativeOverflowAndZeroResourceLimits) {
   for (const auto* argument : {"--sec-latch-max-waves", "--sec-latch-max-states",
-                              "--sec-latch-max-transactions"}) {
+                              "--sec-latch-max-transactions", "--sec-latch-max-nodes",
+                              "--sec-latch-sat-conflicts", "--sec-latch-sat-decisions"}) {
     for (const auto* value : {"0", "-1", "184467440737095516160", "1.2", "3junk"}) {
       LatchEventConfig config;
       std::string error;
@@ -180,14 +185,34 @@ TEST(LatchEventConfigTests, RejectsNegativeOverflowAndZeroResourceLimits) {
   EXPECT_EQ(parseArgument(config, {"--sec-latch-workers", "0"}, error), Result::Parsed);
 }
 
+TEST(LatchEventConfigTests, SymbolicBudgetsAreCheckedAndDoNotEnableGate) {
+  for (const auto* flag : {"--sec-latch-sat-conflicts", "--sec-latch-sat-decisions"}) {
+    LatchEventConfig config;
+    std::string error;
+    EXPECT_EQ(parseArgument(config, {flag, "4294967296"}, error), Result::Error);
+    EXPECT_EQ(parseArgument(config, {flag, "42"}, error), Result::Parsed);
+    EXPECT_FALSE(config.options().enabled);
+    EXPECT_FALSE(config.validate(true, false, false, error));
+  }
+  for (const auto* key : {"max_symbolic_nodes", "max_sat_conflicts", "max_sat_decisions"}) {
+    LatchEventConfig config;
+    std::string error;
+    EXPECT_FALSE(parseYaml(config, std::string("{") + key + ": 0}", error));
+  }
+  LatchEventConfig config;
+  std::string error;
+  ASSERT_EQ(parseArgument(config, {"--sec-latch-max-nodes", "99"}, error), Result::Parsed);
+  EXPECT_EQ(config.options().maxSymbolicNodes, 99u);
+  EXPECT_FALSE(config.validate(true, false, false, error));
+}
+
 TEST(LatchEventConfigTests, RejectsMissingFlagValueAndIncompatibleWorkflows) {
   LatchEventConfig config;
   std::string error;
   EXPECT_EQ(parseArgument(config, {"--sec-latch-events"}, error), Result::Error);
   ASSERT_TRUE(parseYaml(config, complete, error));
   EXPECT_FALSE(config.validate(false, false, false, error));
-  EXPECT_FALSE(config.validate(true, true, false, error));
-  EXPECT_NE(error.find("reset cycles"), std::string::npos);
+  EXPECT_TRUE(config.validate(true, true, false, error));
   EXPECT_FALSE(config.validate(true, false, true, error));
   EXPECT_NE(error.find("leaf boundaries"), std::string::npos);
 }
@@ -313,7 +338,7 @@ TEST_F(LatchEventCliTests, FlagsAreAcceptedBeforeAndAfterFormat) {
   }
 }
 
-TEST_F(LatchEventCliTests, RejectsLecResetCyclesAndSelectedLeafBoundaries) {
+TEST_F(LatchEventCliTests, RejectsLecClocklessResetCyclesAndSelectedLeafBoundaries) {
   const std::vector<std::vector<std::string>> incompatible{
       {"-v", "lec"},
       {"-v", "sec", "--sec-reset-cycles", "1", "--sec-reset-port", "e=1"},

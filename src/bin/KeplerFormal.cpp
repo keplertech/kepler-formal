@@ -87,8 +87,9 @@ static void print_usage(const char* prog) {
   SPDLOG_INFO("Boolean event SEC (off by default): --latch_support --sec-latch-events <any|single> "
       "--sec-latch-initial-inputs <0|1> --sec-latch-initial-storage <0|1> "
       "[--sec-latch-workers <n>] [--sec-latch-max-waves <n>] "
-      "[--sec-latch-max-states <n>] [--sec-latch-max-transactions <n>]. "
-      "Steps are settled external events, not clock/reset cycles.");
+      "[--sec-latch-max-states <n>] [--sec-latch-max-transactions <n>] "
+      "[--sec-latch-max-nodes <n>] [--sec-latch-sat-conflicts <n>] [--sec-latch-sat-decisions <n>]. "
+      "Normal steps are settled external events; sec_reset counts clock cycles.");
 // LCOV_EXCL_START
 }
 // LCOV_EXCL_STOP

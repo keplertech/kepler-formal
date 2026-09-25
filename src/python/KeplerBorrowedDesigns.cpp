@@ -241,6 +241,8 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
   std::lock_guard<std::mutex> lock(mutex);
 
   try {
+    const auto latchOptions = options.latchSupport.validated(
+        options.mode == BorrowedVerificationMode::SEC, !options.setAsBoundary.empty());
     auto* universe = naja::NL::NLUniverse::get();
     if (!universe || !design0 || !design1) {
       throw std::invalid_argument("Borrowed designs need a live Naja universe and two live designs");
@@ -254,9 +256,8 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     Config::ScopedVerificationContext verificationContext;
     BorrowedExpressionState expressionState;
     BorrowedRunState runState;
-    // BorrowedDesignOptions has no event contract: never inherit ambient
-    // thread-local event semantics from a caller's direct extraction scope.
-    SEC::LATCH::ScopedSupportOptions eventOptions({});
+    // Both designs share this explicit contract; never inherit ambient options.
+    SEC::LATCH::ScopedSupportOptions eventOptions(latchOptions);
     Config::setSolverType(options.solver);
     Config::setReportSkippedPOs(options.reportSkippedOutputs);
     Config::setErrorOnOpaque(options.errorOnOpaque);

@@ -18,6 +18,9 @@ struct SupportOptions {
   std::optional<bool> initialStorage;
   size_t workers = 0;
   CompilerLimits limits;
+  size_t maxSymbolicNodes = 2000000;
+  unsigned maxSatConflicts = 500000;
+  unsigned maxSatDecisions = 5000000;
 };
 
 const SupportOptions& supportOptions();

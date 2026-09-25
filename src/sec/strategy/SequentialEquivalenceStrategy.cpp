@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -41,6 +42,7 @@
 #include "kinduction/SatEncoding.h"
 #include "model/SequentialDesignModel.h"
 #include "latch/LatchEventContract.h"
+#include "latch/LatchResetAdapter.h"
 #include "pdr/PDREngine.h"
 #include "proof/DualRailEncoding.h"
 #include "proof/TransitionExprResolver.h"
@@ -831,7 +833,9 @@ std::string formatConeTraceback(const KInductionResult::CounterexampleWitness& w
 
   std::ostringstream oss;
   oss << "Traceback for first differing point `" << differencePoint.signal
-      << "` at cycle " << witness.badFrame << ":\n";
+      << "` at " << (model0.eventContract.empty() ? "cycle " :
+          model0.eventResetCycles ? "reset/event step " : "event transaction ")
+      << witness.badFrame << ":\n";
 
 
 // LCOV_EXCL_STOP
@@ -895,8 +899,13 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   }
 
   const auto& witness = *result.witness;
+  const char* step = model0.eventContract.empty() ? "cycle " :
+      model0.eventResetCycles ? "reset/event step " : "event transaction ";
   std::ostringstream oss;
-  oss << "Counterexample reaches the first bad frame at cycle "
+  if (!model0.eventContract.empty()) oss << "Event contract: " << model0.eventContract << ".\n";
+  if (model0.eventResetCycles) oss << "The first " << model0.eventResetCycles
+      << " steps are reset clock cycles; subsequent steps are external event transactions.\n";
+  oss << "Counterexample reaches the first bad frame at " << step
       << witness.badFrame << ".\n";
 
   if (witness.inputTrace.empty()) {
@@ -904,7 +913,7 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   } else {  // LCOV_EXCL_LINE
     oss << "Input trace:\n";
     for (const auto& frame : witness.inputTrace) {
-      oss << "  cycle " << frame.frame << ": ";
+      oss << "  " << step << frame.frame << ": ";
       if (frame.assignments.empty()) {
         oss << "<no environment inputs>";  // LCOV_EXCL_LINE
       } else {  // LCOV_EXCL_LINE
@@ -923,7 +932,7 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   // LCOV_EXCL_STOP
 
   if (!witness.outputMismatches.empty()) {
-    oss << "Observed output mismatches at cycle " << witness.badFrame << ":\n";
+    oss << "Observed output mismatches at " << step << witness.badFrame << ":\n";
     // LCOV_EXCL_START
     for (const auto& mismatch : witness.outputMismatches) {
       oss << "  " << mismatch.signal << ": design0="
@@ -3738,6 +3747,23 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   // Phase 2: align the externally visible SEC interface, then drop any outputs
   // whose cones were already classified as skipped by extraction.
   // Internal names are candidate hints only; relations are certified below.
+  if (!model0.eventContract.empty() && resetSpec_.enabled()) {
+    auto failure = [&](const std::string& reason) {
+      return makeSecResult(SequentialEquivalenceStatus::Unsupported, 0, reason,
+                           OutputCoverageSelection{}, extractedBoundaryReports);
+    };
+    if (auto error = LATCH::eventContractError(model0.eventContract, model1.eventContract, false))
+      return failure(*error);
+    if (resetSpec_.cycles > std::numeric_limits<size_t>::max() - maxK)
+      return failure("reset cycle count overflows the SEC bound");
+    auto first = LATCH::adaptResetCycles(model0, resetSpec_);
+    if (!first.model) return failure("design0: " + first.error);
+    auto second = LATCH::adaptResetCycles(model1, resetSpec_);
+    if (!second.model) return failure("design1: " + second.error);
+    auto adapted = *this;
+    adapted.resetSpec_ = {};
+    return adapted.runExtractedModels(*first.model, *second.model, maxK + resetSpec_.cycles);
+  }
   if (auto error = LATCH::eventContractError(model0.eventContract, model1.eventContract, resetSpec_.enabled())) {
     return makeSecResult(SequentialEquivalenceStatus::Unsupported, 0, *error,
                          OutputCoverageSelection{}, extractedBoundaryReports);

@@ -469,6 +469,9 @@ TEST_F(LatchNetlistAdapterTests, ProofEnginesFindDifferentPhysicalLatchOutputs) 
     SequentialEquivalenceStrategy strategy(first, second, Config::SolverType::KISSAT, engine, SecEncoding::Binary);
     const auto result = strategy.run(8);
     EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
+    EXPECT_NE(result.reason.find("event transaction"), std::string::npos);
+    EXPECT_NE(result.reason.find("Event contract: boolean-epochs-v1"), std::string::npos);
+    EXPECT_EQ(result.reason.find("at cycle"), std::string::npos);
   }
 }
 
@@ -614,14 +617,14 @@ TEST_F(LatchNetlistAdapterTests, ExtractedModelsCannotMixBooleanInitializationCo
   EXPECT_NE(result.reason.find("initialization contracts"), std::string::npos);
 }
 
-TEST_F(LatchNetlistAdapterTests, ExtractedEventModelRejectsCycleCountedResetBootstrap) {
+TEST_F(LatchNetlistAdapterTests, ResetCyclesRequireDiscoverableClockNotAnArbitraryLatchEnable) {
   ScopedSupportOptions scope(options());
   const auto model = SequentialDesignModel::extract(directTop("top", NLDB0::getDLatch()));
   SequentialEquivalenceStrategy strategy(nullptr, nullptr, Config::SolverType::KISSAT,
       SecEngine::KInduction, SecEncoding::Binary, SecResetSpec{1, {{"data", false}}});
   const auto result = strategy.runExtractedModels(model, model, 8);
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
-  EXPECT_NE(result.reason.find("clock-cycle reset"), std::string::npos);
+  EXPECT_NE(result.reason.find("clock"), std::string::npos);
 }
 
 TEST_F(LatchNetlistAdapterTests, Btor2ExportRetainsEventStepAndInitializationMetadata) {

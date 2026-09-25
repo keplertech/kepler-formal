@@ -11,6 +11,8 @@
 #include "SNLDesign.h"
 #include "SNLDesignModeling.h"
 #include "SNLInstance.h"
+#include "latch/NajaSymbolicLogic.h"
+#include "latch/LatchResetClock.h"
 
 namespace KEPLER_FORMAL::SEC::LATCH {
 namespace {
@@ -24,6 +26,9 @@ using Term = naja::NL::SNLBitTerm;
 struct Formula {
   Expression expression;
   std::vector<size_t> pins;
+  BoolExpr* operator()(const SymbolicBits& input, const SymbolicBits& storage) const {
+    return detail::symbolicFormula(expression, pins, input, storage);
+  }
   bool operator()(const Bits& input, const Bits& storage) const {
     Bits values(expression.nodes.size());
     for (size_t i = 0; i < values.size(); ++i) {
@@ -150,7 +155,8 @@ struct Table {
 }  // namespace
 
 Primitive makeNajaEventPrimitive(naja::NL::SNLInstance* instance, std::string path,
-                                const std::map<const Term*, size_t>& nets) {
+                                const std::map<const Term*, size_t>& nets,
+                                SymbolicPrimitive* symbolic, ResetClockPrimitive* resetClock) {
   if (!instance) throw std::runtime_error("missing leaf instance");
   Primitive primitive;
   primitive.name = std::move(path);
@@ -206,6 +212,23 @@ Primitive makeNajaEventPrimitive(naja::NL::SNLInstance* instance, std::string pa
     primitive.initialOutputValues = [rule](const Bits& state, const Bits& pins) {
       return rule->output(state, pins);
     };
+    if (symbolic) {
+      symbolic->react = [rule](const SymbolicBits& state, const SymbolicBits& before,
+          const SymbolicBits& now, std::optional<size_t> changed, bool bootstrap) {
+        return detail::symbolicSequentialReaction(*rule, state, before, now, changed, bootstrap);
+      };
+      symbolic->initialOutputs = [rule](const SymbolicBits& state, const SymbolicBits& pins) {
+        return detail::symbolicSequentialOutputs(*rule, state, pins);
+      };
+    }
+    if (resetClock) {
+      resetClock->kind = rule->latch ? ResetClockPrimitive::Kind::Latch : ResetClockPrimitive::Kind::FlipFlop;
+      if (!rule->latch) {
+        SymbolicBits pins;
+        for (size_t i = 0; i < primitive.inputs.size(); ++i) pins.push_back(BoolExpr::Var(i + 2));
+        resetClock->clock = rule->control(pins, SymbolicBits{});
+      }
+    }
   } else {
     std::vector<Table> tables;
     for (auto* output : outputs) {
@@ -225,12 +248,33 @@ Primitive makeNajaEventPrimitive(naja::NL::SNLInstance* instance, std::string pa
         throw std::runtime_error("truth table exceeds event index width");
       tables.push_back(std::move(table));
     }
-    primitive.react = [tables = std::move(tables)](const Bits&, const Bits&, const Bits& input,
+    const auto sharedTables = std::make_shared<const std::vector<Table>>(std::move(tables));
+    primitive.react = [sharedTables](const Bits&, const Bits&, const Bits& input,
                                                  std::optional<size_t>, bool) {
       Reaction result;
-      for (const auto& table : tables) result.outputs.push_back(table(input));
+      for (const auto& table : *sharedTables) result.outputs.push_back(table(input));
       return result;
     };
+    if (symbolic) symbolic->react = [sharedTables](const SymbolicBits&, const SymbolicBits&,
+        const SymbolicBits& input, std::optional<size_t>, bool) {
+      SymbolicReaction result;
+      for (const auto& table : *sharedTables)
+        result.outputs.push_back(detail::symbolicTruthTable(table.truth, table.pins, input));
+      return result;
+    };
+    if (resetClock) {
+      try {
+        SymbolicBits pins;
+        for (size_t i = 0; i < primitive.inputs.size(); ++i) pins.push_back(BoolExpr::Var(i + 2));
+        resetClock->kind = ResetClockPrimitive::Kind::Combinational;
+        for (const auto& table : *sharedTables)
+          resetClock->outputs.push_back(detail::symbolicTruthTable(table.truth, table.pins, pins));
+      } catch (const Limit&) {
+        // Clock discovery is optional. Its symbolic routing budget must not
+        // disable a primitive that the exact finite event path can still model.
+        *resetClock = {};
+      }
+    }
   }
   return primitive;
 }

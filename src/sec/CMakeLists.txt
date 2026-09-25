@@ -13,7 +13,13 @@ add_library(kepler_sec STATIC
     model/SecNetlistChecks.cpp
     model/OpaquePolicy.cpp
     latch/LatchEventModel.cpp
+    latch/LatchDependencyGraph.cpp
     latch/LatchSettlingCompiler.cpp
+    latch/LatchSymbolicModel.cpp
+    latch/LatchSymbolicCompiler.cpp
+    latch/LatchSymbolicEncoding.cpp
+    latch/LatchResetAdapter.cpp
+    latch/LatchResetClock.cpp
     latch/LatchBoundaryEncoding.cpp
     latch/LatchSupportOptions.cpp
     latch/NajaEventPrimitive.cpp

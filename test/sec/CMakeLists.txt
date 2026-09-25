@@ -4,7 +4,16 @@
 add_executable(secStrategyTests
     OpaquePolicyTests.cpp
     LatchEventModelTests.cpp
+    LatchConstantNetTests.cpp
+    LatchDependencyGraphTests.cpp
     LatchSettlingCompilerTests.cpp
+    LatchSymbolicModelTests.cpp
+    LatchSymbolicCompilerTests.cpp
+    LatchSymbolicIntegrationTests.cpp
+    LatchEventExportTests.cpp
+    LatchResetClockTests.cpp
+    LatchResetAdapterTests.cpp
+    LatchResetIntegrationTests.cpp
     LatchBoundaryEncodingTests.cpp
     LatchNetlistAdapterTests.cpp
     InternalRelationsTests.cpp

@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <map>
-#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -17,8 +16,14 @@
 #include "SNLInstance.h"
 #include "SNLPath.h"
 #include "latch/LatchBoundaryEncoding.h"
+#include "latch/LatchConstantNet.h"
+#include "latch/LatchDependencyGraph.h"
+#include "latch/LatchInputHistory.h"
+#include "latch/LatchResetAdapter.h"
+#include "latch/LatchResetClock.h"
 #include "latch/LatchSupportOptions.h"
 #include "latch/NajaEventPrimitive.h"
+#include "latch/LatchSymbolicEncoding.h"
 #include "model/OpaquePolicy.h"
 
 namespace KEPLER_FORMAL::SEC::LATCH {
@@ -88,16 +93,6 @@ struct DnlScope {
   }
 };
 
-struct DisjointSets {
-  std::vector<size_t> parent;
-  explicit DisjointSets(size_t size) : parent(size) { std::iota(parent.begin(), parent.end(), 0); }
-  size_t root(size_t value) {
-    while (parent[value] != value) { parent[value] = parent[parent[value]]; value = parent[value]; }
-    return value;
-  }
-  void join(size_t a, size_t b) { a = root(a); b = root(b); if (a != b) parent[std::max(a,b)] = std::min(a,b); }
-};
-
 void opaque(SequentialDesignModel& model, const SignalKey& key, const std::string& name,
             const std::string& reason) {
   model.displayNameByKey.insert_or_assign(key, name);
@@ -121,6 +116,7 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       ";initial_storage=" + std::to_string(*options.initialStorage);
   DnlScope scope(top);
   const auto* dnl = naja::DNL::get();
+  DriverlessConstantResolver driverlessConstants(*dnl);
   Network network;
   std::map<naja::DNL::DNLID, size_t> byIso;
   std::vector<std::string> netErrors;
@@ -133,7 +129,12 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     network.constantByNet.push_back({});
     netErrors.emplace_back();
     if (isoID == naja::DNL::DNLID_MAX) {
-      netErrors.back() = "unconnected signal " + name(term);
+      const auto constant = driverlessConstants.resolve(term);
+      network.constantByNet.back() = constant.value;
+      if (constant.conflictingOrUnknown)
+        netErrors.back() = "X/Z or conflicting constant net in Boolean event model: " + name(term);
+      else if (!constant.value)
+        netErrors.back() = "unconnected signal " + name(term);
       return index;
     }
     byIso.emplace(isoID, index);
@@ -165,6 +166,8 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     network.externalInputs.push_back(input.net);
   }
   std::vector<CellInfo> cells;
+  std::vector<SymbolicPrimitive> symbolicPrimitives;
+  std::vector<ResetClockPrimitive> resetClocks;
   for (auto leaf : dnl->getLeaves()) {
     const auto& instance = dnl->getDNLInstanceFromID(leaf);
     if (instance.isTop()) continue;
@@ -181,8 +184,10 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
         fallback.outputs.push_back(index); info.key = key(term); info.name = name(term);
       } else info.error = "bidirectional primitive pin: " + name(term);
     }
+    SymbolicPrimitive symbolic;
+    ResetClockPrimitive resetClock;
     try {
-      auto primitive = makeNajaEventPrimitive(instance.getSNLInstance(), fallback.name, pins);
+      auto primitive = makeNajaEventPrimitive(instance.getSNLInstance(), fallback.name, pins, &symbolic, &resetClock);
       // Constant equipotentials already have an authoritative source. A cell
       // tied into one is not silently treated as a second varying writer.
       for (auto output : primitive.outputs)
@@ -190,8 +195,11 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       network.primitives.push_back(std::move(primitive));
     } catch (const std::exception& error) {
       info.error = fallback.name + ": " + error.what();
+      resetClock = {};
       network.primitives.push_back(std::move(fallback));
     }
+    symbolicPrimitives.push_back(std::move(symbolic));
+    resetClocks.push_back(std::move(resetClock));
     cells.push_back(std::move(info));
   }
   // A top wire observes a stored external level in selector mode. An observer
@@ -203,6 +211,14 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     network.constantByNet.push_back({}); netErrors.emplace_back();
     network.primitives.push_back(combinational("<top observation>", {output.net}, {observed},
         [](const Bits& value) { return value; }));
+    SymbolicPrimitive observer;
+    observer.react = [](const SymbolicBits&, const SymbolicBits&, const SymbolicBits& value,
+                        std::optional<size_t>, bool) { return SymbolicReaction{{}, value}; };
+    symbolicPrimitives.push_back(std::move(observer));
+    ResetClockPrimitive observationClock;
+    observationClock.kind = ResetClockPrimitive::Kind::Combinational;
+    observationClock.outputs = {BoolExpr::Var(2)};
+    resetClocks.push_back(std::move(observationClock));
     cells.push_back({syntheticKey(3, cells.size()), output.name, {}});
     output.net = observed;
   }
@@ -212,23 +228,25 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
   // including clock/enable/asynchronous controls. Shared read-only PIs are not
   // edges. This deliberately over-groups rather than dropping cross-island
   // pulses; waves inside a component still execute in parallel.
-  DisjointSets groups(network.primitives.size());
+  const auto graph = analyzeDependencies(network);
   std::vector<size_t> owner(network.netCount, absent);
   for (size_t i = 0; i < network.primitives.size(); ++i) {
     for (auto output : network.primitives[i].outputs) {
       if (owner[output] != absent) {
-        groups.join(i, owner[output]);
         netErrors[output] = "multiple primitive writers";
       } else owner[output] = i;
     }
   }
-  for (size_t i = 0; i < network.primitives.size(); ++i)
-    for (auto input : network.primitives[i].inputs)
-      if (owner[input] != absent) groups.join(i, owner[input]);
-  std::map<size_t, std::vector<size_t>> components;
-  for (size_t i = 0; i < network.primitives.size(); ++i) components[groups.root(i)].push_back(i);
 
   size_t nextVar = 2;
+  auto resetInterface = std::make_shared<EventResetInterface>();
+  resetInterface->singleInputChange = options.singleInputChange;
+  resetInterface->maxCompositionNodes = options.maxSymbolicNodes;
+  for (const auto& input : inputs) {
+    resetInterface->inputKeys.push_back(input.key);
+    resetInterface->inputNames.push_back(input.name);
+  }
+  resetInterface->currentInputs.assign(inputs.size(), BoolExpr::Var(*options.initialInputs ? 1 : 0));
   std::vector<BoolExpr*> inputExpressions, selector;
   BoolExpr* eventValue = nullptr;
   if (!options.singleInputChange) {
@@ -244,10 +262,13 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     for (size_t i = 0; i < bits; ++i)
       selector.push_back(variable(model, syntheticKey(1, i + 1), "$event.select[" + std::to_string(i) + "]", false, nextVar));
     eventValue = variable(model, syntheticKey(1, bits + 1), "$event.value", false, nextVar);
+    for (auto* bit : selector) resetInterface->selectorSymbols.push_back(bit->getId());
+    resetInterface->valueSymbol = eventValue->getId();
     inputExpressions.assign(inputs.size(), BoolExpr::createFalse());
   }
 
-  for (const auto& [componentID, members] : components) {
+  for (size_t componentID = 0; componentID < graph.components.size(); ++componentID) {
+    const auto& members = graph.components[componentID];
     std::set<size_t> used;
     std::string failure;
     for (auto member : members) {
@@ -272,14 +293,33 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       local.externalInputs.push_back(localNet.at(inputs[i].net));
       localInputs.push_back(inputExpressions[i]);
     }
+    std::vector<SymbolicPrimitive> localSymbolic;
     for (auto member : members) {
       auto primitive = network.primitives[member];
       for (auto& index : primitive.inputs) index = localNet.at(index);
       for (auto& index : primitive.outputs) index = localNet.at(index);
       local.primitives.push_back(std::move(primitive));
+      localSymbolic.push_back(symbolicPrimitives[member]);
+    }
+    std::optional<SymbolicMacro> symbolic;
+    std::string symbolicFailure;
+    if (failure.empty()) {
+      SymbolicCompileOptions compile;
+      compile.initialInputs.assign(local.externalInputs.size(), *options.initialInputs);
+      compile.singleExternalInputChange = options.singleInputChange;
+      compile.maxWaves = options.limits.maxWaves;
+      compile.maxNodes = options.maxSymbolicNodes;
+      compile.maxSatConflicts = options.maxSatConflicts;
+      compile.maxSatDecisions = options.maxSatDecisions;
+      compile.workers = options.workers;
+      for (const auto& primitive : local.primitives)
+        compile.initialStorage.emplace_back(primitive.storageBits, uint8_t(*options.initialStorage));
+      auto result = compileSymbolicNetwork({local, std::move(localSymbolic)}, compile);
+      if (result.certified()) symbolic = std::move(result.model);
+      else symbolicFailure = result.detail;
     }
     std::optional<TransitionTable> table;
-    if (failure.empty()) {
+    if (failure.empty() && !symbolic) {
       try {
         EventModel reference(local, {}, options.workers);
         CompileOptions compile;
@@ -290,7 +330,8 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
           compile.initialStorage.emplace_back(primitive.storageBits, uint8_t(*options.initialStorage));
         auto result = compileTransitionTable(reference, compile);
         if (result.certified()) table = std::move(result.table);
-        else failure = std::string(certificationStatusName(result.status)) + ": " + result.detail;
+        else failure = std::string(certificationStatusName(result.status)) + ": " + result.detail +
+            "; symbolic certificate: " + symbolicFailure;
       } catch (const std::exception& error) { failure = error.what(); }
     }
     if (table && (table->initials.size() != 1 || table->initials[0].boundary >= table->boundaries.size()))
@@ -299,7 +340,7 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
       const std::string reason = "event component " + cells[members.front()].name + ": " + failure;
       for (auto member : members) opaque(model, cells[member].key, cells[member].name, reason);
       for (const auto& output : outputs)
-        if (owner[output.net] != absent && groups.root(owner[output.net]) == componentID) {
+        if (owner[output.net] != absent && graph.componentOf[owner[output.net]] == componentID) {
           model.skippedObservedOutputs.push_back(output.key);
           opaque(model, output.key, output.name, reason);
         }
@@ -307,17 +348,23 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     }
     std::vector<BoolExpr*> state;
     std::vector<SignalKey> stateKeys;
-    for (size_t bit = 0; bit < boundaryEncodingBits(table->boundaries.size()); ++bit) {
+    const size_t stateWidth = symbolic ? symbolic->stateSymbols.size() : boundaryEncodingBits(table->boundaries.size());
+    for (size_t bit = 0; bit < stateWidth; ++bit) {
       const auto stateKey = syntheticKey(2, componentID, bit);
       stateKeys.push_back(stateKey);
       state.push_back(variable(model, stateKey, "$event.component[" + std::to_string(componentID) + "].state[" + std::to_string(bit) + "]", true, nextVar));
-      model.initialStateValueByKey.emplace(stateKey, (table->initials[0].boundary >> bit) & 1);
+      model.initialStateValueByKey.emplace(stateKey, symbolic ? symbolic->initialState.at(bit) : (table->initials[0].boundary >> bit) & 1);
     }
-    const auto encoded = encodeBoundaryTable(*table, local, state, localInputs, selector, eventValue, globalInputIndices);
+    const auto encoded = symbolic
+        ? encodeSymbolicMacro(*symbolic, local, state, localInputs, options.singleInputChange, selector, eventValue, globalInputIndices)
+        : encodeBoundaryTable(*table, local, state, localInputs, selector, eventValue, globalInputIndices);
     for (size_t bit = 0; bit < state.size(); ++bit)
       model.nextStateExprByStateKey.emplace(stateKeys[bit], encoded.nextState[bit]);
+    for (size_t i = 0; i < globalInputIndices.size(); ++i)
+      resetInterface->currentInputs[globalInputIndices[i]] = symbolic ? state.at(local.externalInputs[i])
+          : finiteInputHistory(*table, state, local.externalInputs[i]);
     for (const auto& output : outputs) {
-      if (owner[output.net] == absent || groups.root(owner[output.net]) != componentID) continue;
+      if (owner[output.net] == absent || graph.componentOf[owner[output.net]] != componentID) continue;
       model.observedOutputs.push_back(output.key);
       model.observedOutputExprByKey.emplace(output.key, encoded.observedNets.at(localNet.at(output.net)));
     }
@@ -334,6 +381,12 @@ SequentialDesignModel extract(naja::NL::SNLDesign* top, size_t side) {
     }
   }
   recordOpaqueOutputlessCells(model, *dnl);
+  // Discovery failure limits automatic reset-cycle expansion only, not ordinary
+  // event semantics. No clock is guessed from a latch enable or a signal name.
+  const auto clock = discoverResetClock(network, resetClocks);
+  resetInterface->clockInputIndex = clock.externalInputIndex;
+  if (!clock.resolved()) resetInterface->clockError = clock.detail;
+  model.eventResetInterface = std::move(resetInterface);
   applyOpaquePolicy(model, top->getName().getString(), side);
   return model;
 }

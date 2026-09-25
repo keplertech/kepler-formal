@@ -14,6 +14,7 @@ from typing import Any, Mapping, TypeVar
 import najaeda as _najaeda
 
 from . import _native
+from ._latch_options import build_latch_options
 from .result import VerificationResult
 
 PathLike = str | os.PathLike[str]
@@ -49,6 +50,12 @@ class VerificationOptions:
     ``set_as_boundary`` pairs top-relative paths to leaf instances, whose
     models have no child instances. Hierarchical paths to leaves are valid;
     selecting a nonleaf instance is rejected.
+
+    ``latch_support`` is disabled by default. Enabling it requires SEC, an
+    explicit ``latch_input_changes`` contract (``"any"`` or ``"single"``),
+    and initial inputs/storage given as integer 0 or 1. Each SEC step then
+    represents an external transaction followed by settling, not a clock
+    cycle. It consumes declared Naja models; it never infers cells by name.
     """
 
     mode: VerificationMode | str = VerificationMode.LEC
@@ -66,6 +73,17 @@ class VerificationOptions:
     learn_internal_relations: bool = True
     allow_x_equality_in_internal_relations: bool = True
     error_on_opaque: bool = False
+    latch_support: bool = False
+    latch_input_changes: str | None = None
+    latch_initial_inputs: int | None = None
+    latch_initial_storage: int | None = None
+    latch_workers: int | None = None
+    latch_max_waves: int | None = None
+    latch_max_states: int | None = None
+    latch_max_transactions: int | None = None
+    latch_max_symbolic_nodes: int | None = None
+    latch_max_sat_conflicts: int | None = None
+    latch_max_sat_decisions: int | None = None
 
 
 NativeDesign = _native.NativeDesign
@@ -172,6 +190,7 @@ def _build_native_design_options(
     if mode == VerificationMode.LEC.value and error_on_opaque:
         raise ValueError("error_on_opaque is only supported for SEC")
     set_as_boundary = _boundary_pairs(settings.set_as_boundary)
+    latch_options = build_latch_options(settings, mode=mode, has_boundaries=bool(set_as_boundary))
     if settings.max_k is not None:
         if isinstance(settings.max_k, bool) or not isinstance(settings.max_k, int):
             raise TypeError("max_k must be an integer")
@@ -206,6 +225,7 @@ def _build_native_design_options(
         raise ValueError("log_level must be 'debug', 'info', or None")
 
     return {
+        **latch_options,
         "mode": mode,
         "solver": solver,
         "max_k": 32 if settings.max_k is None else settings.max_k,

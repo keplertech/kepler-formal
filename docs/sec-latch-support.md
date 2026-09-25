@@ -1,9 +1,11 @@
 # Proposed SEC Latch Support
 
-Status: architectural design and conditional correctness arguments. The initial
-opt-in, resource-bounded Boolean event implementation is documented separately
-in [SEC Latch Event Implementation](sec-latch-implementation.md); it does not
-implement every optimization proposed here. This document records the
+Status: architectural design and conditional correctness arguments, with the
+deterministic Boolean-event path implemented behind the default-off `latch_support`
+switch. The implementation, explicit admission/initialization contract, symbolic
+certifier, finite fallback, and scoped limitations are documented separately in
+[SEC Latch Event Implementation](sec-latch-implementation.md). Optional phase
+abstraction and stronger scheduling reductions remain extensions. This document records the
 literature-backed approach discussed for level-sensitive latch support. It does
 not itself enable latch extraction or change SEC results. The constructions and
 proof sketches below close the identified specification gaps for a deliberately
@@ -59,8 +61,9 @@ flowchart TD
 
 Current documented behavior is described in
 [SEC Sequential Models](sec-sequential-models.md) and
-[SEC Clock Handling](sec-clock-handling.md). Generic latch outputs are currently
-opaque. Existing clock handling also has explicit limits on cross-domain cones.
+[SEC Clock Handling](sec-clock-handling.md). With `latch_support` disabled, generic
+latch outputs remain opaque. The opt-in path models only certified behavior.
+Existing clock handling also has explicit limits on cross-domain cones.
 
 This proposal would extend those semantics; it is not merely an extraction
 optimization. In particular, modeling independent latch enables requires more
@@ -728,12 +731,27 @@ for either design must stop the run with an error and a nonzero exit status,
 rather than continuing with partial coverage. The diagnostic must identify the
 design, hierarchical cell or signal, and reason for opacity. This policy applies
 to opacity generally, not only to unsupported latches; it does not change which
-behavior the modeling strategy supports. The switch's CLI spelling is not yet
-specified, and this document does not implement it.
+behavior the modeling strategy supports. The implemented spellings are
+`--error-on-opaque` and YAML/Python `error_on_opaque`, independently default-off.
 
 ## 12. Proposed Implementation and Validation Stages
 
-These are future tasks, not changes made by this document.
+The stages below remain the design's acceptance checklist. The core Boolean
+implementation realizes stages 1-5 with explicit primitive callbacks, BOOT,
+concrete and symbolic waves, dependency regions, SAT certificates, and bounded
+compilation. Stage 6 uses an explicit **external-transaction** backend adapter:
+native SEC, witnesses, and BTOR2 share that step meaning. Reset bootstrap uses
+an automatic cycle adapter for the supported single-clock/single-reset subset:
+assert reset, sample unconstrained data, generate both clock edges with full
+settling, and release reset after N complete cycles. It never counts propagation
+waves as cycles. Ambiguous clock protocols and selected leaf boundaries remain
+unsupported; see the implementation document for the exact reset input-arrival
+contract and diagnostics. Stage 7 remains optional, as originally proposed. See the implementation
+document for exact supported frontend and resource boundaries.
+
+The entire latch path remains behind `latch_support`, default-off. With it off,
+reset uses the existing bootstrap implementation unchanged; the event adapter's
+additional clock/reset restrictions do not apply to legacy runs.
 
 1. Encode and review the explicit primitive tables, Boolean bootstrap, shared
    environment, and observation contract specified here; supply missing frontend
@@ -939,14 +957,16 @@ The previously open construction is now specialized as follows:
 - **Fallback:** unsupported behavior stays opaque by default, with existing
   reporting/skipping; error-on-opaque is a separate default-off switch.
 
-These close the logical construction under the stated hypotheses. They do not
-constitute a tested implementation, machine-checked theorem, or a proof that
-arbitrary asynchronous hardware satisfies the hypotheses. Before enabling the
-feature, the implementation must instantiate and validate the primitive tables,
-bootstrap and invariants, compiler and scheduler, proof certificates, frontend
-models, resource limits, and the adapter to SEC's existing cycle/reset/export
-conventions. The environment/initial-state contract must be explicit in the user
-configuration; it must not be inferred to make a proof succeed.
+These close the logical construction under the stated hypotheses; they are not
+a machine-checked theorem or a proof that arbitrary asynchronous hardware
+satisfies those hypotheses. The opt-in implementation now instantiates the
+primitive tables, bootstrap, reference and symbolic compilers, certificates,
+dependency regions, resource limits, and SEC reset/export adapters, with tests
+described in [the implementation document](sec-latch-implementation.md).
+Tests and per-component SAT certificates do not establish that this Boolean
+contract models every physical circuit. The environment/initial-state contract
+must remain explicit in user configuration; it must not be inferred to make a
+proof succeed.
 
 Extensions still requiring separate arguments include genuine multivalued
 semantics, input changes before an episode settles, physical timing and
