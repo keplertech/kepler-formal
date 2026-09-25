@@ -10,13 +10,18 @@ namespace KEPLER_FORMAL {
 SEC::LATCH::SupportOptions BorrowedLatchOptions::validated(
     bool isSec, bool hasLeafBoundaries) const {
   SEC::LATCH::SupportOptions result;
+  result.enabled = enabled;
+  const bool hasTuning = inputChanges || initialInputs || initialStorage || workers || maxWaves ||
+      maxStates || maxTransactions || maxSymbolicNodes || maxSatConflicts || maxSatDecisions;
   if (!enabled) {
-    if (inputChanges || initialInputs || initialStorage || workers || maxWaves ||
-        maxStates || maxTransactions || maxSymbolicNodes || maxSatConflicts || maxSatDecisions) {
+    if (hasTuning) {
       throw std::invalid_argument("latch event tuning requires latch_support=true");
     }
     return result;
   }
+  // No supplied event contract keeps legacy LEC/SEC semantics, including
+  // opaque latches. Do not silently constrain initial inputs or stored state.
+  if (!hasTuning) return result;
   if (!isSec) throw std::invalid_argument("latch_support is only supported for SEC");
   if (!inputChanges || !initialInputs || !initialStorage) {
     throw std::invalid_argument(

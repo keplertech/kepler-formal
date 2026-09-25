@@ -78,8 +78,9 @@ bool LatchEventConfig::parseYaml(const YAML::Node& config, std::string& error) {
 
 LatchEventConfig::ArgumentResult LatchEventConfig::parseArgument(
     int argc, char** argv, int& index, std::string& error) {
-  if (std::string_view(argv[index]) == "--latch_support") {
-    options_.enabled = true;
+  const std::string_view argument(argv[index]);
+  if (argument == "--latch_support" || argument == "--no-latch_support") {
+    options_.enabled = argument == "--latch_support";
     return ArgumentResult::Parsed;
   }
   static const std::map<std::string, std::string> names{
@@ -107,6 +108,9 @@ bool LatchEventConfig::validate(bool isSec, bool hasResetCycles, bool hasLeafBou
     error = "latch event tuning requires latch_support: true or --latch_support";
     return false;
   }
+  // The default enables the capability, not assumptions about initial state.
+  // Existing workflows without an event contract keep their legacy semantics.
+  if (!explicitTuning_) return true;
   if (!isSec) error = "latch event options require SEC verification";
   else if (!inputChangesExplicit_ || !options_.initialInputs || !options_.initialStorage)
     error = "latch events require explicit input_changes, initial_inputs and initial_storage";

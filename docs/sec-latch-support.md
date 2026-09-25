@@ -1,8 +1,9 @@
 # Proposed SEC Latch Support
 
 Status: architectural design and conditional correctness arguments, with the
-deterministic Boolean-event path implemented behind the default-off `latch_support`
-switch. The implementation, explicit admission/initialization contract, symbolic
+deterministic Boolean-event path implemented behind the default-on `latch_support`
+switch, with an explicit event contract still required to activate that path.
+The implementation, explicit admission/initialization contract, symbolic
 certifier, finite fallback, and scoped limitations are documented separately in
 [SEC Latch Event Implementation](sec-latch-implementation.md). Optional phase
 abstraction and stronger scheduling reductions remain extensions. This document records the
@@ -61,9 +62,11 @@ flowchart TD
 
 Current documented behavior is described in
 [SEC Sequential Models](sec-sequential-models.md) and
-[SEC Clock Handling](sec-clock-handling.md). With `latch_support` disabled, generic
-latch outputs remain opaque. The opt-in path models only certified behavior.
-Existing clock handling also has explicit limits on cross-domain cones.
+[SEC Clock Handling](sec-clock-handling.md). With `latch_support` disabled, or with
+no latch-event settings supplied, generic latch outputs remain opaque. The switch
+is enabled by default, but event modeling still requires explicit input-event and
+initialization settings; it models only certified behavior. Existing clock
+handling also has explicit limits on cross-domain cones.
 
 This proposal would extend those semantics; it is not merely an extraction
 optimization. In particular, modeling independent latch enables requires more
@@ -749,9 +752,15 @@ unsupported; see the implementation document for the exact reset input-arrival
 contract and diagnostics. Stage 7 remains optional, as originally proposed. See the implementation
 document for exact supported frontend and resource boundaries.
 
-The entire latch path remains behind `latch_support`, default-off. With it off,
-reset uses the existing bootstrap implementation unchanged; the event adapter's
-additional clock/reset restrictions do not apply to legacy runs.
+The entire latch path remains behind `latch_support`, default-on. Explicit YAML
+`latch_support: false`, CLI `--no-latch_support`, or Python `latch_support=False`
+disables it. Default enablement does not assume initial values or input timing:
+without any event settings, legacy SEC/LEC behavior is preserved. A complete
+contract activates event modeling; partial contracts or tuning without the
+required fields are errors, as is tuning while explicitly disabled. With the
+switch off or no event settings supplied, reset uses the existing bootstrap
+implementation unchanged; the event adapter's additional clock/reset
+restrictions do not apply to legacy runs.
 
 1. Encode and review the explicit primitive tables, Boolean bootstrap, shared
    environment, and observation contract specified here; supply missing frontend
@@ -959,8 +968,8 @@ The previously open construction is now specialized as follows:
 
 These close the logical construction under the stated hypotheses; they are not
 a machine-checked theorem or a proof that arbitrary asynchronous hardware
-satisfies those hypotheses. The opt-in implementation now instantiates the
-primitive tables, bootstrap, reference and symbolic compilers, certificates,
+satisfies those hypotheses. The explicitly configured event implementation now
+instantiates the primitive tables, bootstrap, reference and symbolic compilers, certificates,
 dependency regions, resource limits, and SEC reset/export adapters, with tests
 described in [the implementation document](sec-latch-implementation.md).
 Tests and per-component SAT certificates do not establish that this Boolean

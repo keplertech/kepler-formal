@@ -10,7 +10,7 @@ from kepler_formal import _native
 
 class NativeLatchOptionsTest(unittest.TestCase):
     def contract(self, **changes):
-        return dict(mode="sec", latch_support=True, latch_input_changes="single",
+        return dict(mode="sec", latch_input_changes="single",
                     latch_initial_inputs=0, latch_initial_storage=0) | changes
 
     def rejected(self, options, error, message):
@@ -21,17 +21,19 @@ class NativeLatchOptionsTest(unittest.TestCase):
         for changes in ("single", "any"):
             self.rejected(self.contract(latch_input_changes=changes), TypeError, "design1 must be a NativeDesign")
 
-    def test_gate_defaults_off_and_accepts_explicit_false(self):
-        for options in ({}, {"latch_support": False}):
+    def test_no_event_settings_preserve_legacy_with_default_or_explicit_gate(self):
+        for options in ({}, {"latch_support": False}, {"latch_support": True}, {"mode": "sec"}):
             self.rejected(options, TypeError, "design1 must be a NativeDesign")
 
-    def test_native_tuning_does_not_enable_gate(self):
+    def test_native_tuning_requires_contract_and_cannot_override_explicit_false(self):
         for key, value in (("latch_input_changes", "any"), ("latch_initial_inputs", 0),
                            ("latch_initial_storage", 0), ("latch_workers", 0),
                            ("latch_max_waves", 1), ("latch_max_states", 1),
                            ("latch_max_transactions", 1)):
             with self.subTest(key=key):
-                self.rejected({"mode": "sec", key: value}, ValueError, "requires latch_support")
+                self.rejected({"mode": "sec", key: value}, ValueError, "requires explicit")
+                self.rejected({"mode": "sec", "latch_support": False, key: value},
+                              ValueError, "requires latch_support")
 
     def test_native_requires_complete_contract(self):
         for key in ("latch_input_changes", "latch_initial_inputs", "latch_initial_storage"):

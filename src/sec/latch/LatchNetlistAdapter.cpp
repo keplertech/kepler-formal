@@ -396,6 +396,7 @@ std::optional<SequentialDesignModel> extractEventDesign(
     naja::NL::SNLDesign* top, const BoundaryPairs& pairs, size_t side) {
   const auto& options = supportOptions();
   if (!options.enabled) return {};
+  if (!options.initialInputs && !options.initialStorage) return {};
   if (!options.initialInputs || !options.initialStorage || !pairs.empty()) {
     SequentialDesignModel result;
     result.unsupportedReasons.push_back(!pairs.empty()

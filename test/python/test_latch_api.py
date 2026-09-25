@@ -47,11 +47,11 @@ class BorrowedLatchApiTest(unittest.TestCase):
             cell.getInstTerm(pin).setNet(net)
         return top
 
-    def options(self, enabled=True, **changes):
+    def options(self, with_contract=True, **changes):
         values = dict(mode="sec", sec_engine="k_induction", sec_encoding="binary",
                       log_file=Path(self.temporary.name) / "verification.log")
-        if enabled:
-            values.update(latch_support=True, latch_input_changes="single",
+        if with_contract:
+            values.update(latch_input_changes="single",
                           latch_initial_inputs=0, latch_initial_storage=0)
         return VerificationOptions(**(values | changes))
 
@@ -66,6 +66,7 @@ class BorrowedLatchApiTest(unittest.TestCase):
 
     def test_default_then_enabled_then_default_do_not_leak(self):
         default = verify_designs(self.first, self.second, options=self.options(False))
+        self.assertEqual(VerificationStatus.UNSUPPORTED, default.status)
         self.assertEqual(0, default.covered_outputs)
         self.unchanged()
         enabled = verify_designs(self.first, self.second, options=self.options())
@@ -74,7 +75,15 @@ class BorrowedLatchApiTest(unittest.TestCase):
         self.assertEqual(1, enabled.total_outputs)
         self.unchanged()
         repeated = verify_designs(self.first, self.second, options=self.options(False))
+        self.assertEqual(VerificationStatus.UNSUPPORTED, repeated.status)
         self.assertEqual(0, repeated.covered_outputs)
+        self.unchanged()
+
+    def test_explicit_false_keeps_latches_opaque(self):
+        result = verify_designs(self.first, self.second,
+                                options=self.options(False, latch_support=False))
+        self.assertEqual(VerificationStatus.UNSUPPORTED, result.status)
+        self.assertEqual(0, result.covered_outputs)
         self.unchanged()
 
     def test_handles_and_raw_designs_share_the_event_contract(self):

@@ -183,6 +183,8 @@ class LatchNetlistAdapterTests : public ::testing::Test {
 };
 
 TEST_F(LatchNetlistAdapterTests, DefaultOptionsLeaveExistingExtractionUntouched) {
+  EXPECT_TRUE(supportOptions().enabled);
+  EXPECT_FALSE(supportOptions().hasEventContract());
   auto* top = directTop("top", NLDB0::getDLatch());
   EXPECT_FALSE(extractEventDesign(top, {}, 0).has_value());
   const auto model = SequentialDesignModel::extract(top);
@@ -200,18 +202,23 @@ TEST_F(LatchNetlistAdapterTests, ExplicitContractRejectsUnspecifiedInitializatio
 }
 
 TEST_F(LatchNetlistAdapterTests, ScopedOptionsRestorePreviousSemanticContract) {
-  EXPECT_FALSE(supportOptions().enabled);
+  EXPECT_TRUE(supportOptions().enabled);
+  EXPECT_FALSE(supportOptions().hasEventContract());
   {
     ScopedSupportOptions outer(options());
     EXPECT_TRUE(supportOptions().enabled);
     {
-      ScopedSupportOptions inner(SupportOptions{});
+      auto disabled = options();
+      disabled.enabled = false;
+      ScopedSupportOptions inner(disabled);
       EXPECT_FALSE(supportOptions().enabled);
+      EXPECT_FALSE(supportOptions().hasEventContract());
     }
     EXPECT_TRUE(supportOptions().enabled);
     EXPECT_TRUE(supportOptions().singleInputChange);
   }
-  EXPECT_FALSE(supportOptions().enabled);
+  EXPECT_TRUE(supportOptions().enabled);
+  EXPECT_FALSE(supportOptions().hasEventContract());
 }
 
 TEST_F(LatchNetlistAdapterTests, Db0LatchFollowsOpenDataAndRetainsClosingValue) {

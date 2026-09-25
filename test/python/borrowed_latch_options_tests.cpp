@@ -18,7 +18,6 @@ void check(bool value, const std::string& detail) {
 
 BorrowedLatchOptions contract() {
   BorrowedLatchOptions options;
-  options.enabled = true;
   options.inputChanges = LatchInputChanges::Single;
   options.initialInputs = false;
   options.initialStorage = false;
@@ -36,7 +35,16 @@ void invalid(const BorrowedLatchOptions& options, const char* message,
 }
 
 void cppOptions() {
-  check(!BorrowedLatchOptions{}.validated(false, true).enabled, "default must be disabled");
+  for (bool sec : {false, true}) {
+    for (bool boundaries : {false, true}) {
+      auto defaults = BorrowedLatchOptions{}.validated(sec, boundaries);
+      check(defaults.enabled && !defaults.initialInputs && !defaults.initialStorage,
+            "default-on support invented an event contract");
+      BorrowedLatchOptions disabled;
+      disabled.enabled = false;
+      check(!disabled.validated(sec, boundaries).enabled, "explicit false ignored");
+    }
+  }
   auto options = contract();
   auto result = options.validated(true, false);
   check(result.enabled && result.singleInputChange && result.initialInputs == false &&
@@ -82,6 +90,8 @@ void cppOptions() {
   }
   options = {};
   options.workers = 0;
+  invalid(options, "requires explicit");
+  options.enabled = false;
   invalid(options, "requires latch_support");
   for (int field = 0; field < 3; ++field) {
     options = contract();
@@ -103,7 +113,7 @@ void cppOptions() {
 }
 
 void parsed(const std::string& expression, bool success, PyObject* exception = nullptr,
-            bool sec = true, bool boundaries = false) {
+            bool sec = true, bool boundaries = false, bool expectedEnabled = true) {
   PyObject* scope = PyDict_New();
   PyDict_SetItemString(scope, "__builtins__", PyEval_GetBuiltins());
   PyObject* dictionary = PyRun_String(expression.c_str(), Py_eval_input, scope, scope);
@@ -119,17 +129,23 @@ void parsed(const std::string& expression, bool success, PyObject* exception = n
     PyErr_Clear();
   } else {
     check(!PyErr_Occurred(), "success retained Python exception");
-    if (options.enabled) check(options.initialInputs.has_value() && options.initialStorage.has_value(),
-                               "parser invented incomplete contract");
+    check(options.enabled == expectedEnabled, "parser changed the master gate");
+    check(options.inputChanges.has_value() == options.initialInputs.has_value() &&
+          options.initialInputs.has_value() == options.initialStorage.has_value(),
+          "parser invented incomplete contract");
   }
 }
 
 void pythonOptions() {
-  const std::string good = "{'latch_support': True, 'latch_input_changes': 'single', "
+  const std::string good = "{'latch_input_changes': 'single', "
       "'latch_initial_inputs': 0, 'latch_initial_storage': 0}";
   parsed("{}", true, nullptr, false, true);
-  parsed("{'latch_support': False}", true);
+  parsed("{}", true);
+  parsed("{'latch_support': False}", true, nullptr, true, false, false);
+  parsed("{'latch_support': True}", true);
   parsed(good, true);
+  parsed(good + " | {'latch_support': True}", true);
+  parsed(good + " | {'latch_support': False}", false, PyExc_ValueError);
   parsed(good + " | {'latch_input_changes': 'any', 'latch_initial_inputs': 1, 'latch_initial_storage': 1}", true);
   parsed(good + " | {'latch_workers': 0, 'latch_max_waves': 8, 'latch_max_states': 16, 'latch_max_transactions': 32}", true);
   parsed(good, false, PyExc_ValueError, false);
@@ -165,7 +181,6 @@ void pythonOptions() {
   parsed("{'latch_input_changes': 'any'}", false, PyExc_ValueError);
   parsed("{'latch_initial_inputs': 0}", false, PyExc_ValueError);
   parsed("{'latch_initial_storage': 0}", false, PyExc_ValueError);
-  parsed("{'latch_support': True}", false, PyExc_ValueError);
 }
 }  // namespace
 

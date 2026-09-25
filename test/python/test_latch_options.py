@@ -11,14 +11,15 @@ from kepler_formal.api import _build_native_design_options
 
 class LatchOptionsTest(unittest.TestCase):
     def contract(self, **changes):
-        values = dict(mode="sec", latch_support=True, latch_input_changes="single",
+        values = dict(mode="sec", latch_input_changes="single",
                       latch_initial_inputs=0, latch_initial_storage=0)
         return VerificationOptions(**(values | changes))
 
-    def test_default_is_disabled_without_an_invented_contract(self):
-        for options in (None, VerificationOptions(), VerificationOptions(mode="sec")):
+    def test_default_is_enabled_without_an_invented_contract(self):
+        for options in (None, VerificationOptions(), VerificationOptions(mode="sec"),
+                        VerificationOptions(latch_support=True)):
             result = _build_native_design_options(options)
-            self.assertIs(result["latch_support"], False)
+            self.assertIs(result["latch_support"], True)
             for key in ("latch_input_changes", "latch_initial_inputs", "latch_initial_storage"):
                 self.assertIsNone(result[key])
 
@@ -38,13 +39,17 @@ class LatchOptionsTest(unittest.TestCase):
                         self.assertEqual(inputs, result["latch_initial_inputs"])
                         self.assertEqual(storage, result["latch_initial_storage"])
 
-    def test_tuning_does_not_enable_support(self):
+    def test_tuning_requires_a_contract_and_cannot_override_explicit_false(self):
         for key, value in (("latch_input_changes", "any"), ("latch_initial_inputs", 0),
                            ("latch_initial_storage", 1), ("latch_workers", 0),
                            ("latch_max_waves", 1), ("latch_max_states", 1),
                            ("latch_max_transactions", 1)):
-            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "requires latch_support"):
-                _build_native_design_options(VerificationOptions(mode="sec", **{key: value}))
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "requires explicit"):
+                    _build_native_design_options(VerificationOptions(mode="sec", **{key: value}))
+                with self.assertRaisesRegex(ValueError, "requires latch_support"):
+                    _build_native_design_options(VerificationOptions(
+                        mode="sec", latch_support=False, **{key: value}))
 
     def test_enabled_requires_each_contract_field(self):
         for key in ("latch_input_changes", "latch_initial_inputs", "latch_initial_storage"):
@@ -55,7 +60,7 @@ class LatchOptionsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only supported for SEC"):
             _build_native_design_options(self.contract(mode="lec"))
 
-    def test_boundaries_rejected_only_when_enabled(self):
+    def test_boundaries_rejected_only_with_event_contract(self):
         boundaries = (("left/cell", "right/cell"),)
         self.assertEqual(list(boundaries), _build_native_design_options(
             VerificationOptions(mode="sec", set_as_boundary=boundaries))["set_as_boundary"])
@@ -118,8 +123,11 @@ class LatchOptionsTest(unittest.TestCase):
         for key in ("latch_max_symbolic_nodes", "latch_max_sat_conflicts", "latch_max_sat_decisions"):
             with self.subTest(key=key):
                 self.assertEqual(123, _build_native_design_options(self.contract(**{key: 123}))[key])
-                with self.assertRaisesRegex(ValueError, "requires latch_support"):
+                with self.assertRaisesRegex(ValueError, "requires explicit"):
                     _build_native_design_options(VerificationOptions(mode="sec", **{key: 123}))
+                with self.assertRaisesRegex(ValueError, "requires latch_support"):
+                    _build_native_design_options(VerificationOptions(
+                        mode="sec", latch_support=False, **{key: 123}))
                 for value, error in ((0, ValueError), (-1, ValueError), (True, TypeError),
                                      (1.0, TypeError), ("1", TypeError), (2**128, ValueError)):
                     with self.subTest(value=value), self.assertRaises(error):

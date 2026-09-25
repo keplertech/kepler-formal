@@ -51,9 +51,11 @@ class VerificationOptions:
     models have no child instances. Hierarchical paths to leaves are valid;
     selecting a nonleaf instance is rejected.
 
-    ``latch_support`` is disabled by default. Enabling it requires SEC, an
-    explicit ``latch_input_changes`` contract (``"any"`` or ``"single"``),
-    and initial inputs/storage given as integer 0 or 1. Each SEC step then
+    ``latch_support`` is enabled by default. Without event settings, legacy
+    LEC/SEC behavior is preserved and latches remain opaque. Modeling latches
+    requires SEC, an explicit ``latch_input_changes`` contract (``"any"`` or
+    ``"single"``), and initial inputs/storage given as integer 0 or 1. No
+    initial values are assumed implicitly. Each SEC step then
     represents an external transaction followed by settling, not a clock
     cycle. It consumes declared Naja models; it never infers cells by name.
     """
@@ -73,7 +75,7 @@ class VerificationOptions:
     learn_internal_relations: bool = True
     allow_x_equality_in_internal_relations: bool = True
     error_on_opaque: bool = False
-    latch_support: bool = False
+    latch_support: bool = True
     latch_input_changes: str | None = None
     latch_initial_inputs: int | None = None
     latch_initial_storage: int | None = None

@@ -1,7 +1,7 @@
 # Copyright 2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validation of the explicit, default-off latch event contract."""
+"""Validation of default-on latch support with an explicit event contract."""
 
 import ctypes
 
@@ -41,9 +41,12 @@ def build_latch_options(settings, *, mode: str, has_boundaries: bool) -> dict:
             raise ValueError("latch resource limits must be positive integers")
         if name.startswith("latch_max_sat_") and value > unsigned_max:
             raise ValueError("latch SAT limits must fit a positive unsigned int")
+    has_tuning = any(value is not None for value in values.values())
     if not enabled:
-        if any(value is not None for value in values.values()):
+        if has_tuning:
             raise ValueError("latch event tuning requires latch_support=True")
+    elif not has_tuning:
+        pass  # Preserve legacy extraction without inventing initialization.
     elif mode != "sec":
         raise ValueError("latch_support is only supported for SEC")
     elif any(values[name] is None for name in names[:3]):

@@ -171,12 +171,14 @@ TEST_F(LatchResetCliTests, MultipleResetPortsAreRejectedExplicitly) {
 }
 
 TEST_F(LatchResetCliTests, OffOnOffPreservesLegacyResetSemanticsForEveryEngine) {
-  const auto legacy = [&](const std::string& engine, const std::string& second) {
+  const auto legacy = [&](const std::string& engine, const std::string& second,
+                          bool explicitlyDisabled = true) {
     // Legacy reset supports multiple reset ports and needs no discovered FF
     // carrier. Either leaked event dispatch or leaked reset sampling rejects
     // this deliberately clockless design instead of preserving that behavior.
     write("legacy.yaml", "format: verilog\nverification: sec\nsec_engine: " + engine +
-        "\nsec_encoding: binary\nmax_k: 8\nlatch_support: false\n"
+        "\nsec_encoding: binary\nmax_k: 8\n" +
+        (explicitlyDisabled ? "latch_support: false\n" : "") +
         "input_paths: [wire.v, " + second + "]\nliberty_files: [cells.lib]\n"
         "sec_reset:\n  cycles: 2\n  ports:\n"
         "    - name: reset\n      active_value: 1\n"
@@ -203,7 +205,15 @@ TEST_F(LatchResetCliTests, OffOnOffPreservesLegacyResetSemanticsForEveryEngine) 
       EXPECT_EQ(after.reason.find("Event contract"), std::string::npos);
       EXPECT_EQ(after.reason.find("boolean-epochs"), std::string::npos);
       EXPECT_EQ(after.reason.find("reset/event step"), std::string::npos);
-      EXPECT_FALSE(KEPLER_FORMAL::SEC::LATCH::supportOptions().enabled);
+      const auto implicit = legacy(engine, second, false);
+      EXPECT_EQ(implicit.status, before.status) << implicit.reason;
+      EXPECT_EQ(implicit.exitCode, before.exitCode);
+      EXPECT_EQ(implicit.coveredOutputs, before.coveredOutputs);
+      EXPECT_EQ(implicit.totalOutputs, before.totalOutputs);
+      EXPECT_EQ(implicit.skippedObservedOutputs, before.skippedObservedOutputs);
+      EXPECT_EQ(implicit.reason, before.reason);
+      EXPECT_TRUE(KEPLER_FORMAL::SEC::LATCH::supportOptions().enabled);
+      EXPECT_FALSE(KEPLER_FORMAL::SEC::LATCH::supportOptions().hasEventContract());
       EXPECT_FALSE(KEPLER_FORMAL::SEC::LATCH::supportOptions().initialInputs.has_value());
     }
   }

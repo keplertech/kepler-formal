@@ -73,7 +73,7 @@ void run(const std::filesystem::path& directory) {
   const auto firstReference = first->getReference();
   const auto secondReference = second->getReference();
   SEC::LATCH::SupportOptions ambient;
-  ambient.enabled = true; // Incomplete: inheriting this would fail extraction.
+  ambient.enabled = true;
   ambient.workers = 7;
   SEC::LATCH::ScopedSupportOptions ambientScope(ambient);
 
@@ -93,10 +93,17 @@ void run(const std::filesystem::path& directory) {
           "borrowed run leaked its event contract");
   };
   verifyBorrowedDesigns(first, second, options, result);
-  check(result.coveredOutputs == 0, "default unexpectedly enabled latch semantics");
+  check(result.status == RunStatus::Unsupported && result.coveredOutputs == 0,
+        "default did not preserve opaque-latch behavior");
   unchanged();
 
-  options.latchSupport.enabled = true;
+  check(options.latchSupport.enabled, "latch support is not enabled by default");
+  options.latchSupport.enabled = false;
+  verifyBorrowedDesigns(first, second, options, result);
+  check(result.status == RunStatus::Unsupported && result.coveredOutputs == 0,
+        "explicit false did not preserve opaque-latch behavior");
+  unchanged();
+  options.latchSupport = {};
   options.latchSupport.inputChanges = LatchInputChanges::Single;
   options.latchSupport.initialInputs = false;
   options.latchSupport.initialStorage = false;

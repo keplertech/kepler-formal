@@ -8,18 +8,22 @@ SEC integration. It is not a timing-accurate model of arbitrary asynchronous
 circuits. Optional phase abstraction and stronger scheduling reductions are not
 required by, or enabled in, this implementation.
 
-The master switch is `latch_support: true` in YAML or `--latch_support` on the
-command line. It is **off by default**. New latch extraction and supplemental
-Liberty latch modeling are behind this switch; leaving it off preserves the
-existing SEC path and its opaque-latch behavior. In particular, with
-`latch_support` off, `sec_reset` uses the unchanged legacy reset-bootstrap path;
-none of the event adapter's clock-discovery, initialization, or single-reset-port
-requirements apply.
+The master switch `latch_support` is **on by default**. Disable it with YAML
+`latch_support: false`, CLI `--no-latch_support`, or Python `latch_support=False`.
+Default enablement does not invent an initialization or input-event contract:
+with no latch-event settings supplied, the existing SEC path and opaque-latch
+behavior remain in use. New latch extraction and supplemental Liberty latch
+modeling require the complete explicit contract below. With the switch off, or
+with no event contract supplied, `sec_reset` uses the unchanged legacy
+reset-bootstrap path; none of the event adapter's clock-discovery,
+initialization, or single-reset-port requirements apply. Ordinary LEC behavior
+also remains unchanged.
 
 ## 1. Enabling the model requires an explicit contract
 
 The master switch does not select an initialization or input-event assumption.
-An enabled run must also provide all three fields below:
+To activate event modeling, provide all three fields below; an explicit
+`latch_support: true` is optional because it is already the default:
 
 ```yaml
 format: verilog
@@ -27,7 +31,6 @@ verification: sec
 input_paths: [reference.v, implementation.v]
 liberty_files: [cells.lib]
 
-latch_support: true
 sec_latch_events:
   input_changes: any
   initial_inputs: 0
@@ -42,17 +45,20 @@ contract, not a proof that arbitrary power-up state reaches reset.
 
 | Purpose | YAML | Command-line option |
 | --- | --- | --- |
-| Master enable, default off | `latch_support: true` | `--latch_support` |
+| Master enable, default on | `latch_support: true` | `--latch_support` |
+| Explicitly disable latch support | `latch_support: false` | `--no-latch_support` |
 | Allowed external transactions | `sec_latch_events.input_changes: any` or `single` | `--sec-latch-events any` or `single` |
 | Initial value of all external inputs | `sec_latch_events.initial_inputs: 0` or `1` | `--sec-latch-initial-inputs 0` or `1` |
 | Initial value of all primitive storage bits | `sec_latch_events.initial_storage: 0` or `1` | `--sec-latch-initial-storage 0` or `1` |
 | Optional strict opacity policy, default off | `error_on_opaque: true` | `--error-on-opaque` |
 
-The `sec_latch_events` fields and `--sec-latch-*` tuning flags do **not** enable
-latch support by themselves. Providing tuning while the master switch is off
-is rejected, as is an enabled run with an incomplete contract. The strict
-opaque policy is independent of the master latch switch:
-it can also be used with ordinary SEC.
+Providing the complete contract activates event modeling under the default-on
+switch. Providing any contract or tuning settings while explicitly disabling
+the switch is rejected. Partial contracts, including resource tuning without
+all three required contract fields, are also rejected; they do not fall back
+silently. Supplying no latch-event settings at all preserves the legacy path.
+The strict opaque policy is independent of the master latch switch: it can
+also be used with ordinary SEC.
 
 ### `any` and `single` are different verification assumptions
 
@@ -481,11 +487,12 @@ does not justify restricting the event or reset-input contract.
 
 ## 7. Opacity, errors, and coverage
 
-With latch support disabled, the existing extraction path remains in use.
-With it enabled, a certified component is modeled; an unsupported or uncertified
-component remains opaque, with reasons and affected output skipping. Independent
-supported outputs can still be checked. Skipped outputs are not proved, and a
-partial result is not a claim that an excluded nonsettling component terminates.
+With latch support disabled, or with no event contract supplied, the existing
+extraction path remains in use. With it enabled and a complete contract supplied,
+a certified component is modeled; an unsupported or uncertified component remains
+opaque, with reasons and affected output skipping. Independent supported outputs
+can still be checked. Skipped outputs are not proved, and a partial result is not
+a claim that an excluded nonsettling component terminates.
 
 Diagnostics distinguish a proven nonsettling cycle, distinct complete boundary
 results, an invalid reference/primitive case, exhausted resources, and a settling
@@ -504,14 +511,13 @@ inherit a caller's ambient event contract or leak their settings back to it.
 
 ## 8. Borrowed C++ and Python APIs
 
-The Python interface uses the same default-off gate and explicit contract:
+The Python interface uses the same default-on gate and explicit contract:
 
 ```python
 from kepler_formal import VerificationOptions
 
 options = VerificationOptions(
     mode="sec",
-    latch_support=True,
     latch_input_changes="single",
     latch_initial_inputs=0,
     latch_initial_storage=0,
@@ -521,9 +527,12 @@ options = VerificationOptions(
 Optional fields are `latch_workers`, `latch_max_waves`, `latch_max_states`,
 `latch_max_transactions`, `latch_max_symbolic_nodes`, `latch_max_sat_conflicts`,
 and `latch_max_sat_decisions`. `latch_workers=0` selects automatic parallelism;
-proof budgets must be positive. Invalid types, missing contract fields, tuning
-without enablement, non-SEC mode, and selected leaf boundaries are rejected.
-The independent `error_on_opaque` option remains default-off.
+proof budgets must be positive. Invalid types, partial contracts, tuning while
+explicitly disabled, and event settings in non-SEC mode or with selected leaf
+boundaries are rejected. With no event settings supplied, ordinary SEC/LEC
+behavior is retained. Use `latch_support=False` to explicitly disable the feature;
+it must not be combined with event settings. The independent `error_on_opaque`
+option remains default-off.
 
 The native C++ equivalent is `BorrowedDesignOptions::latchSupport`, a validated
 `BorrowedLatchOptions` object. Borrowed APIs consume the caller's explicit Naja
@@ -537,7 +546,7 @@ after success or failure. Matching-runtime native and Python tests run through
 | File | Responsibility |
 | --- | --- |
 | `src/bin/LatchEventConfig.*` | Master enable, explicit contract, tuning, and CLI/YAML validation |
-| `src/bin/LibertyLatchModels.*` | Opt-in supplemental scalar Liberty latch descriptions |
+| `src/bin/LibertyLatchModels.*` | Supplemental scalar Liberty latch descriptions for explicitly configured event modeling |
 | `src/sec/latch/NajaEventPrimitive.*` | Copy supported Naja primitive expressions into immutable callbacks |
 | `src/sec/latch/LatchConstantNet.h` | Read-only resolution of driverless Boolean constants, preserving conflict diagnostics |
 | `src/sec/latch/LatchEventModel.*` | Boolean BOOT/admission/wave semantics, complete state, parallel primitive evaluation |
