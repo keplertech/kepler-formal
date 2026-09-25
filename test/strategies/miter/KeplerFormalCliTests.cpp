@@ -2920,6 +2920,194 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogSecVerificationAccepted) {
 }
 
 TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecRejectsUnsupportedFourStateLiteralExpressions) {
+  struct FourStateCase {
+    const char* name;
+    const char* expression;
+    const char* literal;
+  };
+  const std::vector<FourStateCase> cases = {
+      {"direct_x", "1'bx", "X"},
+      {"direct_z", "1'bz", "Z"},
+      {"ternary_x", "en ? a : 1'bx", "X"},
+      {"x_equal_x", "1'bx == 1'bx", "X"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const std::string source =
+        "module t(input logic en, input logic a, output logic y);\n"
+        "  assign y = " + std::string(testCase.expression) + ";\n"
+        "endmodule\n";
+    const auto fixture = createEquivalentDesignFixture("sv", source);
+    const auto logPath =
+        fixture.tmpDir / (std::string("sec_four_state_") + testCase.name + ".log");
+    const auto cfgPath = writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "sec_encoding: binary\n"
+        "max_k: 2\n"
+        "compact_mode: true\n"
+        "sv_design1_top: t\n"
+        "sv_design2_top: t\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+
+    EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+    ASSERT_TRUE(std::filesystem::exists(logPath));
+    const auto contents = readFileContents(logPath);
+    EXPECT_NE(
+        contents.find("SEC cannot run on this design pair:"),
+        std::string::npos);
+    EXPECT_NE(
+        contents.find(std::string("unsupported ") + testCase.literal +
+                      " literal"),
+        std::string::npos);
+    EXPECT_NE(contents.find("design0.sv:"), std::string::npos);
+    EXPECT_NE(
+        contents.find("SEC does not implement X/Z care-set semantics"),
+        std::string::npos);
+    EXPECT_NE(
+        contents.find(
+            "SEC compact mode: design 1 is unsupported; skipping design 2 "
+            "loading"),
+        std::string::npos);
+    EXPECT_EQ(contents.find("SEC checked-output coverage:"), std::string::npos);
+    EXPECT_EQ(
+        contents.find(
+            "SEC compact mode: extracting and releasing design 2 before "
+            "starting proof"),
+        std::string::npos);
+    EXPECT_EQ(
+        contents.find("Parsing systemverilog file(s) for design 2"),
+        std::string::npos);
+    EXPECT_EQ(contents.find("no-driver"), std::string::npos);
+    EXPECT_EQ(contents.find("internal frontier term"), std::string::npos);
+    EXPECT_EQ(
+        contents.find("not collected as a primary input"),
+        std::string::npos);
+    EXPECT_EQ(
+        contents.find("No difference was found. SEC proved equivalence"),
+        std::string::npos);
+    EXPECT_EQ(
+        contents.find(
+            "No binary-defined difference was found. SEC proved equivalence"),
+        std::string::npos);
+    EXPECT_EQ(
+        contents.find("SEC partially proved equivalence"),
+        std::string::npos);
+
+    std::filesystem::remove(cfgPath);
+    std::filesystem::remove_all(fixture.tmpDir);
+  }
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecBinaryTernaryZeroControlHasFullCoverage) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module t(input logic en, input logic a, output logic y);\n"
+      "  assign y = en ? a : 1'b0;\n"
+      "endmodule\n");
+  const auto logPath = fixture.tmpDir / "sec_binary_ternary_zero_control.log";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "sec_encoding: binary\n"
+      "max_k: 2\n"
+      "compact_mode: true\n"
+      "sv_design1_top: t\n"
+      "sv_design2_top: t\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  ASSERT_TRUE(std::filesystem::exists(logPath));
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(
+      contents.find(
+          "SEC checked-output coverage: 100.00% (1/1 covered/existing outputs)."),
+      std::string::npos);
+  EXPECT_NE(
+      contents.find("No difference was found. SEC proved equivalence"),
+      std::string::npos);
+  EXPECT_EQ(contents.find("unsupported-four-state-literal"), std::string::npos);
+  EXPECT_EQ(contents.find("no-driver"), std::string::npos);
+  EXPECT_EQ(contents.find("internal frontier term"), std::string::npos);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecRejectsFourStateLiteralInSecondDesign) {
+  const auto fixture = createDesignFixture(
+      "sv",
+      "module t(input logic en, input logic a, output logic y);\n"
+      "  assign y = en ? a : 1'b0;\n"
+      "endmodule\n",
+      "module t(input logic en, input logic a, output logic y);\n"
+      "  assign y = en ? a : 1'bx;\n"
+      "endmodule\n");
+
+  for (const bool compact : {false, true}) {
+    SCOPED_TRACE(compact ? "compact" : "standard");
+    const auto logPath =
+        fixture.tmpDir /
+        (compact ? "sec_four_state_design2_compact.log"
+                 : "sec_four_state_design2_standard.log");
+    const auto cfgPath = writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "sec_encoding: binary\n"
+        "max_k: 2\n"
+        "compact_mode: " + std::string(compact ? "true" : "false") + "\n"
+        "sv_design1_top: t\n"
+        "sv_design2_top: t\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+
+    EXPECT_EQ(runWithConfigFile(cfgPath), kSecInconclusiveExitCode);
+    ASSERT_TRUE(std::filesystem::exists(logPath));
+    const auto contents = readFileContents(logPath);
+    EXPECT_NE(
+        contents.find("SEC cannot run on this design pair:"),
+        std::string::npos);
+    EXPECT_NE(contents.find("unsupported X literal"), std::string::npos);
+    EXPECT_NE(contents.find("design1.sv:"), std::string::npos);
+    EXPECT_NE(
+        contents.find("SEC does not implement X/Z care-set semantics"),
+        std::string::npos);
+    if (compact) {
+      EXPECT_NE(
+          contents.find(
+              "SEC compact mode: extracting and releasing design 2 before "
+              "starting proof"),
+          std::string::npos);
+      EXPECT_NE(
+          contents.find("Parsing systemverilog file(s) for design 2"),
+          std::string::npos);
+    }
+    EXPECT_EQ(contents.find("SEC checked-output coverage:"), std::string::npos);
+    EXPECT_EQ(contents.find("no-driver"), std::string::npos);
+    EXPECT_EQ(contents.find("internal frontier term"), std::string::npos);
+    EXPECT_EQ(contents.find("SEC proved equivalence"), std::string::npos);
+
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
        CliSystemVerilogSecSharedDivModPrimitiveProvesEquivalent) {
   const auto fixture = createEquivalentDesignFixture(
       "sv",

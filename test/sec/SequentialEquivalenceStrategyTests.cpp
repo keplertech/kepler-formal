@@ -16424,6 +16424,101 @@ TEST_F(
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRejectsReachableFourStateLiteralsEarly) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  constexpr const char* moduleName = "four_state_literal_sec_diagnostic";
+  auto* top = loadSystemVerilogTopFromSource(
+      library,
+      moduleName,
+      R"(module four_state_literal_sec_diagnostic(
+  input  logic en,
+  input  logic a,
+  output logic good,
+  output logic direct_x,
+  output logic mux_z
+);
+  assign good = a;
+  assign direct_x = 1'bx;
+  assign mux_z = en ? a : 1'bz;
+endmodule
+)");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  ASSERT_TRUE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.unsupportedReasons.size(), 2u);
+  const std::string reasons = extracted.unsupportedReasons[0] + "\n" +
+                              extracted.unsupportedReasons[1];
+  const auto xReason = std::find_if(
+      extracted.unsupportedReasons.begin(),
+      extracted.unsupportedReasons.end(),
+      [](const std::string& reason) {
+        return reason.find("unsupported X literal") != std::string::npos;
+      });
+  const auto zReason = std::find_if(
+      extracted.unsupportedReasons.begin(),
+      extracted.unsupportedReasons.end(),
+      [](const std::string& reason) {
+        return reason.find("unsupported Z literal") != std::string::npos;
+      });
+  ASSERT_NE(xReason, extracted.unsupportedReasons.end());
+  ASSERT_NE(zReason, extracted.unsupportedReasons.end());
+  EXPECT_NE(xReason->find(std::string(moduleName) + ".sv:9"), std::string::npos);
+  EXPECT_NE(zReason->find(std::string(moduleName) + ".sv:10"), std::string::npos);
+  EXPECT_NE(reasons.find("hierarchy `four_state_literal_sec_diagnostic`"),
+            std::string::npos);
+  EXPECT_NE(reasons.find("X/Z care-set semantics"), std::string::npos);
+  EXPECT_EQ(reasons.find("internal frontier term"), std::string::npos);
+  EXPECT_EQ(reasons.find("no drivers"), std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelRejectsXHiddenByEqualitySimplification) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  constexpr const char* moduleName = "four_state_equality_sec_diagnostic";
+  auto* top = loadSystemVerilogTopFromSource(
+      library,
+      moduleName,
+      R"(module unused_four_state_child(output logic y);
+  assign y = 1'bz;
+endmodule
+module equality_child(output logic y);
+  assign y = 1'bx == 1'bx;
+endmodule
+module four_state_equality_sec_diagnostic(output logic y);
+  equality_child u_equality(.y(y));
+endmodule
+)");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  ASSERT_TRUE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.unsupportedReasons.size(), 1u);
+  const auto& reason = extracted.unsupportedReasons.front();
+  EXPECT_NE(reason.find("unsupported X literal"), std::string::npos);
+  EXPECT_NE(reason.find("reachable design `equality_child`"), std::string::npos);
+  EXPECT_NE(
+      reason.find("hierarchy `four_state_equality_sec_diagnostic.u_equality`"),
+      std::string::npos);
+  const bool hasDeclarationOrExpressionLine =
+      reason.find(std::string(moduleName) + ".sv:4") != std::string::npos ||
+      reason.find(std::string(moduleName) + ".sv:5") != std::string::npos;
+  EXPECT_TRUE(hasDeclarationOrExpressionLine)
+      << "the diagnostic must identify either the folded expression or its "
+         "enclosing child declaration: "
+      << reason;
+  EXPECT_NE(reason.find("X/Z care-set semantics"), std::string::npos);
+  EXPECT_EQ(reason.find("unsupported Z literal"), std::string::npos)
+      << "an uninstantiated design must not be scanned";
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractModelsInferredMemoryWithConstantFalseCommitGuard) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());

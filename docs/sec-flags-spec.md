@@ -154,6 +154,13 @@ design-local proof symbol for that element. Other modeled outputs remain
 eligible for proof, so the result is partial when only some outputs are skipped
 and unsupported when no aligned verifiable output remains.
 
+RTL `X` and `Z` literals are different from reset-unknown state and are not
+currently modeled by SEC. Correct synthesis-don't-care handling requires both
+a Boolean value and a definedness/care condition; substituting an environment
+input would be unsound. SEC therefore rejects a reachable design containing an
+`X` or `Z` literal before Boolean transition extraction and reports the literal
+kind and the nearest available source location.
+
 ## Bounds And Results
 
 `max_k` is parsed as a non-negative integer.

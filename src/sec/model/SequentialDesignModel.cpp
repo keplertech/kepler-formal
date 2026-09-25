@@ -27,8 +27,14 @@
 #include "NLDB0.h"
 #include "NLName.h"
 #include "NLUniverse.h"
+#include "SNLBitNet.h"
+#include "SNLDesign.h"
 #include "SNLDesignModeling.h"
+#include "SNLInstance.h"
+#include "SNLInstTerm.h"
+#include "SNLNet.h"
 #include "SNLPath.h"
+#include "SNLRTLInfos.h"
 #include "../../clauses/SNLLogicCloud.h"
 #include "../../clauses/Tree2BoolExpr.h"
 #include "common/BoolExprUtils.h"
@@ -2308,6 +2314,134 @@ struct ExtractContext {
   std::vector<PendingTransition> pendingTransitions;
   std::vector<PendingMemoryInstance> pendingMemoryInstances;
 };
+
+const naja::NL::SNLRTLInfos* getSourceInfos(
+    const naja::NL::SNLDesignObject* object) {
+  const auto* infos = object == nullptr ? nullptr : object->getRTLInfos();
+  return infos != nullptr && infos->hasSourceLoc() &&
+                 !infos->getSourceLoc()->file.empty()
+             ? infos
+             : nullptr;
+}
+
+const naja::NL::SNLRTLInfos* getSourceInfos(
+    const naja::NL::SNLDesign* design) {
+  const auto* infos = design == nullptr ? nullptr : design->getRTLInfos();
+  return infos != nullptr && infos->hasSourceLoc() &&
+                 !infos->getSourceLoc()->file.empty()
+             ? infos
+             : nullptr;
+}
+
+void appendSourceLocation(
+    std::ostringstream& detail,
+    const naja::NL::SNLRTLInfos* infos) {
+  if (infos == nullptr || !infos->hasSourceLoc()) {
+    return;
+  }
+  const auto& sourceLoc = *infos->getSourceLoc();
+  if (sourceLoc.file.empty()) {
+    return;
+  }
+  detail << sourceLoc.file.getString();
+  if (sourceLoc.line != 0) {
+    detail << ":" << sourceLoc.line;
+    if (sourceLoc.column != 0) {
+      detail << ":" << sourceLoc.column;
+    }
+  }
+}
+
+const naja::NL::SNLRTLInfos* getFourStateConsumerSourceInfos(
+    const naja::NL::SNLBitNet* net) {
+  if (net == nullptr) {
+    return nullptr;
+  }
+  for (auto* instTerm : net->getInstTerms()) {
+    if (instTerm == nullptr ||
+        instTerm->getDirection() == naja::NL::SNLTerm::Direction::Output) {
+      continue;
+    }
+    if (const auto* infos = getSourceInfos(instTerm->getInstance())) {
+      return infos;
+    }
+  }
+  return nullptr;
+}
+
+std::vector<std::string> findReachableFourStateLiterals(
+    naja::NL::SNLDesign* top) {
+  struct PendingDesign {
+    naja::NL::SNLDesign* design = nullptr;
+    const naja::NL::SNLInstance* instance = nullptr;
+    std::string path;
+  };
+
+  std::vector<std::string> reasons;
+  std::deque<PendingDesign> pending;
+  pending.push_back({top, nullptr, top->getName().getString()});
+  std::unordered_set<naja::NL::SNLDesign*> visited;
+  while (!pending.empty()) {
+    PendingDesign current = std::move(pending.front());
+    pending.pop_front();
+    if (current.design == nullptr || !visited.insert(current.design).second) {
+      continue;
+    }
+
+    bool reportedX = false;
+    bool reportedZ = false;
+    for (auto* net : current.design->getBitNets()) {
+      const bool isX = net != nullptr && net->isConstantX();
+      const bool isZ = net != nullptr && net->isConstantZ();
+      if ((!isX && !isZ) || (isX && reportedX) || (isZ && reportedZ)) {
+        continue;
+      }
+      reportedX = reportedX || isX;
+      reportedZ = reportedZ || isZ;
+
+      std::ostringstream detail;
+      detail << "encountered unsupported " << (isX ? "X" : "Z")
+             << " literal in reachable design `"
+             << current.design->getName().getString() << "`";
+      if (!current.path.empty()) {
+        detail << " at hierarchy `" << current.path << "`";
+      }
+
+      if (const auto* consumerInfos = getFourStateConsumerSourceInfos(net)) {
+        detail << " in expression at ";
+        appendSourceLocation(detail, consumerInfos);
+      } else if (const auto* netInfos = getSourceInfos(net)) {
+        detail << " at ";
+        appendSourceLocation(detail, netInfos);
+      } else if (const auto* designInfos = getSourceInfos(current.design)) {
+        detail << "; design declared at ";
+        appendSourceLocation(detail, designInfos);
+      } else if (const auto* instanceInfos = getSourceInfos(current.instance)) {
+        detail << "; instance declared at ";
+        appendSourceLocation(detail, instanceInfos);
+      }
+      detail << "; SEC does not implement X/Z care-set semantics";
+      reasons.push_back(detail.str());
+    }
+
+    for (auto* instance : current.design->getInstances()) {
+      if (instance == nullptr || instance->getModel() == nullptr) {
+        continue;
+      }
+      std::string instanceName = instance->getName().getString();
+      if (instanceName.empty()) {
+        instanceName = "<instance#" + std::to_string(instance->getID()) + ">";
+      }
+      std::string childPath = current.path;
+      if (!childPath.empty()) {
+        childPath += ".";
+      }
+      childPath += instanceName;
+      pending.push_back({instance->getModel(), instance, std::move(childPath)});
+    }
+  }
+  return reasons;
+}
 
 std::string describeSupportVarOrigins(  // LCOV_EXCL_LINE
     const ExtractContext& ctx,
@@ -4803,6 +4937,24 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       .secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr,
   };
   ctx.builder.setRetainDnl(true);
+
+  // SEC's Boolean transition model has no value/care representation for X or
+  // Z. Reject four-state literals before DNL/BoolExpr extraction: some valid
+  // four-state expressions (for example X == X) can otherwise be simplified
+  // by the structural frontend and leave no X/Z frontier for the cone builder
+  // to diagnose.
+  naja::DNL::destroy();
+  model.unsupportedReasons = findReachableFourStateLiterals(top);
+  if (model.hasUnsupportedFeatures()) {
+    if (ctx.secDiagEnabled) {
+      fprintf(
+          stderr,
+          "SEC diag: extract(%s) early unsupported four-state literal exit\n",
+          ctx.topName.c_str());
+      fflush(stderr);
+    }
+    return model;
+  }
 
   // Phase 1: collect the raw boundary, classify top I/O vs sequential state,
   // and scan leaf sequentials so the later formula build knows what it must

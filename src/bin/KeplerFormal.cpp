@@ -2502,6 +2502,22 @@ int KeplerFormalMain(int argc, char** argv) {
             0,
             2,
             "design 1");
+        if (model0.hasUnsupportedFeatures()) {
+          if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
+            spdlog::set_default_logger(mainLogger);
+          }
+          SPDLOG_INFO(
+              "SEC compact mode: design 1 is unsupported; skipping design 2 "
+              "loading");
+          KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
+              nullptr,
+              nullptr,
+              solverType,
+              secEngine,
+              secEncoding);
+          return emitSecResult(
+              strategy.runExtractedModels(model0, {}, secMaxK));
+        }
         if (inputFormatType != FormatType::SV2V &&
             sameCompactSecDesignSpec(
                 inputFormatType == FormatType::SYSTEMVERILOG,
