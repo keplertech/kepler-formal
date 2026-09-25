@@ -5356,7 +5356,10 @@ class PdrTernaryModelReducer {
     }
     for (auto& [symbolMap, dependencies] :
          memoDependenciesBySymbolMap_) {
-      (void)symbolMap;
+      // Later roots can extend the shared DAG under a different symbol map.
+      // Parent propagation visits those new nodes even for an earlier map,
+      // so every memo must cover the final DAG before generation checks.
+      dependencies.memo = &supportCache_->ternaryEvaluationMemo(symbolMap);
       for (auto& [mappedSymbol, localSymbols] :
            dependencies.localSymbolsByMappedSymbol) {
         (void)mappedSymbol;
