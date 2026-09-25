@@ -23,6 +23,7 @@ struct BorrowedDesignOptions {
   SEC::InternalRelationOptions internalRelationOptions;
   bool allowBoundaryMismatch = false;
   bool reportSkippedOutputs = false;
+  bool errorOnOpaque = false;
   std::string logFile;
   std::string logLevel;
   BoundaryPairs setAsBoundary;

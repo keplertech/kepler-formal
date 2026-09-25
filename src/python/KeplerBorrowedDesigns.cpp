@@ -22,6 +22,7 @@
 #include "SNLDesign.h"
 #include "SNLInstance.h"
 #include "Tree2BoolExpr.h"
+#include "latch/LatchSupportOptions.h"
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -111,6 +112,7 @@ class BorrowedRunState {
   BorrowedRunState()
       : solver_(Config::getSolverType()),
         reportSkipped_(Config::getReportSkippedPOs()),
+        errorOnOpaque_(Config::getErrorOnOpaque()),
         defaultLogger_(spdlog::default_logger()),
         borrowedLogger_(spdlog::get("kepler_formal_borrowed_logger")),
         miterLogger_(spdlog::get("miter_logger")),
@@ -122,6 +124,7 @@ class BorrowedRunState {
     MiterStrategy::logFileName_ = std::move(miterLogFile_);
     Config::setSolverType(solver_);
     Config::setReportSkippedPOs(reportSkipped_);
+    Config::setErrorOnOpaque(errorOnOpaque_);
     restoreLogger("miter_logger", miterLogger_);
     restoreLogger("miter_logger_fallback", fallbackLogger_);
     // set_default_logger also registers its logger by name. Restoring only
@@ -143,6 +146,7 @@ class BorrowedRunState {
 
   Config::SolverType solver_;
   bool reportSkipped_;
+  bool errorOnOpaque_;
   std::shared_ptr<spdlog::logger> defaultLogger_;
   std::shared_ptr<spdlog::logger> borrowedLogger_;
   std::shared_ptr<spdlog::logger> miterLogger_;
@@ -250,8 +254,15 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     Config::ScopedVerificationContext verificationContext;
     BorrowedExpressionState expressionState;
     BorrowedRunState runState;
+    // BorrowedDesignOptions has no event contract: never inherit ambient
+    // thread-local event semantics from a caller's direct extraction scope.
+    SEC::LATCH::ScopedSupportOptions eventOptions({});
     Config::setSolverType(options.solver);
     Config::setReportSkippedPOs(options.reportSkippedOutputs);
+    Config::setErrorOnOpaque(options.errorOnOpaque);
+    if (options.errorOnOpaque && options.mode != BorrowedVerificationMode::SEC) {
+      throw std::invalid_argument("error_on_opaque is only supported for SEC");
+    }
     configureLogger(options, result);
     if (options.mode == BorrowedVerificationMode::SEC) {
       SEC::SequentialEquivalenceStrategy strategy(

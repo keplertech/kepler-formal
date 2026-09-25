@@ -64,6 +64,9 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
       connectivitySkipInfoByKey;
   std::vector<ComplementedStateRelation> complementedStateRelations;
   std::vector<std::string> unsupportedReasons;
+  // Empty for legacy clock-cycle extraction; event models retain their contract
+  // after compact mode releases the netlists.
+  std::string eventContract;
 
   // Extract the model from the given top design. Opaque per-output cones are
   // skipped; globally unsupported structures are recorded in unsupportedReasons.

@@ -28,6 +28,11 @@ cc_test(
 cc_test(
     name = "SequentialEquivalenceStrategyTests",
     srcs = [
+        "LatchBoundaryEncodingTests.cpp",
+        "LatchEventModelTests.cpp",
+        "LatchNetlistAdapterTests.cpp",
+        "LatchSettlingCompilerTests.cpp",
+        "OpaquePolicyTests.cpp",
         "SequentialEquivalenceStrategyTests.cpp",
         "InternalRelationsTests.cpp",
         "Btor2ExportStrategyTests.cpp",

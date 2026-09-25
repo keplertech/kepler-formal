@@ -40,6 +40,7 @@
 #include "kinduction/OutputBatching.h"
 #include "kinduction/SatEncoding.h"
 #include "model/SequentialDesignModel.h"
+#include "latch/LatchEventContract.h"
 #include "pdr/PDREngine.h"
 #include "proof/DualRailEncoding.h"
 #include "proof/TransitionExprResolver.h"
@@ -3737,6 +3738,10 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   // Phase 2: align the externally visible SEC interface, then drop any outputs
   // whose cones were already classified as skipped by extraction.
   // Internal names are candidate hints only; relations are certified below.
+  if (auto error = LATCH::eventContractError(model0.eventContract, model1.eventContract, resetSpec_.enabled())) {
+    return makeSecResult(SequentialEquivalenceStatus::Unsupported, 0, *error,
+                         OutputCoverageSelection{}, extractedBoundaryReports);
+  }
   AlignedSecInterface aligned = alignSecInterface(
       model0,
       model1,
@@ -3868,7 +3873,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
 
   if (exportOptions_.enabled()) {
     exportSecBtor2File(proofProblem, exportOptions_.path,
-        {aligned.outputCoverage.totalOutputs, aligned.outputCoverage.skippedOutputs});
+        {aligned.outputCoverage.totalOutputs, aligned.outputCoverage.skippedOutputs, model0.eventContract});
     if (exportOptions_.dumpOnly) {
       return makeSecResult(SequentialEquivalenceStatus::Exported, 0,
           "BTOR2 exported to " + exportOptions_.path + "; proof not run",

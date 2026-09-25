@@ -133,6 +133,7 @@ void exportSecBtor2(const KInductionProblem& problem,
   writer.comment("encoding=" + std::string(problem.usesDualRailStateEncoding
       ? "dual_rail_steady" : "binary"));
   writer.comment("startup=SEC concrete base-case observation semantics");
+  if (!metadata.stepSemantics.empty()) writer.comment("step_semantics=" + metadata.stepSemantics);
   writer.comment("covered_outputs=" + std::to_string(problem.observedOutputNames.size()) +
       " total_outputs=" + std::to_string(metadata.totalOutputCount != 0
           ? metadata.totalOutputCount : problem.observedOutputNames.size()));

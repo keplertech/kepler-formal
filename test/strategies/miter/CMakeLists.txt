@@ -27,6 +27,9 @@ add_executable(keplerFormalCliTests
     Btor2ExportCliTests.cpp
     Btor2ExportDriverTests.cpp
     DriverSeparationTests.cpp
+    OpaquePolicyCliTests.cpp
+    LibertyLatchModelsTests.cpp
+    LatchEventConfigTests.cpp
 )
 
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)

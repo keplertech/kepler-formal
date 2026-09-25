@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_executable(secStrategyTests
+    OpaquePolicyTests.cpp
+    LatchEventModelTests.cpp
+    LatchSettlingCompilerTests.cpp
+    LatchBoundaryEncodingTests.cpp
+    LatchNetlistAdapterTests.cpp
     InternalRelationsTests.cpp
     SequentialEquivalenceStrategyTests.cpp
     Btor2ExportStrategyTests.cpp)

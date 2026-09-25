@@ -65,6 +65,7 @@ class VerificationOptions:
     ) = ()
     learn_internal_relations: bool = True
     allow_x_equality_in_internal_relations: bool = True
+    error_on_opaque: bool = False
 
 
 NativeDesign = _native.NativeDesign
@@ -167,6 +168,9 @@ def _build_native_design_options(
     report_skipped_outputs = _boolean(
         settings.report_skipped_outputs, "report_skipped_outputs"
     )
+    error_on_opaque = _boolean(settings.error_on_opaque, "error_on_opaque")
+    if mode == VerificationMode.LEC.value and error_on_opaque:
+        raise ValueError("error_on_opaque is only supported for SEC")
     set_as_boundary = _boundary_pairs(settings.set_as_boundary)
     if settings.max_k is not None:
         if isinstance(settings.max_k, bool) or not isinstance(settings.max_k, int):
@@ -215,6 +219,7 @@ def _build_native_design_options(
         "allow_boundary_mismatch": allow_boundary_mismatch,
         "set_as_boundary": set_as_boundary,
         "report_skipped_outputs": report_skipped_outputs,
+        "error_on_opaque": error_on_opaque,
         "log_file": log_file,
         "log_level": log_level,
     }

@@ -351,7 +351,7 @@ bool parseBorrowedOptions(PyObject *object,
   static const std::unordered_set<std::string_view> allowedKeys = {
       "mode",          "solver",          "max_k",
       "sec_engine",    "sec_encoding",    "allow_boundary_mismatch",
-      "set_as_boundary", "report_skipped_outputs", "log_file", "log_level",
+      "set_as_boundary", "report_skipped_outputs", "error_on_opaque", "log_file", "log_level",
       "learn_internal_relations", "allow_x_equality_in_internal_relations"};
   Py_ssize_t position = 0;
   PyObject *key = nullptr;
@@ -393,12 +393,17 @@ bool parseBorrowedOptions(PyObject *object,
       !dictionaryBoolean(object, "allow_x_equality_in_internal_relations",
                          options.internalRelationOptions.allowXEqualityInInternalRelations) ||
       !dictionaryBoolean(object, "report_skipped_outputs",
-                         options.reportSkippedOutputs)) {
+                         options.reportSkippedOutputs) ||
+      !dictionaryBoolean(object, "error_on_opaque", options.errorOnOpaque)) {
     return false;
   }
 
   if (mode == "lec") {
     options.mode = KEPLER_FORMAL::BorrowedVerificationMode::LEC;
+    if (options.errorOnOpaque) {
+      PyErr_SetString(PyExc_ValueError, "error_on_opaque is only supported for SEC");
+      return false;
+    }
     if (!options.internalRelationOptions.learnInternalRelations ||
         !options.internalRelationOptions.allowXEqualityInInternalRelations) {
       PyErr_SetString(PyExc_ValueError,

@@ -15,6 +15,7 @@ struct KInductionProblem;
 struct SecBtor2Metadata {
   size_t totalOutputCount = 0;
   std::vector<std::string> skippedOutputs;
+  std::string stepSemantics;
 };
 
 // Export the prepared SEC obligation with the concrete base-case startup and

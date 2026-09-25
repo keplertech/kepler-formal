@@ -34,3 +34,9 @@ add_test(NAME kepler-formal-borrowed-native-tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 set_tests_properties(kepler-formal-borrowed-native-tests PROPERTIES TIMEOUT 120)
+
+add_executable(kepler-borrowed-policy-tests borrowed_policy_tests.cpp)
+target_link_libraries(kepler-borrowed-policy-tests PRIVATE kepler_borrowed_designs Python3::Python)
+najaeda_fixup_consumer(kepler-borrowed-policy-tests)
+add_test(NAME kepler-formal-borrowed-policy-tests COMMAND kepler-borrowed-policy-tests)
+set_tests_properties(kepler-formal-borrowed-policy-tests PROPERTIES TIMEOUT 120)

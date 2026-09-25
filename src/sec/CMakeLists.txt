@@ -11,6 +11,13 @@ add_library(kepler_sec STATIC
     kinduction/KInductionEngine.cpp
     kinduction/OutputBatching.cpp
     model/SecNetlistChecks.cpp
+    model/OpaquePolicy.cpp
+    latch/LatchEventModel.cpp
+    latch/LatchSettlingCompiler.cpp
+    latch/LatchBoundaryEncoding.cpp
+    latch/LatchSupportOptions.cpp
+    latch/NajaEventPrimitive.cpp
+    latch/LatchNetlistAdapter.cpp
     model/SequentialDesignModel.cpp
     pdr/PDREngine.cpp
     proof/DualRailEncoding.cpp

@@ -1,9 +1,12 @@
 # Proposed SEC Latch Support
 
-Status: design proposal, not implemented behavior. This document records the
+Status: architectural design and conditional correctness arguments. The initial
+opt-in, resource-bounded Boolean event implementation is documented separately
+in [SEC Latch Event Implementation](sec-latch-implementation.md); it does not
+implement every optimization proposed here. This document records the
 literature-backed approach discussed for level-sensitive latch support. It does
-not enable latch extraction or change SEC results. The constructions and proof
-sketches below close the identified specification gaps for a deliberately
+not itself enable latch extraction or change SEC results. The constructions and
+proof sketches below close the identified specification gaps for a deliberately
 restricted digital contract. They are not machine-checked proofs of an
 implementation, or a claim to support every physical latch network.
 
