@@ -33,6 +33,8 @@
 #include "../../clauses/Tree2BoolExpr.h"
 #include "common/BoolExprUtils.h"
 #include "model/SecNetlistChecks.h"
+#include "model/OpaquePolicy.h"
+#include "latch/LatchNetlistAdapter.h"
 #include "../../strategies/miter/BuildPrimaryOutputClauses.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -4857,6 +4859,10 @@ SequentialDesignModel SequentialDesignModel::extract(
     throw std::runtime_error("SequentialDesignModel::extract: NLUniverse not created");
   }
 
+  if (auto eventModel = LATCH::extractEventDesign(top, pairs, side)) {
+    return std::move(*eventModel);
+  }
+
   SequentialDesignModel model;
   ExtractContext ctx{
       // LCOV_EXCL_START
@@ -4877,6 +4883,8 @@ SequentialDesignModel SequentialDesignModel::extract(
   collectTopInterfaceTerms(ctx, model);
   classifyBuilderBoundaryTerms(ctx, model);
   collectSequentialTransitions(ctx, model);
+  recordOpaqueOutputlessCells(model, *ctx.dnl, ctx.boundary);
+  applyOpaquePolicy(model, ctx.topName, side);
 
   if (model.hasUnsupportedFeatures()) {
     // Primitive-modeling issues are structural, not proof-related. Report them
@@ -5006,6 +5014,7 @@ SequentialDesignModel SequentialDesignModel::extract(
 
   // Phase 6: make sure the remaining covered interface is complete before SEC
   // hands this model to the proof engines.
+  applyOpaquePolicy(model, ctx.topName, side);
   validateExtractedModel(model);
 
   // Restore the original top design for callers that keep using the universe.

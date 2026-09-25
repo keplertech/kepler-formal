@@ -32,3 +32,24 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "LatchEventCliTests",
+    srcs = [
+        "LatchEventConfigTests.cpp",
+        "LatchResetCliTests.cpp",
+        "LibertyLatchModelsTests.cpp",
+        "OpaquePolicyCliTests.cpp",
+    ],
+    copts = NAJA_HEADER_COPTS,
+    deps = [
+        "//src/bin:kepler_formal_test_driver",
+        "//src/config:kepler_config",
+        "//src/sec:kepler_sec",
+        "@naja",
+        "@naja//:naja_extra_headers",
+        "@yaml-cpp",
+        "@zlib//:zlib",
+        "@googletest//:gtest_main",
+    ],
+)

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -17,6 +18,7 @@ class SNLDesign;
 }
 
 namespace KEPLER_FORMAL::SEC {
+namespace LATCH { struct EventResetInterface; }
 
 struct ComplementedStateRelation {  // LCOV_EXCL_LINE
   SignalKey primaryKey;
@@ -54,6 +56,12 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> observedOutputExprByKey;
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> nextStateExprByStateKey;
   std::unordered_map<SignalKey, bool, SignalKeyHash> initialStateValueByKey;
+  // An exact initial relation can represent unspecified, independent Boolean
+  // storage and correlated settled event signals without fixing their values.
+  // It is applied only at frame zero, in addition to any unit initial facts.
+  BoolExpr* initialCondition = nullptr;
+  std::unordered_map<SignalKey, SignalKey, SignalKeyHash>
+      initialInputStateKeyByInputKey;
   // Variables proven during extraction to be pure routed clock carriers.
   // Downstream SEC matching can classify them with the top clock without
   // making any name-based assumption about internal sequential state.
@@ -64,6 +72,13 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
       connectivitySkipInfoByKey;
   std::vector<ComplementedStateRelation> complementedStateRelations;
   std::vector<std::string> unsupportedReasons;
+  // Empty for legacy clock-cycle extraction; event models retain their contract
+  // after compact mode releases the netlists.
+  std::string eventContract;
+  // Copied input-level/clock metadata for reset-cycle expansion after compact
+  // extraction; never retains pointers into the source netlist.
+  std::shared_ptr<const LATCH::EventResetInterface> eventResetInterface;
+  size_t eventResetCycles = 0;
 
   // Extract the model from the given top design. Opaque per-output cones are
   // skipped; globally unsupported structures are recorded in unsupportedReasons.

@@ -4,6 +4,14 @@ SEC reset bootstrap constrains user-named top-level reset inputs before the
 normal SEC property is checked. Use it for designs whose state is initialized by
 a reset sequence rather than by explicit initial values.
 
+This behavior is unchanged when `latch_support` is off, or for latch-free designs
+without explicit event tuning. The switch is on by default and requires no
+initialization settings. With event modeling active, `cycles`
+still counts clock cycles, but an explicit event adapter generates the clock
+edges and latch settling. Its supported clock/reset subset and stimulus protocol
+are described in the
+[latch reset-cycle adapter](sec-latch-implementation.md#reset-cycle-adapter).
+
 ## YAML
 
 ```yaml

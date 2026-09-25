@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -40,6 +41,9 @@
 #include "kinduction/OutputBatching.h"
 #include "kinduction/SatEncoding.h"
 #include "model/SequentialDesignModel.h"
+#include "latch/LatchEventContract.h"
+#include "latch/LatchInitialState.h"
+#include "latch/LatchResetAdapter.h"
 #include "pdr/PDREngine.h"
 #include "proof/DualRailEncoding.h"
 #include "proof/TransitionExprResolver.h"
@@ -830,7 +834,9 @@ std::string formatConeTraceback(const KInductionResult::CounterexampleWitness& w
 
   std::ostringstream oss;
   oss << "Traceback for first differing point `" << differencePoint.signal
-      << "` at cycle " << witness.badFrame << ":\n";
+      << "` at " << (model0.eventContract.empty() ? "cycle " :
+          model0.eventResetCycles ? "reset/event step " : "event transaction ")
+      << witness.badFrame << ":\n";
 
 
 // LCOV_EXCL_STOP
@@ -894,8 +900,13 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   }
 
   const auto& witness = *result.witness;
+  const char* step = model0.eventContract.empty() ? "cycle " :
+      model0.eventResetCycles ? "reset/event step " : "event transaction ";
   std::ostringstream oss;
-  oss << "Counterexample reaches the first bad frame at cycle "
+  if (!model0.eventContract.empty()) oss << "Event contract: " << model0.eventContract << ".\n";
+  if (model0.eventResetCycles) oss << "The first " << model0.eventResetCycles
+      << " steps are reset clock cycles; subsequent steps are external event transactions.\n";
+  oss << "Counterexample reaches the first bad frame at " << step
       << witness.badFrame << ".\n";
 
   if (witness.inputTrace.empty()) {
@@ -903,7 +914,7 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   } else {  // LCOV_EXCL_LINE
     oss << "Input trace:\n";
     for (const auto& frame : witness.inputTrace) {
-      oss << "  cycle " << frame.frame << ": ";
+      oss << "  " << step << frame.frame << ": ";
       if (frame.assignments.empty()) {
         oss << "<no environment inputs>";  // LCOV_EXCL_LINE
       } else {  // LCOV_EXCL_LINE
@@ -922,7 +933,7 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   // LCOV_EXCL_STOP
 
   if (!witness.outputMismatches.empty()) {
-    oss << "Observed output mismatches at cycle " << witness.badFrame << ":\n";
+    oss << "Observed output mismatches at " << step << witness.badFrame << ":\n";
     // LCOV_EXCL_START
     for (const auto& mismatch : witness.outputMismatches) {
       oss << "  " << mismatch.signal << ": design0="
@@ -2521,6 +2532,7 @@ void addDualRailInitialAssignments(
   for (const auto& key : model.stateBits) {
     const auto rails = railsByKey.at(key);
     const auto value = lookupStateValue(model.initialStateValueByKey, key);
+    if (model.initialCondition && !value.has_value()) continue;
     addDualRailStateAssignment(problem.initialStateAssignments, rails, value);
     problem.initializedStateCount += 2;
   }
@@ -2876,6 +2888,19 @@ KInductionProblem buildDualRailSecProblem(
   // existing base-case encoders enter their structured-init path without
   // materializing a huge duplicate conjunction over every rail.
   problem.initialCondition = BoolExpr::createTrue();
+
+  if (model0.initialCondition || model1.initialCondition) {
+    auto symbols0 = symbolSpace.localToCombined0;
+    auto symbols1 = symbolSpace.localToCombined1;
+    for (const auto& [local, rails] : railMaps.localState0BySymbol)
+      symbols0[local] = rails.mayBeOne;
+    for (const auto& [local, rails] : railMaps.localState1BySymbol)
+      symbols1[local] = rails.mayBeOne;
+    LATCH::integrateEventInitialState(model0, model1, alignedInputs,
+                                     symbols0, symbols1, problem);
+    LATCH::constrainEventInitialRails(model0, railMaps.localState0BySymbol, problem);
+    LATCH::constrainEventInitialRails(model1, railMaps.localState1BySymbol, problem, true);
+  }
 
 // LCOV_DISABLED_START
 
@@ -3737,6 +3762,27 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   // Phase 2: align the externally visible SEC interface, then drop any outputs
   // whose cones were already classified as skipped by extraction.
   // Internal names are candidate hints only; relations are certified below.
+  if (!model0.eventContract.empty() && resetSpec_.enabled()) {
+    auto failure = [&](const std::string& reason) {
+      return makeSecResult(SequentialEquivalenceStatus::Unsupported, 0, reason,
+                           OutputCoverageSelection{}, extractedBoundaryReports);
+    };
+    if (auto error = LATCH::eventContractError(model0.eventContract, model1.eventContract, false))
+      return failure(*error);
+    if (resetSpec_.cycles > std::numeric_limits<size_t>::max() - maxK)
+      return failure("reset cycle count overflows the SEC bound");
+    auto first = LATCH::adaptResetCycles(model0, resetSpec_);
+    if (!first.model) return failure("design0: " + first.error);
+    auto second = LATCH::adaptResetCycles(model1, resetSpec_);
+    if (!second.model) return failure("design1: " + second.error);
+    auto adapted = *this;
+    adapted.resetSpec_ = {};
+    return adapted.runExtractedModels(*first.model, *second.model, maxK + resetSpec_.cycles);
+  }
+  if (auto error = LATCH::eventContractError(model0.eventContract, model1.eventContract, resetSpec_.enabled())) {
+    return makeSecResult(SequentialEquivalenceStatus::Unsupported, 0, *error,
+                         OutputCoverageSelection{}, extractedBoundaryReports);
+  }
   AlignedSecInterface aligned = alignSecInterface(
       model0,
       model1,
@@ -3772,6 +3818,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       symbolSpace.state0Symbols,
       symbolSpace.state1Symbols,
       symbolSpace.problem);
+  LATCH::integrateEventInitialState(model0, model1, aligned.inputs,
+      symbolSpace.localToCombined0, symbolSpace.localToCombined1, symbolSpace.problem);
   if (auto resetError = applyResetBootstrapSpec(
           resetSpec_, aligned.inputs, symbolSpace.problem, secDiagEnabled)) {
     return makeSecResult(
@@ -3782,7 +3830,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         extractedBoundaryReports);
   }
   if (encoding_ == SecEncoding::Binary) {
-    if (symbolSpace.problem.hasResetBootstrap()) {
+    if (symbolSpace.problem.hasResetBootstrap() ||
+        symbolSpace.problem.hasExactRelationalInitialState) {
       logSecDiagLine(
           secDiagEnabled,
           "SEC diag: reset bootstrap keeps reset-unanchored outputs in the "
@@ -3868,7 +3917,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
 
   if (exportOptions_.enabled()) {
     exportSecBtor2File(proofProblem, exportOptions_.path,
-        {aligned.outputCoverage.totalOutputs, aligned.outputCoverage.skippedOutputs});
+        {aligned.outputCoverage.totalOutputs, aligned.outputCoverage.skippedOutputs, model0.eventContract});
     if (exportOptions_.dumpOnly) {
       return makeSecResult(SequentialEquivalenceStatus::Exported, 0,
           "BTOR2 exported to " + exportOptions_.path + "; proof not run",

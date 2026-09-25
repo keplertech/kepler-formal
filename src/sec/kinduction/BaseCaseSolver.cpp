@@ -347,9 +347,11 @@ struct ResetFrontierReachabilityContextData {
 
 std::unordered_set<size_t> buildStateSymbolSet(const KInductionProblem& problem) {
   std::unordered_set<size_t> stateSymbols;
-  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size() +
+                       problem.auxiliaryStateSymbols.size());
   stateSymbols.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   stateSymbols.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  stateSymbols.insert(problem.auxiliaryStateSymbols.begin(), problem.auxiliaryStateSymbols.end());
   return stateSymbols;
 }
 
@@ -461,7 +463,8 @@ void addFormulaSupport(BoolExpr* formula, std::unordered_set<size_t>& output) {
 }
 
 bool hasStructuredInitialAssignments(const KInductionProblem& problem) {
-  return !problem.initialStateAssignments.empty();
+  return !problem.hasExactRelationalInitialState &&
+         !problem.initialStateAssignments.empty();
 }
 
 bool isKInductionCoiDiagEnabled() {
@@ -976,10 +979,11 @@ void addInitialConstraints(SATSolverWrapper& solver,
 
   if ((mode == InitialConstraintMode::CompleteInit ||
        mode == InitialConstraintMode::PartialInit) &&
-      problem.initialCondition != nullptr) {
-    if (hasStructuredInitialAssignments(problem)) {
+      (problem.initialCondition != nullptr || problem.hasExactRelationalInitialState)) {
+    if (hasStructuredInitialAssignments(problem) || problem.hasExactRelationalInitialState) {
       addInitialStateAssignments(solver, variables, problem, solverSymbols);
-    } else {
+    }
+    if (!hasStructuredInitialAssignments(problem) && problem.initialCondition != nullptr) {
       FrameFormulaEncoder encoder(
           solver,
           variables.makeLeafLits(

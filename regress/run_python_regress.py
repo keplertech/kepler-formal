@@ -102,7 +102,9 @@ print('Source-built NajaEDA:', najaeda.__file__)
             run("cmake", "-S", ROOT, "-B", consumer, *common,
                 "-DBUILD_KEPLER_PYTHON=ON", "-DENABLE_UNIT_TESTS=ON")
             run("cmake", "--build", consumer, "--target", "kepler_formal_native",
-                "kepler-borrowed-native-tests", "--parallel", args.jobs)
+                "kepler-borrowed-native-tests", "kepler-borrowed-policy-tests",
+                "kepler-borrowed-latch-options-tests", "kepler-borrowed-latch-tests",
+                "--parallel", args.jobs)
             run("cmake", "--install", consumer, "--component", "python")
             if sys.platform == "darwin":
                 # The SDK signs the build artifact. CMake then adjusts its
@@ -130,7 +132,7 @@ print('Shared runtime and borrowed design check passed.')
 """, stage)
 
             run("ctest", "--test-dir", consumer, "--output-on-failure",
-                "-R", "^kepler-formal-borrowed-native-tests$")
+                "-R", "^kepler-formal-borrowed-.*-tests$")
             # CTest's Python fixture replaces PYTHONPATH. Test the installed
             # sibling packages directly instead, including the real example.
             run(python, "-m", "unittest", "discover", "-v", "-s", ROOT / "test/python")

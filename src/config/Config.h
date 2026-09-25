@@ -69,12 +69,16 @@ public:
     return reportSkippedPOs_;
   }
 
+  static void setErrorOnOpaque(bool enabled) { errorOnOpaque_ = enabled; }
+  static bool getErrorOnOpaque() { return errorOnOpaque_; }
+
 private:
   Config() = default;
   ~Config() = default;
 
   inline static SolverType solverType_ = KISSAT;
   inline static bool reportSkippedPOs_ = false;
+  inline static bool errorOnOpaque_ = false;
   inline static std::atomic<uint64_t> nextVerificationGeneration_{1};
   inline static std::atomic<uint64_t> verificationGeneration_{0};
 };
