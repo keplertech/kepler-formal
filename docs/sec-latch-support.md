@@ -132,6 +132,17 @@ visible output Q. The presentation [R1] gives the schematic construction:
 The register in this construction is mathematical storage. It is not a claim
 that the physical latch samples on the main flip-flop clock.
 
+The implementation represents this block as **one storage-bearing latch
+primitive**, not as separately scheduled register and mux objects. For each
+internal pin-event evaluation, its basic reaction computes the mux value and
+returns that value as both the visible output and the next remembered value.
+The symbolic implementation constructs the corresponding Boolean mux expression.
+This packaging does not itself change the data-or-hold equation; equivalence of
+complete executions also requires matching initialization, event ordering, and
+storage-update timing. See [the implemented primitive and its diagram](
+sec-latch-implementation.md#basic-latch-primitive-register-plus-transparent-mux)
+for the exact scope of this correspondence.
+
 When the latch is closed, its output is its remembered value. When open, changes
 at its data input can change its output and activate downstream logic without
 waiting for a flip-flop edge. Reset and preset semantics must be incorporated

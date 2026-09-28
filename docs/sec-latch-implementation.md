@@ -260,6 +260,107 @@ This conservative closure prevents a component's temporary pulse from being
 discarded at a neighboring storage element. It is not an implementation of
 arbitrary independently settling local islands or final-output-only summaries.
 
+### Basic latch primitive: register plus transparent mux
+
+The basic active-high Boolean latch has one remembered bit `H`, data `D`,
+enable `E`, and visible output `Q`. For one internal pin-event evaluation,
+without asynchronous controls:
+
+```text
+Q       = E ? D : H
+next(H) = Q
+```
+
+```mermaid
+flowchart LR
+    D[Current data D] -->|Select when open| M[Transparent mux]
+    E[Enable E] --> M
+    H[Abstract register: H] -->|Select when closed| M
+    M --> Q[Visible output Q]
+    Q -->|Formal storage update: next H = Q| H
+```
+
+When open, the mux selects current data. When closed, it selects remembered
+storage. The visible value is the **mux result**, not merely the register's old
+output. `H` is abstract storage, not a flip-flop connected to the design clock.
+The formal event machinery evaluates the block when it is activated; a hardware
+clock edge is not required. Changes propagate to consumers through internal
+waves within an external transaction, rather than waiting for another hardware
+clock cycle.
+
+#### Representation in the code
+
+The first diagram shows the register/mux construction. The second shows its
+packaging in the implemented primitive; the box contains a calculation, not a
+new hardware cell or a second clock domain:
+
+```mermaid
+flowchart TD
+    I[Pin values D and E for this event] --> M
+    H[Incoming remembered bit H] --> M
+    subgraph P[One latch primitive evaluation]
+        M[Select D when open, otherwise H] --> V[Mux result V]
+        V --> Q[Returned output Q = V]
+        V --> S[Returned next storage H = V]
+    end
+    S --> N[Next pin visit uses this storage]
+    Q --> W[Publish final outputs and storage at wave commit]
+    S --> W
+    W --> C[Changed outputs activate downstream logic]
+```
+
+If multiple pins changed, the scheduler repeats this evaluation for each pin
+in each permitted ordering. Only that ordering's final outputs are published
+at wave commit; intermediate storage updates are retained inside the primitive.
+
+The network contains one `Primitive` with one storage bit for the simple latch,
+not two independently scheduled primitive instances. The
+[`latch()` convenience constructor](../src/sec/latch/LatchEventModel.cpp)
+computes the mux value and returns it as both `Reaction::outputs` and
+`Reaction::storage`. The
+[Naja adapter](../src/sec/latch/NajaEventPrimitive.cpp) applies the same
+data-or-hold rule to explicit library state expressions; its
+[symbolic counterpart](../src/sec/latch/NajaSymbolicLogic.h) constructs a
+`symbolicMux` expression. Library physical outputs are then evaluated from the
+updated state and current pins, so inverted outputs or an integrated clock
+gate's output expression need not equal the simple latch's `Q` directly.
+
+This is a composed register-and-mux **behavioral representation**. Different
+packaging alone is not evidence of different latch behavior: the basic equations
+match for the same incoming history and pin values. Conversely, matching those
+equations alone does not prove whole-network equivalence under different event
+or startup rules. No separately scheduled register/mux decomposition is claimed
+to have been verified.
+
+#### Event ordering, startup, and controls
+
+- Within one permitted changed-pin ordering, each pin is visited in turn. Its
+  reaction's next storage becomes the incoming storage for the next visit.
+  A wave publishes the final storage and outputs from that ordering together.
+  Other primitives evaluate the same pre-wave snapshot; this is not a new
+  clock edge for every latch or a physical propagation-delay model.
+- For example, start with `D=0, E=1, H=0`, then change data to `1` while closing
+  the latch. Data-first can retain `1`; close-first retains `0`. Both orders
+  remain in the reference model. The certifier cannot silently choose one
+  outcome to make the component deterministic.
+- Before forced bootstrap evaluation, physical storage outputs are projected
+  from remembered state (and the library's output mapping). Transparency is
+  evaluated during bootstrap propagation. Unspecified storage remains symbolic;
+  the primitive does not assume zero, insert a reset, or fabricate a flip-flop
+  clock edge at startup.
+- Active-low enables use the corresponding polarity. Explicit asynchronous
+  clear/preset rules override ordinary transparency according to the library
+  model. Undefined or unsupported control combinations remain errors.
+
+Splitting the mux and register into ordinary, independently scheduled primitives
+would not be a cosmetic refactor of this event model. It can add a propagation
+wave, alter data-versus-closing order, or change pulses seen by downstream clock
+and enable pins. Such a decomposition requires a separate preservation argument.
+
+The basic primitive is distinct from the whole-design extraction and component
+grouping policy described above. Explaining its register/mux correspondence
+does not resolve the known large-component certification/coverage failure.
+
 ## 4. Initialization and internal waves
 
 Initialization is itself a checked settling episode:
