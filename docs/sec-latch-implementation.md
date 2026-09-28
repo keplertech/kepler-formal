@@ -34,10 +34,10 @@ next(H) = Q
 
 ```mermaid
 flowchart LR
-    D[Data D] -->|Open| M[Transparent mux]
-    E[Enable E] --> M
-    H[Abstract register H] -->|Closed| M
-    M --> Q[Visible output Q]
+    D["Data D"] -->|Open| M["Transparent<br/>mux"]
+    E["Enable E"] --> M
+    H["Abstract register<br/>H"] -->|Closed| M
+    M --> Q["Output Q"]
     Q -->|next H = Q| H
 ```
 
@@ -51,16 +51,16 @@ storage and pin history left by the preceding visit:
 
 ```mermaid
 flowchart TD
-    A[Start with incoming storage and previous pin values] --> P
-    subgraph L[One composed latch primitive]
-        P[Apply next changed pin in the chosen order] --> M
-        M[Select data or remembered storage] --> R
-        R[Update private storage and output from mux result]
-        R -->|More changed pins: carry history forward| P
+    A["Incoming storage<br/>and pin history"] --> P
+    subgraph L["One latch primitive"]
+        P["Visit next<br/>changed pin"] --> M
+        M["Select data<br/>or stored value"] --> R
+        R["Private update:<br/>storage and output"]
+        R -->|"More pins:<br/>carry history"| P
     end
-    R -->|Last pin| S[Stage final storage and output]
-    S --> W[Commit together with the complete wave]
-    W --> N[Changed outputs activate consumers for next wave]
+    R -->|Last pin| S["Stage final<br/>storage and output"]
+    S --> W["Commit with<br/>the whole wave"]
+    W --> N["Changed outputs<br/>activate consumers<br/>for next wave"]
 ```
 
 Only the ordering's final values are published at the wave boundary; intermediate

@@ -57,11 +57,11 @@ remain visible to downstream elements. This primitive granularity is part of
 the model, not a claim to reproduce arbitrary physical glitches [R2].
 
 ```mermaid
-flowchart LR
-    A[External transaction] --> E[Evaluate activated elements]
-    E --> C[Commit updates together]
+flowchart TD
+    A["External<br/>transaction"] --> E["Evaluate<br/>active elements"]
+    E --> C["Commit together"]
     C -->|Signal changes| E
-    C -->|No pending work or error| B[Settled observation]
+    C -->|"No pending work<br/>and no error"| B["Settled observation"]
 ```
 
 A simultaneous data change and latch closure can retain either old or new
