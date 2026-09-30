@@ -105,9 +105,9 @@ next_state = enable ? data_next : current_state
 
 This means clock gating is modeled as state enable behavior rather than as a
 new independent clock when the gate is combinational and fully modelable.
-A gated clock cone that reaches a latch is opaque because SEC does not model
-level-sensitive state. Latch handling and strict fallback behavior are documented in
-[sec-sequential-models.md](sec-sequential-models.md).
+A latch in the clock path requires event modeling to preserve transparency and
+generated edges; see the [latch algorithm](sec-latch-support.md).
+Without that modeling, latch-dependent observations remain opaque.
 
 ## Complex Clock Trees
 

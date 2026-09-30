@@ -226,6 +226,11 @@ struct KInductionProblem {
   std::vector<std::pair<size_t, BoolExpr*>> auxiliaryTransitions;
   std::shared_ptr<LazyTransitionStore> lazyTransitions;
   BoolExpr* initialCondition = nullptr;
+  // An exact Boolean initial-state relation may describe many states without
+  // assigning individual bits. It is conjoined with initialStateAssignments,
+  // checked from frame zero, and must not assume the observation property.
+  // False preserves the legacy partial/ternary initialization conventions.
+  bool hasExactRelationalInitialState = false;
   size_t initializedStateCount = 0;
   size_t totalStateCount = 0;
   BoolExpr* property = nullptr;
@@ -257,11 +262,12 @@ struct KInductionProblem {
   }
 
   bool hasExplicitInitialState() const {
-    return initializedStateCount != 0;
+    return hasExactRelationalInitialState || initializedStateCount != 0;
   }
 
   bool hasCompleteInitialState() const {
-    return initializedStateCount != 0 && initializedStateCount == totalStateCount;
+    return hasExactRelationalInitialState ||
+           (initializedStateCount != 0 && initializedStateCount == totalStateCount);
   }
 
   bool hasResetBootstrap() const {

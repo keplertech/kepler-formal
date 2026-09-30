@@ -159,8 +159,10 @@ ExternalProject_Add(cadical_external
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
         "CXX=${CMAKE_CXX_COMPILER}"
-        "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
-        "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
+        # Match the consumer's sanitizer policy, including libc++ container
+        # annotations. Mixing instrumented and plain STL instantiations is unsafe.
+        "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS} $<JOIN:$<TARGET_PROPERTY:sanitizers_config,INTERFACE_COMPILE_OPTIONS>, >"
+        "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS} $<JOIN:$<TARGET_PROPERTY:sanitizers_config,INTERFACE_COMPILE_OPTIONS>, >"
         ./configure -q --no-tracing --no-contrib ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make -C build libcadical.a
     INSTALL_COMMAND ""

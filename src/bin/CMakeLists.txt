@@ -52,8 +52,11 @@ function(configure_kepler_formal_driver target)
   target_link_libraries(${target} PUBLIC ${KEPLER_FORMAL_DRIVER_LIBRARIES})
 endfunction()
 
-add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp)
+find_package(ZLIB REQUIRED)
+add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp
+    LibertyLatchModels.cpp LatchEventConfig.cpp)
 configure_kepler_formal_driver(kepler_formal_core)
+target_link_libraries(kepler_formal_core PRIVATE ZLIB::ZLIB)
 
 add_library(kepler_formal_driver STATIC CppDriver.cpp)
 target_link_libraries(kepler_formal_driver PUBLIC kepler_formal_core naja_snl_pyloader)

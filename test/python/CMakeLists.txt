@@ -34,3 +34,24 @@ add_test(NAME kepler-formal-borrowed-native-tests
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 set_tests_properties(kepler-formal-borrowed-native-tests PROPERTIES TIMEOUT 120)
+
+add_executable(kepler-borrowed-policy-tests borrowed_policy_tests.cpp)
+target_link_libraries(kepler-borrowed-policy-tests PRIVATE kepler_borrowed_designs Python3::Python)
+najaeda_fixup_consumer(kepler-borrowed-policy-tests)
+add_test(NAME kepler-formal-borrowed-policy-tests COMMAND kepler-borrowed-policy-tests)
+set_tests_properties(kepler-formal-borrowed-policy-tests PROPERTIES TIMEOUT 120)
+
+add_executable(kepler-borrowed-latch-options-tests borrowed_latch_options_tests.cpp
+  ${PROJECT_SOURCE_DIR}/src/python/BorrowedLatchOptions.cpp
+  ${PROJECT_SOURCE_DIR}/src/python/PyLatchOptions.cpp)
+target_include_directories(kepler-borrowed-latch-options-tests PRIVATE
+  ${PROJECT_SOURCE_DIR}/src/python ${PROJECT_SOURCE_DIR}/src/sec)
+target_link_libraries(kepler-borrowed-latch-options-tests PRIVATE Python3::Python)
+add_test(NAME kepler-formal-borrowed-latch-options-tests COMMAND kepler-borrowed-latch-options-tests)
+
+add_executable(kepler-borrowed-latch-tests borrowed_latch_tests.cpp)
+target_link_libraries(kepler-borrowed-latch-tests PRIVATE kepler_borrowed_designs Python3::Python)
+najaeda_fixup_consumer(kepler-borrowed-latch-tests)
+add_test(NAME kepler-formal-borrowed-latch-tests COMMAND kepler-borrowed-latch-tests)
+set_tests_properties(kepler-formal-borrowed-latch-options-tests
+  kepler-formal-borrowed-latch-tests PROPERTIES TIMEOUT 120)

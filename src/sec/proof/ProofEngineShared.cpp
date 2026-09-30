@@ -330,7 +330,13 @@ BoolExpr* buildProofInitFormula(const KInductionProblem& problem) {
       hasConstraint = true;
     }
   } else {
-    if (problem.initialCondition == BoolExpr::createTrue() &&
+    if (problem.hasExactRelationalInitialState) {
+      init = problem.initialCondition != nullptr
+                 ? problem.initialCondition : BoolExpr::createTrue();
+      hasConstraint = true;
+      init = appendStructuredAssignmentFacts(
+          init, problem.initialStateAssignments, hasConstraint);
+    } else if (problem.initialCondition == BoolExpr::createTrue() &&
         !problem.initialStateAssignments.empty()) {
       // Dual-rail SEC keeps the boot rails as structured unit facts so PDR and
       // k-induction can encode only the local COI.  Formula-based callers such

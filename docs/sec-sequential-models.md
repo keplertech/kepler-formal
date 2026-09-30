@@ -30,21 +30,17 @@ eligible unless their own dependency cones reach an opaque terminal.
 
 ## Latches
 
-A latch is level-sensitive. For an active-high latch, its behavior is:
+A latch follows data while open and holds its remembered value H while closed:
 
 ```text
-next_q = enable ? data : q
+Q = enable ? data : H
+next(H) = Q
 ```
 
-This is different from a flip-flop's edge-triggered update. Naja represents
-that distinction with `SequentialModel::Kind::Latch`, and its built-in
-`naja_dlatch` has such a model.
-
-Kepler SEC does not currently implement generic level-sensitive transition
-semantics. It therefore does not consume a Naja latch model as ordinary SEC
-state. Every latch output is opaque, including latches used in clock-gating
-structures, and any requested top-level output whose cone reaches it is
-skipped. SEC does not infer latch behavior from cell or pin names.
+These updates use internal events, not only flip-flop clock edges.
+Propagation, feedback, and unsupported cases are explained in the
+[latch algorithm](sec-latch-support.md) and [behavior guide](sec-latch-implementation.md).
+Without event modeling, latch-dependent observations remain opaque.
 
 ## Opaque Outputs
 

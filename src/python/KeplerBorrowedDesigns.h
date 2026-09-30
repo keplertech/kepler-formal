@@ -4,7 +4,8 @@
 #pragma once
 
 #include "RunResult.h"
-#include "Config.h"
+#include "../config/Config.h"
+#include "BorrowedLatchOptions.h"
 #include "DesignBoundary.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
@@ -23,6 +24,8 @@ struct BorrowedDesignOptions {
   SEC::InternalRelationOptions internalRelationOptions;
   bool allowBoundaryMismatch = false;
   bool reportSkippedOutputs = false;
+  bool errorOnOpaque = false;
+  BorrowedLatchOptions latchSupport;
   std::string logFile;
   std::string logLevel;
   BoundaryPairs setAsBoundary;

@@ -23,20 +23,56 @@ genrule(
     cmd = "cp $(location @naja//src/nl/python/naja_wrapping:naja.so) $@",
 )
 
+# Share the existing driver compilation inputs with in-process CLI tests without
+# changing the executable's Python data files or shared-runtime link contract.
+_DRIVER_SRCS = [
+    "KeplerFormal.cpp",
+    "CppDriver.cpp",
+    "Btor2ExportConfig.cpp",
+    "KeplerFormalUtils.cpp",
+    "LatchEventConfig.cpp",
+    "LibertyLatchModels.cpp",
+    "RunResult.cpp",
+]
+
+_DRIVER_HDRS = [
+    "Btor2ExportConfig.h",
+    "KeplerFormalDriver.h",
+    "KeplerFormalUtils.h",
+    "LatchEventConfig.h",
+    "LibertyLatchModels.h",
+    "RunResult.h",
+]
+
+_DRIVER_DEPS = [
+    ":kepler_version",
+    "//src/config:kepler_config",
+    "//src/sec:kepler_sec",
+    "//src/scope:scope_extraction",
+    "//src/strategies:formal_strategies",
+    "//src/utils:kepler_formal_utils",
+    "@kissat",
+    "@naja",
+    "@naja//:naja_extra_headers",
+    "@spdlog",
+    "@yaml-cpp",
+    "@zlib//:zlib",
+]
+
+cc_library(
+    name = "kepler_formal_test_driver",
+    testonly = True,
+    srcs = _DRIVER_SRCS,
+    hdrs = _DRIVER_HDRS,
+    includes = ["."],
+    copts = NAJA_HEADER_COPTS,
+    visibility = ["//test/strategies/miter:__pkg__"],
+    deps = _DRIVER_DEPS,
+)
+
 cc_binary(
     name = "kepler-formal",
-    srcs = [
-        "KeplerFormal.cpp",
-        "CppDriver.cpp",
-        "Btor2ExportConfig.cpp",
-        "Btor2ExportConfig.h",
-        "KeplerFormalDriver.h",
-        "KeplerFormalMain.cpp",
-        "KeplerFormalUtils.h",
-        "KeplerFormalUtils.cpp",
-        "RunResult.h",
-        "RunResult.cpp",
-    ],
+    srcs = _DRIVER_SRCS + _DRIVER_HDRS + ["KeplerFormalMain.cpp"],
     copts = NAJA_HEADER_COPTS,
     data = [":naja_python_module"],
     dynamic_deps = ["@naja//src/nl/python/naja_wrapping:naja_runtime"],
@@ -45,17 +81,5 @@ cc_binary(
     # flags. The hermetic toolchain links libc++ statically by default,
     # which supersedes the former -static-libstdc++/-static-libgcc.
     visibility = ["//visibility:public"],
-    deps = [
-        ":kepler_version",
-        "//src/config:kepler_config",
-        "//src/sec:kepler_sec",
-        "//src/scope:scope_extraction",
-        "//src/strategies:formal_strategies",
-        "//src/utils:kepler_formal_utils",
-        "@kissat",
-        "@naja",
-        "@naja//:naja_extra_headers",
-        "@spdlog",
-        "@yaml-cpp",
-    ],
+    deps = _DRIVER_DEPS,
 )

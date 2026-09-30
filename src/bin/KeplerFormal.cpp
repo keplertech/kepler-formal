@@ -44,6 +44,8 @@
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
 #include "Btor2ExportConfig.h"
+#include "LatchEventConfig.h"
+#include "LibertyLatchModels.h"
 #include "Config.h"
 #include "DesignBoundary.h"
 #include "KeplerFormalDriver.h"
@@ -73,15 +75,22 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] | "
+      "[--report-skipped-pos] [--error-on-opaque] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] "
+      "[--report-skipped-pos] [--error-on-opaque] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
+  SPDLOG_INFO("Latch support is on by default (--no-latch_support disables it). Optional Boolean event SEC settings: [--sec-latch-events <any|single>] "
+      "[--sec-latch-initial-inputs <0|1>] [--sec-latch-initial-storage <0|1>] "
+      "[--sec-latch-workers <n>] [--sec-latch-max-waves <n>] "
+      "[--sec-latch-max-states <n>] [--sec-latch-max-transactions <n>] "
+      "[--sec-latch-max-nodes <n>] [--sec-latch-sat-conflicts <n>] [--sec-latch-sat-decisions <n>]. "
+      "Input changes default to any; unspecified starting inputs and storage remain symbolic. "
+      "Normal event-mode steps are settled external events; sec_reset counts clock cycles.");
 // LCOV_EXCL_START
 }
 // LCOV_EXCL_STOP
@@ -486,6 +495,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "learn_ineternal_relations",
       "allow_x_equality_in_internal_relations",
       "sec_reset",
+      "latch_support",
+      "sec_latch_events",
       "btor2_export",
       "btor2_export_path",
       "dump_only",
@@ -507,6 +518,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf_path",
       "compact_mode",
       "report_skipped_pos",
+      "error_on_opaque",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1240,6 +1252,7 @@ static int KeplerFormalMainImpl(
       KEPLER_FORMAL::SEC::SecEncoding::DualRailSteady;
   KEPLER_FORMAL::SEC::SecResetSpec secResetSpec;
   KEPLER_FORMAL::Btor2ExportConfig btor2ExportConfig;
+  KEPLER_FORMAL::LatchEventConfig latchEventConfig;
   bool secEngineExplicit = false;
   bool secEncodingExplicit = false;
   KEPLER_FORMAL::SEC::InternalRelationOptions internalRelationOptions;
@@ -1270,11 +1283,13 @@ static int KeplerFormalMainImpl(
   bool compactMode = false;
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
+  bool errorOnOpaque = false;
   bool verilogPreprocessing = false;
   std::string dumpCnfPath;
   std::string dumpPoCnfPath;
 
   KEPLER_FORMAL::Config::setReportSkippedPOs(false);
+  KEPLER_FORMAL::Config::setErrorOnOpaque(false);
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -1428,6 +1443,10 @@ static int KeplerFormalMainImpl(
           SPDLOG_CRITICAL("Invalid BTOR2 export config: {}", btor2ExportError);
           return EXIT_FAILURE;
         }
+        if (!latchEventConfig.parseYaml(cfg, btor2ExportError)) {
+          SPDLOG_CRITICAL("Invalid latch event config: {}", btor2ExportError);
+          return EXIT_FAILURE;
+        }
 
         // input_paths
         if (cfg["input_paths"]) {
@@ -1520,6 +1539,14 @@ static int KeplerFormalMainImpl(
           allowBoundaryMismatch = cfg["allow-boundary-mismatch"].as<bool>();
         }
 
+        if (cfg["error_on_opaque"]) {
+          if (!cfg["error_on_opaque"].IsScalar()) {
+            SPDLOG_CRITICAL("error_on_opaque must be a boolean scalar");
+            return EXIT_FAILURE;
+          }
+          errorOnOpaque = cfg["error_on_opaque"].as<bool>();
+        }
+
         // report_skipped_pos
         if (cfg["report_skipped_pos"] && cfg["report_skipped_pos"].IsScalar()) {
           // LCOV_EXCL_START
@@ -1590,6 +1617,21 @@ static int KeplerFormalMainImpl(
     int parseStart = 1;
     while (parseStart < argc) {
       std::string arg = argv[parseStart];
+      std::string latchError;
+      const auto latchArgument = latchEventConfig.parseArgument(argc, argv, parseStart, latchError);
+      if (latchArgument == KEPLER_FORMAL::LatchEventConfig::ArgumentResult::Error) {
+        SPDLOG_CRITICAL("{}", latchError);
+        return EXIT_FAILURE;
+      }
+      if (latchArgument == KEPLER_FORMAL::LatchEventConfig::ArgumentResult::Parsed) {
+        ++parseStart;
+        continue;
+      }
+      if (arg == "--error-on-opaque") {
+        errorOnOpaque = true;
+        ++parseStart;
+        continue;
+      }
       std::string btor2ExportError;
       const auto exportArgument = btor2ExportConfig.parseArgument(
           argc, argv, parseStart, btor2ExportError);
@@ -1803,6 +1845,13 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_START
     for (int i = parseStart; i < argc; ++i) {
       std::string arg = argv[i];
+      std::string latchError;
+      const auto latchArgument = latchEventConfig.parseArgument(argc, argv, i, latchError);
+      if (latchArgument == KEPLER_FORMAL::LatchEventConfig::ArgumentResult::Error) {
+        SPDLOG_CRITICAL("{}", latchError);
+        return EXIT_FAILURE;
+      }
+      if (latchArgument == KEPLER_FORMAL::LatchEventConfig::ArgumentResult::Parsed) continue;
       std::string btor2ExportError;
       const auto exportArgument = btor2ExportConfig.parseArgument(
           argc, argv, i, btor2ExportError);
@@ -1988,6 +2037,10 @@ static int KeplerFormalMainImpl(
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--error-on-opaque") {
+        errorOnOpaque = true;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
@@ -2165,6 +2218,12 @@ static int KeplerFormalMainImpl(
     SPDLOG_CRITICAL("Invalid BTOR2 export options: {}", btor2ExportError);
     return EXIT_FAILURE;
   }
+  if (!latchEventConfig.validate(verificationMode == VerificationMode::SEC,
+          secResetExplicit, !boundaryPairs.empty(), btor2ExportError)) {
+    SPDLOG_CRITICAL("Invalid latch event options: {}", btor2ExportError);
+    return EXIT_FAILURE;
+  }
+  KEPLER_FORMAL::SEC::LATCH::ScopedSupportOptions latchEventScope(latchEventConfig.options());
   if (verificationMode == VerificationMode::LEC && secMaxKExplicit) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL("max_k/-k is only supported with SEC verification");
@@ -2185,6 +2244,10 @@ static int KeplerFormalMainImpl(
   }
   if (verificationMode == VerificationMode::LEC && internalRelationOptionsExplicit) {
     SPDLOG_CRITICAL("Internal relation options are only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (verificationMode == VerificationMode::LEC && errorOnOpaque) {
+    SPDLOG_CRITICAL("error_on_opaque/--error-on-opaque is only supported with SEC verification");
     return EXIT_FAILURE;
   }
   if (verificationMode == VerificationMode::LEC && secResetExplicit) {
@@ -2274,6 +2337,7 @@ static int KeplerFormalMainImpl(
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
+  KEPLER_FORMAL::Config::setErrorOnOpaque(errorOnOpaque);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -2291,6 +2355,12 @@ static int KeplerFormalMainImpl(
     SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={}",
                 internalRelationOptions.learnInternalRelations,
                 internalRelationOptions.allowXEqualityInInternalRelations);
+    if (const auto& latch = latchEventConfig.options(); latch.hasEventContract()) {
+      SPDLOG_INFO("SEC latch_support: enabled; Boolean external events={}; initial_inputs={}; initial_storage={}; bounds count events, not clock cycles",
+                  latch.singleInputChange ? "single" : "any",
+                  latch.initialInputs ? (*latch.initialInputs ? "1" : "0") : "unspecified",
+                  latch.initialStorage ? (*latch.initialStorage ? "1" : "0") : "unspecified");
+    }
     if (secResetSpec.enabled()) {
       SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
       for (const auto& port : secResetSpec.ports) {
@@ -2530,7 +2600,9 @@ static int KeplerFormalMainImpl(
         std::filesystem::path libraryPath(libraryFile);
         SPDLOG_INFO("Loading library file: {}", libraryFile);
         SNLLibertyConstructor constructor(primitivesLibrary);
-        constructor.construct(libraryPath);
+        if (verificationMode == VerificationMode::SEC && latchEventConfig.options().enabled)
+          KEPLER_FORMAL::constructLibertyWithLatchModels(primitivesLibrary, libraryPath);
+        else constructor.construct(libraryPath);
       }
       for (const auto& pythonFile : pythonFiles) {
         // LCOV_EXCL_START
@@ -3343,6 +3415,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
 
   const auto previousSolver = Config::getSolverType();
   const bool previousReportSkippedPOs = Config::getReportSkippedPOs();
+  const bool previousErrorOnOpaque = Config::getErrorOnOpaque();
   const auto previousDefaultLogger = spdlog::default_logger();
   const auto previousNamedLogger = spdlog::get("kepler_formal_main_logger");
   const auto previousMiterLogger = spdlog::get("miter_logger");
@@ -3351,6 +3424,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   struct RunStateGuard {
     Config::SolverType solver;
     bool reportSkippedPOs;
+    bool errorOnOpaque;
     std::shared_ptr<spdlog::logger> defaultLogger;
     std::shared_ptr<spdlog::logger> namedLogger;
     std::shared_ptr<spdlog::logger> miterLogger;
@@ -3359,6 +3433,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       cleanupKeplerFormalState();
       Config::setSolverType(solver);
       Config::setReportSkippedPOs(reportSkippedPOs);
+      Config::setErrorOnOpaque(errorOnOpaque);
       const auto restoreNamedLogger = [](
                                           const char* name,
                                           const std::shared_ptr<spdlog::logger>&
@@ -3378,6 +3453,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   } stateGuard{
       previousSolver,
       previousReportSkippedPOs,
+      previousErrorOnOpaque,
       previousDefaultLogger,
       previousNamedLogger,
       previousMiterLogger,
@@ -3385,6 +3461,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
 
   Config::setSolverType(Config::SolverType::KISSAT);
   Config::setReportSkippedPOs(false);
+  Config::setErrorOnOpaque(false);
   const int rc = runKeplerFormalWorkflow(argc, argv, result, primitiveLoader);
   result.exitCode = rc;
   if (rc != EXIT_SUCCESS && result.status == RunStatus::Error &&

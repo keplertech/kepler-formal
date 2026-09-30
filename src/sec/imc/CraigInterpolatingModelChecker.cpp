@@ -649,9 +649,11 @@ int instantiateRegionLiteral(
 std::unordered_set<size_t> stateSymbolSet(
     const KInductionProblem& problem) {
   std::unordered_set<size_t> states;
-  states.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  states.reserve(problem.state0Symbols.size() + problem.state1Symbols.size() +
+                 problem.auxiliaryStateSymbols.size());
   states.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   states.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  states.insert(problem.auxiliaryStateSymbols.begin(), problem.auxiliaryStateSymbols.end());
   return states;
 }
 
@@ -2778,6 +2780,11 @@ void addInitialFrontierConstraint(
     std::unordered_map<size_t, int> leaves) {
   BoolExpr* initial = BoolExpr::createTrue();
   bool hasInitialConstraint = false;
+  if (problem.hasExactRelationalInitialState) {
+    initial = problem.initialCondition != nullptr
+                  ? problem.initialCondition : BoolExpr::createTrue();
+    hasInitialConstraint = true;
+  }
   for (const auto& [symbol, value] : problem.initialStateAssignments) {
     initial = BoolExpr::And(
         initial,
@@ -3534,6 +3541,11 @@ FrontierResult deriveBoundedFrontierRegion(
       " elapsed_ms=", elapsedMilliseconds(buildStart));
 
   if (!startsAtConcreteBootstrapFrontier) {
+    if (problem.hasExactRelationalInitialState && depth != 0) {
+      // The exact BOOT relation is needed at frame zero at every lookahead,
+      // including dependencies outside the tracked output-state projection.
+      addInitialFrontierConstraint(solver, problem, frameLits[0]);
+    }
     addStateAssignments(
         solver, frameLits[0], problem.initialStateAssignments);
   }

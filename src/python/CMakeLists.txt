@@ -12,7 +12,8 @@ if(NOT KEPLER_FORMAL_GIT_HASH)
   set(KEPLER_FORMAL_GIT_HASH "unknown")
 endif()
 
-add_library(kepler_borrowed_designs STATIC KeplerBorrowedDesigns.cpp KeplerNajaState.cpp)
+add_library(kepler_borrowed_designs STATIC KeplerBorrowedDesigns.cpp KeplerNajaState.cpp
+  BorrowedLatchOptions.cpp)
 target_include_directories(kepler_borrowed_designs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kepler_borrowed_designs PUBLIC kepler_verification_support)
 
@@ -22,7 +23,7 @@ if(KEPLER_USE_PUBLISHED_NAJAEDA)
 else()
   set(kepler_runtime_source KeplerNajaRuntime.cpp)
 endif()
-Python3_add_library(kepler_formal_native MODULE WITH_SOABI PyKeplerFormal.cpp ${kepler_runtime_source})
+Python3_add_library(kepler_formal_native MODULE WITH_SOABI PyKeplerFormal.cpp PyLatchOptions.cpp ${kepler_runtime_source})
 set_target_properties(kepler_formal_native PROPERTIES
   OUTPUT_NAME _native
   CXX_VISIBILITY_PRESET hidden

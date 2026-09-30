@@ -4,6 +4,10 @@ SEC reset bootstrap constrains user-named top-level reset inputs before the
 normal SEC property is checked. Use it for designs whose state is initialized by
 a reset sequence rather than by explicit initial values.
 
+With latch events, a reset cycle still means a clock cycle, with full settling
+between its edges. No reset or fixed initial values are assumed without a request.
+See the [reset-cycle behavior](sec-latch-implementation.md#reset-cycle-adapter).
+
 ## YAML
 
 ```yaml
