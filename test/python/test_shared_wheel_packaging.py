@@ -21,7 +21,8 @@ class SharedWheelPackagingTests(unittest.TestCase):
     def test_release_uses_published_provider_instead_of_rebuilding_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            with patch.object(helper, "PROVIDER_REQUIREMENT", "najaeda==1.2.3"), \
+            with patch.object(helper, "USE_PUBLISHED_PROVIDER", True), \
+                 patch.object(helper, "PROVIDER_REQUIREMENT", "najaeda==1.2.3"), \
                  patch.object(helper, "run") as run, \
                  patch.object(helper, "repair") as repair:
                 helper.build_provider(root)

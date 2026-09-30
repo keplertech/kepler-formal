@@ -20,10 +20,11 @@ import subprocess
 import sys
 import tempfile
 
-PROVIDER_REQUIREMENT = (
-    "najaeda==0.7.24" if os.environ.get("KEPLER_USE_PUBLISHED_NAJAEDA") == "1"
-    else "najaeda==0.7.24.dev0"
-)
+# The development provider is built from thirdparty/naja and carries the same
+# version number as the NajaEDA release it is based on, so the version alone
+# cannot tell the two providers apart.
+USE_PUBLISHED_PROVIDER = os.environ.get("KEPLER_USE_PUBLISHED_NAJAEDA") == "1"
+PROVIDER_REQUIREMENT = "najaeda==0.7.24" if USE_PUBLISHED_PROVIDER else "najaeda==0.7.26"
 
 
 def run(*arguments: str, env: dict[str, str] | None = None) -> None:
@@ -148,7 +149,7 @@ def build_provider(project: Path) -> None:
                       "Windows": "delvewheel"}[platform.system()]
     run(sys.executable, "-m", "pip", "install", repair_package)
     destination = project / ".kepler-provider-wheels"
-    if ".dev" not in PROVIDER_REQUIREMENT:
+    if USE_PUBLISHED_PROVIDER:
         # Release consumers must link the exact distributed provider, not a
         # locally rebuilt same-version runtime with a different native build
         # identity. Download it for the isolated cibuildwheel test environment.

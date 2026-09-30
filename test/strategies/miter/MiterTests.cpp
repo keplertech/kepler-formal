@@ -265,6 +265,8 @@ void expectGenericGateMiterEquivalent(const char* gateName,
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
 
   NLDB0::GateType gateType = NLDB0::GateType::And;
   switch (genericType) {
@@ -297,7 +299,8 @@ void expectGenericGateMiterEquivalent(const char* gateName,
 
   auto buildTop = [&](const char* topName) {
     auto top =
-        SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(topName));
+        SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                          NLName(topName));
     auto topIn0 =
         SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("a"));
     auto topIn1 =
@@ -331,6 +334,8 @@ void expectTableSelectMiterEquivalentToMuxTree() {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
 
   NLDB0::TableSelectSignature signature;
   signature.width = 1;
@@ -343,7 +348,8 @@ void expectTableSelectMiterEquivalentToMuxTree() {
 
   auto buildTop = [&](const char* topName, bool useTableSelect) {
     auto* top =
-        SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(topName));
+        SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                          NLName(topName));
     auto* data =
         SNLBusTerm::create(top, SNLTerm::Direction::Input, 7, 0, NLName("d"));
     auto* addr =
@@ -538,9 +544,12 @@ TEST_F(MiterTests, TestMiterAND) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   // 2. Create a top model with one output
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
   auto topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
@@ -662,11 +671,14 @@ TEST_F(MiterTests, TestMiterANDNonConstant) {
   // 2. Create primitives library and register truth tables
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   NLLibraryTruthTables::construct(library);
 
   // 3. Create top design with two inputs and two outputs
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topOut  = SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));
@@ -778,8 +790,11 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesConstantTrueOutput) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topOut =
@@ -811,8 +826,11 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesConstantFalseOutput) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topOut =
@@ -950,8 +968,11 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesUsesFlatDependencyCoordinatesForPOs)
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topIn0 =
@@ -1000,8 +1021,11 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedNoDriverPO) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topIn =
@@ -1069,8 +1093,11 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesReportsSkippedMultiDriverPO) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topIn =
@@ -1152,8 +1179,11 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesInitializesSkippedPOReportFilesOnlyO
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topInA =
@@ -1436,8 +1466,11 @@ TEST_F(MiterTests, CachedIsoShortcutDoesNotCreateNewMiterInput) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topInA =
@@ -1620,8 +1653,11 @@ TEST_F(MiterTests, SNLLogicCloudReportsSkippedNoDriverRoot) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
 
   auto topIn =
@@ -2003,9 +2039,12 @@ TEST_F(MiterTests, TestMiterANDNonConstantWithSequentialElements) {
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("nangate45"));
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   // 2. Create a top model with one output
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(libraryDesigns, SNLDesign::Type::Standard,
+                        NLName("top"));
   univ->setTopDesign(top);
   auto topOut =
       SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out"));

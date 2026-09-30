@@ -18,11 +18,11 @@ SPEC.loader.exec_module(release)
 
 METADATA = '''# Keep unrelated metadata and commands intact.
 [build-system]
-requires = ["scikit-build-core>=0.11.3,<0.12", "najaeda==0.7.24.dev0"]
+requires = ["scikit-build-core>=0.11.3,<0.12", "najaeda==0.7.26"]
 
 [project]
 name = "kepler-formal"
-dependencies = ["najaeda==0.7.24.dev0"]
+dependencies = ["najaeda==0.7.26"]
 dynamic = ["version"]
 
 [tool.scikit-build.cmake.define]
@@ -78,7 +78,7 @@ class PythonReleaseTest(unittest.TestCase):
 
     def test_published_preparation_changes_only_pins_and_cmake_option(self):
         release.prepare_project(self.project, published_najaeda=True)
-        expected = METADATA.replace("najaeda==0.7.24.dev0", "najaeda==0.7.24").replace(
+        expected = METADATA.replace("najaeda==0.7.26", "najaeda==0.7.24").replace(
             'KEPLER_USE_PUBLISHED_NAJAEDA = "OFF"',
             'KEPLER_USE_PUBLISHED_NAJAEDA = "ON"')
         self.assertEqual(expected, self.metadata.read_text(encoding="utf-8"))
@@ -92,8 +92,8 @@ class PythonReleaseTest(unittest.TestCase):
         self.assertEqual("0.5.0", self._validate())
 
     def test_mismatched_or_unsupported_provider_pins_do_not_modify_checkout(self):
-        for text in (METADATA.replace("najaeda==0.7.24.dev0", "najaeda==0.7.24", 1),
-                     METADATA.replace("najaeda==0.7.24.dev0", "najaeda>=0.7.24")):
+        for text in (METADATA.replace("najaeda==0.7.26", "najaeda==0.7.24", 1),
+                     METADATA.replace("najaeda==0.7.26", "najaeda>=0.7.24")):
             with self.subTest(text=text):
                 self.metadata.write_text(text, encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "supported provider"):

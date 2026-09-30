@@ -18,7 +18,7 @@ For local regression without wheels or publishing, use the
 packages from this checkout and tests their shared runtime.
 
 The default development build uses the matching NajaEDA shared-runtime SDK,
-version `0.7.24.dev0` in `thirdparty/naja`. Build both packages from this
+version `0.7.26` in `thirdparty/naja`. Build both packages from this
 recursive checkout in one virtual environment, with the native build
 dependencies installed:
 

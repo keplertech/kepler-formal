@@ -149,3 +149,27 @@
 +load("@rules_cc//cc:cc_library.bzl", "cc_library")
 +
  # Vendored directly in this repo (not a submodule). naja only ever uses
+--- src/nl/formats/hdl/BUILD.bazel
++++ src/nl/formats/hdl/BUILD.bazel
+@@ -1,3 +1,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+ 
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ cc_library(
+--- src/nl/formats/vhdl/BUILD.bazel
++++ src/nl/formats/vhdl/BUILD.bazel
+@@ -1,3 +1,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+ 
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ cc_library(
+--- src/vhdl/BUILD.bazel
++++ src/vhdl/BUILD.bazel
+@@ -1,3 +1,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+ 
++load("@kepler-formal//bazel:naja_cc_library.bzl", "cc_library")
++
+ cc_library(

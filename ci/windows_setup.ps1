@@ -24,7 +24,8 @@ Invoke-Checked (Join-Path $keplerVcpkgRoot 'bootstrap-vcpkg.bat') @('-disableMet
 Invoke-Checked (Join-Path $keplerVcpkgRoot 'vcpkg.exe') @(
     'install', '--triplet=x64-windows',
     'capnproto', 'tbb', 'zlib',
-    'boost-intrusive', 'boost-dynamic-bitset', 'boost-unordered', 'boost-regex'
+    'boost-intrusive', 'boost-dynamic-bitset', 'boost-multiprecision',
+    'boost-unordered', 'boost-regex'
 )
 
 # GitHub's Windows image includes LLVM and an MSVC SDK. The LLVM frontend is

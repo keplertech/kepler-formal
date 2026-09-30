@@ -33,10 +33,10 @@ _FLEX_VERSION = "2.6.4"
 _CADICAL_COMMIT = "7b99c07f0bcab5824a5a3ce62c7066554017f641"
 _GLUCOSE_COMMIT = "7f887abba7cf13636a5ac2d28653668a20a91b25"
 _KISSAT_COMMIT = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
-_NAJA_COMMIT = "1d33c24c408f975aac901dc91cf316e02fe6dc82"
-_NAJA_VERILOG_COMMIT = "5da040bb34f0e4e5bb8d67223b999a0132fb401f"
+_NAJA_COMMIT = "6331960cb372ef6d332d07a42fb449d0bea01bbe"
+_NAJA_VERILOG_COMMIT = "be6544b128e229ce2aee814e795c1e49b02caf5c"
 _NAJA_IF_COMMIT = "099677d9f52c0db11b12c08d03e32543eebc7888"
-_SLANG_COMMIT = "512c327c209d3043aa98ecfd02d06a1b73fcd5fb"
+_SLANG_COMMIT = "b60d729d66b9cdeec158b800f898461a138d505e"
 _TOMLPLUSPLUS_COMMIT = "30172438cee64926dc41fdd9c11fb3ba5b2ba9de"
 
 def _deps_impl(_module_ctx):
@@ -131,7 +131,7 @@ def _deps_impl(_module_ctx):
     http_archive(
         name = "naja-verilog",
         url = "https://github.com/najaeda/naja-verilog/archive/{}.tar.gz".format(_NAJA_VERILOG_COMMIT),
-        sha256 = "8a0513378c419afc462ffd59c35c7d0362fee7787ab40ef23b2f0a360df0a9df",
+        sha256 = "f6fa913e9af19a589fe656bd503f9e1acb1fab11db8a563457513e76113bb003",
         strip_prefix = "naja-verilog-{}".format(_NAJA_VERILOG_COMMIT),
         patch_args = ["-p0", "-f"],
         patches = [Label("//bazel:naja_verilog_bazel9.patch")],
@@ -147,8 +147,8 @@ def _deps_impl(_module_ctx):
 
     http_archive(
         name = "slang",
-        url = "https://github.com/najaeda/slang/archive/{}.tar.gz".format(_SLANG_COMMIT),
-        sha256 = "144054285e246801a579e1365fe50c4d0a04a188025c8cb2bbe2355f653f2cbd",
+        url = "https://github.com/MikePopoloski/slang/archive/{}.tar.gz".format(_SLANG_COMMIT),
+        sha256 = "a9f65590ccf4ff2083b49f0f4352aac53e6458b04b2f1a65e24814aba3a05bc2",
         strip_prefix = "slang-{}".format(_SLANG_COMMIT),
         build_file = Label("//bazel:slang.BUILD.bazel"),
     )
@@ -156,7 +156,7 @@ def _deps_impl(_module_ctx):
     http_archive(
         name = "naja",
         url = "https://github.com/nanocoh/naja/archive/{}.tar.gz".format(_NAJA_COMMIT),
-        sha256 = "29ee47d9621d9bf597ede5cb8dcd90e502953b86156550c923f79d03002fb634",
+        sha256 = "29fb32c3bb91d777bfd1458b5a90858f4979bc075fd2e79fcac63cf16a97c1b2",
         strip_prefix = "naja-{}".format(_NAJA_COMMIT),
         build_file = Label("//bazel:naja.BUILD.bazel"),
         patch_args = ["-p0", "-f"],
