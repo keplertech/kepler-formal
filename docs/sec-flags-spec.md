@@ -232,9 +232,6 @@ the final output property.
 The YAML spelling `learn_ineternal_relations` is accepted as an alias for
 `learn_internal_relations`; specifying both spellings is an error.
 
-The algorithm follows the candidate/refinement and inductive correspondence
-approach in [Mishchenko et al., ICCAD 2008](https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_seq.pdf).
-The ternary representation follows [Khasidashvili and Hanna, 2003](https://people.eecs.berkeley.edu/~alanmi/courses/2007_290N/papers/sec_intel_bmc03.pdf).
 The X option applies only to the internal candidate check; the existing output
 property and selected engine are unchanged. Turning off both switches retains
 the pre-learning SEC path.

@@ -40,7 +40,7 @@ exactly as it does without learning. Counting stops at the limit, so a large
 design is never built in memory just to be measured. tinyrocket has about 0.9
 million nodes; nangate45_black_parrot, with 666,543 candidates, exceeds the
 limit and would otherwise need over 13 GiB and tens of minutes. The gate is an
-engineering limit, not a technique from the papers.
+engineering limit.
 
 ## 4. Inductive step
 
@@ -51,24 +51,23 @@ one transition.
 - **Speculative reduction.** The hypotheses are applied by literal
   substitution: both registers of a pair share one current-frame literal. The
   two sides' transitions are then encoded over the same literals, so identical
-  logic collapses structurally and needs no search. (Mony et al., DAC 2005;
-  Mishchenko et al., ICCAD 2008, section 3.2.)
+  logic collapses structurally and needs no search.
 - **Partitioning.** One-step register correspondence needs a single time frame,
   so the candidates are split into partitions bounded by solver variables.
   Every hypothesis is merged in every partition and each candidate is proved in
   exactly one, so splitting loses no relation. A large design is split rather
-  than skipped. (Mishchenko et al., section 3.3.)
+  than skipped.
 - **Variables on first use.** A partition reads a small part of the design, so
   its solver creates a variable only when the encoded logic first mentions a
-  symbol, not one per symbol per frame. This is an implementation choice, not a
-  technique from the papers. It lowers memory and encode time per partition.
+  symbol, not one per symbol per frame. This implementation choice lowers
+  memory and encode time per partition.
 - **Query.** Each partition asks whether some candidate in it can differ in the
   next frame.
   - UNSAT: all of its candidates hold under the hypotheses.
   - SAT: the counterexample is replayed (below).
   - Undecided within budget: each pair of that partition is asked separately
     on the same solver with its own budget, and only the pairs that stay
-    undecided are dropped. (Mony et al., sections 2 and 4.1.)
+    undecided are dropped.
 
 ## 5. Refinement by simulation
 
@@ -76,8 +75,7 @@ A counterexample is replayed on the original transitions as one of 64 parallel
 patterns; the other 63 are random states that also satisfy the hypotheses. The
 replay runs for up to 16 steps, and every candidate seen differing on a valid
 pattern is dropped. One counterexample therefore refines all candidates, not
-only the pairs the solver model happens to separate. (Mony et al., section
-3.2.)
+only the pairs the solver model happens to separate.
 
 Simulation only drops candidates. It never proves one.
 
@@ -95,5 +93,5 @@ nothing; if the round limit is reached first, nothing is returned.
   reach; the output check still reports the counterexample.
 - Equivalent designs whose logic was rebuilt (for example synthesis netlist
   versus final netlist) prove few pairs: register equalities alone are often
-  not inductive there. Mishchenko et al. address this with signal
-  correspondence, which also relates internal nodes. That is not implemented.
+  not inductive there. Signal correspondence, which also relates internal
+  nodes, is not implemented.

@@ -15,8 +15,9 @@ contains the primitive diagrams and event examples.
 6. Unfold those internal rounds into one boundary-to-boundary transition.
 7. Compare both designs under the same external stimulus.
 
-Phase reduction is optional and comes afterward. The cited research supports
-individual steps; no single article proves this complete combination.
+Phase reduction is optional and comes afterward. This document specifies the
+model and its proof obligations, not a completed end-to-end proof of the
+implementation.
 
 ## 2. Latch and event behavior
 
@@ -28,7 +29,7 @@ next(H) = Q
 ```
 
 H is abstract storage, not a flip-flop connected to the hardware clock.
-The output follows data while open and retains history while closed [R1].
+The output follows data while open and retains history while closed.
 Reset and preset follow the element's declared priority.
 
 The block is evaluated as one primitive. Combining its register and mux does
@@ -54,7 +55,7 @@ Each round:
 Intermediate storage updates within one element's pin ordering are retained;
 only its final outputs are published for that round. Changes between rounds
 remain visible to downstream elements. This primitive granularity is part of
-the model, not a claim to reproduce arbitrary physical glitches [R2].
+the model, not a claim to reproduce arbitrary physical glitches.
 
 ```mermaid
 flowchart TD
@@ -103,7 +104,7 @@ Find these paths using both data and control dependencies.
   change during propagation.
 
 A scheduling region is not necessarily a feedback loop: it may contain several
-loops and connecting logic [R5, R9]. Flip-flop data paths can supply boundaries
+loops and connecting logic. Flip-flop data paths can supply boundaries
 when capture cannot occur inside an episode; generated clocks and asynchronous
 controls cannot be cut without justification.
 
@@ -146,7 +147,7 @@ AND NOT Settled(xK)
 ```
 
 Here u is held external stimulus; T is one complete internal round.
-Proving this formula impossible establishes the bound [R3, R4].
+Proving this formula impossible establishes the bound.
 Keeping errors alive prevents short failing executions from disappearing before K.
 
 A finite state space alone does not establish convergence. A reachable cycle
@@ -185,7 +186,7 @@ padding. Build this chain once and reuse it for successive external transactions
 Why this is exact under the stated conditions: every permitted episode finishes
 by K and can be padded without changing its result; every unfolded execution
 therefore corresponds to a permitted completed episode. Closure extends that
-argument across transaction sequences [R3, R4, R9].
+argument across transaction sequences.
 
 The bound concerns complete episodes. Combining independently guessed local
 bounds by a maximum or sum is not a proof of the whole episode.
@@ -211,7 +212,7 @@ choice must remain the same at all its receivers.
 
 This allows local scheduling without requiring each region to settle privately.
 Skipping rounds, publishing only endpoints, or reordering dependent events
-needs stronger preservation arguments [R6–R8].
+needs stronger preservation arguments.
 
 ## 7. Equivalence and unsupported behavior
 
@@ -240,51 +241,8 @@ semantics. Large bounds may be impractical even when behavior is valid.
 ## 8. Optional phase reduction
 
 Only after defining correct transitions, look for deterministic periodic state
-signals and use them to reduce repeated phases [R10]. Preserve residual gating,
+signals and use them to reduce repeated phases. Preserve residual gating,
 capture effects, and the observation boundary.
 
 This is not one phase per latch, and internal round numbers are not automatically
 hardware clock phases. Failure to find a period leaves the original model intact.
-
-## References
-
-- **R1.** Håkan Hjort, [On Applying Model Checking in Formal Verification](https://fmcad.org/FMCAD22/presentations/00%20-%20tutorials/02_hjort.pdf),
-  FMCAD 2022 tutorial, slides 41 and 44–50: latch register/mux construction and
-  feedback hazards; no general safe sampling interval or settling bound.
-- **R2.** Raffelsieper, Roorda, Mousavi,
-  [Model Checking Verilog Descriptions of Cell Libraries](https://doi.org/10.1109/ACSD.2009.18),
-  ACSD 2009. Accessible treatment:
-  [Cell Libraries and Verification, Chapter 3](https://pure.tue.nl/ws/files/3499974/717717.pdf#page=24),
-  2011, especially pp. 20–27: pin history, evaluation, and updates.
-  Published fixed-order/input restrictions and unknown-value conventions are
-  not adopted implicitly here; the experiments do not establish whole-design scalability.
-- **R3.** Claessen and Sörensson,
-  [A Liveness Checking Algorithm that Counts](https://www.cs.utexas.edu/~hunt/fmcad/FMCAD12/fmcad2012.pdf#page=59),
-  FMCAD 2012, Section III-A: finite-state eventuality bounds.
-  Applying the result to complete latch episodes is our specialization.
-- **R4.** Schuppan and Biere,
-  [Efficient Reduction of Finite State Model Checking to Reachability Analysis](https://www.schuppan.de/viktor/VSchuppanABiere-STTT-2004.pdf),
-  2004: liveness-to-safety reasoning; no guarantee that a particular loop settles.
-- **R5.** DeVane,
-  [Efficient Circuit Partitioning to Extend Cycle Simulation Beyond Synchronous Circuits](https://cecs.uci.edu/~papers/compendium94-03/papers/1997/iccad97/pdffiles/03a_1.pdf),
-  ICCAD 1997, Sections 3.5–4: trigger-based regions, latches, generated clocks,
-  and asynchronous controls. The principal algorithm restricts combinational feedback.
-- **R6.** Lang and Mateescu,
-  [Partial Order Reductions using Compositional Confluence Detection](https://cadp.inria.fr/publications/Lang-Mateescu-09.html),
-  FM 2009: conditional composition and reordering results, not permission to
-  serialize arbitrary latch regions.
-- **R7.** Neele, Valmari, Willemse,
-  [A Detailed Account of the Inconsistent Labelling Problem of Stutter-Preserving Partial-Order Reduction](https://lmcs.episciences.org/7709/pdf),
-  2021, Section 5: conditions for preserving observations under reduction.
-- **R8.** McDonald and Bryant,
-  [Symbolic Timing Simulation Using Cluster Scheduling](https://www.cs.cmu.edu/~bryant/pubdir/dac00a.pdf),
-  DAC 2000, Section 3.2: local symbolic event queues with ordering safeguards;
-  not a proof of this zero-delay latch model.
-- **R9.** Alur and Henzinger,
-  [Reactive Modules](https://www.cis.upenn.edu/~alur/FMSD99.pdf),
-  1999, Section 6.2, pp. 37–38, Figure 13: transparent-latch feedback and
-  internal-round abstraction; not universal convergence of arbitrary loops.
-- **R10.** Bjesse and Kukula,
-  [Automatic Generalized Phase Abstraction for Formal Verification](http://www.perbjesse.com/iccad05.pdf),
-  ICCAD 2005: periodic reduction after correct latch/clock modeling and loop
-  resolution, not a replacement for those foundations.
