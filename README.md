@@ -152,7 +152,7 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ```bash
 # Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v> [options] \
+build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl> [options] \
   <design1> <design2> [<library-file>...]
 
 # Multi-file Verilog
@@ -165,6 +165,11 @@ build/src/bin/kepler-formal -sv -v sec \
   --sv_design1_flist <file> --sv_design1_top <top> \
   --sv_design2_flist <file> --sv_design2_top <top> \
   [--liberty <library-file>...]
+
+# VHDL SEC, files in compile order with the top-level unit last
+build/src/bin/kepler-formal -vhdl -v sec \
+  --design1 <file...> --design2 <file...> \
+  [--vhdl_design1_top <top>] [--vhdl_design2_top <top>]
 ```
 
 | Flag | Meaning |
@@ -180,9 +185,11 @@ build/src/bin/kepler-formal -sv -v sec \
 | `-naja_if` | Parse both designs as Naja IF. |
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
+| `-vhdl` | Parse both designs as VHDL. Requires SEC. Experimental; see [VHDL support](docs/vhdl/README.md). |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
+| `--vhdl_design1_top <top>`, `--vhdl_design2_top <top>` | Select the top entity for each VHDL design. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
@@ -203,7 +210,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. Defaults to `verilog` if omitted. |
+| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, or `vhd`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `btor2_export` | bool | Enable BTOR2 export before solving; SEC only. Defaults to `false`. |
 | `btor2_export_path` | string | BTOR2 destination; defaults to `miter.btor2` when enabled. Requires `btor2_export: true`. |
@@ -211,6 +218,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `verilog_design1_top`, `verilog_design2_top` | string | Select the top module for each Verilog design. In `sv2v` mode, only `verilog_design2_top` is valid. |
+| `vhdl_design1_top`, `vhdl_design2_top` | string | Select the top entity for each VHDL design. Only valid with `format: vhdl`. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |

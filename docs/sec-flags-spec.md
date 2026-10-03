@@ -209,14 +209,34 @@ opposite. Cycles where either output is X are outside this property. A proof in
 this encoding therefore establishes equivalence under the steady-state
 abstraction; it does not establish that either output becomes binary-defined.
 
+A cell output is X only when an X input can change it. Each cell is evaluated
+from the prime implicants of its truth table, so a known reset, enable or mux
+select decides the output whatever the other inputs are. For `out = rst OR s`,
+`rst = 1` gives `out = 1` even when `s` is X. Cells with more than ten relevant
+inputs are evaluated row by row instead, and can report X where the value is in
+fact decided. The same prime implicant form is what LEC writes to an exported
+CNF.
+
+In `dual_rail_steady`, PDR first tries the outputs in batches. A batch that is
+not decided within its probe limits is split, down to single outputs. A
+single-output proof has a cumulative solver budget of 1,000,000 conflicts,
+40,000,000 decisions and 500,000,000 ticks. A design with 50 or fewer outputs
+to prove gets `100 / outputs` times that budget, rounded down and at most five
+times, so its total allowance never exceeds that of a 100-output design. An
+output that exhausts its budget is reported inconclusive, and the other outputs
+are still checked.
+
 Internal relation learning is enabled by default. Matching state names and
 shared next-state drivers generate candidates, never assumptions. Candidates
 must hold at the original initial state and their surviving conjunction must
-pass a one-step induction check. A refuted candidate is removed and dependents
-are rechecked. Only the certified equalities are added to the shared problem
-used by KI, IMC, PDR, and BTOR2 export. The pass is bounded (4096 candidates,
-250000 transition expression nodes, at most 64 refinement rounds and bounded SAT
-queries); an unfinished proof adds no relations.
+pass a one-step induction check. A pair whose two next-state expressions are
+the same under the hypotheses is proved by that comparison; the others are
+decided by SAT. A refuted candidate is removed and dependents are rechecked.
+Only the certified equalities are added to the shared problem used by KI, IMC,
+PDR, and BTOR2 export. The SAT part is bounded (about 8 million transition
+expression nodes and bounded queries) and the whole pass runs at most 64
+refinement rounds; an unfinished proof adds no relations. See
+[SEC Internal Relation Learning](sec-internal-relations.md).
 Exact IMC reuses the certified conjunction in interpolation, reachable-state
 enumeration, and invariant validation. With learning disabled, the conjunction
 is absent and these queries retain their original constraints.
@@ -313,6 +333,9 @@ These are debug-only controls, not stable public flags.
 | --- | --- |
 | `KEPLER_SEC_DIAG=1` | Prints SEC extraction, alignment, boundary, proof-problem, and engine-progress diagnostics to stderr/log output. |
 | `KEPLER_SEC_PDR_TRACE=1` | Prints PDR-specific problem and frame traces. Most useful together with `--sec-engine pdr`. |
+| `KEPLER_SEC_SUMMARY_STATS=1` | Prints one-line problem summaries, including the internal relation candidates and the rail equalities proved. |
+| `KEPLER_SEC_PDR_STATS=1` | Prints PDR statistics, including the budget each single-output dual-rail proof used. |
+| `KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_CONFLICT_BUDGET=<n>`, `..._DECISION_BUDGET=<n>`, `..._TICK_BUDGET=<n>` | Replace one limit of the dual-rail PDR single-output budget with an absolute value. The scaling for designs with few outputs is not applied to a replaced limit. |
 
 ## Related Non-SEC Inputs
 

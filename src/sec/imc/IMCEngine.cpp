@@ -1381,11 +1381,7 @@ IMCResult IMCEngine::run(size_t maxK) const {
     return {IMCStatus::Equivalent, 0};
   }
 
-  if (problem_.usesDualRailStateEncoding &&
-      problem_.effectiveTotalStateCount() > 12 &&
-      !problem_.observedOutputExprs0.empty() &&
-      problem_.observedOutputExprs0.size() ==
-          problem_.observedOutputExprs1.size()) {
+  if (problem_.usesLargeDualRailImc()) {
     if (const auto counterexample =
             findLargeDualRailCounterexampleUpTo(problem_, solverType_, 0);
         counterexample.has_value()) {

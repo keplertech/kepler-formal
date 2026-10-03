@@ -57,6 +57,13 @@ designs. A scalar top input can be named as `reset` even if the aligned bit name
 is reported as `reset[0]`. For a bus reset, name each reset bit explicitly, such
 as `reset_bus[0]`.
 
+A reset sequence can leave some state uninitialized. In the `binary` encoding
+SEC then assumes that the outputs agree on the first frame after the bootstrap
+window. Before the engine runs, SEC checks that some reset trace can satisfy
+that assumption. If none can, the designs already differ on that frame, and SEC
+reports the difference with a counterexample instead of proving equivalence
+from an assumption that cannot hold.
+
 Reset bootstrap is SEC-only. It does not discover internal reset nets, infer
 reset polarity, or relax top-level input matching; every listed reset port must
 exist as an aligned top-level input in both designs.

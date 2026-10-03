@@ -52,6 +52,14 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexample(
     KEPLER_FORMAL::Config::SolverType solverType,
     size_t k);
 
+// With an incomplete reset, binary SEC assumes that the outputs agree on the
+// first frame after the reset prefix. Returns a counterexample when no reset
+// trace can satisfy that assumption, so that a contradictory assumption is
+// reported as a mismatch instead of making every later proof vacuous.
+std::optional<KInductionResult::CounterexampleWitness>
+findResetFrontierMismatch(const KInductionProblem& problem,
+                          KEPLER_FORMAL::Config::SolverType solverType);
+
 // Resource-bounded base proof for localized recovery paths.  A true UNSAT
 // answer is required before an output may be covered; timeout stays Unknown so
 // callers can conservatively split or skip the hard residual.

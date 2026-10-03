@@ -5356,7 +5356,9 @@ class PdrTernaryModelReducer {
     }
     for (auto& [symbolMap, dependencies] :
          memoDependenciesBySymbolMap_) {
-      (void)symbolMap;
+      // Roots compiled later add parents to nodes shared with earlier roots,
+      // and propagation visits those parents in every memo.
+      dependencies.memo = &supportCache_->ternaryEvaluationMemo(symbolMap);
       for (auto& [mappedSymbol, localSymbols] :
            dependencies.localSymbolsByMappedSymbol) {
         (void)mappedSymbol;

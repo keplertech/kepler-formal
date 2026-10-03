@@ -11,6 +11,7 @@
 #include <tbb/concurrent_vector.h>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/tbb_allocator.h>
+#include <algorithm>
 #include <bitset>
 #include <cstdint>
 #include <mutex>
@@ -527,6 +528,87 @@ BoolExpr* buildGenericTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
       tbl, k, nullptr, naja::DNL::DNLID_MAX);
 }
 
+// A cube is a product term: `first` selects the inputs it tests and `second`
+// gives their required values.
+using Cube = std::pair<uint64_t, uint64_t>;
+
+// Wider tables keep one term per row: merging is exponential in the inputs.
+constexpr uint32_t kMaxPrimeImplicantInputs = 10;
+
+// Returns the prime implicants of the table over its relevant inputs. A sum of
+// all prime implicants agrees with a sum of rows on 0/1 inputs, and unlike it
+// stays exact when an input is unknown in ternary (dual-rail) evaluation: a
+// known select decides a mux whatever the unselected input is.
+//
+// Merging strategy (the first half of Quine-McCluskey):
+//   1. Start with one cube per table row whose output is 1.
+//   2. Merge two cubes that test the same inputs and differ in exactly one of
+//      them into a cube that no longer tests that input.
+//   3. Repeat on the merged cubes until nothing merges.
+//   4. Every cube that was never merged is a prime implicant.
+//
+// Example, out = rst OR s: the rows (rst=1, s=0) and (rst=1, s=1) merge into
+// the cube `rst`, which evaluates to 1 even when s is unknown.
+//
+// All prime implicants are kept, not a minimal cover: dropping a redundant one
+// would lose exactness on unknown inputs.
+static const std::vector<Cube>& primeImplicants(const SNLTruthTable& tbl,
+                                                uint32_t k) {
+  thread_local std::vector<Cube> level, next, primes;
+  thread_local std::vector<char> merged;
+  uint64_t relevant = 0;
+  uint32_t relevantCount = 0;
+  for (uint32_t j = 0; j < k; ++j) {
+    if (getRelevantETS(j)) {
+      relevant |= uint64_t{1} << j;
+      ++relevantCount;
+    }
+  }
+  const auto sortUnique = [](std::vector<Cube>& cubes) {
+    std::sort(cubes.begin(), cubes.end());
+    cubes.erase(std::unique(cubes.begin(), cubes.end()), cubes.end());
+  };
+  level.clear();
+  primes.clear();
+  const uint64_t rows = uint64_t{1} << k;
+  for (uint64_t m = 0; m < rows; ++m) {
+    if (tbl.bits().bit(m)) {
+      level.emplace_back(relevant, m & relevant);
+    }
+  }
+  sortUnique(level);
+  if (relevantCount > kMaxPrimeImplicantInputs) {
+    primes = level;
+    return primes;
+  }
+  while (!level.empty()) {
+    next.clear();
+    merged.assign(level.size(), 0);
+    for (size_t i = 0; i < level.size(); ++i) {
+      const auto [care, value] = level[i];
+      for (uint64_t bits = care; bits != 0; bits &= bits - 1) {
+        const uint64_t bit = bits & (~bits + 1);
+        // Two cubes that differ in one tested input merge into one that
+        // no longer tests it.
+        if (std::binary_search(level.begin(), level.end(),
+                               Cube{care, value ^ bit})) {
+          merged[i] = 1;
+          next.emplace_back(care & ~bit, value & ~bit);
+        }
+      }
+    }
+    for (size_t i = 0; i < level.size(); ++i) {
+      if (!merged[i]) {
+        primes.push_back(level[i]);
+      }
+    }
+    sortUnique(next);
+    level.swap(next);
+  }
+  std::sort(primes.begin(), primes.end());
+  return primes;
+}
+
 // Frame type used for explicit stack-based post-order traversal.
 // Each frame holds a pointer to a node and a boolean indicating whether
 // the node has been visited (post-visit) or not (pre-visit).
@@ -725,23 +807,18 @@ BoolExpr* Tree2BoolExpr::convert(
         // The algorithm expects at least one relevant input for a PI node.
         assert(numRelIdx > 0 && "No relevant inputs for node");
         {
-          // Build DNF terms by iterating over rows where the table output is 1.
-          // For each such row, create a conjunction of literals for relevant inputs.
+          // Build DNF terms from the prime implicants of the table.
+          // For each one, create a conjunction of literals for the inputs it tests.
           clearTermsETS();
-          for (uint64_t m = 0; m < rows; ++m) {
-            if (!tbl.bits().bit(m)) {
-              continue;
-            }
+          for (const auto& [care, m] : primeImplicants(tbl, k)) {
             BoolExpr* term = nullptr;
             bool firstLit = true;
             BoolExpr* lit = nullptr;
-            // For each relevant input, pick the literal (child or its negation)
-            // according to the bit value in row m.
+            // For each tested input, pick the literal (child or its negation)
+            // according to its required value.
             for (uint32_t j = 0; j < k; ++j) { 
-              if (!getRelevantETS(j)) {
-                // LCOV_EXCL_START
-                continue;  // LCOV_EXCL_LINE
-                // LCOV_EXCL_STOP
+              if (((care >> j) & 1) == 0) {
+                continue;
               }
               bool bit1 = ((m >> j) & 1) != 0;
               lit = bit1 ? getChildFETS(j) : BoolExpr::Not(getChildFETS(j));

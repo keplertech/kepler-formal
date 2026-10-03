@@ -2687,6 +2687,11 @@ constexpr size_t kDefaultDualRailPdrSingletonDecisionBudget =
 // queries that can do little visible decision or conflict work.
 constexpr size_t kDefaultDualRailPdrSingletonTickBudget =
     500 * 1000 * 1000;
+// A design with few outputs shares the allowance a design with this many
+// outputs has in total, up to the scale below: the hardest of the 18 sv2v gcd
+// outputs proves at about 90M decisions and 850M ticks.
+constexpr size_t kDualRailPdrSingletonBudgetOutputs = 100;
+constexpr size_t kDualRailPdrSingletonBudgetMaxScale = 5;
 // Treat multi-output runs as bounded scheduling probes. They may still prove
 // the whole conjunction, but a hard one is split into smaller exact properties
 // instead of monopolizing the complete PDR budget.
@@ -2696,6 +2701,7 @@ PDRResult runPdrOutputBatch(const PDREngine& engine,
                             size_t maxFrames,
                             BoolExpr* property,
                             size_t outputCount,
+                            size_t engineOutputCount,
                             bool boundSingletonCadicalWork) {
   if (outputCount != 1) {
     // A broad UNKNOWN only schedules exact child properties. Full per-query
@@ -2707,16 +2713,19 @@ PDRResult runPdrOutputBatch(const PDREngine& engine,
     return engine.run(maxFrames, property);
   }
 
+  const size_t scale = std::clamp<size_t>(
+      kDualRailPdrSingletonBudgetOutputs / std::max<size_t>(engineOutputCount, 1),
+      1, kDualRailPdrSingletonBudgetMaxScale);
   SATSolverWrapper::CadicalWorkBudget budget(
       secStrategySizeLimitFromEnv(
           "KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_CONFLICT_BUDGET",
-          kDefaultDualRailPdrSingletonConflictBudget),
+          scale * kDefaultDualRailPdrSingletonConflictBudget),
       secStrategySizeLimitFromEnv(
           "KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_DECISION_BUDGET",
-          kDefaultDualRailPdrSingletonDecisionBudget),
+          scale * kDefaultDualRailPdrSingletonDecisionBudget),
       secStrategySizeLimitFromEnv(
           "KEPLER_SEC_PDR_DUAL_RAIL_SINGLETON_TICK_BUDGET",
-          kDefaultDualRailPdrSingletonTickBudget));
+          scale * kDefaultDualRailPdrSingletonTickBudget));
   PDRResult result;
   {
     SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
@@ -3182,6 +3191,7 @@ SequentialEquivalenceResult runPdrSecEngine(
       pdrResult = runPdrOutputBatch(
           pdrEngine, maxK, exactBatchProblem.property,
           outputCount,
+          dualRailEngineOutputIndices.size(),
           problem.usesDualRailStateEncoding);
     }
     releasePdrBatchAllocatorPages();
@@ -3882,6 +3892,17 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   if (secDiagEnabled) {
     fprintf(stderr, "SEC diag: entering %s\n", describeSecEngine(secEngine_));
     fflush(stderr);
+  }
+
+  if (auto witness = SEC::findResetFrontierMismatch(proofProblem, solverType_)) {
+    const KInductionResult mismatch{
+        KInductionStatus::Different, 0, std::move(witness)};
+    return makeSecResult(
+        SequentialEquivalenceStatus::Different,
+        0,
+        formatCounterexampleWitness(mismatch, model0, model1, top0_, top1_),
+        aligned.outputCoverage,
+        extractedBoundaryReports);
   }
 
   return runSelectedSecEngine(

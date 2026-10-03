@@ -59,6 +59,7 @@ cc_binary(
         "@naja//src/nl/formats/liberty:naja_snl_liberty",
         "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
         "@naja//src/nl/formats/verilog:naja_snl_verilog",
+        "@naja//src/nl/formats/vhdl:naja_snl_vhdl",
         "@naja//src/nl/netlist:naja_nl",
         "@naja//src/nl/netlist/serialization/capnp:naja_nl_dump",
         "@naja//src/nl/python/pyloader:naja_snl_pyloader",

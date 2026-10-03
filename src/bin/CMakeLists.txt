@@ -38,6 +38,7 @@ set(KEPLER_FORMAL_DRIVER_LIBRARIES
     naja_snl_liberty
     naja_snl_systemverilog
     naja_snl_verilog
+    naja_snl_vhdl
     kissat
     cadical
     formal_strategies
