@@ -4538,6 +4538,34 @@ module three_cycle(input [7:0] A,
 endmodule : three_cycle
 )";
 
+// Issue #250, third report (Systolic_MAC_with_DFT): an unpacked array written
+// by one always block per element, as a generate loop produces. The frontend
+// used to infer a memory from the first block only and lower the second as a
+// flop, so the memory's read data net had two drivers and every output
+// through it was skipped.
+const char* const kArrayWrittenPerElementSource = R"(module top (
+  input  wire       clk,
+  input  wire [1:0] we,
+  input  wire       sel,
+  input  wire [7:0] d0,
+  input  wire [7:0] d1,
+  output wire [7:0] q
+);
+  wire [7:0] d [1:0];
+  assign d[0] = d0;
+  assign d[1] = d1;
+  reg [7:0] r [1:0];
+  genvar x;
+  generate
+    for (x = 0; x < 2; x = x + 1) begin : g
+      always @(posedge clk)
+        if (we[x]) r[x] <= d[x];
+    end
+  endgenerate
+  assign q = sel ? r[1] : r[0];
+endmodule
+)";
+
 // Runs the issue #250 command line: the same file on both sides, dual-rail
 // PDR with default options, and checks that every output is proved.
 void expectSelfCompareProvesAllOutputs(
@@ -4586,6 +4614,13 @@ TEST_F(KeplerFormalCliTests,
 TEST_F(KeplerFormalCliTests,
        CliSystemVerilogSecSelfCompareTinyAluProvesEveryOutput) {
   expectSelfCompareProvesAllOutputs(kTinyAluSource, "tinyalu", 17u);
+}
+
+// Issue #250: an array written from several always blocks must not become a
+// memory with a second, competing driver. Used to skip all 8 outputs.
+TEST_F(KeplerFormalCliTests,
+       CliSystemVerilogSecSelfCompareArrayWrittenPerElementProvesEveryOutput) {
+  expectSelfCompareProvesAllOutputs(kArrayWrittenPerElementSource, "top", 8u);
 }
 
 TEST_F(KeplerFormalCliTests,
