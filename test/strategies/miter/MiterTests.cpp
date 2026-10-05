@@ -1022,8 +1022,10 @@ TEST_F(MiterTests,
   NLDB* db = NLDB::create(univ);
   NLLibrary* library =
       NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("primitives"));
+  NLLibrary* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   SNLDesign* top =
-      SNLDesign::create(library, SNLDesign::Type::Primitive, NLName("top"));
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top"));
   univ->setTopDesign(top);
 
   auto* unused =
