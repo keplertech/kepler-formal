@@ -2062,6 +2062,7 @@ TEST_F(KeplerFormalCliTests, ConfigCVsRtlRejectsDesign1SystemVerilogOptions) {
   std::filesystem::remove(cfgPath);
 }
 
+#ifdef KEPLER_FORMAL_WITH_XLS  // these run the XLS lowering
 namespace {
 
 // Tagged-record encoder: a combinational C++ model against a three-stage
@@ -2294,6 +2295,8 @@ TEST_F(KeplerFormalCliTests, CliCVsRtlTaggedRecordPlantedTagBugFindsCounterexamp
   EXPECT_EQ(run.exitCode, kSecCounterexampleExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
+
+#endif  // KEPLER_FORMAL_WITH_XLS
 
 TEST_F(KeplerFormalCliTests, ConfigSystemVerilogLecRejected) {
   const auto fixture = createEquivalentDesignFixture(
@@ -5948,6 +5951,7 @@ TEST_F(KeplerFormalCliTests, CliMixedFormatsRequireBothDesignSides) {
   }
 }
 
+#ifdef KEPLER_FORMAL_WITH_XLS  // runs the XLS lowering
 TEST_F(KeplerFormalCliTests, ConfigCcReusesOnlyIdenticalSynthesisOptions) {
   const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_cc_reuse");
   const auto includeDir = tmpDir / "include";
@@ -5999,6 +6003,7 @@ TEST_F(KeplerFormalCliTests, ConfigCcReusesOnlyIdenticalSynthesisOptions) {
   }
   std::filesystem::remove_all(tmpDir);
 }
+#endif  // KEPLER_FORMAL_WITH_XLS
 
 TEST_F(KeplerFormalCliTests,
        CliCVsRtlPreservesWriteOnlyReferenceOutputNames) {
@@ -6271,6 +6276,7 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+#ifdef KEPLER_FORMAL_WITH_XLS  // runs the XLS lowering
 TEST_F(KeplerFormalCliTests, ConfigCcSynthesisFailuresReportTheirCause) {
   const auto fixture = createTemporalC2RtlTransformFixture();
   const auto blockedDir = fixture.tmpDir / "blocked";
@@ -6302,6 +6308,7 @@ TEST_F(KeplerFormalCliTests, ConfigCcSynthesisFailuresReportTheirCause) {
   }
   std::filesystem::remove_all(fixture.tmpDir);
 }
+#endif  // KEPLER_FORMAL_WITH_XLS
 
 TEST_F(KeplerFormalCliTests,
        ConfigTemporalC2RtlReportsBoundedInconclusiveWithoutReset) {

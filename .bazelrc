@@ -1,3 +1,24 @@
+# naja's development pin comes from bazel/registry/ (until naja is on
+# BCR); versions not on BCR yet come from their open BCR pull requests,
+# each pinned to a commit (drop a line once its PR merges); everything
+# else from BCR.
+common --registry=file://%workspace%/bazel/registry
+#   bison 3.8.2.bcr.10                     bazelbuild/bazel-central-registry#10879
+#   sv-lang 11.0.0-20260701-b60d729d.bcr.1 bazelbuild/bazel-central-registry#10882
+#   naja-if 0.0.0-20260723-099677d9        bazelbuild/bazel-central-registry#10881
+#   naja-verilog 0.0.0-20260909-be6544b1   bazelbuild/bazel-central-registry#10885
+#   kissat 4.0.4                           bazelbuild/bazel-central-registry#10880
+#   cadical 3.0.0                          bazelbuild/bazel-central-registry#10883
+#   glucose 4.2.1-20251230-674dbba         bazelbuild/bazel-central-registry#10884
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/bb42d7dc14939aaf578926cf1c93bd987ca9fac7/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/5888fdb942da7cf4a6eecd8d5bc07c777e82c4ee/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/377d10e631e9461794687b9ff1d4bbbde0c9ad1d/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/649d563703219943c013c9e5af8884ea81b2ab19/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/985ff91136fd9c24be49d268c8f8acb416137a01/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/cf30c24de5255b58a523064f8a624848b4bd1bab/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/0dc1d20b35db8595fbaaf762dbf5046fb19ae188/
+common --registry=https://bcr.bazel.build/
+
 common --enable_platform_specific_config
 
 build --cxxopt=-std=c++20
@@ -9,17 +30,6 @@ build --workspace_status_command=tools/workspace_status.sh
 # host toolchain, so the guard is Linux-scoped.
 common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 build:linux --dynamic_mode=off
-
-# rules_foreign_cc invokes host tools such as cmake from sandboxed actions.
-# On macOS those tools usually live under Homebrew, which is not always present
-# in Bazel's default action PATH.
-build:macos --action_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-build:macos --repo_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-
-# Force C11 for host tools to work around rules_foreign_cc pkg-config
-# bootstrap failure: bundled glib uses 'bool' as a struct field name,
-# which is a keyword in GCC 15's default C23 mode.
-build --host_conlyopt=-std=c11
 
 # Recommended: show test output on failure
 test --test_output=errors

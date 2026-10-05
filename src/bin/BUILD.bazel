@@ -1,7 +1,6 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel:kepler_version.bzl", "kepler_version")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
 exports_files(["KeplerVersion.h.in"])
 
@@ -37,27 +36,36 @@ cc_binary(
         "RunResult.h",
         "RunResult.cpp",
     ],
-    copts = NAJA_HEADER_COPTS,
-    data = [":naja_python_module"],
+    # The embedded Python's runtime (stdlib), located through runfiles by
+    # CppDriver.cpp.
+    data = [
+        ":naja_python_module",
+        "@rules_python//python:current_py_toolchain",
+    ],
     dynamic_deps = ["@naja//src/nl/python/naja_wrapping:naja_runtime"],
-    # capnp/kj (static), TBB (shared, bundled in the release tarball) and
-    # zlib arrive transitively through @naja's cmake deps — no system -l
-    # flags. The hermetic toolchain links libc++ statically by default,
-    # which supersedes the former -static-libstdc++/-static-libgcc.
+    local_defines = ['KEPLER_PYTHON3_ROOTPATH=\\"$(PYTHON3_ROOTPATH)\\"'],
+    toolchains = ["@rules_python//python:current_py_toolchain"],
     visibility = ["//visibility:public"],
     deps = [
         ":kepler_version",
-        "//src/config:kepler_config",
         "//src/c2rtl:kepler_c2rtl_formal",
+        "//src/config:kepler_config",
         "//src/sec:kepler_sec",
         "//src/scope:scope_extraction",
         "//src/strategies:formal_strategies",
         "//src/utils:kepler_formal_utils",
         "@kissat",
-        "@naja",
-        "@naja//:naja_extra_headers",
+        "@naja//src/core:naja_core",
+        "@naja//src/dnl:naja_dnl",
+        "@naja//src/nl/formats/liberty:naja_snl_liberty",
+        "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
+        "@naja//src/nl/formats/verilog:naja_snl_verilog",
+        "@naja//src/nl/formats/vhdl:naja_snl_vhdl",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/nl/netlist/serialization/capnp:naja_nl_dump",
+        "@naja//src/nl/python/pyloader:naja_snl_pyloader",
+        "@rules_cc//cc/runfiles",
         "@spdlog",
-        "//src/c2rtl:kepler_xls_c2rtl",
         "@yaml-cpp",
     ],
 )

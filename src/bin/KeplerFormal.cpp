@@ -54,7 +54,9 @@
 #include "strategy/SequentialEquivalenceStrategy.h"
 #include "formal/C2RtlEquivalenceStrategy.h"
 #include "formal/C2RtlExpression.h"
+#ifdef KEPLER_FORMAL_WITH_XLS
 #include "KeplerXlsC2Rtl.h"
+#endif
 
 static const char* kBoundaryTermsReport = "boundary_terms.txt";
 static const char* kSkippedResetUnanchoredPOReport =
@@ -1286,6 +1288,13 @@ static SynthesizedCcDesign synthesizeOneCcDesign(
   }
 
   const auto outputPathString = outputPath.string();
+#ifndef KEPLER_FORMAL_WITH_XLS
+  (void)blockProtoOption;
+  (void)includePathPtrs;
+  throw std::runtime_error(
+      "C/C++ synthesis for " + designLabel +
+      " needs the XLS front end, which this build does not include");
+#else
   const char* blockProtoPath =
       blockProtoOption ? blockProtoOption->c_str() : nullptr;
   KeplerXlsC2RtlOptions c2rtlOptions{
@@ -1318,6 +1327,7 @@ static SynthesizedCcDesign synthesizeOneCcDesign(
         "XLS C2RTL synthesis failed for " + designLabel + ": " + errorText);
   }
   return {outputPathString, moduleName};
+#endif
 }
 
 static LoweredCcDesign lowerOneCcDesignToSystemVerilog(

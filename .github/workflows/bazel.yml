@@ -13,33 +13,18 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: true
-      # Bazel fetches most deps via http_archive/BCR, but the C2RTL overlay
-      # deliberately builds from the pinned thirdparty/xls checkout.
+      # No submodules needed — every dependency is a bazel_dep
 
     - name: Cache Bazel outputs
       uses: actions/cache@v4
       with:
         path: ~/.cache/bazel
-        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel', 'bazel/*.bzl') }}
+        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/registry/**') }}
         restore-keys: |
           bazel-${{ runner.os }}-
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -yq \
-          build-essential pkg-config \
-          bison cmake flex ninja-build python3-dev
-
     - name: Build kepler-formal
       run: bazelisk build //src/bin:kepler-formal
-
-    - name: Dump rules_foreign_cc CMake log on failure
-      if: failure()
-      run: |
-        find bazel-out -type f -name CMake.log -print -exec sed -n '1,260p' {} \; || true
 
     - name: Run tests
       run: bazelisk test //test/...

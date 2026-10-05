@@ -1,5 +1,5 @@
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 sh_test(
     name = "BazelPythonPrimitivesTest",
@@ -21,14 +21,19 @@ cc_test(
         "KEPLER_BIN": "$(rootpath //src/bin:kepler-formal)",
         "TEST_DATA_PREFIX": "",
     },
-    copts = NAJA_HEADER_COPTS,
     deps = [
         "//src/clauses:kepler_clauses",
         "//src/config:kepler_config",
         "//src/formal:formal_structures",
         "//src/strategies:formal_strategies",
-        "@naja",
-        "@naja//:naja_extra_headers",
-        "@googletest//:gtest_main",
+        "@naja//src/core:naja_core",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/nl/netlist:naja_snl_visual",
+        "@naja//src/dnl:naja_dnl",
+        "@naja//src/optimization:naja_opt",
+        "@naja//src/nl/formats/liberty:naja_snl_liberty",
+        "@naja//src/nl/formats/verilog:naja_snl_verilog",
+        "@naja//src/nl/netlist/serialization/capnp:naja_nl_dump",
+        "@googletest//:gtest",
     ],
 )

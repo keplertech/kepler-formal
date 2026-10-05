@@ -1,5 +1,4 @@
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
 
 cc_test(
     name = "Btor2WriterTests",
@@ -10,12 +9,11 @@ cc_test(
 cc_test(
     name = "SNLTruthTableTreeTests",
     srcs = ["SNLTruthTableTreeTests.cpp"],
-    copts = NAJA_HEADER_COPTS,
     deps = [
         "//src/clauses:kepler_clauses",
         "//src/formal:formal_structures",
         "//src/strategies:formal_strategies",
-        "@googletest//:gtest_main",
+        "@googletest//:gtest",
     ],
 )
 
@@ -31,7 +29,6 @@ cc_test(
 cc_test(
     name = "DesignBoundaryTests",
     srcs = ["DesignBoundaryTests.cpp"],
-    copts = NAJA_HEADER_COPTS,
     deps = [
         "//src/utils:kepler_formal_utils",
         "@googletest//:gtest_main",

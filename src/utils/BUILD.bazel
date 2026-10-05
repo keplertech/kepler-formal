@@ -1,6 +1,4 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
-load("//bazel:tbb.bzl", "TBB_DEPS")
 
 cc_library(
     name = "kepler_formal_utils",
@@ -12,12 +10,12 @@ cc_library(
         "DesignBoundary.h",
         "SNLLogicCone.h",
     ],
-    copts = NAJA_HEADER_COPTS,
     includes = ["."],
     visibility = ["//visibility:public"],
-    deps = TBB_DEPS + [
+    deps = [
+        "@onetbb//:tbb",
         "//src/formal:formal_structures",
-        "@naja",
-        "@naja//:naja_extra_headers",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
     ],
 )

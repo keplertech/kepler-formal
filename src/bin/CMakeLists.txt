@@ -56,6 +56,9 @@ function(configure_kepler_formal_driver target)
 endfunction()
 
 add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp)
+# The XLS lowering is linked here; the Bazel build has no XLS and compiles the
+# driver without this definition.
+target_compile_definitions(kepler_formal_core PRIVATE KEPLER_FORMAL_WITH_XLS=1)
 configure_kepler_formal_driver(kepler_formal_core)
 
 add_library(kepler_formal_driver STATIC CppDriver.cpp)

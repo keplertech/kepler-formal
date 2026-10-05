@@ -28,6 +28,7 @@ add_executable(keplerFormalCliTests
     Btor2ExportDriverTests.cpp
     DriverSeparationTests.cpp
 )
+target_compile_definitions(keplerFormalCliTests PRIVATE KEPLER_FORMAL_WITH_XLS=1)
 
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)
 

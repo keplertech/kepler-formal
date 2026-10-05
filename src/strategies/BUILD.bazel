@@ -1,6 +1,4 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
-load("//bazel:tbb.bzl", "TBB_DEPS")
 
 cc_library(
     name = "formal_strategies",
@@ -16,9 +14,9 @@ cc_library(
         "miter",
         "..",  # for ../sat/SATSolverWrapper.h relative includes
     ],
-    copts = NAJA_HEADER_COPTS,
     visibility = ["//visibility:public"],
-    deps = TBB_DEPS + [
+    deps = [
+        "@onetbb//:tbb",
         "//src/clauses:kepler_clauses",
         "//src/config:kepler_config",
         "//src/formal:formal_structures",
@@ -26,8 +24,9 @@ cc_library(
         "//src/sat:sat_solver_wrapper",
         "@glucose",
         "@kissat",
-        "@naja",
-        "@naja//:naja_extra_headers",
+        "@naja//src/core:naja_core",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
         "@spdlog",
     ],
 )

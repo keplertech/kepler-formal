@@ -1,6 +1,4 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
-load("//bazel:tbb.bzl", "TBB_DEPS")
 
 cc_library(
     name = "sec_common_headers",
@@ -70,9 +68,9 @@ cc_library(
         ".",
         "..",
     ],
-    copts = NAJA_HEADER_COPTS,
     visibility = ["//visibility:public"],
-    deps = TBB_DEPS + [
+    deps = [
+        "@onetbb//:tbb",
         "//src/clauses:kepler_clauses",
         "//src/config:kepler_config",
         "//src/clocks:kepler_clocks",
@@ -80,8 +78,8 @@ cc_library(
         "//src/sat:sat_solver_wrapper",
         ":sec_common_headers",
         "//src/strategies:formal_strategies",
-        "@naja",
-        "@naja//:naja_extra_headers",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
         "@kissat",
     ],
 )

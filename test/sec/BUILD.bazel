@@ -1,30 +1,14 @@
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
-load("//bazel:naja_includes.bzl", "NAJA_HEADER_COPTS")
-
-cc_test(
-    name = "C2RtlFormalTests",
-    srcs = ["C2RtlExpressionTests.cpp", "C2RtlEquivalenceTests.cpp"],
-    copts = NAJA_HEADER_COPTS,
-    deps = [
-        "//src/c2rtl:kepler_c2rtl_formal",
-        "//src/clauses:kepler_clauses",
-        "//src/formal:formal_structures",
-        "@naja",
-        "@naja//:naja_extra_headers",
-        "@googletest//:gtest_main",
-    ],
-)
 
 cc_test(
     name = "BoundaryEquivalenceTests",
     srcs = ["BoundaryEquivalenceTests.cpp"],
-    copts = NAJA_HEADER_COPTS,
     deps = [
         "//src/sec:kepler_sec",
         "//src/utils:kepler_formal_utils",
         "//src/clauses:kepler_clauses",
-        "@naja",
-        "@naja//:naja_extra_headers",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
         "@googletest//:gtest_main",
     ],
 )
@@ -35,7 +19,6 @@ cc_test(
         "SecBtor2ExporterTests.cpp",
         "SecBtor2ExportValidationTests.cpp",
     ],
-    copts = NAJA_HEADER_COPTS,
     deps = ["//src/sec:kepler_sec", "//src/formal:formal_structures", "@googletest//:gtest_main"],
 )
 
@@ -48,21 +31,39 @@ cc_test(
     ],
     data = [
         "//examples:testdata",
-        "@naja//:ff_scan_lib",
+        "@naja//test/nl/formats/liberty:benchmarks/tests/FF_scan.lib",
     ],
     env = {
-        "NAJA_FF_SCAN_LIB": "$(rootpath @naja//:ff_scan_lib)",
+        "NAJA_FF_SCAN_LIB": "$(rootpath @naja//test/nl/formats/liberty:benchmarks/tests/FF_scan.lib)",
         "TEST_DATA_PREFIX": "",
     },
     size = "large",
     timeout = "long",
-    copts = NAJA_HEADER_COPTS,
     deps = [
         "//src/config:kepler_config",
         "//src/sec:kepler_sec",
         "//src/strategies:formal_strategies",
-        "@naja",
-        "@naja//:naja_extra_headers",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
+        "@naja//src/nl/formats/liberty:naja_snl_liberty",
+        "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "C2RtlFormalTests",
+    srcs = [
+        "C2RtlEquivalenceTests.cpp",
+        "C2RtlExpressionTests.cpp",
+    ],
+    deps = [
+        "//src/c2rtl:kepler_c2rtl_formal",
+        "//src/clauses:kepler_clauses",
+        "//src/formal:formal_structures",
+        "//src/sec:kepler_sec",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
         "@googletest//:gtest_main",
     ],
 )
