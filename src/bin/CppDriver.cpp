@@ -5,10 +5,47 @@
 #include "SNLPyLoader.h"
 
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 
+#ifdef KEPLER_PYTHON3_ROOTPATH
+#include "rules_cc/cc/runfiles/runfiles.h"
+#endif
+
 namespace {
+
+#ifdef KEPLER_PYTHON3_ROOTPATH
+// Bazel builds embed the toolchain's hermetic Python, whose compiled-in
+// prefix does not exist at run time. Point it at the runtime that ships in
+// this binary's runfiles, unless the caller chose a PYTHONHOME (the release
+// tarball's wrapper script does).
+static void setBundledPythonHome(const char* argv0) {
+  if (std::getenv("PYTHONHOME")) {
+    return;
+  }
+  std::string error;
+  std::unique_ptr<rules_cc::cc::runfiles::Runfiles> runfiles(
+      rules_cc::cc::runfiles::Runfiles::Create(argv0, BAZEL_CURRENT_REPOSITORY, &error));
+  if (!runfiles) {
+    return;
+  }
+  // $(PYTHON3_ROOTPATH) of an external repository is "../<repo>/bin/python3";
+  // its runfiles location drops the "../".
+  std::string rootpath(KEPLER_PYTHON3_ROOTPATH);
+  const std::string rlocation =
+      rootpath.rfind("../", 0) == 0 ? rootpath.substr(3) : "_main/" + rootpath;
+  const std::filesystem::path interpreter(runfiles->Rlocation(rlocation));
+  std::error_code ec;
+  if (interpreter.empty() || !std::filesystem::exists(interpreter, ec)) {
+    return;
+  }
+  const auto home = interpreter.parent_path().parent_path();
+  if (setenv("PYTHONHOME", home.string().c_str(), 1) != 0) {
+    throw std::runtime_error("Cannot configure PYTHONHOME for Naja primitives");  // LCOV_EXCL_LINE
+  }
+}
+#endif
 
 static void addNajaPythonPath(const char* argv0) {
   if (!argv0 || !*argv0) {
@@ -63,6 +100,9 @@ static void addNajaPythonPath(const char* argv0) {
 class StandalonePrimitiveLoader final : public KEPLER_FORMAL::PrimitiveLibraryLoader {
  public:
   void prepare(const char* executable) const override {
+#ifdef KEPLER_PYTHON3_ROOTPATH
+    setBundledPythonHome(executable);
+#endif
     addNajaPythonPath(executable);
   }
   void load(naja::NL::NLLibrary* library,

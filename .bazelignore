@@ -1,2 +1,4 @@
 thirdparty
-deps
+bazel/registry
+# A separate workspace, built from its own directory.
+.github/consumer-test

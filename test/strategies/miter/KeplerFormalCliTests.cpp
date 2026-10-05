@@ -2312,6 +2312,319 @@ TEST_F(KeplerFormalCliTests, ConfigSystemVerilogLecRejected) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+namespace {
+
+const char* const kVhdlRegister =
+    "entity top is\n"
+    "  port (clk, rst, en, d : in bit; q : out bit);\n"
+    "end;\n"
+    "architecture rtl of top is\n"
+    "begin\n"
+    "  process(clk) begin\n"
+    "    if rising_edge(clk) then\n"
+    "      if rst = '1' then\n"
+    "        q <= '0';\n"
+    "      elsif en = '1' then\n"
+    "        q <= d;\n"
+    "      end if;\n"
+    "    end if;\n"
+    "  end process;\n"
+    "end;\n";
+
+const char* const kVhdlInvertedRegister =
+    "entity top is\n"
+    "  port (clk, rst, en, d : in bit; q : out bit);\n"
+    "end;\n"
+    "architecture rtl of top is\n"
+    "begin\n"
+    "  process(clk) begin\n"
+    "    if rising_edge(clk) then\n"
+    "      if rst = '1' then\n"
+    "        q <= '0';\n"
+    "      elsif en = '1' then\n"
+    "        q <= not d;\n"
+    "      end if;\n"
+    "    end if;\n"
+    "  end process;\n"
+    "end;\n";
+
+std::string vhdlSecConfig(const SimpleCliFixture& fixture) {
+  // The default dual-rail encoding proves registers without a reset bootstrap.
+  return "format: vhdl\n"
+         "verification: sec\n"
+         "max_k: 4\n"
+         "input_paths:\n"
+         "  - " + fixture.design0Path.string() + "\n"
+         "  - " + fixture.design1Path.string() + "\n";
+}
+
+}  // namespace
+
+TEST_F(KeplerFormalCliTests, ConfigVhdlProvesRewrittenLogicEquivalent) {
+  const auto fixture = createDesignFixture(
+      "vhd",
+      "entity top is\n"
+      "  port (a, b, c : in bit; y : out bit);\n"
+      "end;\n"
+      "architecture rtl of top is\n"
+      "begin\n"
+      "  y <= not (a and b) xor c;\n"
+      "end;\n",
+      "entity top is\n"
+      "  port (a, b, c : in bit; y : out bit);\n"
+      "end;\n"
+      "architecture rtl of top is\n"
+      "begin\n"
+      "  y <= ((not a) or (not b)) xor c;\n"
+      "end;\n");
+  const auto cfgPath = writeTempConfig(vhdlSecConfig(fixture));
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(run.result.inputFormat, "vhdl");
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigVhdlProvesRegistersEquivalent) {
+  const auto fixture = createEquivalentDesignFixture("vhd", kVhdlRegister);
+  const auto cfgPath = writeTempConfig(vhdlSecConfig(fixture));
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigVhdlFindsRegisterDifference) {
+  const auto fixture =
+      createDesignFixture("vhd", kVhdlRegister, kVhdlInvertedRegister);
+  const auto cfgPath = writeTempConfig(vhdlSecConfig(fixture));
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_NE(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigVhdlLecRejected) {
+  const auto fixture = createEquivalentDesignFixture("vhd", kVhdlRegister);
+  const auto cfgPath = writeTempConfig(
+      "format: vhdl\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_NE(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigVhdlTopRejectedForOtherFormats) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "vhdl_design1_top: top\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n");
+  int rc = runWithConfigFile(cfgPath);
+  EXPECT_NE(rc, EXIT_SUCCESS);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlMultiFileHierarchyMatchesFlatDesign) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_vhdl_hierarchy");
+  const auto leafPath = fixture.tmpDir / "leaf.vhd";
+  fixture.design0Path = fixture.tmpDir / "design0_top.vhd";
+  fixture.design1Path = fixture.tmpDir / "design1.vhd";
+  {
+    std::ofstream leaf(leafPath);
+    leaf << "entity inv4 is\n"
+            "  port (a : in bit_vector(3 downto 0);\n"
+            "        y : out bit_vector(3 downto 0));\n"
+            "end;\n"
+            "architecture rtl of inv4 is\n"
+            "begin\n"
+            "  y <= not a;\n"
+            "end;\n";
+  }
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "entity htop is\n"
+               "  port (a : in bit_vector(3 downto 0);\n"
+               "        y : out bit_vector(3 downto 0));\n"
+               "end;\n"
+               "architecture structural of htop is\n"
+               "  signal mid : bit_vector(3 downto 0);\n"
+               "begin\n"
+               "  u0: entity work.inv4 port map(a, mid);\n"
+               "  u1: entity work.inv4 port map(mid, y);\n"
+               "end;\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "entity htop is\n"
+               "  port (a : in bit_vector(3 downto 0);\n"
+               "        y : out bit_vector(3 downto 0));\n"
+               "end;\n"
+               "architecture rtl of htop is\n"
+               "begin\n"
+               "  y <= a;\n"
+               "end;\n";
+  }
+
+  // Files are loaded in compile order, so the instantiated entity comes first.
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal", "-vhdl", "-v", "sec",
+       "--vhdl_design1_top", "htop", "--vhdl_design2_top", "htop",
+       "--design1", leafPath.string(), fixture.design0Path.string(),
+       "--design2", fixture.design1Path.string()});
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  const auto wrongOrder = runStructuredWithArgs(
+      {"kepler-formal", "-vhdl", "-v", "sec",
+       "--design1", fixture.design0Path.string(), leafPath.string(),
+       "--design2", fixture.design1Path.string()});
+  EXPECT_NE(wrongOrder.exitCode, EXIT_SUCCESS);
+  EXPECT_NE(wrongOrder.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlCompactModeFindsRegisterDifference) {
+  const auto fixture =
+      createDesignFixture("vhd", kVhdlRegister, kVhdlInvertedRegister);
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal", "-vhdl", "-v", "sec",
+       "--compact",
+       "--design1", fixture.design0Path.string(),
+       "--design2", fixture.design1Path.string()});
+  EXPECT_NE(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlReportsLoadFailures) {
+  const auto fixture = createDesignFixture(
+      "vhd",
+      "entity top is\n"
+      "  port (a : in bit; y : out bit)\n"
+      "end;\n",
+      kVhdlRegister);
+  const auto syntaxError = runStructuredWithArgs(
+      {"kepler-formal", "-vhdl", "-v", "sec",
+       "--design1", fixture.design0Path.string(),
+       "--design2", fixture.design1Path.string()});
+  EXPECT_NE(syntaxError.exitCode, EXIT_SUCCESS);
+  EXPECT_NE(syntaxError.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  const auto unknownTop = runStructuredWithArgs(
+      {"kepler-formal", "-vhdl", "-v", "sec",
+       "--vhdl_design2_top", "missing_top",
+       "--design1", fixture.design1Path.string(),
+       "--design2", fixture.design1Path.string()});
+  EXPECT_NE(unknownTop.exitCode, EXIT_SUCCESS);
+  EXPECT_NE(unknownTop.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+namespace {
+
+// A 4-bit register that resets through a mux and only depends on itself.
+std::string vhdlSelfFeedingRegister(const std::string& resetValue,
+                                    const std::string& feedback) {
+  return "library ieee;\n"
+         "use ieee.std_logic_1164.all;\n"
+         "entity top is\n"
+         "  port (clk, rst : in std_logic;\n"
+         "        q : out std_logic_vector(3 downto 0));\n"
+         "end;\n"
+         "architecture rtl of top is\n"
+         "  signal t : std_logic_vector(3 downto 0);\n"
+         "begin\n"
+         "  q <= t;\n"
+         "  process (clk) begin\n"
+         "    if rising_edge(clk) then\n"
+         "      if rst = '1' then\n"
+         "        t <= \"" + resetValue + "\";\n"
+         "      else\n"
+         "        t(3) <= " + feedback + ";\n"
+         "        t(2) <= t(3);\n"
+         "        t(1) <= t(2);\n"
+         "        t(0) <= t(1);\n"
+         "      end if;\n"
+         "    end if;\n"
+         "  end process;\n"
+         "end;\n";
+}
+
+KEPLER_FORMAL::RunStatus runVhdlSec(const SimpleCliFixture& fixture,
+                                    std::vector<std::string> options) {
+  std::vector<std::string> args = {"kepler-formal", "-vhdl", "-v", "sec"};
+  args.insert(args.end(), options.begin(), options.end());
+  args.insert(args.end(), {"--design1", fixture.design0Path.string(),
+                           "--design2", fixture.design1Path.string()});
+  return runStructuredWithArgs(std::move(args)).result.status;
+}
+
+const std::vector<std::string> kBinaryResetBootstrap = {
+    "--sec-encoding", "binary", "--sec-reset-cycles", "1",
+    "--sec-reset-port", "rst=1"};
+
+}  // namespace
+
+TEST_F(KeplerFormalCliTests, CliVhdlFindsDifferenceInSelfFeedingRegister) {
+  // The state is known only if reset decides the mux over an unknown input.
+  const auto fixture = createDesignFixture(
+      "vhd",
+      vhdlSelfFeedingRegister("1111", "t(0)"),
+      vhdlSelfFeedingRegister("1111", "not t(0)"));
+  EXPECT_EQ(runVhdlSec(fixture, {}), KEPLER_FORMAL::RunStatus::Different);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapFindsResetMismatch) {
+  // The outputs cannot agree on the first frame after reset, so assuming that
+  // they do must not turn into a proof.
+  const auto fixture = createDesignFixture(
+      "vhd",
+      vhdlSelfFeedingRegister("1111", "t(0)"),
+      vhdlSelfFeedingRegister("0000", "t(0)"));
+  for (const std::string engine : {"pdr", "k_induction", "imc"}) {
+    SCOPED_TRACE(engine);
+    auto options = kBinaryResetBootstrap;
+    options.insert(options.end(), {"--sec-engine", engine});
+    EXPECT_EQ(runVhdlSec(fixture, options),
+              KEPLER_FORMAL::RunStatus::Different);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapPdrFindsDifference) {
+  // PDR used to read past a ternary evaluation memo on this pair.
+  const auto fixture = createDesignFixture(
+      "vhd",
+      vhdlSelfFeedingRegister("1111", "t(0)"),
+      vhdlSelfFeedingRegister("1111", "not t(0)"));
+  EXPECT_EQ(runVhdlSec(fixture, kBinaryResetBootstrap),
+            KEPLER_FORMAL::RunStatus::Different);
+  const auto same = createEquivalentDesignFixture(
+      "vhd", vhdlSelfFeedingRegister("1111", "t(0)"));
+  EXPECT_EQ(runVhdlSec(same, kBinaryResetBootstrap),
+            KEPLER_FORMAL::RunStatus::Equivalent);
+  std::filesystem::remove_all(fixture.tmpDir);
+  std::filesystem::remove_all(same.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSv2vGateLevelVerilogTopAccepted) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v");

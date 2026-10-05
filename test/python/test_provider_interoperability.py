@@ -13,7 +13,6 @@ from najaeda import naja, netlist
 from kepler_formal import (
     VerificationOptions,
     VerificationStatus,
-    _native,
     from_najaeda,
     verify_designs,
 )
@@ -24,13 +23,10 @@ def _design_ids(design):
     return (identifier.getDBID(), identifier.getLibraryID(), identifier.getDesignID())
 
 
-@unittest.skipUnless(
-    _native._provider_mode == "published", "requires the published NajaEDA adapter"
-)
-class PublishedDesignLifetimeTest(unittest.TestCase):
+class DesignLifetimeTest(unittest.TestCase):
     def setUp(self):
         netlist.reset()
-        self.temporary = tempfile.TemporaryDirectory(prefix="kepler_published_lifetime_")
+        self.temporary = tempfile.TemporaryDirectory(prefix="kepler_provider_lifetime_")
         self.root = Path(self.temporary.name)
         self._create_universe()
 
@@ -85,12 +81,9 @@ class PublishedDesignLifetimeTest(unittest.TestCase):
         self._check_stale_and_live(handle, replacement)
 
 
-@unittest.skipUnless(
-    _native._provider_mode == "published", "requires the published NajaEDA adapter"
-)
-class PublishedRuntimeIdentityTest(unittest.TestCase):
+class RuntimeIdentityTest(unittest.TestCase):
     def _run_isolated(self, source):
-        with tempfile.TemporaryDirectory(prefix="kepler_published_identity_") as temporary:
+        with tempfile.TemporaryDirectory(prefix="kepler_provider_identity_") as temporary:
             completed = subprocess.run(
                 [sys.executable, "-X", "faulthandler", "-c", source],
                 cwd=temporary,

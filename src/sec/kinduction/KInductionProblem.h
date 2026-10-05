@@ -274,6 +274,14 @@ struct KInductionProblem {
                                       auxiliaryStateSymbols.size(); // LCOV_EXCL_LINE
   }
 
+  // Large dual-rail problems are proved per output by the Craig IMC path, which
+  // reads the state relation pairs and never their conjunction.
+  bool usesLargeDualRailImc() const {
+    return usesDualRailStateEncoding && effectiveTotalStateCount() > 12 &&
+           !observedOutputExprs0.empty() &&
+           observedOutputExprs0.size() == observedOutputExprs1.size();
+  }
+
   bool hasCompleteBootstrapStateAssignments() const {
     const size_t stateCount = effectiveTotalStateCount();
     return stateCount != 0 && bootstrapStateAssignments.size() >= stateCount;

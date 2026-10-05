@@ -56,8 +56,8 @@ and [GitHub environment protection documentation](https://docs.github.com/en/act
 
 After the workflow is present on the repository's default branch, open
 **Actions → Python wheels → Run workflow**. Leave `publish` unchecked and
-`version` empty. These jobs use locally built NajaEDA `0.7.24.dev0` from the
-pinned submodule and its shared-runtime SDK. The workflow builds, repairs,
+`version` empty. These jobs use locally built NajaEDA `0.7.27` from the
+pinned submodule, whose wheel ships its headers. The workflow builds, repairs,
 and tests wheels, then stores them as Actions artifacts. Use this to check a
 branch before merging.
 
@@ -86,9 +86,10 @@ repository defaults and development jobs stay on the development provider
 with the option off. Build and runtime pins must match, so installations of
 a published-provider Kepler wheel select the same NajaEDA release.
 
-Published NajaEDA does not supply the development shared-runtime SDK. This
-compatibility path is deliberately pinned to `0.7.24` and uses released native
-symbols, including the private DNL cache integration. It is not a general ABI
+Published NajaEDA `0.7.24` ships no headers, so this path takes them from the
+release's verified source archive and is deliberately pinned to that version.
+Both providers are linked the same way, through released native symbols
+including the private DNL cache integration. This is not a general ABI
 guarantee for arbitrary NajaEDA versions; any provider upgrade requires a new
 compatibility review and the complete wheel tests. It does not change NajaEDA
 or bundle a second Naja runtime.

@@ -43,7 +43,7 @@ def main():
     stage = build / "packages"
     environment = build / "venv"
     # Keep system and user Python packages out of the test environment. Both
-    # projects use this exact interpreter, compiler configuration, and SDK.
+    # projects use this exact interpreter, compiler configuration, and headers.
     venv.EnvBuilder(with_pip=False).create(environment)
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     env = dict(os.environ, PYTHONPATH=str(stage), PYTHONNOUSERSITE="1",
@@ -74,7 +74,7 @@ def main():
             f"-DCMAKE_INSTALL_PREFIX={stage}",
         ]
         try:
-            # Fail early rather than reaching the SDK-selection regression
+            # Fail early rather than reaching the provider-selection regression
             # after compiling with an older CMake.
             version_check = build / "check_cmake.cmake"
             version_check.write_text("cmake_minimum_required(VERSION 3.30)\n")
@@ -91,10 +91,10 @@ def main():
 import sys
 from pathlib import Path
 import najaeda
-from najaeda import sdk
 stage = Path(sys.argv[1]).resolve()
-assert Path(najaeda.__file__).resolve().is_relative_to(stage), najaeda.__file__
-assert Path(sdk.get_cmake_dir()).resolve().is_relative_to(stage), sdk.get_cmake_dir()
+root = Path(najaeda.__file__).resolve().parent
+assert root.is_relative_to(stage), najaeda.__file__
+assert (root / 'sdk/include/naja/core/NajaVersion.h').is_file(), 'NajaEDA ships no headers'
 print('Source-built NajaEDA:', najaeda.__file__)
 """, stage)
 
@@ -104,11 +104,6 @@ print('Source-built NajaEDA:', najaeda.__file__)
             run("cmake", "--build", consumer, "--target", "kepler_formal_native",
                 "kepler-borrowed-native-tests", "--parallel", args.jobs)
             run("cmake", "--install", consumer, "--component", "python")
-            if sys.platform == "darwin":
-                # The SDK signs the build artifact. CMake then adjusts its
-                # install RPATH, invalidating that signature on Apple Silicon.
-                for extension in (stage / "kepler_formal").glob("_native*.so"):
-                    run("codesign", "--force", "--sign", "-", extension)
             run(python, "-c", """
 import sys
 from pathlib import Path

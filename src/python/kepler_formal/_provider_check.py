@@ -1,6 +1,6 @@
 # Copyright 2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
-"""Fail closed when an opt-in published-provider build loads another runtime."""
+"""Fail closed when Kepler's native extension loads another NajaEDA runtime."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -12,10 +12,10 @@ import re
 
 
 @lru_cache(maxsize=4)
-def validate_provider(manifest_json: str) -> None:
+def validate_provider(manifest_json: str, version: str, git_hash: str) -> None:
     """Validate the exact provider binaries used to compile this extension.
 
-    Python package versions alone do not identify a C++ ABI. The adapter is
+    Python package versions alone do not identify a C++ ABI. The extension is
     compiled for a particular wheel's native files; their hashes travel with
     Kepler's extension. Successful validation is cached for this process.
     """
@@ -23,12 +23,19 @@ def validate_provider(manifest_json: str) -> None:
     from najaeda import naja
 
     try:
-        version = importlib.metadata.version("najaeda")
-        if version != "0.7.24" or naja.getGitHash() != "2263958":
-            raise ImportError("Kepler's published-provider adapter requires NajaEDA 0.7.24 (2263958)")
+        try:
+            distribution = importlib.metadata.distribution("najaeda")
+        except importlib.metadata.PackageNotFoundError:
+            # A plain CMake install, as in the source regression, has no metadata.
+            distribution = None
+        installed_version = naja.getVersion() if distribution is None else distribution.version
+        if installed_version != version or naja.getGitHash() != git_hash:
+            raise ImportError(
+                f"Kepler Formal was built against NajaEDA {version} ({git_hash}); "
+                f"found {installed_version} ({naja.getGitHash()})")
         root = Path(najaeda.__file__).resolve().parent
-        distribution = importlib.metadata.distribution("najaeda")
-        if distribution.locate_file("najaeda/__init__.py").resolve() != root / "__init__.py":
+        if (distribution is not None
+                and distribution.locate_file("najaeda/__init__.py").resolve() != root / "__init__.py"):
             raise ImportError("Imported NajaEDA does not match its installed distribution")
         extension = Path(naja.__file__).resolve()
         if extension.parent != root:
@@ -52,6 +59,5 @@ def validate_provider(manifest_json: str) -> None:
                 raise ImportError(
                     f"NajaEDA runtime differs from the wheel Kepler was built against: {relative}. "
                     "Install matching Kepler Formal and NajaEDA wheels.")
-    except (AttributeError, OSError, TypeError, ValueError,
-            importlib.metadata.PackageNotFoundError) as error:
-        raise ImportError(f"Cannot validate Kepler's published NajaEDA provider: {error}") from error
+    except (AttributeError, OSError, TypeError, ValueError) as error:
+        raise ImportError(f"Cannot validate Kepler's NajaEDA provider: {error}") from error

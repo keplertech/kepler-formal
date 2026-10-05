@@ -100,35 +100,6 @@ assert importlib.reload(canonical) is canonical
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
         )
 
-    def test_incompatible_runtime_capsule_is_rejected_at_import(self):
-        completed = _run_isolated_python(
-            """
-import ctypes
-import najaeda
-
-class Header(ctypes.Structure):
-    _fields_ = [('abi_version', ctypes.c_uint32), ('struct_size', ctypes.c_size_t)]
-
-header = Header(999, ctypes.sizeof(Header))
-name = b'najaeda.naja._C_API'
-new_capsule = ctypes.pythonapi.PyCapsule_New
-new_capsule.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
-new_capsule.restype = ctypes.py_object
-najaeda.naja._C_API = new_capsule(ctypes.addressof(header), name, None)
-try:
-    import kepler_formal
-except ImportError as error:
-    assert 'Incompatible NajaEDA native runtime API' in str(error), str(error)
-else:
-    raise AssertionError('incompatible NajaEDA capsule was accepted')
-"""
-        )
-        self.assertEqual(
-            0,
-            completed.returncode,
-            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
-        )
-
 
 class SharedNajaedaRuntimeTest(unittest.TestCase):
     def setUp(self):

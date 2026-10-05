@@ -1,7 +1,8 @@
 # Python regression from source
 
 The regression builds NajaEDA from the pinned `thirdparty/naja` submodule,
-then builds Kepler's Python extension against that NajaEDA SDK. Both packages
+then builds Kepler's Python extension against that NajaEDA's installed
+libraries and headers. Both packages
 are installed with CMake into a private directory. No wheels, package index,
 or publishing are involved.
 

@@ -60,6 +60,14 @@ static NLLibrary* createUniverseAndLibrary(NLUniverse*& outUniv) {
   return lib;
 }
 
+// Utility: create the standard library holding the top designs. Instances
+// cannot be created inside primitive designs, so tops live here while their
+// leaf models stay in the primitives library.
+static NLLibrary* createDesignsLibrary(NLLibrary* primitives) {
+  return NLLibrary::create(primitives->getDB(), NLLibrary::Type::Standard,
+                           NLName("designs"));
+}
+
 // Build a simple top design with two child instances and two outputs.
 // The function returns the top design pointer and also fills the instance
 // pointers and term pointers so tests can wire nets differently to create
@@ -79,7 +87,8 @@ struct TopDesignBundle {
   SNLScalarTerm* childB_out = nullptr;
 };
 
-static TopDesignBundle buildSimpleTop(NLLibrary* lib,
+static TopDesignBundle buildSimpleTop(NLLibrary* designs,
+                                      NLLibrary* lib,
                                       const std::string& topBaseName,
                                       const std::string& childANameBase,
                                       const std::string& childBNameBase) {
@@ -91,7 +100,8 @@ static TopDesignBundle buildSimpleTop(NLLibrary* lib,
 
   TopDesignBundle b;
   // Create top
-  b.top = SNLDesign::create(lib, SNLDesign::Type::Primitive, NLName(topName));
+  b.top =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName(topName));
   // two top outputs
   b.topOutA =
       SNLScalarTerm::create(b.top, SNLTerm::Direction::Output, NLName("outA"));
@@ -126,6 +136,7 @@ class ScopeExtractionUnitTests : public ::testing::Test {
   void SetUp() override {
     // create universe + library for each test
     lib_ = createUniverseAndLibrary(univ_);
+    designs_ = createDesignsLibrary(lib_);
   }
 
   void TearDown() override {
@@ -133,10 +144,12 @@ class ScopeExtractionUnitTests : public ::testing::Test {
     NLUniverse::get()->destroy();
     univ_ = nullptr;
     lib_ = nullptr;
+    designs_ = nullptr;
   }
 
   NLUniverse* univ_ = nullptr;
   NLLibrary* lib_ = nullptr;
+  NLLibrary* designs_ = nullptr;
 };
 
 // Test case: identical designs should not be added to designsToVerify_ at the
@@ -144,8 +157,10 @@ class ScopeExtractionUnitTests : public ::testing::Test {
 // identical).
 TEST_F(ScopeExtractionUnitTests, IdenticalDesigns_NoVerificationNeeded) {
   // Build two top designs with identical structure (unique names internally)
-  TopDesignBundle a = buildSimpleTop(lib_, "topA", "LOGIC0", "LOGIC1");
-  TopDesignBundle b = buildSimpleTop(lib_, "topB", "LOGIC0", "LOGIC1");
+  TopDesignBundle a =
+      buildSimpleTop(designs_, lib_, "topA", "LOGIC0", "LOGIC1");
+  TopDesignBundle b =
+      buildSimpleTop(designs_, lib_, "topB", "LOGIC0", "LOGIC1");
 
   // Make the child models have deterministic truth tables so library tables
   // exist
@@ -184,7 +199,8 @@ TEST_F(ScopeExtractionUnitTests, IdenticalDesigns_NoVerificationNeeded) {
 // added
 TEST_F(ScopeExtractionUnitTests, DifferentInstanceCount_TopAddedToVerify) {
   // Build top A with two children
-  TopDesignBundle a = buildSimpleTop(lib_, "topA_diff", "LOGIC0", "LOGIC1");
+  TopDesignBundle a =
+      buildSimpleTop(designs_, lib_, "topA_diff", "LOGIC0", "LOGIC1");
 
   // Build top B with only one child (simulate different instance count)
   TopDesignBundle b;
@@ -192,7 +208,8 @@ TEST_F(ScopeExtractionUnitTests, DifferentInstanceCount_TopAddedToVerify) {
   ++localCounter;
   const std::string topBName =
       std::string("topB_diff_") + std::to_string(localCounter);
-  b.top = SNLDesign::create(lib_, SNLDesign::Type::Primitive, NLName(topBName));
+  b.top = SNLDesign::create(designs_, SNLDesign::Type::Standard,
+                            NLName(topBName));
   b.topOutA =
       SNLScalarTerm::create(b.top, SNLTerm::Direction::Output, NLName("outA"));
   // create only one child model and instance (unique name)
@@ -244,8 +261,10 @@ TEST_F(ScopeExtractionUnitTests, DifferentInstanceCount_TopAddedToVerify) {
 // the second top as well.
 TEST_F(ScopeExtractionUnitTests, SameCountDifferentChildIDs_AddedToVerify) {
   // Build two tops with same number of instances but different child model IDs
-  TopDesignBundle a = buildSimpleTop(lib_, "topA_ids", "LOGIC_A", "LOGIC_B");
-  TopDesignBundle b = buildSimpleTop(lib_, "topB_ids", "LOGIC_X", "LOGIC_Y");
+  TopDesignBundle a =
+      buildSimpleTop(designs_, lib_, "topA_ids", "LOGIC_A", "LOGIC_B");
+  TopDesignBundle b =
+      buildSimpleTop(designs_, lib_, "topB_ids", "LOGIC_X", "LOGIC_Y");
 
   // Set truth tables so nets/terms exist
   SNLDesignModeling::setTruthTable(a.childA_model, SNLTruthTable(0, 0, SNLTruthTable::fullDependencies(0)));

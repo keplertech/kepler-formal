@@ -129,23 +129,20 @@ cmake .. \
   -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
-### Bazel (experimental)
+### Bazel
 
-On Ubuntu, install the required host tools:
-
-```bash
-sudo apt-get install build-essential pkg-config bison flex python3-dev
-```
-
-Build and test with Bazelisk:
+The Bazel build needs no host packages on Linux (hermetic clang
+toolchain; every library and code generator is a Bazel module) and does
+not use the `thirdparty/` submodules:
 
 ```bash
 bazelisk build //src/bin:kepler-formal
-bazelisk test //test/...
+bazelisk test //...
 ```
 
-Additional notes and the BCR publication roadmap are tracked in
-[docs/bcr-roadmap.md](docs/bcr-roadmap.md).
+Dependencies, where modules not yet on the Bazel Central Registry come
+from, and how to depend on kepler-formal from another Bazel
+module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 
@@ -175,7 +172,7 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ```bash
 # Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-cc/-cxx> [options] \
+build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl/-cc/-cxx> [options] \
   <design1> <design2> [<library-file>...]
 
 # Multi-file Verilog
@@ -188,6 +185,11 @@ build/src/bin/kepler-formal -sv -v sec \
   --sv_design1_flist <file> --sv_design1_top <top> \
   --sv_design2_flist <file> --sv_design2_top <top> \
   [--liberty <library-file>...]
+
+# VHDL SEC, files in compile order with the top-level unit last
+build/src/bin/kepler-formal -vhdl -v sec \
+  --design1 <file...> --design2 <file...> \
+  [--vhdl_design1_top <top>] [--vhdl_design2_top <top>]
 ```
 
 | Flag | Meaning |
@@ -203,10 +205,12 @@ build/src/bin/kepler-formal -sv -v sec \
 | `-naja_if` | Parse both designs as Naja IF. |
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
+| `-vhdl` | Parse both designs as VHDL. Requires SEC. Experimental; see [VHDL support](docs/vhdl/README.md). |
 | `-cc`, `-cxx` | Synthesize one C/C++ translation unit per design to SystemVerilog with XLS, then run SEC on the generated RTL. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
+| `--vhdl_design1_top <top>`, `--vhdl_design2_top <top>` | Select the top entity for each VHDL design. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--cc_top <function>` | C/C++ top function for both designs. Use `--cc_design1_top` / `--cc_design2_top` when they differ. |
 | `--cc_include <dir>` | Add an include directory for XLS C/C++ synthesis. May be repeated. |
@@ -230,7 +234,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. Defaults to `verilog` if omitted. |
+| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `btor2_export` | bool | Enable BTOR2 export before solving; SEC only. Defaults to `false`. |
 | `btor2_export_path` | string | BTOR2 destination; defaults to `miter.btor2` when enabled. Requires `btor2_export: true`. |
@@ -238,6 +242,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
 | `input_paths` | list | Required. Either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `verilog_design1_top`, `verilog_design2_top` | string | Select the top module for each Verilog design. In `sv2v` mode, only `verilog_design2_top` is valid. |
+| `vhdl_design1_top`, `vhdl_design2_top` | string | Select the top entity for each VHDL design. Only valid with `format: vhdl`. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |

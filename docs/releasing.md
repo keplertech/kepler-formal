@@ -120,15 +120,9 @@ http_archive(
 
 ### Bazel (build from source)
 
-```python
-bazel_dep(name = "kepler-formal", version = "1.0.0")
-
-git_override(
-    module_name = "kepler-formal",
-    remote = "https://github.com/keplertech/kepler-formal.git",
-    commit = "<sha>",
-)
-```
+See [Depending on kepler-formal](bcr-roadmap.md#depending-on-kepler-formal):
+until kepler-formal is on the Bazel Central Registry, a consumer also
+lists kepler-formal's registry in its `.bazelrc`.
 
 ## Troubleshooting
 
@@ -140,6 +134,6 @@ Bump the version to a new number and retry.
 
 **"Working tree is dirty" error**: Commit or stash all changes first.
 
-**Release workflow fails**: Check the Actions tab for logs.  The most
-common issue is a stale dependency hash in `bazel/deps.bzl` — update
-per the instructions in `docs/bcr-roadmap.md`.
+**Release workflow fails**: Check the Actions tab for logs.  A stale
+`source.json` integrity hash in `bazel/registry/` is fixed by rerunning
+`bazel/registry/update_source.py` (see `bazel/registry/README.md`).

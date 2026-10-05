@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      # The SDK-selection tests require CMake 3.30 or newer.
+      # The provider-selection tests require CMake 3.30 or newer.
       - uses: jwlawson/actions-setup-cmake@v2
         with:
           cmake-version: '3.31.x'

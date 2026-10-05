@@ -414,5 +414,94 @@ TEST_F(InternalRelationsTests, RejectedCandidatesNeverReachExactImcConstraints) 
   EXPECT_TRUE(problem.sameFrameStateEqualityPairs0.empty());
 }
 
+// Two designs of one output register q over held registers. Design 0 uses the
+// symbols 2 (q) and 3..3+width-1, design 1 the same count after them.
+struct GatePair {
+  KInductionProblem problem;
+  std::vector<InternalRelationCandidate> candidates;
+  std::vector<BoolExpr*> in0;
+  std::vector<BoolExpr*> in1;
+};
+
+GatePair gatePair(size_t width) {
+  GatePair pair;
+  const size_t stride = width + 1;
+  for (size_t i = 0; i < stride; ++i) {
+    const size_t lhs = 2 + i;
+    const size_t rhs = lhs + stride;
+    pair.problem.state0Symbols.push_back(lhs);
+    pair.problem.state1Symbols.push_back(rhs);
+    pair.problem.initialStateAssignments.emplace_back(lhs, false);
+    pair.problem.initialStateAssignments.emplace_back(rhs, false);
+    pair.candidates.push_back({{{lhs, rhs}}, {}});
+    if (i != 0) {
+      pair.problem.transitions0.emplace_back(lhs, BoolExpr::Var(lhs));
+      pair.problem.transitions1.emplace_back(rhs, BoolExpr::Var(rhs));
+      pair.in0.push_back(BoolExpr::Var(lhs));
+      pair.in1.push_back(BoolExpr::Var(rhs));
+    }
+  }
+  pair.problem.allSymbols = pair.problem.state0Symbols;
+  pair.problem.allSymbols.insert(pair.problem.allSymbols.end(),
+                                 pair.problem.state1Symbols.begin(),
+                                 pair.problem.state1Symbols.end());
+  return pair;
+}
+
+size_t provedPairs(GatePair pair, BoolExpr* next0, BoolExpr* next1) {
+  pair.problem.transitions0.emplace_back(2, next0);
+  pair.problem.transitions1.emplace_back(2 + pair.in0.size() + 1, next1);
+  return proveInternalRelations(pair.problem, pair.candidates, {},
+                                Config::SolverType::KISSAT).size();
+}
+
+TEST_F(InternalRelationsTests, SwappedPinsOfASymmetricGateAreTheSameTransition) {
+  const auto pair = gatePair(3);
+  const auto& a = pair.in0;
+  const auto& b = pair.in1;
+  EXPECT_EQ(provedPairs(pair, BoolExpr::And(BoolExpr::And(a[0], a[1]), a[2]),
+                        BoolExpr::And(BoolExpr::And(b[2], b[1]), b[0])), 4u);
+  EXPECT_EQ(provedPairs(pair, BoolExpr::Not(BoolExpr::Or(BoolExpr::Or(a[0], a[1]), a[2])),
+                        BoolExpr::Not(BoolExpr::Or(b[1], BoolExpr::Or(b[2], b[0])))), 4u);
+  EXPECT_EQ(provedPairs(pair, BoolExpr::Xor(a[0], BoolExpr::Not(a[1])),
+                        BoolExpr::Xor(BoolExpr::Not(b[1]), b[0])), 4u);
+}
+
+TEST_F(InternalRelationsTests, SwappedDataPinsOfAMuxAreADifferentTransition) {
+  const auto pair = gatePair(3);
+  const auto mux = [](BoolExpr* select, BoolExpr* one, BoolExpr* zero) {
+    return BoolExpr::Or(BoolExpr::And(select, one),
+                        BoolExpr::And(BoolExpr::Not(select), zero));
+  };
+  const auto& a = pair.in0;
+  const auto& b = pair.in1;
+  EXPECT_EQ(provedPairs(pair, mux(a[0], a[1], a[2]), mux(b[0], b[1], b[2])), 4u);
+  // The three held registers stay proved; only q is refuted.
+  EXPECT_EQ(provedPairs(pair, mux(a[0], a[1], a[2]), mux(b[0], b[2], b[1])), 3u);
+}
+
+TEST_F(InternalRelationsTests, EqualFunctionsOfDifferentShapeAreLeftToTheSolver) {
+  const auto pair = gatePair(2);
+  const auto& a = pair.in0;
+  const auto& b = pair.in1;
+  EXPECT_EQ(provedPairs(pair, BoolExpr::Not(BoolExpr::And(a[0], a[1])),
+                        BoolExpr::Or(BoolExpr::Not(b[0]), BoolExpr::Not(b[1]))), 3u);
+  EXPECT_EQ(provedPairs(pair, BoolExpr::And(a[0], a[1]), BoolExpr::Or(b[0], b[1])), 2u);
+}
+
+TEST_F(InternalRelationsTests, LongChainsKeepTheirShapeAndStillCompare) {
+  const auto pair = gatePair(20);
+  BoolExpr* same0 = pair.in0[0];
+  BoolExpr* same1 = pair.in1[0];
+  BoolExpr* reversed1 = pair.in1[19];
+  for (size_t i = 1; i < 20; ++i) {
+    same0 = BoolExpr::And(same0, pair.in0[i]);
+    same1 = BoolExpr::And(same1, pair.in1[i]);
+    reversed1 = BoolExpr::And(reversed1, pair.in1[19 - i]);
+  }
+  EXPECT_EQ(provedPairs(pair, same0, same1), 21u);
+  EXPECT_EQ(provedPairs(pair, same0, reversed1), 21u);
+}
+
 }  // namespace
 }  // namespace KEPLER_FORMAL::SEC

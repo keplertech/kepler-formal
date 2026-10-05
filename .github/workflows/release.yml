@@ -26,16 +26,9 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/bazel
-        key: bazel-release-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/deps.bzl', 'bazel/*.BUILD.bazel') }}
+        key: bazel-release-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/registry/**') }}
         restore-keys: |
           bazel-release-${{ runner.os }}-
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -yq \
-          build-essential pkg-config \
-          bison flex python3-dev
 
     - name: Build (optimized)
       run: bazelisk build -c opt //src/bin:kepler-formal
@@ -61,18 +54,19 @@ jobs:
           exit 1
         fi
 
-        # Bundle TBB (no static libs by design) from the hermetic Bazel
-        # build — the exact libraries the binary and naja .so files link.
-        for lib in libtbb.so.12 libtbbmalloc.so.2; do
-          find -L bazel-bin/ -name "${lib}" -print -quit | xargs -I{} cp -L {} "${DIST}/lib/"
-          test -f "${DIST}/lib/${lib}" || { echo "missing bundled ${lib}"; exit 1; }
-        done
+        # Bundle the hermetic Python runtime the binary embeds (libpython
+        # and its stdlib) from the binary's runfiles.
+        PY_RUNTIME=$(find -L bazel-bin/src/bin/kepler-formal.runfiles -maxdepth 1 -name 'rules_python++python+python_3_*' -print -quit)
+        test -n "${PY_RUNTIME}" || { echo "missing bundled Python runtime"; exit 1; }
+        cp -RL "${PY_RUNTIME}" "${DIST}/python"
 
-        # Create wrapper script that sets LD_LIBRARY_PATH for bundled libs
+        # Create wrapper script that points the binary at the bundled libs
+        # and Python runtime.
         printf '%s\n' \
           '#!/usr/bin/env bash' \
           'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"' \
-          'export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+          'export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${SCRIPT_DIR}/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+          'export PYTHONHOME="${PYTHONHOME:-${SCRIPT_DIR}/python}"' \
           'exec "${SCRIPT_DIR}/bin/kepler-formal" "$@"' \
           > "${DIST}/kepler-formal"
         chmod +x "${DIST}/kepler-formal"

@@ -1,10 +1,14 @@
 # Copyright 2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
-"""Build the opt-in Kepler adapter for the published NajaEDA 0.7.24 wheel.
+"""Describe the installed NajaEDA provider to Kepler's CMake build.
 
-Only release headers are extracted; this helper never builds or edits Naja.
-PE export/import-library handling and Mach-O fixup are adapted from Naja's
-Apache-2.0 licensed najaeda/sdk.py (The Naja authors).
+Kepler's Python extension links the native libraries of the NajaEDA package
+installed in the build interpreter. The default provider is a wheel built from
+``thirdparty/naja``, which ships its headers under ``najaeda/sdk/include``.
+``--published`` selects the unmodified NajaEDA 0.7.24 release instead and takes
+its headers from the verified source archive. This helper never builds or
+edits Naja. PE export/import-library handling and Mach-O fixup are adapted from
+the former Apache-2.0 licensed najaeda/sdk.py (The Naja authors).
 """
 from __future__ import annotations
 
@@ -21,32 +25,64 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from typing import NamedTuple
 import urllib.request
 
-VERSION = "0.7.24"
-GIT_COMMIT = "2263958"
-SOURCE_SHA256 = "00145fd267e50031e92637160df3b164e9da5df2f75591ce5bd3f2f786a7abc0"
-SOURCE_URL = "https://files.pythonhosted.org/packages/source/n/najaeda/najaeda-0.7.24.tar.gz"
+PUBLISHED_VERSION = "0.7.24"
+PUBLISHED_GIT_COMMIT = "2263958"
+PUBLISHED_SOURCE_SHA256 = "00145fd267e50031e92637160df3b164e9da5df2f75591ce5bd3f2f786a7abc0"
+PUBLISHED_SOURCE_URL = "https://files.pythonhosted.org/packages/source/n/najaeda/najaeda-0.7.24.tar.gz"
 RUNTIMES = ("naja_nl", "naja_dnl", "naja_bne", "naja_opt", "naja_metrics", "naja_python")
 
 
-def _provider() -> tuple[Path, Path]:
+class Provider(NamedTuple):
+    root: Path
+    extension: Path
+    version: str
+    git_commit: str
+
+
+def _provider_root() -> tuple[Path, Path, str | None]:
+    """Return the imported package root, its extension and distribution version."""
     import najaeda
     from najaeda import naja
 
-    version = importlib.metadata.version("najaeda")
-    if version != VERSION or naja.getGitHash() != GIT_COMMIT:
-        raise RuntimeError(
-            f"Published NajaEDA adapter requires {VERSION} ({GIT_COMMIT}); "
-            f"found {version} ({naja.getGitHash()})")
     root = Path(najaeda.__file__).resolve().parent
     extension = Path(naja.__file__).resolve()
-    distribution = importlib.metadata.distribution("najaeda")
-    if distribution.locate_file("najaeda/__init__.py").resolve() != root / "__init__.py":
+    try:
+        distribution = importlib.metadata.distribution("najaeda")
+    except importlib.metadata.PackageNotFoundError:
+        # A plain CMake install, as in the source regression, has no metadata.
+        distribution = None
+    if (distribution is not None
+            and distribution.locate_file("najaeda/__init__.py").resolve() != root / "__init__.py"):
         raise RuntimeError("Imported NajaEDA does not match the installed distribution")
     if extension.parent != root:
         raise RuntimeError("NajaEDA imported a native extension outside its package")
-    return root, extension
+    return root, extension, None if distribution is None else distribution.version
+
+
+def _provider(published: bool = False) -> Provider:
+    from najaeda import naja
+
+    root, extension, version = _provider_root()
+    if version is None:
+        version = naja.getVersion()
+    git_commit = naja.getGitHash()
+    if published:
+        if version != PUBLISHED_VERSION or git_commit != PUBLISHED_GIT_COMMIT:
+            raise RuntimeError(
+                f"Published NajaEDA adapter requires {PUBLISHED_VERSION} ({PUBLISHED_GIT_COMMIT}); "
+                f"found {version} ({git_commit})")
+    elif not (root / "sdk/include/naja/core/NajaVersion.h").is_file():
+        raise RuntimeError(
+            f"NajaEDA {version} ({git_commit}) in {root} ships no headers. Install the "
+            "development wheel built from thirdparty/naja, or configure with "
+            f"KEPLER_USE_PUBLISHED_NAJAEDA=ON for the published {PUBLISHED_VERSION} release")
+    if naja.getVersion() != version:
+        raise RuntimeError(
+            f"NajaEDA distribution {version} reports native version {naja.getVersion()}")
+    return Provider(root, extension, version, git_commit)
 
 
 def _provider_files(root: Path) -> tuple[Path, ...]:
@@ -71,16 +107,27 @@ def _libraries(root: Path) -> dict[str, Path]:
     return libraries
 
 
-def _headers(output_dir: Path, source_archive: Path | None) -> list[Path]:
+def _wheel_headers(root: Path) -> list[Path]:
+    """Use the headers the development wheel installed next to its libraries."""
+    include_root = root / "sdk/include"
+    include_dirs = {include_root}
+    include_dirs.update(path.parent for path in (include_root / "naja").rglob("*.h"))
+    if not (include_root / "naja/core/NajaVersion.h").is_file():
+        raise RuntimeError("NajaEDA wheel headers contain no version header")
+    return sorted(include_dirs)
+
+
+def _published_headers(output_dir: Path, source_archive: Path | None) -> list[Path]:
+    """Extract the published release's headers from its verified source archive."""
     if source_archive is None:
-        source_archive = output_dir / f"najaeda-{VERSION}.tar.gz"
+        source_archive = output_dir / f"najaeda-{PUBLISHED_VERSION}.tar.gz"
         if not source_archive.is_file():
-            with urllib.request.urlopen(SOURCE_URL, timeout=60) as response:
+            with urllib.request.urlopen(PUBLISHED_SOURCE_URL, timeout=60) as response:
                 content = response.read()
-            if hashlib.sha256(content).hexdigest() != SOURCE_SHA256:
+            if hashlib.sha256(content).hexdigest() != PUBLISHED_SOURCE_SHA256:
                 raise RuntimeError("Published NajaEDA source archive checksum mismatch")
             source_archive.write_bytes(content)
-    if hashlib.sha256(source_archive.read_bytes()).hexdigest() != SOURCE_SHA256:
+    if hashlib.sha256(source_archive.read_bytes()).hexdigest() != PUBLISHED_SOURCE_SHA256:
         raise RuntimeError("Published NajaEDA source archive checksum mismatch")
     destination = output_dir / "release-headers"
     include_dirs = {output_dir / "include"}
@@ -89,7 +136,7 @@ def _headers(output_dir: Path, source_archive: Path | None) -> list[Path]:
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts or "\\" in member.name:
                 raise RuntimeError(f"Unsafe path in NajaEDA source archive: {member.name}")
-            if not path.parts or path.parts[0] != f"najaeda-{VERSION}":
+            if not path.parts or path.parts[0] != f"najaeda-{PUBLISHED_VERSION}":
                 raise RuntimeError("Unexpected NajaEDA source archive root")
             relative = PurePosixPath(*path.parts[1:])
             if not relative.parts:
@@ -106,7 +153,7 @@ def _headers(output_dir: Path, source_archive: Path | None) -> list[Path]:
             target = destination.joinpath(*relative.parts)
             if relative.name == "NajaVersion.h.in":
                 target = output_dir / "include" / "NajaVersion.h"
-                content = content.replace(b"@NAJA_GIT_HASH@", GIT_COMMIT.encode("ascii"))
+                content = content.replace(b"@NAJA_GIT_HASH@", PUBLISHED_GIT_COMMIT.encode("ascii"))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
             if is_source:
@@ -122,7 +169,7 @@ def fixup_consumer(consumer: Path) -> None:
     """Resolve repaired Mach-O install IDs without modifying provider files."""
     if sys.platform != "darwin":
         return
-    root, _ = _provider()
+    root, _, _ = _provider_root()
     consumer = consumer.resolve(strict=True)
     files = _provider_files(root)
     if consumer in files:
@@ -164,7 +211,7 @@ def _pe_exports(library: Path) -> list[tuple[str, bool]]:
     machine, count, _, _, _, optional_size, _ = unpack("<HHIIIHH", pe + 4)
     optional = pe + 24
     if machine != 0x8664 or unpack("<H", optional)[0] != 0x20B:
-        raise RuntimeError(f"NajaEDA SDK requires an AMD64 PE32+ library: {library}")
+        raise RuntimeError(f"Kepler requires an AMD64 PE32+ NajaEDA library: {library}")
     export_rva, export_size = unpack("<II", optional + 112)
     sections = []
     for index in range(count):
@@ -209,7 +256,13 @@ def _pe_exports(library: Path) -> list[tuple[str, bool]]:
     return exports
 
 
-def _import_library(name: str, library: Path, output_dir: Path) -> Path:
+def _import_library(name: str, library: Path, output_dir: Path, root: Path | None = None) -> Path:
+    # The development wheel ships the original import libraries. They only
+    # match DLLs whose names wheel repair left unchanged.
+    if root is not None and library.name.lower() == f"{name}.dll":
+        original = root / "sdk/lib" / f"{name}.lib"
+        if original.is_file():
+            return original
     digest = hashlib.sha256(library.read_bytes()).hexdigest()[:20]
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / f"{name}-{digest}.lib"
@@ -245,33 +298,43 @@ def _cmake_value(value: object) -> str:
     return f"[==[{value}]==]"
 
 
-def cmake_config(output_dir: Path, source_archive: Path | None = None) -> str:
-    root, extension = _provider()
-    libraries = _libraries(root)
+def cmake_config(output_dir: Path, *, published: bool = False,
+                 source_archive: Path | None = None) -> str:
+    provider = _provider(published)
+    libraries = _libraries(provider.root)
     output_dir = output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    include_dirs = _headers(output_dir, source_archive)
+    (output_dir / "include").mkdir(parents=True, exist_ok=True)
+    if published:
+        include_dirs = _published_headers(output_dir, source_archive)
+    else:
+        include_dirs = [output_dir / "include", *_wheel_headers(provider.root)]
     manifest = {}
-    for path in (*libraries.values(), extension):
+    for path in (*libraries.values(), provider.extension):
         try:
-            relative = path.relative_to(root.parent).as_posix()
+            relative = path.relative_to(provider.root.parent).as_posix()
         except ValueError as error:
             raise RuntimeError(f"Provider library is outside its installation: {path}") from error
         manifest[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest_json = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
-    (output_dir / "include" / "KeplerPublishedNajaBuild.h").write_text(
-        "// Generated from the installed published NajaEDA provider.\n#pragma once\n"
+    # The extension validates these at import: the same release and the same
+    # native files it was compiled against. Package versions alone do not
+    # identify a C++ ABI.
+    (output_dir / "include" / "KeplerNajaProviderBuild.h").write_text(
+        "// Generated from the installed NajaEDA provider.\n#pragma once\n"
+        f"#define KEPLER_NAJA_PROVIDER_VERSION {json.dumps(provider.version)}\n"
+        f"#define KEPLER_NAJA_PROVIDER_GIT_HASH {json.dumps(provider.git_commit)}\n"
         f"#define KEPLER_NAJA_PROVIDER_MANIFEST {json.dumps(manifest_json)}\n",
         encoding="utf-8")
-    values = {"NajaEDA_VERSION": VERSION, "NajaEDA_GIT_COMMIT": GIT_COMMIT,
-              "NajaEDA_BUILD_ID": "published-" + hashlib.sha256(manifest_json.encode()).hexdigest()}
+    values = {"NajaEDA_VERSION": provider.version, "NajaEDA_GIT_COMMIT": provider.git_commit,
+              "NajaEDA_BUILD_ID": hashlib.sha256(manifest_json.encode()).hexdigest()}
     lines = [f"set({name} {_cmake_value(value)})" for name, value in values.items()]
     lines.append("set(NajaEDA_INCLUDE_DIRS " + " ".join(map(_cmake_value, include_dirs)) + ")")
     lines.append("set(NajaEDA_RUNTIME_LIBRARIES " + " ".join(map(_cmake_value, libraries.values())) + ")")
     for name, library in libraries.items():
         lines.append(f"set(NajaEDA_{name}_LIBRARY {_cmake_value(library)})")
         if sys.platform == "win32":
-            implib = _import_library(name, library, output_dir / "import-libs")
+            implib = _import_library(name, library, output_dir / "import-libs",
+                                     None if published else provider.root)
             lines.append(f"set(NajaEDA_{name}_IMPLIB {_cmake_value(implib)})")
     return "\n".join(lines) + "\n"
 
@@ -282,12 +345,18 @@ def main() -> None:
     action.add_argument("--cmake", action="store_true")
     action.add_argument("--fixup-consumer", type=Path)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--source-archive", type=Path)
+    parser.add_argument("--published", action="store_true",
+                        help=f"use the published NajaEDA {PUBLISHED_VERSION} release")
+    parser.add_argument("--source-archive", type=Path,
+                        help="cached source archive of the published release")
     args = parser.parse_args()
     if args.cmake and args.output_dir is None:
         parser.error("--cmake requires --output-dir")
+    if args.source_archive is not None and not args.published:
+        parser.error("--source-archive requires --published")
     if args.cmake:
-        print(cmake_config(args.output_dir, args.source_archive), end="")
+        print(cmake_config(args.output_dir, published=args.published,
+                           source_archive=args.source_archive), end="")
     else:
         fixup_consumer(args.fixup_consumer)
 

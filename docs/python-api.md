@@ -17,8 +17,9 @@ For local regression without wheels or publishing, use the
 [source regression runner](python-regression.md). It compiles both Python
 packages from this checkout and tests their shared runtime.
 
-The default development build uses the matching NajaEDA shared-runtime SDK,
-version `0.7.24.dev0` in `thirdparty/naja`. Build both packages from this
+The default development build links the NajaEDA wheel built from
+`thirdparty/naja` (version `0.7.27`), which ships the headers matching its
+libraries under `najaeda/sdk/include`. Build both packages from this
 recursive checkout in one virtual environment, with the native build
 dependencies installed:
 
@@ -31,14 +32,13 @@ python -m pip install --no-build-isolation .
 Default wheel CI runs on relevant pull requests, pushes to `main`, `v*` tags, and manual
 runs. It builds and installs a separate local provider wheel for every
 Python/platform combination. Only a manual `publish` request adds a second,
-parallel set of jobs against published NajaEDA `0.7.24` wheels through KF's
-version-specific compatibility adapter. Only published-provider jobs must
+parallel set of jobs against published NajaEDA `0.7.24` wheels, which ship no
+headers; `KEPLER_USE_PUBLISHED_NAJAEDA` takes them from that release's verified
+source archive instead. Only published-provider jobs must
 pass for publication; development-provider jobs remain independent regression
 checks. Only wheels tested against the published provider are uploaded.
-The adapter obtains matching release headers, links the installed native
-libraries, and checks their identity before sharing designs. Those wheels
-require `najaeda==0.7.24`, which pip installs normally. There is no separate
-provider checkbox; see [release instructions](python-release.md).
+Those wheels require `najaeda==0.7.24`, which pip installs normally. There is
+no separate provider checkbox; see [release instructions](python-release.md).
 
 `BUILD_KEPLER_PYTHON=ON` is a Python-only CMake build. Build the standalone
 executable separately with `BUILD_KEPLER_PYTHON=OFF`; it continues to use the
@@ -66,10 +66,12 @@ Maintainers can publish tested wheels using the manual
 ## Shared NajaEDA runtime
 
 `najaeda` is a runtime dependency of `kepler_formal` and is imported before
-Kepler's native extension. Development builds use its versioned native API to
-check build and runtime identity. The published-provider adapter instead checks
-the pinned release's native-file fingerprints, exported Python types, and live
-universe identity. Both paths reject mismatches before accepting live designs.
+Kepler's native extension. The extension links the installed package's own
+`libnaja_*` libraries and records their version, git hash and file
+fingerprints at build time. At import it checks those, the exported Python
+types, and the live universe identity, and rejects any mismatch before
+accepting live designs. The same checks apply to development and published
+providers.
 
 For compatibility, `kepler_formal.najaeda` and all of its submodules are
 aliases to the original package:

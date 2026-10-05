@@ -7,7 +7,7 @@ Files: src/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 
-Files: examples/* .github/workflows/* .github/consumer-test/* .gitmodules README.md docs/*
+Files: examples/* .github/workflows/* .github/consumer-test/* .bcr/* .gitmodules README.md docs/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 
@@ -15,7 +15,7 @@ Files: test/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 
-Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore
+Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore CLAUDE.md AGENTS.md
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 

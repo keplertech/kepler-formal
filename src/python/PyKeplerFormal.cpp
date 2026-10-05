@@ -594,7 +594,7 @@ PyMODINIT_FUNC PyInit__native() {
 #ifdef KEPLER_USE_PUBLISHED_NAJAEDA
   constexpr const char* providerMode = "published";
 #else
-  constexpr const char* providerMode = "sdk";
+  constexpr const char* providerMode = "development";
 #endif
   if (PyModule_AddStringConstant(result.get(), "_provider_mode", providerMode) < 0) {
     nativeDesignType = nullptr;

@@ -17,6 +17,7 @@ The SEC-specific flag surface is documented separately in
 | `sec` | Gate-level sequential equivalence checking | Sequential Verilog/SystemVerilog netlists plus Liberty/Python primitive libraries as needed. |
 | `sec` | RTL-level sequential equivalence checking | RTL Verilog/SystemVerilog sources, including SystemVerilog flists with explicit tops. |
 | `sec` | SystemVerilog-to-Verilog RTL-vs-gate checking (`sv2v`) | SystemVerilog design 1 and Verilog design 2, plus Liberty/Python primitive libraries as needed. |
+| `sec` | VHDL RTL-level sequential equivalence checking (`vhdl`) | VHDL sources for both designs, in compile order. Experimental; see [VHDL support](vhdl/README.md). |
 
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 `verification: sec` in YAML.
@@ -41,6 +42,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
+| `-vhdl` | Use VHDL format for both designs. Requires SEC verification. |
 | `-cc`, `-cxx`, `-cpp` | Synthesize one C/C++ translation unit per design to SystemVerilog through XLS, then run SEC on the generated RTL. |
 | `--help`, `-h` | Print usage and exit. |
 | `--version`, `-V` | Print the embedded Kepler Formal and Naja versions and Git hashes to stdout and exit successfully. Use as a standalone option. |
@@ -60,6 +62,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
+| `--vhdl_design1_top <top>`, `--vhdl_design2_top <top>` | Per-design VHDL top entities. Only valid in `vhdl` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 
@@ -67,7 +70,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. If omitted, the implementation defaults to `verilog`. |
+| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. If omitted, the implementation defaults to `verilog`. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
@@ -113,6 +116,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `verilog_design1_top`, `verilog_design2_top` | string | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
+| `vhdl_design1_top`, `vhdl_design2_top` | string | Per-design VHDL top entities. Only valid in `vhdl` mode. |
 | `solver` | string | SAT solver selection: `kissat`, `glucose`, or `cadical`. Defaults to `kissat`. |
 
 Example:

@@ -1399,7 +1399,8 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
     std::optional<size_t> exactPublicBadFrame,
     bool localizeMultiOutputFrontier = true,
     BaseCaseSolverProfile solverProfile = BaseCaseSolverProfile::SecConeProof,
-    SATSolverWrapper::SolveStatus* solveStatusOut = nullptr);
+    SATSolverWrapper::SolveStatus* solveStatusOut = nullptr,
+    bool assumeResetFrontierProperty = true);
 
 // LCOV_EXCL_START
 KInductionProblem makeSingleObservedOutputProblem(  // LCOV_EXCL_LINE
@@ -1585,7 +1586,8 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
     std::optional<size_t> exactPublicBadFrame,
     bool localizeMultiOutputFrontier,
     BaseCaseSolverProfile solverProfile,
-    SATSolverWrapper::SolveStatus* solveStatusOut) {
+    SATSolverWrapper::SolveStatus* solveStatusOut,
+    bool assumeResetFrontierProperty) {
   if (solveStatusOut != nullptr) {
     *solveStatusOut = SATSolverWrapper::SolveStatus::Unsat;
   }
@@ -1599,7 +1601,8 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
 
   const size_t bootstrapFrames = resetBootstrapFrames(problem);
   const bool resetBootstrapObservationFrontier =
-      bootstrapFrames != 0 && problem.usesResetBootstrapObservationFrontier();
+      assumeResetFrontierProperty && bootstrapFrames != 0 &&
+      problem.usesResetBootstrapObservationFrontier();
   const size_t internalK = k + bootstrapFrames;
   // Base BMC only needs to assert the requested bad frame(s).  For frontier
   // sweeps, earlier depths are checked by the caller; for cumulative base
@@ -2216,6 +2219,31 @@ bool baseCaseValidationUsesLocalQueryProfile(
   // profile and Glucose keeps its own native defaults.
   return solverType == KEPLER_FORMAL::Config::SolverType::CADICAL ||
          solverType == KEPLER_FORMAL::Config::SolverType::KISSAT;
+}
+
+std::optional<KInductionResult::CounterexampleWitness>
+findResetFrontierMismatch(const KInductionProblem& problem,
+                          KEPLER_FORMAL::Config::SolverType solverType) {
+  if (resetBootstrapFrames(problem) == 0 ||
+      !problem.usesResetBootstrapObservationFrontier()) {
+    return std::nullopt;
+  }
+  // Ask whether any reset trace lets the outputs agree on the frontier frame.
+  KInductionProblem agreeing = problem;
+  agreeing.bad = problem.property;
+  SATSolverWrapper::SolveStatus status = SATSolverWrapper::SolveStatus::Unknown;
+  findBaseCounterexampleImpl(
+      agreeing, solverType, 0, 0, /*localizeMultiOutputFrontier=*/false,
+      BaseCaseSolverProfile::PdrValidationProofOnly, &status,
+      /*assumeResetFrontierProperty=*/false);
+  if (status != SATSolverWrapper::SolveStatus::Unsat) {
+    return std::nullopt;
+  }
+  // None does, so every reset trace is a mismatch on that frame.
+  return findBaseCounterexampleImpl(
+      problem, solverType, 0, 0, /*localizeMultiOutputFrontier=*/false,
+      BaseCaseSolverProfile::SecConeProof, nullptr,
+      /*assumeResetFrontierProperty=*/false);
 }
 
 std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexample(

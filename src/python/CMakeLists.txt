@@ -16,13 +16,7 @@ add_library(kepler_borrowed_designs STATIC KeplerBorrowedDesigns.cpp KeplerNajaS
 target_include_directories(kepler_borrowed_designs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kepler_borrowed_designs PUBLIC kepler_verification_support)
 
-if(KEPLER_USE_PUBLISHED_NAJAEDA)
-  set(kepler_runtime_source KeplerPublishedNajaRuntime.cpp)
-  target_compile_definitions(kepler_borrowed_designs PUBLIC KEPLER_USE_PUBLISHED_NAJAEDA=1)
-else()
-  set(kepler_runtime_source KeplerNajaRuntime.cpp)
-endif()
-Python3_add_library(kepler_formal_native MODULE WITH_SOABI PyKeplerFormal.cpp ${kepler_runtime_source})
+Python3_add_library(kepler_formal_native MODULE WITH_SOABI PyKeplerFormal.cpp KeplerNajaRuntime.cpp)
 set_target_properties(kepler_formal_native PROPERTIES
   OUTPUT_NAME _native
   CXX_VISIBILITY_PRESET hidden
@@ -32,6 +26,9 @@ target_compile_definitions(kepler_formal_native PRIVATE
   KEPLER_FORMAL_VERSION="${PROJECT_VERSION}"
   KEPLER_FORMAL_GIT_HASH="${KEPLER_FORMAL_GIT_HASH}"
 )
+if(KEPLER_USE_PUBLISHED_NAJAEDA)
+  target_compile_definitions(kepler_formal_native PRIVATE KEPLER_USE_PUBLISHED_NAJAEDA=1)
+endif()
 target_include_directories(kepler_formal_native PRIVATE ${PROJECT_SOURCE_DIR}/src/bin)
 target_link_libraries(kepler_formal_native PRIVATE
   kepler_borrowed_designs
@@ -55,6 +52,15 @@ install(TARGETS
   PUBLIC_HEADER DESTINATION kepler_formal/include
   COMPONENT python-headers
 )
+if(APPLE)
+  # The provider fixup ad-hoc signs the module after linking. Installing
+  # rewrites its RPATH, which invalidates that signature, and Apple Silicon
+  # then kills the importing process. Sign the installed copy again.
+  install(CODE "execute_process(COMMAND codesign --force --sign -
+      \"\${CMAKE_INSTALL_PREFIX}/kepler_formal/$<TARGET_FILE_NAME:kepler_formal_native>\"
+      COMMAND_ERROR_IS_FATAL ANY)"
+    COMPONENT python)
+endif()
 
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/kepler_formal
