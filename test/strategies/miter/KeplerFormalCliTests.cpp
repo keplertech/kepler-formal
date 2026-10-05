@@ -4267,15 +4267,16 @@ TEST_F(KeplerFormalCliTests,
     const char* diagnostic;
     bool undriven = false;
   };
+  // SEC models X literals as permanently-X state (see
+  // docs/sec-sequential-models.md), so only Z literals are reported.
   const Case cases[] = {
-      {"x_ternary", "assign y = sel ? d : 1'bx;",
-       "unsupported X constant (1'bx)"},
+      {"x_ternary", "assign y = sel ? d : 1'bx;", nullptr},
       {"z_bitwise", "assign y = d & 1'bz;",
        "unsupported Z constant (1'bz)"},
-      {"x_direct", "assign y = 1'bx;", "unsupported X constant (1'bx)"},
+      {"x_direct", "assign y = 1'bx;", nullptr},
       {"z_direct", "assign y = 1'bz;", "unsupported Z constant (1'bz)"},
       {"x_next_state", "always_ff @(posedge clk) y <= sel ? d : 1'bx;",
-       "unsupported X constant (1'bx)"},
+       nullptr},
       {"known_zero", "assign y = sel ? d : 1'b0;", nullptr},
       {"undriven", "assign y = undriven;", nullptr, true},
   };
