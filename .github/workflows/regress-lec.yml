@@ -79,6 +79,22 @@ jobs:
           expect-identical \
           po-cnfs
 
+    # The same gcd netlists built by Python scripts through the Naja Python
+    # API must give the same verdict and the same CNF files. The Python
+    # interpreter leaks by design at exit, which the sanitizer must ignore.
+    - name: Run sky130hd_gcd_py
+      working-directory: ${{github.workspace}}
+      env:
+        ASAN_OPTIONS: detect_leaks=0
+      run: |
+        bash regress/run_cnf_regress.sh \
+          sky130hd_gcd_py \
+          "${{github.workspace}}/regress/sky130hd_gcd_py" \
+          "${{github.workspace}}/build/src/bin/kepler-formal" \
+          config.yaml \
+          expect-identical \
+          po-cnfs
+
     - name: Run nangate45_black_parrot
       working-directory: ${{github.workspace}}
       run: |

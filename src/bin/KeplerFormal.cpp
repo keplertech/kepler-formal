@@ -70,14 +70,15 @@ static const char* kSkippedOpaqueCellPOReport =
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl> "
+      "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> "
       "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--vhdl_design1_top <name>] [--vhdl_design2_top <name>] "
+      "[--python_design1_top <name>] [--python_design2_top <name>] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
-      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl> --design1 <file...> --design2 "
-      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> --design1 <file...> --design2 "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] | "
@@ -546,6 +547,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "check_reachability",
       "vhdl_design1_top",
       "vhdl_design2_top",
+      "python_design1_top",
+      "python_design2_top",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -736,6 +739,34 @@ struct VerilogTopOptions {
 
 // VHDL selects its tops the same way: one optional name per design.
 using VhdlTopOptions = VerilogTopOptions;
+// So does Python design input.
+using PythonTopOptions = VerilogTopOptions;
+
+// Python design input: every script of a design is run in order against the
+// same library, so a design can be split over several files. Each script
+// defines constructLibrary(lib) and builds its modules, instances and nets
+// with the naja module, the same way py_tech_files build primitives.
+static naja::NL::SNLDesign* constructPythonDesign(
+    const KEPLER_FORMAL::PrimitiveLibraryLoader& loader,
+    naja::NL::NLLibrary* library,
+    const std::vector<std::string>& designPaths,
+    const std::optional<std::string>& requestedTop,
+    int designIndex) {
+  for (const auto& designPath : designPaths) {
+    SPDLOG_INFO("Loading python design file: {}", designPath);
+    loader.loadDesignLibrary(library, std::filesystem::path(designPath));
+  }
+  if (!requestedTop) {
+    return SNLUtils::findTop(library);
+  }
+  auto* top = library->getSNLDesign(NLName(*requestedTop));
+  if (!top) {
+    throw std::runtime_error(
+        "Top module `" + *requestedTop + "` was not found in design " +
+        std::to_string(designIndex + 1));
+  }
+  return top;
+}
 
 static bool parseConfigInputPaths(const YAML::Node& node,
                                   DesignInputs& out,
@@ -1737,6 +1768,7 @@ static int KeplerFormalMainImpl(
     SYSTEMVERILOG,
     SV2V,
     VHDL,
+    PYTHON,
     CC,
     C_VS_RTL,
     RTL_VS_GATE,
@@ -1766,6 +1798,7 @@ static int KeplerFormalMainImpl(
   CcSynthesisOptions ccSynthesisOptions;
   VerilogTopOptions verilogTopOptions;
   VhdlTopOptions vhdlTopOptions;
+  PythonTopOptions pythonTopOptions;
   KEPLER_FORMAL::BoundaryPairs boundaryPairs;
   std::vector<std::string> libertyFiles;
   std::vector<std::string> pythonFiles;
@@ -1867,6 +1900,8 @@ static int KeplerFormalMainImpl(
             inputFormatType = FormatType::RTL_VS_GATE;
           } else if (fmt == "vhdl" || fmt == "vhd") {
             inputFormatType = FormatType::VHDL;
+          } else if (fmt == "python" || fmt == "py") {
+            inputFormatType = FormatType::PYTHON;
           } else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
@@ -2187,7 +2222,11 @@ static int KeplerFormalMainImpl(
             !applySystemVerilogConfigOption(
                 cfg, "vhdl_design1_top", vhdlTopOptions.design0, svConfigError) ||
             !applySystemVerilogConfigOption(
-                cfg, "vhdl_design2_top", vhdlTopOptions.design1, svConfigError)) {
+                cfg, "vhdl_design2_top", vhdlTopOptions.design1, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "python_design1_top", pythonTopOptions.design0, svConfigError) ||
+            !applySystemVerilogConfigOption(
+                cfg, "python_design2_top", pythonTopOptions.design1, svConfigError)) {
           // LCOV_EXCL_START
           SPDLOG_CRITICAL("Invalid design config option: {}", svConfigError);
           return EXIT_FAILURE;
@@ -2468,6 +2507,12 @@ static int KeplerFormalMainImpl(
         formatFound = true;
         break;
       }
+      if (arg == "-python" || arg == "-py") {
+        inputFormatType = FormatType::PYTHON;
+        ++parseStart;
+        formatFound = true;
+        break;
+      }
       // LCOV_EXCL_START
       SPDLOG_CRITICAL("Unrecognized option before input format type: {}", arg);
       return EXIT_FAILURE;
@@ -2677,6 +2722,7 @@ static int KeplerFormalMainImpl(
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
           arg == "--vhdl_design1_top" || arg == "--vhdl_design2_top" ||
+          arg == "--python_design1_top" || arg == "--python_design2_top" ||
           arg == "--sv_design1_top" || arg == "--sv_design2_top") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
@@ -2705,6 +2751,10 @@ static int KeplerFormalMainImpl(
           vhdlTopOptions.design0 = value;
         } else if (arg == "--vhdl_design2_top") {
           vhdlTopOptions.design1 = value;
+        } else if (arg == "--python_design1_top") {
+          pythonTopOptions.design0 = value;
+        } else if (arg == "--python_design2_top") {
+          pythonTopOptions.design1 = value;
         } else {
           verilogTopOptions.design1 = value;
           // LCOV_EXCL_STOP
@@ -2853,6 +2903,10 @@ static int KeplerFormalMainImpl(
   if (inputFormatType == FormatType::VHDL) {
     inputFormatName = "VHDL";
     inputFormatToken = "vhdl";
+  }
+  if (inputFormatType == FormatType::PYTHON) {
+    inputFormatName = "PYTHON";
+    inputFormatToken = "python";
   }
   if (runResult != nullptr) {
     runResult->inputFormat = inputFormatToken;
@@ -3087,6 +3141,11 @@ static int KeplerFormalMainImpl(
     SPDLOG_CRITICAL("VHDL top options are only valid with -vhdl input");
     return EXIT_FAILURE;
   }
+  if (inputFormatType != FormatType::PYTHON &&
+      (pythonTopOptions.design0 || pythonTopOptions.design1)) {
+    SPDLOG_CRITICAL("Python top options are only valid with -python input");
+    return EXIT_FAILURE;
+  }
   if (inputFormatType == FormatType::SV2V && verilogTopOptions.design0) {
     SPDLOG_CRITICAL(
         "sv2v format only accepts a Verilog top option for design 2; "
@@ -3192,7 +3251,7 @@ static int KeplerFormalMainImpl(
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
-  if (!pythonFiles.empty()) {
+  if (!pythonFiles.empty() || inputFormatType == FormatType::PYTHON) {
     try {
       primitiveLoader.prepare(argv[0]);
     } catch (const std::exception& error) {
@@ -3531,10 +3590,12 @@ static int KeplerFormalMainImpl(
              inputFormatType == FormatType::SYSTEMVERILOG ||
              inputFormatType == FormatType::SV2V ||
              inputFormatType == FormatType::RTL_VS_GATE ||
-             inputFormatType == FormatType::VHDL;
+             inputFormatType == FormatType::VHDL ||
+             inputFormatType == FormatType::PYTHON;
     };
 
     const bool useVhdl = inputFormatType == FormatType::VHDL;
+    const bool usePython = inputFormatType == FormatType::PYTHON;
 
     const auto designUsesSystemVerilog = [&](int designIndex) {
       return inputFormatType == FormatType::SYSTEMVERILOG ||
@@ -3569,12 +3630,22 @@ static int KeplerFormalMainImpl(
         db->setID(dbID);
         const bool useSystemVerilog = designUsesSystemVerilog(designIndex);
         SPDLOG_INFO("Parsing {} file(s) for design {}",
-                    useVhdl ? "vhdl"
-                            : useSystemVerilog ? "systemverilog" : "verilog",
+                    usePython ? "python"
+                              : useVhdl ? "vhdl"
+                                        : useSystemVerilog ? "systemverilog"
+                                                           : "verilog",
                     designIndex + 1);
         auto designLibrary = NLLibrary::create(db, NLName("DESIGN"));
         naja::NL::SNLDesign* vhdlTop = nullptr;
-        if (useVhdl) {
+        if (usePython) {
+          vhdlTop = constructPythonDesign(
+              primitiveLoader,
+              designLibrary,
+              designPaths,
+              designIndex == 0 ? pythonTopOptions.design0
+                               : pythonTopOptions.design1,
+              designIndex);
+        } else if (useVhdl) {
           vhdlTop = constructVhdlDesign(
               designLibrary,
               designPaths,
@@ -3635,7 +3706,7 @@ static int KeplerFormalMainImpl(
           constructor.config_.preprocessEnabled_ = verilogPreprocessing;
           constructor.construct(toPathVector(designPaths));
         }
-        auto top = useVhdl
+        auto top = useVhdl || usePython
                        ? vhdlTop
                        : useSystemVerilog
                              ? SNLUtils::findTop(designLibrary)
@@ -3857,7 +3928,8 @@ static int KeplerFormalMainImpl(
                 inputFormatType == FormatType::SYSTEMVERILOG,
                 designInputs,
                 systemVerilogOptions,
-                useVhdl ? vhdlTopOptions : verilogTopOptions,
+                usePython ? pythonTopOptions
+                          : useVhdl ? vhdlTopOptions : verilogTopOptions,
                 boundaryPairs)) {
           // CVA6-style smoke runs often compare a design against itself. In
           // compact SEC, extracting that identical second side would require
@@ -3944,14 +4016,20 @@ static int KeplerFormalMainImpl(
       const bool design0UsesSystemVerilog = designUsesSystemVerilog(0);
       SPDLOG_INFO("Parsing {} file(s) for design 1",
       // LCOV_EXCL_STOP
-                  useVhdl ? "vhdl"
-                          : design0UsesSystemVerilog ? "systemverilog"
-                                                     : "verilog");
+                  usePython ? "python"
+                            : useVhdl ? "vhdl"
+                                      : design0UsesSystemVerilog
+                                            ? "systemverilog"
+                                            : "verilog");
       // LCOV_EXCL_START
       auto designLibrary = NLLibrary::create(db0, NLName("DESIGN"));
       naja::NL::SNLDesign* vhdlTop = nullptr;
       // LCOV_EXCL_STOP
-      if (useVhdl) {
+      if (usePython) {
+        vhdlTop = constructPythonDesign(
+            primitiveLoader, designLibrary, designInputs.design0,
+            pythonTopOptions.design0, 0);
+      } else if (useVhdl) {
         vhdlTop = constructVhdlDesign(
             designLibrary, designInputs.design0, vhdlTopOptions.design0);
       // LCOV_EXCL_START
@@ -3998,7 +4076,7 @@ static int KeplerFormalMainImpl(
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
         constructor.construct(design0Paths);
       }
-      auto top = useVhdl
+      auto top = useVhdl || usePython
                      ? vhdlTop
                      : design0UsesSystemVerilog
                            ? SNLUtils::findTop(designLibrary)
@@ -4080,14 +4158,20 @@ static int KeplerFormalMainImpl(
       const bool design1UsesSystemVerilog = designUsesSystemVerilog(1);
       SPDLOG_INFO("Parsing {} file(s) for design 2",
       // LCOV_EXCL_STOP
-                  useVhdl ? "vhdl"
-                          : design1UsesSystemVerilog ? "systemverilog"
-                                                     : "verilog");
+                  usePython ? "python"
+                            : useVhdl ? "vhdl"
+                                      : design1UsesSystemVerilog
+                                            ? "systemverilog"
+                                            : "verilog");
       // LCOV_EXCL_START
       auto designLibrary = NLLibrary::create(db1, NLName("DESIGN"));
       naja::NL::SNLDesign* vhdlTop = nullptr;
       // LCOV_EXCL_STOP
-      if (useVhdl) {
+      if (usePython) {
+        vhdlTop = constructPythonDesign(
+            primitiveLoader, designLibrary, designInputs.design1,
+            pythonTopOptions.design1, 1);
+      } else if (useVhdl) {
         vhdlTop = constructVhdlDesign(
             designLibrary, designInputs.design1, vhdlTopOptions.design1);
       // LCOV_EXCL_START
@@ -4120,7 +4204,7 @@ static int KeplerFormalMainImpl(
         constructor.config_.preprocessEnabled_ = verilogPreprocessing;
         constructor.construct(design1Paths);
       }
-      auto top = useVhdl
+      auto top = useVhdl || usePython
                      ? vhdlTop
                      : design1UsesSystemVerilog
                            ? SNLUtils::findTop(designLibrary)

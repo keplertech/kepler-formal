@@ -109,17 +109,26 @@ class StandalonePrimitiveLoader final : public KEPLER_FORMAL::PrimitiveLibraryLo
             const std::filesystem::path& path) const override {
     naja::NL::SNLPyLoader::loadPrimitives(library, path);
   }
+  void loadDesignLibrary(naja::NL::NLLibrary* library,
+                         const std::filesystem::path& path) const override {
+    naja::NL::SNLPyLoader::loadLibrary(library, path);
+  }
 };
 
 class InProcessPrimitiveLoader final : public KEPLER_FORMAL::PrimitiveLibraryLoader {
  public:
   void prepare(const char*) const override {
     throw std::runtime_error(
-        "py_tech_files are not supported by the in-process file API");
+        "Python inputs (py_tech_files or the python format) are not supported "
+        "by the in-process file API");
   }
   void load(naja::NL::NLLibrary*, const std::filesystem::path&) const override {
     // Shared validation calls prepare before any loading begins.
     throw std::logic_error("In-process Python primitive loading was not validated");
+  }
+  void loadDesignLibrary(naja::NL::NLLibrary*,
+                         const std::filesystem::path&) const override {
+    throw std::logic_error("In-process Python design loading was not validated");
   }
 };
 

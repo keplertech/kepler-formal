@@ -20,6 +20,10 @@ class PrimitiveLibraryLoader {
   virtual void prepare(const char* executable) const = 0;
   virtual void load(naja::NL::NLLibrary* library,
                     const std::filesystem::path& path) const = 0;
+  // Python design input: the script's constructLibrary(lib) builds the
+  // design's modules, instances and nets in `library`.
+  virtual void loadDesignLibrary(naja::NL::NLLibrary* library,
+                                 const std::filesystem::path& path) const = 0;
 };
 
 // File workflow: argument/YAML parsing, file loading,

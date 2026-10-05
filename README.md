@@ -172,7 +172,7 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ```bash
 # Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl/-cc/-cxx> [options] \
+build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl/-python/-cc/-cxx> [options] \
   <design1> <design2> [<library-file>...]
 
 # Multi-file Verilog
@@ -206,11 +206,13 @@ build/src/bin/kepler-formal -vhdl -v sec \
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
 | `-vhdl` | Parse both designs as VHDL. Requires SEC. Experimental; see [VHDL support](docs/vhdl/README.md). |
+| `-python`, `-py` | Build both designs from Python scripts through the Naja Python API; see [Python design input](docs/python-design-input.md). |
 | `-cc`, `-cxx` | Synthesize one C/C++ translation unit per design to SystemVerilog with XLS, then run SEC on the generated RTL. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
 | `--vhdl_design1_top <top>`, `--vhdl_design2_top <top>` | Select the top entity for each VHDL design. |
+| `--python_design1_top <top>`, `--python_design2_top <top>` | Select the top module for each Python-built design. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--cc_top <function>` | C/C++ top function for both designs. Use `--cc_design1_top` / `--cc_design2_top` when they differ. |
 | `--cc_include <dir>` | Add an include directory for XLS C/C++ synthesis. May be repeated. |
@@ -234,7 +236,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. Defaults to `verilog` if omitted. |
+| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `python`, `py`, `cc`, `c`, `cxx`, `cpp`, or `c2rtl`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `btor2_export` | bool | Enable BTOR2 export before solving; SEC only. Defaults to `false`. |
 | `btor2_export_path` | string | BTOR2 destination; defaults to `miter.btor2` when enabled. Requires `btor2_export: true`. |
