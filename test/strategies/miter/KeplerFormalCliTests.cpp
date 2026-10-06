@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -1027,6 +1028,46 @@ TEST_F(KeplerFormalCliTests, InProcessDriverRejectsAnActiveNajaUniverse) {
   const auto help =
       runStructuredWithArgs({"kepler-formal", "--help"});
   EXPECT_EQ(help.result.status, KEPLER_FORMAL::RunStatus::NoResult);
+}
+
+TEST_F(KeplerFormalCliTests, LecLogNamesTheSolverProblemAndItsTime) {
+  // An equivalent pair the miter cannot hash away, so the solver runs. Its
+  // start line names the problem it was given and its finish line the time:
+  // a long solve can then be told from a hang and compared with a smaller.
+  NamedLoggerGuard loggerGuard("kepler_formal_main_logger");
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input a, input b, output y);\n"
+      "  assign y = a & b;\n"
+      "endmodule\n",
+      "module top(input a, input b, output y);\n"
+      "  assign y = ~(~a | ~b);\n"
+      "endmodule\n");
+  const auto log = fixture.tmpDir / "problem_size.log";
+  const auto cfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "log_file: " + log.string() + "\n");
+  const auto run = runStructuredWithConfigFile(cfg);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  std::ifstream in(log);
+  std::stringstream text;
+  text << in.rdbuf();
+  EXPECT_TRUE(std::regex_search(
+      text.str(),
+      std::regex("Starting solver: [0-9]+ variables, [0-9]+ clauses, "
+                 "[0-9]+ outputs compared")))
+      << text.str();
+  EXPECT_TRUE(std::regex_search(
+      text.str(),
+      std::regex("SAT solver finished: (SAT|UNSAT) in [0-9]+\\.[0-9] s")))
+      << text.str();
+  std::filesystem::remove(cfg);
+  std::filesystem::remove_all(fixture.tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {

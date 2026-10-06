@@ -1,6 +1,7 @@
 // Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include "MiterStrategy.h"
 #include "BoolExpr.h"
 #include "BuildPrimaryOutputClauses.h"
@@ -1053,9 +1054,12 @@ bool MiterStrategy::run(bool compact) {
   solver.addClause({rootVar});
 
   // solve with no assumptions
-  logger->info("Starting solver");
+  logger->info("Starting solver: {} variables, {} clauses, {} outputs compared",
+               solver.numVariables(), solver.numClauses(), POs0.size());
+  const auto solveStart = std::chrono::steady_clock::now();
   bool sat = solver.solve();
-  logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
+  logger->info("SAT solver finished: {} in {:.1f} s", sat ? "SAT" : "UNSAT",
+               std::chrono::duration<double>(std::chrono::steady_clock::now() - solveStart).count());
 
   if (sat) {
     logger->info("Miter found a difference -> moving to analyze individual POs");
@@ -1362,9 +1366,12 @@ bool MiterStrategy::runCompactPOs(const tbb::concurrent_vector<BoolExpr*>& POs0,
   int rootVar = tseitinEncode(solver, miter, node2var, varName2idx);
   solver.addClause({rootVar});
 
-  logger->info("Starting solver");
+  logger->info("Starting solver: {} variables, {} clauses, {} outputs compared",
+               solver.numVariables(), solver.numClauses(), POs0.size());
+  const auto solveStart = std::chrono::steady_clock::now();
   const bool sat = solver.solve();
-  logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
+  logger->info("SAT solver finished: {} in {:.1f} s", sat ? "SAT" : "UNSAT",
+               std::chrono::duration<double>(std::chrono::steady_clock::now() - solveStart).count());
   logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
   if (sat) {
     logger->warn("Due to compact mode, per PO analysis is skipped.");

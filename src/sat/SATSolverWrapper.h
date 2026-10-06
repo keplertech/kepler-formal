@@ -340,9 +340,19 @@ public:
     addClauseRange(lits);
   }
 
+  // The problem as handed to the solver, for the log line that starts it:
+  // clauses added and the largest variable any of them uses.
+  size_t numClauses() const { return numClauses_; }
+  size_t numVariables() const { return numVariables_; }
+
  private:
   template <typename ClauseRange>
   void addClauseRange(const ClauseRange& lits) {
+    ++numClauses_;
+    for (int lit : lits) {
+      // external +-(var+2): a literal of magnitude v is variable v-1 counted from 1
+      numVariables_ = std::max(numVariables_, static_cast<size_t>(std::abs(lit)) - 1);
+    }
     if (solverType_ == KEPLER_FORMAL::Config::SolverType::GLUCOSE) {
       Glucose::vec<Glucose::Lit> clause;
       for (int lit : lits) {
@@ -1115,6 +1125,8 @@ public:
   // LCOV_EXCL_STOP
 
 private:
+  size_t numClauses_ = 0;
+  size_t numVariables_ = 0;
   static CaDiCraig::CraigVarType cadicalCraigVariableType( // LCOV_EXCL_LINE
       CraigVariablePartition partition) {
     switch (partition) { // LCOV_EXCL_LINE
