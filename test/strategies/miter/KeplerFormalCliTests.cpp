@@ -977,6 +977,12 @@ TEST_F(KeplerFormalCliTests, SecResultExitCodesAreStable) {
   EXPECT_EQ(kSecCounterexampleExitCode, 3);
 }
 
+TEST_F(KeplerFormalCliTests, LecResultExitCodesAreStable) {
+  // Equivalent is 0; a difference shares SEC's counterexample code.
+  EXPECT_EQ(kLecDifferenceExitCode, 3);
+  EXPECT_EQ(kLecDifferenceExitCode, kSecCounterexampleExitCode);
+}
+
 TEST_F(KeplerFormalCliTests, InProcessRunStatusNamesAreStable) {
   using KEPLER_FORMAL::RunStatus;
   EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::NoResult), "no_result");
@@ -1075,8 +1081,8 @@ TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {
       "  - " + fixture.design1Path.string() + "\n"
       "log_file: " + differentLog.string() + "\n");
   const auto different = runStructuredWithConfigFile(differentCfg);
-  EXPECT_EQ(different.exitCode, EXIT_SUCCESS);
-  EXPECT_EQ(different.result.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(different.exitCode, kLecDifferenceExitCode);
+  EXPECT_EQ(different.result.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(different.result.status, KEPLER_FORMAL::RunStatus::Different);
   EXPECT_EQ(different.result.logFile, differentLog.string());
   EXPECT_TRUE(std::filesystem::exists(differentLog));

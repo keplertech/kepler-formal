@@ -15,6 +15,11 @@ inline constexpr int kSecPartiallyProvedExitCode = 1;
 inline constexpr int kSecInconclusiveExitCode = 2;
 inline constexpr int kSecCounterexampleExitCode = 3;
 
+// A completed LEC that found a difference exits with the same code as a SEC
+// counterexample, so a script tells "different" from "equivalent" by the
+// exit status alone in either mode; equivalent is 0.
+inline constexpr int kLecDifferenceExitCode = kSecCounterexampleExitCode;
+
 // Shared helper for consistent filename handling.
 std::string sanitizeFileToken(const std::string& input);
 

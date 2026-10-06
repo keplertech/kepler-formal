@@ -3084,7 +3084,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     cfg << "log_file: \"" << differentLog.string() << "\"\n";
   }
   int rc = runKeplerCliWithArgs({"--config", differentCfg.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // a difference: the code a SEC counterexample has
   ASSERT_TRUE(std::filesystem::exists(differentLog));
   std::ifstream miterLogFile(differentLog);
   std::string line;
@@ -3787,7 +3787,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRun) {
     config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog_bazel.yaml";
   }
   int rc = run_kepler_cli_with_args({"--config", config});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
@@ -3804,7 +3804,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
                                          pfx + "examples/tinyrocket/fakeram45_64x15.lib",
                                          pfx + "examples/tinyrocket/fakeram45_64x32.lib",
                                          pfx + "examples/tinyrocket/fakeram45_1024x32.lib"});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
@@ -3851,7 +3851,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
   configFile.close();
 
   int rc = run_kepler_cli_with_args({"--config", config.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
   std::filesystem::remove_all(tempDir);
 }
 
@@ -3902,7 +3902,7 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
   }
 
   int rc = run_kepler_cli_with_args({"--config", configPath.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
   ASSERT_TRUE(std::filesystem::exists(logPath));
 
   std::ifstream logFile(logPath);
