@@ -135,6 +135,13 @@ YAML `py_tech_files` option. See
 [Custom Python Primitives](docs/python-primitives.md) for setup and deployment
 and the [Xilinx FPGA example](examples/xilinx) for the use model.
 
+### LEC Result Codes
+
+| Result | Exit code | Meaning |
+| --- | ---: | --- |
+| Equivalent | `0` | No difference was found. |
+| Difference found | `3` | A mismatch was found; the same code as a SEC counterexample. |
+
 ### SEC Result Codes
 
 | Result | Exit code | Meaning |
