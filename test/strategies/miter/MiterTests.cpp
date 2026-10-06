@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -3207,6 +3208,96 @@ static int run_kepler_cli_with_args(const std::vector<std::string>& args) {
     return EXIT_FAILURE;
   }
 #endif
+}
+
+// A scratch directory per test, and a shell run of kepler-formal in it with
+// stdout and stderr kept: the subprocess form of a CLI test.
+static std::filesystem::path cliScratchDir(const std::string& name) {
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("kepler_cli_" + name + "_" +
+                    std::to_string(std::chrono::steady_clock::now()
+                                       .time_since_epoch()
+                                       .count()));
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+static void writeText(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream out(path);
+  out << text;
+}
+
+static std::string readText(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::stringstream text;
+  text << in.rdbuf();
+  return text.str();
+}
+
+// AND2, NAND2 and INV, enough for an equivalent pair the miter cannot hash
+// away: AND2 against NAND2 into INV.
+static const char* kTinyLiberty =
+    "library(tiny) {\n"
+    "  cell(AND2) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(B) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"(A&B)\"; }\n"
+    "  }\n"
+    "  cell(NAND2) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(B) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"!(A&B)\"; }\n"
+    "  }\n"
+    "  cell(INV) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"!A\"; }\n"
+    "  }\n"
+    "}\n";
+
+// Runs kepler-formal in `dir`; its output goes to `dir`/kepler.out.
+static int runKeplerIn(const std::filesystem::path& dir,
+                       const std::vector<std::string>& args) {
+  std::string cmd = "cd '" + dir.string() + "' && '" + std::string(KEPLER_BIN) + "'";
+  for (const auto& a : args) {
+    cmd += " '" + a + "'";
+  }
+  cmd += " > kepler.out 2>&1";
+  const int rc = std::system(cmd.c_str());
+  return (rc != -1 && WIFEXITED(rc)) ? WEXITSTATUS(rc) : EXIT_FAILURE;
+}
+
+TEST(KeplerCliSubprocessTests, LecLogNamesTheSolverProblemAndItsTime) {
+  // An equivalent pair the miter cannot hash away, so the solver runs: its
+  // start line names the problem it was given, its finish line the time.
+  const auto dir = cliScratchDir("lec_problem_size");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "and.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "nand_inv.v",
+            "module top(input a, input b, output y);\n"
+            "  wire n;\n"
+            "  NAND2 u0 (.A(a), .B(b), .Y(n));\n"
+            "  INV u1 (.A(n), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "cfg.yaml",
+            "format: verilog\n"
+            "verification: lec\n"
+            "input_paths:\n  - and.v\n  - nand_inv.v\n"
+            "liberty_files:\n  - tiny.lib\n"
+            "log_file: miter.log\n");
+  ASSERT_EQ(runKeplerIn(dir, {"--config", "cfg.yaml"}), 0)
+      << readText(dir / "kepler.out");
+  const auto log = readText(dir / "miter.log");
+  EXPECT_TRUE(std::regex_search(
+      log, std::regex("Starting solver: [0-9]+ variables, [0-9]+ clauses, "
+                      "[0-9]+ outputs compared")))
+      << log;
+  EXPECT_TRUE(std::regex_search(
+      log, std::regex("SAT solver finished: UNSAT in [0-9]+\\.[0-9] s")))
+      << log;
+  std::filesystem::remove_all(dir);
 }
 
 TEST(KeplerCliSubprocessTests, BinaryExists) {
