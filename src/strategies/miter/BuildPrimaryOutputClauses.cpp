@@ -12,6 +12,7 @@
 #include "NajaProperty.h"
 #include "../../config/Config.h"
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <ostream>
@@ -79,6 +80,7 @@ bool shouldReportSkippedPOs() {
 
 const char* kSkippedMultiDriverPOReport = "skipped_multi_driver_pos.txt";
 const char* kSkippedNoDriverPOReport = "skipped_no_driver_pos.txt";
+const char* kSkippedGatedClockPOReport = "skipped_gated_clock_pos.txt";
 
 	struct SparseReportedIDs {
 	  bool mark(const DNLFull* dnl, size_t nBits, DNLID id) {
@@ -257,6 +259,51 @@ BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
     std::string detail,
     DNLID opaqueTerm = DNLID_MAX) {
   return {reason, std::move(detail), opaqueTerm};
+}
+
+// The cell output driving a clock pin of the sequential instance that
+// input `termID` belongs to, when the tool cannot model it: no truth
+// table, yet a combinational dependency on the cell's inputs, which is how
+// an integrated clock gate's GCLK (CLK & latched enable) comes out of the
+// liberty. DNLID_MAX otherwise: not a sequential cell's input, or a clock
+// from a port, a buffer (it has a truth table) or a clock divider's flop
+// (no combinational inputs). A clock pin is an input with clock-related
+// inputs of its own.
+DNLID gatedClockDriver(DNLID termID) {
+  const DNLFull* dnl = naja::DNL::get();
+  const auto& term = dnl->getDNLTerminalFromID(termID);
+  if (term.isNull() || term.isTopPort() ||
+      term.getSnlBitTerm()->getDirection() == SNLBitTerm::Direction::Output) {
+    return DNLID_MAX;
+  }
+  const auto& instance = term.getDNLInstance();
+  for (DNLID t = instance.getTermIndexes().first;
+       t != DNLID_MAX && t <= instance.getTermIndexes().second; ++t) {
+    const auto& clockTerm = dnl->getDNLTerminalFromID(t);
+    if (clockTerm.getSnlBitTerm()->getDirection() ==
+            SNLBitTerm::Direction::Output ||
+        SNLDesignModeling::getClockRelatedInputs(clockTerm.getSnlBitTerm())
+            .empty() ||
+        clockTerm.getIsoID() == DNLID_MAX) {
+      continue;
+    }
+    const auto& iso =
+        dnl->getDNLIsoDB().getIsoFromIsoIDconst(clockTerm.getIsoID());
+    for (DNLID d : iso.getDrivers()) {
+      const auto& driver = dnl->getDNLTerminalFromID(d);
+      if (driver.isNull() || driver.isTopPort()) {
+        continue;
+      }
+      auto* bitTerm = driver.getSnlBitTerm();
+      const auto tt = SNLDesignModeling::getTruthTable(bitTerm->getDesign(),
+                                                       bitTerm->getOrderID());
+      if (!tt.isInitialized() &&
+          !SNLDesignModeling::getCombinatorialInputs(bitTerm).empty()) {
+        return d;
+      }
+    }
+  }
+  return DNLID_MAX;
 }
 
 void reportSkippedPO(const DNLFull* dnl,
@@ -872,12 +919,55 @@ void BuildPrimaryOutputClauses::build() {
     // LCOV_EXCL_STOP
     IsPOs_[po] = true;
   }
+  // Experimental (skip_gated_clock_flops): a flop's data input is a
+  // compared output, its next state; with the clock gated by a cell the
+  // tool cannot model, the enable lives on the clock and the data input
+  // alone is not the next state. Those are left out, each one decided
+  // here, before outputs on one iso share a representative, so a skip
+  // never reaches an output that is not a gated flop's.
+  std::vector<bool> gatedClockOutput(outputs_.size(), false);
+  if (Config::getSkipGatedClockFlops()) {
+    size_t gatedCount = 0;
+    for (size_t i = 0; i < outputs_.size(); ++i) {
+      const DNLID gate = gatedClockDriver(outputs_[i]);
+      if (gate == DNLID_MAX) {
+        continue;
+      }
+      const auto& gateTerm = get()->getDNLTerminalFromID(gate);
+      const std::string detail =
+          "experimental skip_gated_clock_flops: the flop is clocked through " +
+          gateTerm.getDNLInstance().getSNLModel()->getName().getString() +
+          "/" + gateTerm.getSnlBitTerm()->getName().getString() +
+          ", which cannot be modelled; its next state is not compared";
+      gatedClockOutput[i] = true;
+      POs_[i] = BoolExpr::createInvalid();
+      skippedOutputs_[outputs_[i]] =
+          makeSkippedOutputInfo(SkippedOutputReason::GatedClock, detail, gate);
+      reportSkippedPO(get(), get()->getDNLTerminalFromID(outputs_[i]),
+                      detail.c_str(), kSkippedGatedClockPOReport);
+      ++gatedCount;
+    }
+    if (gatedCount > 0) {
+      std::fprintf(stderr,
+                   "WARNING: skip_gated_clock_flops (experimental): %zu flop "
+                   "input(s) clocked through a cell that cannot be modelled "
+                   "were not compared%s\n",
+                   gatedCount,
+                   shouldReportSkippedPOs()
+                       ? "; listed in skipped_gated_clock_pos.txt"
+                       : "; report_skipped_pos lists them");
+    }
+  }
   std::vector<size_t> representativeForOutput(outputs_.size());
   std::vector<size_t> representativeOutputs;
   representativeOutputs.reserve(outputs_.size());
   std::unordered_map<DNLID, size_t> firstOutputForIso;
   firstOutputForIso.reserve(outputs_.size());
   for (size_t i = 0; i < outputs_.size(); ++i) {
+    if (gatedClockOutput[i]) {
+      representativeForOutput[i] = i;
+      continue;
+    }
     const DNLID isoID = get()->getDNLTerminalFromID(outputs_[i]).getIsoID();
     if (isoID != DNLID_MAX) {
       auto [it, inserted] = firstOutputForIso.emplace(isoID, i);

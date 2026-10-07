@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -3914,6 +3915,145 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
 }
 
 // Required main function for Google Test
+TEST_F(MiterTests, SkipGatedClockFlopsLeavesOutOnlyFlopsClockedThroughAnIcg) {
+  // An integrated clock gate as asap7's liberty writes it (opaque: a
+  // statetable latch) gating one flop; a second flop on the free clock.
+  const auto libertyPath = testTempPath("gated_clock.lib");
+  {
+    std::ofstream liberty(libertyPath);
+    ASSERT_TRUE(liberty.good());
+    liberty << R"liberty(
+library (gated_clock) {
+  cell (ICG) {
+    clock_gating_integrated_cell : latch_posedge_precontrol;
+    statetable ("CLK ENA SE", "IQ") {
+      table : "L L L : - : L,
+               L L H : - : H,
+               L H L : - : H,
+               L H H : - : H,
+               H - - : - : N";
+    }
+    pin (IQ) {
+      direction : internal;
+      internal_node : "IQ";
+    }
+    pin (GCLK) {
+      direction : output;
+      state_function : "CLK & IQ";
+    }
+    pin (CLK) {
+      direction : input;
+      clock : true;
+    }
+    pin (ENA) {
+      direction : input;
+    }
+    pin (SE) {
+      direction : input;
+    }
+  }
+  cell (DFF) {
+    ff (IQ, IQN) {
+      clocked_on : "CLK";
+      next_state : "D";
+    }
+    pin (D) {
+      direction : input;
+    }
+    pin (CLK) {
+      direction : input;
+      clock : true;
+    }
+    pin (Q) {
+      direction : output;
+      function : "IQ";
+    }
+  }
+}
+)liberty";
+  }
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* cells =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("gated_clock"));
+  SNLLibertyConstructor constructor(cells);
+  constructor.construct(libertyPath);
+  auto* icg = cells->getSNLDesign(NLName("ICG"));
+  auto* dff = cells->getSNLDesign(NLName("DFF"));
+  ASSERT_NE(nullptr, icg);
+  ASSERT_NE(nullptr, dff);
+
+  auto* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("top"));
+  universe->setTopDesign(top);
+  auto port = [&](const char* name, SNLTerm::Direction direction) {
+    auto* term = SNLScalarTerm::create(top, direction, NLName(name));
+    auto* net = SNLScalarNet::create(top, NLName(std::string("net_") + name));
+    term->setNet(net);
+    return net;
+  };
+  auto* clk = port("clk", SNLTerm::Direction::Input);
+  auto* en = port("en", SNLTerm::Direction::Input);
+  auto* d0 = port("d0", SNLTerm::Direction::Input);
+  auto* d1 = port("d1", SNLTerm::Direction::Input);
+  auto* q0 = port("q0", SNLTerm::Direction::Output);
+  auto* q1 = port("q1", SNLTerm::Direction::Output);
+  auto* gclk = SNLScalarNet::create(top, NLName("gclk"));
+  auto connect = [](SNLInstance* instance, const char* pin, SNLNet* net) {
+    instance->getInstTerm(instance->getModel()->getScalarTerm(NLName(pin)))
+        ->setNet(net);
+  };
+  auto* gate = SNLInstance::create(top, icg, NLName("gate"));
+  connect(gate, "CLK", clk);
+  connect(gate, "ENA", en);
+  connect(gate, "SE", en);
+  connect(gate, "GCLK", gclk);
+  auto* gated = SNLInstance::create(top, dff, NLName("gated"));
+  connect(gated, "CLK", gclk);
+  connect(gated, "D", d0);
+  connect(gated, "Q", q0);
+  auto* ungated = SNLInstance::create(top, dff, NLName("ungated"));
+  connect(ungated, "CLK", clk);
+  connect(ungated, "D", d1);
+  connect(ungated, "Q", q1);
+
+  using Reason = BuildPrimaryOutputClauses::SkippedOutputReason;
+  // Every skipped output, by <instance>/<pin>.
+  auto skipped = [&](bool skipGatedClockFlops) {
+    KEPLER_FORMAL::Config::setSkipGatedClockFlops(skipGatedClockFlops);
+    naja::DNL::destroy();
+    naja::DNL::get();
+    BuildPrimaryOutputClauses builder;
+    builder.setRetainDnl(true);
+    builder.collect();
+    builder.build();
+    std::map<std::string, Reason> out;
+    for (const auto& [id, info] : builder.getSkippedOutputs()) {
+      const auto& term = naja::DNL::get()->getDNLTerminalFromID(id);
+      out[term.getDNLInstance().getSNLInstance()->getName().getString() + "/" +
+          term.getSnlBitTerm()->getName().getString()] = info.reason;
+    }
+    KEPLER_FORMAL::Config::setSkipGatedClockFlops(false);
+    return out;
+  };
+
+  const auto on = skipped(true);
+  ASSERT_EQ(1u, on.count("gated/D"));
+  EXPECT_EQ(Reason::GatedClock, on.at("gated/D"));
+  for (const auto& [name, reason] : on) {
+    if (name.rfind("gated/", 0) != 0) {
+      EXPECT_NE(Reason::GatedClock, reason) << name;
+    }
+  }
+  EXPECT_EQ(0u, on.count("ungated/D"));
+
+  for (const auto& [name, reason] : skipped(false)) {
+    EXPECT_NE(Reason::GatedClock, reason) << name;
+  }
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

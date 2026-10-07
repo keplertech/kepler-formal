@@ -46,6 +46,7 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
     LogicalLoop,
     OpaqueInternal,
     UnknownConstant,
+    GatedClock,
   };
 
   struct SkippedOutputInfo {  // LCOV_EXCL_LINE
