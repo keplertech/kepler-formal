@@ -76,13 +76,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] | "
+      "[--report-skipped-pos] [--skip-gated-clock-flops] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] "
+      "[--report-skipped-pos] [--skip-gated-clock-flops] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -510,6 +510,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf_path",
       "compact_mode",
       "report_skipped_pos",
+      "skip_gated_clock_flops",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1342,6 +1343,7 @@ static int KeplerFormalMainImpl(
   std::string dumpPoCnfPath;
 
   KEPLER_FORMAL::Config::setReportSkippedPOs(false);
+  bool skipGatedClockFlops = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -1597,6 +1599,12 @@ static int KeplerFormalMainImpl(
           reportSkippedPOs = cfg["report_skipped_pos"].as<bool>();
         }
         // LCOV_EXCL_STOP
+
+        // skip_gated_clock_flops (experimental)
+        if (cfg["skip_gated_clock_flops"] &&
+            cfg["skip_gated_clock_flops"].IsScalar()) {
+          skipGatedClockFlops = cfg["skip_gated_clock_flops"].as<bool>();
+        }
 
         // verilog_preprocessing (optional)
         if (cfg["verilog_preprocessing"] && cfg["verilog_preprocessing"].IsScalar()) {
@@ -2079,6 +2087,10 @@ static int KeplerFormalMainImpl(
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--skip-gated-clock-flops") {
+        skipGatedClockFlops = true;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
@@ -2399,6 +2411,12 @@ static int KeplerFormalMainImpl(
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
+  KEPLER_FORMAL::Config::setSkipGatedClockFlops(skipGatedClockFlops);
+  if (skipGatedClockFlops) {
+    SPDLOG_WARN(
+        "skip_gated_clock_flops (experimental): the next state of a flop "
+        "clocked through a cell that cannot be modelled is not compared");
+  }
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"

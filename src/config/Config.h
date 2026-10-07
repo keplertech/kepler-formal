@@ -69,12 +69,25 @@ public:
     return reportSkippedPOs_;
   }
 
+  // Experimental: leave out the next-state comparison of every flop whose
+  // clock pin is driven by a cell the tool cannot model (an integrated
+  // clock gate's latch), with a warning that lists them, and compare the
+  // rest. Off by default.
+  static void setSkipGatedClockFlops(bool enabled) {
+    skipGatedClockFlops_ = enabled;
+  }
+
+  static bool getSkipGatedClockFlops() {
+    return skipGatedClockFlops_;
+  }
+
 private:
   Config() = default;
   ~Config() = default;
 
   inline static SolverType solverType_ = KISSAT;
   inline static bool reportSkippedPOs_ = false;
+  inline static bool skipGatedClockFlops_ = false;
   inline static std::atomic<uint64_t> nextVerificationGeneration_{1};
   inline static std::atomic<uint64_t> verificationGeneration_{0};
 };
