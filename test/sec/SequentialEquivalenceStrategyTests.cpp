@@ -37,6 +37,8 @@
 #include "SNLBusTerm.h"
 #include "SNLBusTermBit.h"
 #include "SNLInstance.h"
+#include "SNLInstParameter.h"
+#include "SNLParameter.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "common/AlignedSignals.h"
@@ -15894,6 +15896,342 @@ TEST_F(SequentialEquivalenceStrategyTests,
   // Reset controls the transition relation. Without a declared initializer it
   // must not constrain IC3's exact initial frame.
   EXPECT_TRUE(model.initialStateValueByKey.empty());
+}
+
+SNLDesign* createWideDffTopWithInit(
+    NLLibrary* library,
+    const std::string& name,
+    const char* initValue) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topIn = SNLBusTerm::create(
+      top, SNLTerm::Direction::Input, 3, 0, NLName("in"));
+  auto* topClock = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topOut = SNLBusTerm::create(
+      top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
+
+  auto* dffModel = NLDB0::getOrCreateDFF(4);
+  auto* ff = SNLInstance::create(top, dffModel, NLName("ff0"));
+  auto* netIn = SNLBusNet::create(top, 3, 0, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netQ = SNLBusNet::create(top, 3, 0, NLName("net_q"));
+
+  auto* dataTerm = dffModel->getBusTerm(NLName("D"));
+  auto* outputTerm = dffModel->getBusTerm(NLName("Q"));
+  topClock->setNet(netClock);
+  ff->getInstTerm(dffModel->getScalarTerm(NLName("C")))->setNet(netClock);
+  for (int bit = 0; bit <= 3; ++bit) {
+    topIn->getBit(bit)->setNet(netIn->getBit(bit));
+    ff->getInstTerm(dataTerm->getBit(bit))->setNet(netIn->getBit(bit));
+    ff->getInstTerm(outputTerm->getBit(bit))->setNet(netQ->getBit(bit));
+    topOut->getBit(bit)->setNet(netQ->getBit(bit));
+  }
+  SNLInstParameter::create(
+      ff, dffModel->getParameter(NLName("INIT")), initValue);
+  return top;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsDFFInitParameter) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top = createDffTop(library, "top", invModel, false, false);
+  auto* ff = top->getInstance(NLName("ff0"));
+  ASSERT_NE(ff, nullptr);
+  auto* initParam = ff->getModel()->getParameter(NLName("INIT"));
+  ASSERT_NE(initParam, nullptr);
+  SNLInstParameter::create(ff, initParam, "1'b1");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.initialStateValueByKey.size(), 1u);
+  EXPECT_TRUE(extracted.initialStateValueByKey.begin()->second);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsDFFInitParameterZero) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top = createDffTop(library, "top", invModel, false, false);
+  auto* ff = top->getInstance(NLName("ff0"));
+  ASSERT_NE(ff, nullptr);
+  auto* initParam = ff->getModel()->getParameter(NLName("INIT"));
+  ASSERT_NE(initParam, nullptr);
+  SNLInstParameter::create(ff, initParam, "1'b0");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.initialStateValueByKey.size(), 1u);
+  EXPECT_FALSE(extracted.initialStateValueByKey.begin()->second);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractLeavesUnknownDFFInitUnconstrained) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top = createDffTop(library, "top", invModel, false, false);
+  auto* ff = top->getInstance(NLName("ff0"));
+  ASSERT_NE(ff, nullptr);
+  auto* initParam = ff->getModel()->getParameter(NLName("INIT"));
+  ASSERT_NE(initParam, nullptr);
+  // An explicit all-x INIT (the NLDB0 default) must not constrain the state.
+  SNLInstParameter::create(ff, initParam, "1'bx");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.initialStateValueByKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsWideDFFInitParameter) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  // INIT digits are MSB first: bit3=0, bit2=1, bit1=x (unconstrained), bit0=0.
+  auto* top = createWideDffTopWithInit(library, "top", "4'b01x0");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.stateBits.size(), 4u);
+  EXPECT_EQ(extracted.initialStateValueByKey.size(), 3u);
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[3]")));
+  EXPECT_TRUE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[2]")));
+  EXPECT_EQ(
+      extracted.initialStateValueByKey.find(
+          findKeyByDisplayName(extracted, "ff0.Q[1]")),
+      extracted.initialStateValueByKey.end());
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[0]")));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsAscendingBusDFFInitParameter) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  // A flip-flop primitive with ascending D/Q buses [0:3].
+  auto* model = SNLDesign::create(
+      primitives, SNLDesign::Type::Primitive, NLName("DFF_ASC"));
+  auto* clock =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("C"));
+  auto* data =
+      SNLBusTerm::create(model, SNLTerm::Direction::Input, 0, 3, NLName("D"));
+  auto* output =
+      SNLBusTerm::create(model, SNLTerm::Direction::Output, 0, 3, NLName("Q"));
+  SNLParameter::create(
+      model, NLName("INIT"), SNLParameter::Type::Binary, "4'bxxxx");
+  SNLDesignModeling::BitTerms outputBits;
+  SNLDesignModeling::BitTerms dataBits;
+  for (int bit = 0; bit <= 3; ++bit) {
+    outputBits.push_back(output->getBit(bit));
+    dataBits.push_back(data->getBit(bit));
+  }
+  SNLDesignModeling::addClockToOutputsArcs(clock, outputBits);
+  SNLDesignModeling::addInputsToClockArcs(dataBits, clock);
+  SNLDesignModeling::SequentialModel sequentialModel;
+  sequentialModel.kind = SNLDesignModeling::SequentialModel::Kind::FlipFlop;
+  sequentialModel.clockedOn = makeSequentialTermExpression(clock);
+  for (int bit = 0; bit <= 3; ++bit) {
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(data->getBit(bit));
+    sequentialModel.states.push_back(std::move(state));
+    sequentialModel.outputs.push_back(
+        {output->getBit(bit), makeSequentialStateExpression(bit)});
+  }
+  SNLDesignModeling::setSequentialModel(model, sequentialModel);
+
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* topIn = SNLBusTerm::create(
+      top, SNLTerm::Direction::Input, 0, 3, NLName("in"));
+  auto* topClock = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topOut = SNLBusTerm::create(
+      top, SNLTerm::Direction::Output, 0, 3, NLName("out"));
+  auto* ff = SNLInstance::create(top, model, NLName("ff0"));
+  auto* netIn = SNLBusNet::create(top, 0, 3, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netQ = SNLBusNet::create(top, 0, 3, NLName("net_q"));
+  topClock->setNet(netClock);
+  ff->getInstTerm(model->getScalarTerm(NLName("C")))->setNet(netClock);
+  for (int bit = 0; bit <= 3; ++bit) {
+    topIn->getBit(bit)->setNet(netIn->getBit(bit));
+    ff->getInstTerm(data->getBit(bit))->setNet(netIn->getBit(bit));
+    ff->getInstTerm(output->getBit(bit))->setNet(netQ->getBit(bit));
+    topOut->getBit(bit)->setNet(netQ->getBit(bit));
+  }
+  // Canonical digit 0 is the declared leftmost index (bit 0 for [0:3]).
+  SNLInstParameter::create(
+      ff, model->getParameter(NLName("INIT")), "4'b01x0");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.stateBits.size(), 4u);
+  EXPECT_EQ(extracted.initialStateValueByKey.size(), 3u);
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[0]")));
+  EXPECT_TRUE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[1]")));
+  EXPECT_EQ(
+      extracted.initialStateValueByKey.find(
+          findKeyByDisplayName(extracted, "ff0.Q[2]")),
+      extracted.initialStateValueByKey.end());
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(
+      findKeyByDisplayName(extracted, "ff0.Q[3]")));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractIgnoresNonCanonicalDFFInit) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* invModel = createInvModel(primitives);
+  auto* top = createDffTop(library, "top", invModel, false, false);
+  auto* ff = top->getInstance(NLName("ff0"));
+  ASSERT_NE(ff, nullptr);
+  auto* initParam = ff->getModel()->getParameter(NLName("INIT"));
+  ASSERT_NE(initParam, nullptr);
+  // Only the canonical sized-binary form (written by the naja frontends) is
+  // harvested; anything else leaves the state unconstrained.
+  SNLInstParameter::create(ff, initParam, "1'h1");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.initialStateValueByKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractIgnoresWidthMismatchedDFFInit) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  // The canonical form always covers the whole Q output; a width-mismatched
+  // INIT did not come from a naja frontend and leaves the state unconstrained.
+  auto* top = createWideDffTopWithInit(library, "top", "2'b11");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.initialStateValueByKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsComplementedDFFInitParameter) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model = createNamedComplementSequentialModel(
+      primitives, "DFF_Q_QN_INIT", "Q", "QN");
+  SNLParameter::create(
+      model, NLName("INIT"), SNLParameter::Type::Binary, "1'bx");
+  auto* top = createSequentialOutputPairTop(library, "top", model, "Q", "QN");
+  auto* ff = top->getInstance(NLName("ff0"));
+  ASSERT_NE(ff, nullptr);
+  SNLInstParameter::create(
+      ff, model->getParameter(NLName("INIT")), "1'b1");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.complementedStateRelations.size(), 1u);
+  // State keys hold values in their own pin polarity: the Q key stores the
+  // INIT digit, the QN key stores its complement.
+  const auto primaryKey = findKeyByDisplayName(extracted, "ff0.Q[0]");
+  const auto complementKey = findKeyByDisplayName(extracted, "ff0.QN[0]");
+  ASSERT_EQ(extracted.initialStateValueByKey.size(), 2u);
+  EXPECT_TRUE(extracted.initialStateValueByKey.at(primaryKey));
+  EXPECT_FALSE(extracted.initialStateValueByKey.at(complementKey));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsSlangInitialBlock) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top = loadSystemVerilogTopFromSource(
+      library,
+      "sec_slang_initial_block",
+      R"(module sec_slang_initial_block(
+  input  logic clk,
+  input  logic d,
+  output logic q
+);
+  logic r;
+  initial r = 1'b1;
+  always_ff @(posedge clk) r <= d;
+  assign q = r;
+endmodule
+)");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.initialStateValueByKey.size(), 1u);
+  EXPECT_TRUE(extracted.initialStateValueByKey.begin()->second);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractHarvestsSlangDeclarationInitializer) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top = loadSystemVerilogTopFromSource(
+      library,
+      "sec_slang_decl_init",
+      R"(module sec_slang_decl_init(
+  input  logic clk,
+  input  logic d,
+  output logic q
+);
+  logic r = 1'b0;
+  always_ff @(posedge clk) r <= d;
+  assign q = r;
+endmodule
+)");
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  ASSERT_EQ(extracted.initialStateValueByKey.size(), 1u);
+  EXPECT_FALSE(extracted.initialStateValueByKey.begin()->second);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

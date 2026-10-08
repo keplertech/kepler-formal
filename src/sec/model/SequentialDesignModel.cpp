@@ -27,7 +27,11 @@
 #include "NLDB0.h"
 #include "NLName.h"
 #include "NLUniverse.h"
+#include "SNLBusTerm.h"
+#include "SNLBusTermBit.h"
 #include "SNLDesignModeling.h"
+#include "SNLInstParameter.h"
+#include "SNLInstance.h"
 #include "SNLPath.h"
 #include "../../clauses/SNLLogicCloud.h"
 #include "../../clauses/Tree2BoolExpr.h"
@@ -3157,6 +3161,84 @@ void appendPendingTransitionsForInstance(
   }
 }
 
+// Reads the canonical INIT digit ("<width>'b<msb...lsb>", lowercase 0/1/x/z)
+// for the given state output terminal, in the storage element's own polarity.
+// The naja frontends always store INIT in this form with the width of the Q
+// output; anything else is treated as absent and leaves the state
+// unconstrained.
+std::optional<bool> readDFFInitDigitForStateTerm(
+    const naja::DNL::DNLTerminalFull& term) {
+  if (term.isNull() || term.isTopPort()) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  const auto* snlInstance = term.getDNLInstance().getSNLInstance();
+  if (snlInstance == nullptr) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  const auto* initParam =
+      snlInstance->getInstParameter(naja::NL::NLName("INIT"));
+  if (initParam == nullptr) {
+    return std::nullopt;
+  }
+  const std::string value = initParam->getValue();
+  const auto basePos = value.find('\'');
+  if (basePos == std::string::npos || basePos + 2 >= value.size() ||
+      (value[basePos + 1] != 'b' && value[basePos + 1] != 'B')) {
+    return std::nullopt;  // non-canonical INIT
+  }
+  const size_t width = value.size() - (basePos + 2);
+  size_t digitIndex = 0;  // into the MSB-first digit string
+  if (const auto* busBit =
+          dynamic_cast<const naja::NL::SNLBusTermBit*>(term.getSnlBitTerm())) {
+    const auto* bus = busBit->getBus();
+    if (width != static_cast<size_t>(bus->getWidth())) {
+      return std::nullopt;  // INIT width must match the Q output width
+    }
+    // Digit 0 of the canonical form is the bus MSB, for either ascending or
+    // descending ranges.
+    const auto msb = bus->getMSB();
+    const auto bit = busBit->getBit();
+    digitIndex = static_cast<size_t>(msb >= bit ? msb - bit : bit - msb);
+  } else if (width != 1) {
+    return std::nullopt;  // LCOV_EXCL_LINE
+  }
+  switch (std::tolower(static_cast<unsigned char>(value[basePos + 2 + digitIndex]))) {
+    case '0':
+      return false;
+    case '1':
+      return true;
+    default:
+      return std::nullopt;  // x/z leave the state unconstrained
+  }
+}
+
+// Transfers DFF INIT metadata onto the extracted model. Each state key holds
+// values in its own observed pin polarity: the primary key follows
+// stateOutputIsComplemented (mirroring the next-state build) and complemented
+// keys get the opposite value.
+void harvestInitialStateValues(ExtractContext& ctx, SequentialDesignModel& model) {
+  size_t harvested = 0;
+  for (const auto& pending : ctx.pendingTransitions) {
+    const auto& term = ctx.dnl->getDNLTerminalFromID(pending.stateTermID);
+    const auto digit = readDFFInitDigitForStateTerm(term);
+    if (!digit.has_value()) {
+      continue;
+    }
+    const bool value = pending.stateOutputIsComplemented ? !*digit : *digit;
+    model.initialStateValueByKey.emplace(pending.stateKey, value);
+    for (const auto& complementedKey : pending.complementedStateKeys) {
+      model.initialStateValueByKey.emplace(complementedKey, !value);
+    }
+    ++harvested;
+  }
+  if (ctx.secDiagEnabled && harvested > 0) {
+    fprintf(stderr,
+            "SEC diag: extract(%s) harvested initial state values=%zu\n",
+            ctx.topName.c_str(), harvested);
+    fflush(stderr);
+  }
+}
+
 void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& model) {
   // Record enough pin information to reconstruct Q' after the combinational
   // Boolean expressions have been built.
@@ -3179,6 +3261,7 @@ void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& mo
     }
     appendPendingTransitionsForInstance(ctx, model, *scan);
   }
+  harvestInitialStateValues(ctx, model);
 }
 
 std::vector<naja::DNL::DNLID> collectInitialObservedTerms(const ExtractContext& ctx) {
