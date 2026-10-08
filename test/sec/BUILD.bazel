@@ -50,3 +50,20 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "C2RtlFormalTests",
+    srcs = [
+        "C2RtlEquivalenceTests.cpp",
+        "C2RtlExpressionTests.cpp",
+    ],
+    deps = [
+        "//src/c2rtl:kepler_c2rtl_formal",
+        "//src/clauses:kepler_clauses",
+        "//src/formal:formal_structures",
+        "//src/sec:kepler_sec",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
+        "@googletest//:gtest_main",
+    ],
+)

@@ -29,6 +29,67 @@ project(kepler-formal
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
 
+option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
+
+# Python verifies caller-owned NajaEDA designs without the C2RTL file driver.
+if(NOT BUILD_KEPLER_PYTHON)
+set(KEPLER_XLS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/xls)
+set(CPPITERTOOLS_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cppitertools)
+
+add_library(cppitertools INTERFACE)
+target_include_directories(cppitertools INTERFACE ${CPPITERTOOLS_ROOT})
+
+find_package(absl CONFIG REQUIRED)
+if(NOT TARGET absl::status_builder)
+  message(FATAL_ERROR "XLS C2RTL requires Abseil 20260526 or later")
+endif()
+find_package(Protobuf REQUIRED)
+find_package(OpenSSL REQUIRED)
+if(EXISTS "/opt/homebrew/opt/llvm/lib/cmake/llvm")
+  list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/llvm")
+endif()
+find_package(LLVM CONFIG REQUIRED)
+find_package(Clang CONFIG REQUIRED)
+find_path(Z3_INCLUDE_DIR z3.h
+  HINTS
+    /opt/homebrew/opt/z3/include
+    /opt/homebrew/include
+)
+find_library(Z3_LIBRARY z3
+  HINTS
+    /opt/homebrew/opt/z3/lib
+    /opt/homebrew/lib
+)
+if(NOT Z3_INCLUDE_DIR OR NOT Z3_LIBRARY)
+  message(FATAL_ERROR "Z3 is required for XLS C2RTL")
+endif()
+add_library(z3::z3 UNKNOWN IMPORTED)
+set_target_properties(z3::z3 PROPERTIES
+  IMPORTED_LOCATION "${Z3_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${Z3_INCLUDE_DIR}"
+)
+find_path(RE2_INCLUDE_DIR re2/re2.h
+  HINTS
+    ${CMAKE_BINARY_DIR}/_deps/re2-install/include
+    /opt/homebrew/opt/re2/include
+    /opt/homebrew/include
+)
+find_library(RE2_LIBRARY re2
+  HINTS
+    ${CMAKE_BINARY_DIR}/_deps/re2-install/lib
+    /opt/homebrew/opt/re2/lib
+    /opt/homebrew/lib
+)
+if(NOT RE2_INCLUDE_DIR OR NOT RE2_LIBRARY)
+  message(FATAL_ERROR "RE2 is required for XLS C2RTL")
+endif()
+add_library(re2::re2 UNKNOWN IMPORTED)
+set_target_properties(re2::re2 PROPERTIES
+  IMPORTED_LOCATION "${RE2_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${RE2_INCLUDE_DIR}"
+)
+endif()
+
 include(GNUInstallDirs)
 
 if(WIN32)
@@ -47,7 +108,6 @@ if(WIN32)
   add_compile_options(/utf-8 "$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
 endif()
 
-option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
 option(KEPLER_USE_PUBLISHED_NAJAEDA "Use the tested NajaEDA 0.7.24 wheel compatibility adapter" OFF)
 set(KEPLER_EXTERNAL_PIC_ARG "")
 if(BUILD_KEPLER_PYTHON)
@@ -117,6 +177,34 @@ string(JOIN " " CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS
 if(WIN32)
   include(src/windows/KeplerWindowsSolvers.cmake)
 else()
+set(CADICAL_CFLAGS "${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}")
+set(CADICAL_CXXFLAGS "${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}")
+if(CMAKE_C_FLAGS)
+    string(PREPEND CADICAL_CFLAGS "${CMAKE_C_FLAGS} ")
+endif()
+if(CMAKE_CXX_FLAGS)
+    string(PREPEND CADICAL_CXXFLAGS "${CMAKE_CXX_FLAGS} ")
+endif()
+if(CMAKE_BUILD_TYPE)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" KEPLER_BUILD_TYPE_UPPER)
+    if(CMAKE_C_FLAGS_${KEPLER_BUILD_TYPE_UPPER})
+        string(PREPEND CADICAL_CFLAGS "${CMAKE_C_FLAGS_${KEPLER_BUILD_TYPE_UPPER}} ")
+    endif()
+    if(CMAKE_CXX_FLAGS_${KEPLER_BUILD_TYPE_UPPER})
+        string(PREPEND CADICAL_CXXFLAGS "${CMAKE_CXX_FLAGS_${KEPLER_BUILD_TYPE_UPPER}} ")
+    endif()
+endif()
+# CaDiCaL's Makefile invokes the host `ar` directly. Keep its objects native so
+# a host LLVMgold plugin is not required to understand the compiler's bitcode.
+string(REGEX REPLACE "(^|[ \t])-flto(=[^ \t]+)?" "\\1"
+    CADICAL_CFLAGS "${CADICAL_CFLAGS}")
+string(REGEX REPLACE "(^|[ \t])-flto(=[^ \t]+)?" "\\1"
+    CADICAL_CXXFLAGS "${CADICAL_CXXFLAGS}")
+if(ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    string(APPEND CADICAL_CFLAGS " -fsanitize=address -fno-omit-frame-pointer")
+    string(APPEND CADICAL_CXXFLAGS " -fsanitize=address -fno-omit-frame-pointer")
+endif()
+
 ExternalProject_Add(kissat_external
     SOURCE_DIR ${KISSAT_ROOT}
     # Keep Kissat small and quiet for embedded use, but do not use
@@ -159,8 +247,8 @@ ExternalProject_Add(cadical_external
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
         "CXX=${CMAKE_CXX_COMPILER}"
-        "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
-        "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
+        "CFLAGS=${CADICAL_CFLAGS}"
+        "CXXFLAGS=${CADICAL_CXXFLAGS}"
         ./configure -q --no-tracing --no-contrib ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make -C build libcadical.a
     INSTALL_COMMAND ""

@@ -208,6 +208,9 @@ TEST_F(InternalRelationsTests, SameNamesAndMatchingStartupXCannotHideBinaryMisma
   for (bool initialized : {false, true}) {
     auto zero = heldModel(initialized, false);
     zero.nextStateExprByStateKey.begin()->second = BoolExpr::createFalse();
+    // runExtractedModels short-circuits when both sides are the same object
+    // (compact self-comparison), so an equal copy keeps the engines exercised.
+    const auto zeroCopy = zero;
     auto diverging = zero;
     diverging.nextStateExprByStateKey.begin()->second = BoolExpr::createTrue();
     for (auto engine : {SecEngine::Pdr, SecEngine::KInduction, SecEngine::Imc}) {
@@ -220,7 +223,7 @@ TEST_F(InternalRelationsTests, SameNamesAndMatchingStartupXCannotHideBinaryMisma
           EXPECT_EQ(strategy.runExtractedModels(zero, diverging, 2).status,
                     SequentialEquivalenceStatus::Different);
           if (initialized) {
-            EXPECT_EQ(strategy.runExtractedModels(zero, zero, 2).status,
+            EXPECT_EQ(strategy.runExtractedModels(zero, zeroCopy, 2).status,
                       SequentialEquivalenceStatus::Equivalent);
           }
         }
@@ -237,14 +240,16 @@ TEST_F(InternalRelationsTests, ResetProofBehaviorIsPreservedWithLearning) {
   model.displayNameByKey[reset] = "rst";
   model.nextStateExprByStateKey.begin()->second = BoolExpr::And(
       BoolExpr::Not(BoolExpr::Var(3)), BoolExpr::Var(2));
+  // An equal copy avoids the same-object shortcut in runExtractedModels.
+  const auto modelCopy = model;
   for (auto engine : {SecEngine::Pdr, SecEngine::KInduction, SecEngine::Imc}) {
     SequentialEquivalenceStrategy strategy(nullptr, nullptr, Config::SolverType::KISSAT,
         engine, SecEncoding::DualRailSteady, {1, {{"rst", true}}});
     strategy.setInternalRelationOptions({false, false});
-    const auto baseline = strategy.runExtractedModels(model, model, 2);
+    const auto baseline = strategy.runExtractedModels(model, modelCopy, 2);
     for (bool allowX : {false, true}) {
       strategy.setInternalRelationOptions({true, allowX});
-      const auto result = strategy.runExtractedModels(model, model, 2);
+      const auto result = strategy.runExtractedModels(model, modelCopy, 2);
       EXPECT_EQ(result.status, baseline.status);
       EXPECT_EQ(result.coveredOutputs, baseline.coveredOutputs);
     }
@@ -286,6 +291,8 @@ SequentialDesignModel internalRelationRingModel(const std::string& prefix = "") 
 
 TEST_F(InternalRelationsTests, ExactImcUsesCertifiedRelationsToCloseTheInductionGap) {
   const auto model = internalRelationRingModel();
+  // An equal copy avoids the same-object shortcut in runExtractedModels.
+  const auto modelCopy = model;
   for (auto solver : {Config::SolverType::KISSAT, Config::SolverType::CADICAL,
                       Config::SolverType::GLUCOSE}) {
     for (bool learn : {false, true}) {
@@ -297,7 +304,7 @@ TEST_F(InternalRelationsTests, ExactImcUsesCertifiedRelationsToCloseTheInduction
         strategy.setInternalRelationOptions({learn, allowX});
         // The one-step frontier is not closed, and output equality alone is
         // not inductive. The two jointly certified register equalities close it.
-        const auto result = strategy.runExtractedModels(model, model, 0);
+        const auto result = strategy.runExtractedModels(model, modelCopy, 0);
         EXPECT_EQ(result.status, learn ? SequentialEquivalenceStatus::Equivalent
                                        : SequentialEquivalenceStatus::Inconclusive);
       }

@@ -12,6 +12,8 @@
 #include "NajaProperty.h"
 #include "../../config/Config.h"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <mutex>
 #include <ostream>
@@ -34,6 +36,263 @@ namespace {
 
 constexpr BuildPrimaryOutputClauses::PathComponentID kUnnamedPathComponentTag =
     BuildPrimaryOutputClauses::PathComponentID{1} << 63;
+constexpr int kMaxConcurrentOutputBuilds = 4;
+
+class OutputConeAcyclicityCache {
+ public:
+  void reset() {
+    *this = OutputConeAcyclicityCache();
+  }
+
+  bool prove(const DNLFull& dnl,
+             const std::vector<DNLID>& boundaryTermIDs,
+             const std::vector<bool>& boundaryTerms,
+             const std::vector<DNLID>& outputTermIDs) {
+    prepare(dnl, boundaryTermIDs);
+    if (cannotProve_) {
+      return false;
+    }
+    for (const DNLID outputTermID : outputTermIDs) {
+      if (!visitTermDriver(dnl, boundaryTerms, outputTermID)) {
+        cannotProve_ = true;
+        return false;
+      }
+    }
+    return true;
+  }
+
+  size_t getCompletedInstanceCount() const {
+    return completedInstanceCount_;
+  }
+
+ private:
+  struct Frame {
+    DNLID instanceID = DNLID_MAX;
+    DNLID nextTermID = DNLID_MAX;
+  };
+
+  static bool isBoundaryTerm(const std::vector<bool>& boundaryTerms,
+                             DNLID termID) {
+    return termID < boundaryTerms.size() && boundaryTerms[termID];
+  }
+
+  void prepare(const DNLFull& dnl,
+               const std::vector<DNLID>& boundaryTermIDs) {
+    const auto& instances = dnl.getDNLInstances();
+    const auto& terms = dnl.getDNLTerms();
+    if (dnl_ == &dnl && instancesData_ == instances.data() &&
+        instanceCount_ == instances.size() && termsData_ == terms.data() &&
+        termCount_ == terms.size() &&
+        topDesign_ == dnl.getTopDesign() &&
+        boundaryTermIDs_ == boundaryTermIDs) {
+      return;
+    }
+
+    reset();
+    dnl_ = &dnl;
+    instancesData_ = instances.data();
+    instanceCount_ = instances.size();
+    termsData_ = terms.data();
+    termCount_ = terms.size();
+    topDesign_ = dnl.getTopDesign();
+    boundaryTermIDs_ = boundaryTermIDs;
+    visitState_.assign(instanceCount_, 0);
+  }
+
+  bool visitTermDriver(const DNLFull& dnl,
+                       const std::vector<bool>& boundaryTerms,
+                       DNLID termID) {
+    if (isBoundaryTerm(boundaryTerms, termID)) {
+      return true;
+    }
+    if (termID >= dnl.getNBterms()) {
+      return false;
+    }
+    const auto& term = dnl.getDNLTerminalFromID(termID);
+    const DNLID isoID = term.getIsoID();
+    if (isoID == DNLID_MAX) {
+      return true;
+    }
+    const auto& iso = dnl.getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+    if (iso.isConstant() || iso.getDrivers().empty()) {
+      return true;
+    }
+    if (iso.getDrivers().size() != 1) {
+      return false;
+    }
+
+    const DNLID driverTermID = iso.getDrivers().front();
+    if (isBoundaryTerm(boundaryTerms, driverTermID)) {
+      return true;
+    }
+    const auto& driverTerm = dnl.getDNLTerminalFromID(driverTermID);
+    const auto& driverInstance = driverTerm.getDNLInstance();
+    if (driverInstance.isTop()) {
+      return true;
+    }
+    return visitInstance(dnl, boundaryTerms, driverInstance.getID());
+  }
+
+  bool visitInstance(const DNLFull& dnl,
+                     const std::vector<bool>& boundaryTerms,
+                     DNLID rootInstanceID) {
+    if (rootInstanceID >= visitState_.size()) {
+      return false;
+    }
+    if (visitState_[rootInstanceID] == 2) {
+      return true;
+    }
+    if (visitState_[rootInstanceID] == 1) {
+      return false;
+    }
+
+    const auto& rootInstance = dnl.getDNLInstanceFromID(rootInstanceID);
+    if (rootInstance.isNull() || !rootInstance.isLeaf() ||
+        rootInstance.getTermIndexes().first == DNLID_MAX) {
+      return false;
+    }
+
+    stack_.clear();
+    visitState_[rootInstanceID] = 1;
+    stack_.push_back({rootInstanceID, rootInstance.getTermIndexes().first});
+    while (!stack_.empty()) {
+      auto& frame = stack_.back();
+      const auto& instance = dnl.getDNLInstanceFromID(frame.instanceID);
+      const DNLID lastTermID = instance.getTermIndexes().second;
+      if (frame.nextTermID == DNLID_MAX || frame.nextTermID > lastTermID) {
+        visitState_[frame.instanceID] = 2;
+        ++completedInstanceCount_;
+        stack_.pop_back();
+        continue;
+      }
+
+      const DNLID inputTermID = frame.nextTermID++;
+      const auto& inputTerm = dnl.getDNLTerminalFromID(inputTermID);
+      const auto* bitTerm = inputTerm.getSnlBitTerm();
+      if (bitTerm == nullptr ||
+          bitTerm->getDirection() == SNLBitTerm::Direction::Output ||
+          isBoundaryTerm(boundaryTerms, inputTermID)) {
+        continue;
+      }
+
+      const DNLID isoID = inputTerm.getIsoID();
+      if (isoID == DNLID_MAX) {
+        continue;
+      }
+      const auto& iso = dnl.getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      if (iso.isConstant() || iso.getDrivers().empty()) {
+        continue;
+      }
+      if (iso.getDrivers().size() != 1) {
+        return false;
+      }
+
+      const DNLID driverTermID = iso.getDrivers().front();
+      if (isBoundaryTerm(boundaryTerms, driverTermID)) {
+        continue;
+      }
+      const auto& driverTerm = dnl.getDNLTerminalFromID(driverTermID);
+      const auto& driverInstance = driverTerm.getDNLInstance();
+      if (driverInstance.isTop()) {
+        continue;
+      }
+      const DNLID driverInstanceID = driverInstance.getID();
+      if (driverInstanceID >= visitState_.size() || driverInstance.isNull() ||
+          !driverInstance.isLeaf() ||
+          driverInstance.getTermIndexes().first == DNLID_MAX) {
+        return false;
+      }
+      if (visitState_[driverInstanceID] == 1) {
+        return false;
+      }
+      if (visitState_[driverInstanceID] == 2) {
+        continue;
+      }
+      visitState_[driverInstanceID] = 1;
+      stack_.push_back(
+          {driverInstanceID, driverInstance.getTermIndexes().first});
+    }
+    return true;
+  }
+
+  const DNLFull* dnl_ = nullptr;
+  const void* instancesData_ = nullptr;
+  size_t instanceCount_ = 0;
+  const void* termsData_ = nullptr;
+  size_t termCount_ = 0;
+  const SNLDesign* topDesign_ = nullptr;
+  std::vector<DNLID> boundaryTermIDs_;
+  std::vector<uint8_t> visitState_;
+  std::vector<Frame> stack_;
+  size_t completedInstanceCount_ = 0;
+  bool cannotProve_ = false;
+};
+
+struct SharedOutputConeAcyclicityCache {
+  std::mutex mutex;
+  OutputConeAcyclicityCache cache;
+};
+
+SharedOutputConeAcyclicityCache& getOutputConeAcyclicityCache() {
+  static SharedOutputConeAcyclicityCache shared;
+  return shared;
+}
+
+void resetOutputConeAcyclicityCache() {
+  auto& shared = getOutputConeAcyclicityCache();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  shared.cache.reset();
+}
+
+struct SharedIsoExpressionCache {
+  std::mutex mutex;
+};
+
+SharedIsoExpressionCache& getIsoExpressionCache() {
+  static SharedIsoExpressionCache shared;
+  return shared;
+}
+
+void resetIsoExpressionCache() {
+  auto& shared = getIsoExpressionCache();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  Tree2BoolExpr::iso2boolExpr_.clear();
+}
+
+class ScopedIsoExpressionCacheUse {
+ public:
+  ScopedIsoExpressionCacheUse()
+      : shared_(getIsoExpressionCache()), lock_(shared_.mutex) {
+    // Cached formulas contain builder-local variable IDs. A later builder can
+    // occupy the same address, so pointer identity cannot extend their lifetime
+    // across build() calls.
+    Tree2BoolExpr::iso2boolExpr_.clear();
+  }
+
+ private:
+  SharedIsoExpressionCache& shared_;
+  std::unique_lock<std::mutex> lock_;
+};
+
+bool proveOutputConesAcyclic(const DNLFull& dnl,
+                             const std::vector<DNLID>& boundaryTermIDs,
+                             const std::vector<bool>& boundaryTerms,
+                             const std::vector<DNLID>& outputTermIDs) {
+  auto& shared = getOutputConeAcyclicityCache();
+  std::lock_guard<std::mutex> lock(shared.mutex);
+  const bool result = shared.cache.prove(
+      dnl, boundaryTermIDs, boundaryTerms, outputTermIDs);
+  if (std::getenv("KEPLER_SEC_DIAG") != nullptr) {
+    std::fprintf(
+        stderr,
+        "SEC diag: output-cone DAG proof outputs=%zu completed_instances=%zu "
+        "result=%s\n",
+        outputTermIDs.size(), shared.cache.getCompletedInstanceCount(),
+        result ? "acyclic" : "fallback");
+    std::fflush(stderr);
+  }
+  return result;
+}
 
 const char* getSnlDirectionName(SNLBitTerm::Direction direction) {
   switch (direction) {
@@ -752,6 +1011,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 }
 
 void BuildPrimaryOutputClauses::collect() {
+  resetOutputConeAcyclicityCache();
+  resetIsoExpressionCache();
   leafBoundary_.reset();
   if (!boundaryPairs_.empty()) {
     leafBoundary_ = std::make_unique<LeafBoundary>(
@@ -838,12 +1099,13 @@ void BuildPrimaryOutputClauses::initVarNames() {
 }
 
 void BuildPrimaryOutputClauses::build() {
-  naja::DNL::get();
+  auto* dnl = naja::DNL::get();
+  ScopedIsoExpressionCacheUse isoExpressionCacheUse;
   POs_.clear();
   POs_ = tbb::concurrent_vector<BoolExpr*>(outputs_.size());
   initVarNames();
   size_t processedOutputs = 0;
-  tbb::task_arena arena(20);
+  tbb::task_arena arena(kMaxConcurrentOutputBuilds);
   IsPIs_ = std::vector<bool>(naja::DNL::get()->getNBterms(), false);
   for (auto pi : inputs_) {
     if (pi >= IsPIs_.size()) {
@@ -872,6 +1134,9 @@ void BuildPrimaryOutputClauses::build() {
     // LCOV_EXCL_STOP
     IsPOs_[po] = true;
   }
+  const bool outputConesAcyclic =
+      proveOutputConesAcyclic(*dnl, inputs_, IsPIs_, outputs_);
+
   std::vector<size_t> representativeForOutput(outputs_.size());
   std::vector<size_t> representativeOutputs;
   representativeOutputs.reserve(outputs_.size());
@@ -941,7 +1206,8 @@ void BuildPrimaryOutputClauses::build() {
         out,
         IsPIs_,
         IsPOs_,
-        stopAtOpaqueInternalOutputs_);
+        stopAtOpaqueInternalOutputs_,
+        outputConesAcyclic);
     #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
     #endif
@@ -1079,14 +1345,6 @@ void BuildPrimaryOutputClauses::build() {
     }
     cloud.destroy();
   };
-  struct ScopedIsoCacheReset {
-    ScopedIsoCacheReset() {
-      Tree2BoolExpr::iso2boolExpr_.clear();
-    }
-    ~ScopedIsoCacheReset() {
-      Tree2BoolExpr::iso2boolExpr_.clear();
-    }
-  } scopedIsoCacheReset;
   if (getenv("KEPLER_NO_MT")) {
     for (size_t i : representativeOutputs) {
       processOutput(i);
@@ -1094,19 +1352,21 @@ void BuildPrimaryOutputClauses::build() {
   } else {
     // compute grain safely
     size_t n = representativeOutputs.size();
-    size_t default_grain = 1000;
-    size_t computed = (n >= 1000) ? (n / 1000) : 1; // never zero
-    size_t grain = std::max<size_t>(computed, default_grain); // or clamp as you prefer
+    const size_t grain = std::max<size_t>(
+        1, (n + kMaxConcurrentOutputBuilds - 1) /
+               kMaxConcurrentOutputBuilds);
 
-    tbb::parallel_for(
-      tbb::blocked_range<DNLID>(0, n, grain),
-      [&](const tbb::blocked_range<DNLID>& r) {
-        for (DNLID i = r.begin(); i < r.end(); ++i) {
-          processOutput(representativeOutputs[i]);
-        }
-      },
-      tbb::static_partitioner()
-    );
+    arena.execute([&] {
+      tbb::parallel_for(
+        tbb::blocked_range<DNLID>(0, n, grain),
+        [&](const tbb::blocked_range<DNLID>& r) {
+          for (DNLID i = r.begin(); i < r.end(); ++i) {
+            processOutput(representativeOutputs[i]);
+          }
+        },
+        tbb::static_partitioner()
+      );
+    });
   }
   for (size_t i = 0; i < outputs_.size(); ++i) {
     const size_t representative = representativeForOutput[i];

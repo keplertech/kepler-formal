@@ -616,6 +616,29 @@ static std::shared_ptr<Node> makeManualTableNode(
   return node;
 }
 
+TEST(SNLTruthTableTreeApiTest, AncestorSearchUsesKnownTopologicalDepths) {
+  SNLTruthTableTree tree(0, 0, Node::Type::P);
+  auto root = tree.getRoot();
+  root->topologicalDepth = 2;
+  auto target = makeManualTableNode(tree, 100);
+  const auto targetId = tree.allocateNode(target);
+  std::vector<naja::DNL::DNLID> loopTerms{999};
+
+  // A peer or descendant cannot be an ancestor of the border leaf.
+  for (uint32_t depth : {2u, 3u}) {
+    target->topologicalDepth = depth;
+    EXPECT_FALSE(tree.findAncestorLoopForBorderLeaf(0, 100, loopTerms));
+    EXPECT_TRUE(loopTerms.empty());
+  }
+
+  // A shallower node still needs an actual parent path before reporting a loop.
+  target->topologicalDepth = 1;
+  EXPECT_FALSE(tree.findAncestorLoopForBorderLeaf(0, 100, loopTerms));
+  root->parentIds.emplace_back(targetId);
+  EXPECT_TRUE(tree.findAncestorLoopForBorderLeaf(0, 100, loopTerms));
+  EXPECT_EQ(loopTerms, (std::vector<naja::DNL::DNLID>{100, 0, 100}));
+}
+
 TEST(SNLTruthTableTreeApiTest,
      AncestorPathCacheCoversLinearLookupReuseAndClear) {
   SNLTruthTableTree tree(0, 0, Node::Type::P);

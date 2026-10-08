@@ -1,0 +1,26 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# The C++ to RTL lowering runs through the XLS checkout in thirdparty/xls and
+# is built by CMake only. This target is the C2RTL proof strategy, which has no
+# XLS dependency, so the Bazel build keeps every bazel_dep on BCR.
+cc_library(
+    name = "kepler_c2rtl_formal",
+    srcs = [
+        "formal/C2RtlEquivalenceStrategy.cpp",
+        "formal/C2RtlExpression.cpp",
+    ],
+    hdrs = [
+        "formal/C2RtlEquivalenceStrategy.h",
+        "formal/C2RtlExpression.h",
+    ],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/clauses:kepler_clauses",
+        "//src/config:kepler_config",
+        "//src/formal:formal_structures",
+        "//src/sec:kepler_sec",
+        "@naja//src/dnl:naja_dnl",
+        "@naja//src/nl/netlist:naja_nl",
+    ],
+)
