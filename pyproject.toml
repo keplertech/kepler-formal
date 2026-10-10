@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["scikit-build-core>=0.11.3,<0.12", "najaeda==0.7.27"]
+requires = ["scikit-build-core>=0.11.3,<0.12", "najaeda==0.7.28"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -11,7 +11,7 @@ description = "Native Python interface for Kepler Formal equivalence checking"
 authors = [{name = "keplertech.io", email = "contact@keplertech.io"}]
 readme = "src/python/README.rst"
 requires-python = ">=3.10"
-dependencies = ["najaeda==0.7.27"]
+dependencies = ["najaeda==0.7.28"]
 license = {file = "LICENSE.rst"}
 dynamic = ["version"]
 classifiers = [
