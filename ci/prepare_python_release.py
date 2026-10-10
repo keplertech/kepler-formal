@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 
 
-DEVELOPMENT_REQUIREMENT = "najaeda==0.7.27"
+DEVELOPMENT_REQUIREMENT = "najaeda==0.7.28"
 PUBLISHED_REQUIREMENT = "najaeda==0.7.24"
 CMAKE_OPTION = "KEPLER_USE_PUBLISHED_NAJAEDA"
 VERSION_PATTERN = r'KEPLER_VERSION\s*\{\s*"(?P<value>[0-9]+\.[0-9]+\.[0-9]+)"'

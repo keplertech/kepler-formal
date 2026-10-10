@@ -33,7 +33,7 @@ def _create_design(library, primitives, name: str, *, invert: bool = False):
     model_output = najaeda.naja.SNLScalarTerm.create(
         model, najaeda.naja.SNLTerm.Direction.Output, "Y"
     )
-    init = najaeda.naja.SNLParameter.create_binary(model, "INIT", 2, 0b10)
+    init = najaeda.naja.SNLParameter.createBinary(model, "INIT", 2, 0b10)
     model.setTruthTableFromParameter(model_output, [model_input], init)
 
     design = najaeda.naja.SNLDesign.create(library, name)

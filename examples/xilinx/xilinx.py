@@ -29,7 +29,7 @@ def _construct_lut(lib, input_count):
     output = naja.SNLScalarTerm.create(
         primitive, naja.SNLTerm.Direction.Output, "O"
     )
-    init = naja.SNLParameter.create_binary(
+    init = naja.SNLParameter.createBinary(
         primitive, "INIT", 1 << input_count, 0
     )
     primitive.setTruthTableFromParameter(output, inputs, init)
@@ -123,12 +123,12 @@ def _construct_dsp48e1(lib):
         "OPMODEREG",
         "PREG",
     ):
-        naja.SNLParameter.create_decimal(primitive, name, 1)
-    naja.SNLParameter.create_string(primitive, "A_INPUT", "DIRECT")
-    naja.SNLParameter.create_string(primitive, "B_INPUT", "DIRECT")
-    naja.SNLParameter.create_boolean(primitive, "USE_DPORT", False)
-    naja.SNLParameter.create_string(primitive, "USE_MULT", "MULTIPLY")
-    naja.SNLParameter.create_string(primitive, "USE_SIMD", "ONE48")
+        naja.SNLParameter.createDecimal(primitive, name, 1)
+    naja.SNLParameter.createString(primitive, "A_INPUT", "DIRECT")
+    naja.SNLParameter.createString(primitive, "B_INPUT", "DIRECT")
+    naja.SNLParameter.createBoolean(primitive, "USE_DPORT", False)
+    naja.SNLParameter.createString(primitive, "USE_MULT", "MULTIPLY")
+    naja.SNLParameter.createString(primitive, "USE_SIMD", "ONE48")
 
 
 def _construct_distributed_ram(lib, name, address_width, data_width):
@@ -175,11 +175,11 @@ def _construct_distributed_ram(lib, name, address_width, data_width):
     _set_role(data_inputs.values(), naja.SNLTermRole.MemoryWriteData)
     _set_role(data_outputs.values(), naja.SNLTermRole.MemoryReadData)
     for suffix in "ABCD":
-        naja.SNLParameter.create_binary(
+        naja.SNLParameter.createBinary(
             primitive, f"INIT_{suffix}", 64, 0
         )
     if name == "RAM64M":
-        naja.SNLParameter.create_binary(
+        naja.SNLParameter.createBinary(
             primitive, "IS_WCLK_INVERTED", 1, 0
         )
 
@@ -323,44 +323,44 @@ def _construct_block_ram(
     )
     _set_role([wea, webwe], naja.SNLTermRole.MemoryWriteEnable)
 
-    naja.SNLParameter.create_decimal(primitive, "DOA_REG", 0)
-    naja.SNLParameter.create_decimal(primitive, "DOB_REG", 0)
-    naja.SNLParameter.create_binary(
+    naja.SNLParameter.createDecimal(primitive, "DOA_REG", 0)
+    naja.SNLParameter.createDecimal(primitive, "DOB_REG", 0)
+    naja.SNLParameter.createBinary(
         primitive, "INIT_A", data_width + parity_width, 0
     )
-    naja.SNLParameter.create_binary(
+    naja.SNLParameter.createBinary(
         primitive, "INIT_B", data_width + parity_width, 0
     )
     for index in range(init_count):
-        naja.SNLParameter.create_binary(
+        naja.SNLParameter.createBinary(
             primitive, f"INIT_{index:02X}", 256, 0
         )
     for index in range(initp_count):
-        naja.SNLParameter.create_binary(
+        naja.SNLParameter.createBinary(
             primitive, f"INITP_{index:02X}", 256, 0
         )
     if name == "RAMB36E1":
-        naja.SNLParameter.create_string(
+        naja.SNLParameter.createString(
             primitive, "RAM_EXTENSION_A", "NONE"
         )
-        naja.SNLParameter.create_string(
+        naja.SNLParameter.createString(
             primitive, "RAM_EXTENSION_B", "NONE"
         )
-    naja.SNLParameter.create_string(primitive, "RAM_MODE", "TDP")
+    naja.SNLParameter.createString(primitive, "RAM_MODE", "TDP")
     for suffix in "AB":
-        naja.SNLParameter.create_decimal(
+        naja.SNLParameter.createDecimal(
             primitive, f"READ_WIDTH_{suffix}", 0
         )
-        naja.SNLParameter.create_decimal(
+        naja.SNLParameter.createDecimal(
             primitive, f"WRITE_WIDTH_{suffix}", 0
         )
-        naja.SNLParameter.create_binary(
+        naja.SNLParameter.createBinary(
             primitive,
             f"SRVAL_{suffix}",
             data_width + parity_width,
             0,
         )
-        naja.SNLParameter.create_string(
+        naja.SNLParameter.createString(
             primitive, f"WRITE_MODE_{suffix}", "WRITE_FIRST"
         )
 
@@ -391,7 +391,7 @@ def _construct_flip_flop(
     data = naja.SNLScalarTerm.create(
         primitive, naja.SNLTerm.Direction.Input, "D"
     )
-    naja.SNLParameter.create_binary(primitive, "INIT", 1, init)
+    naja.SNLParameter.createBinary(primitive, "INIT", 1, init)
 
     naja.SNLDesign.addInputsToClockArcs([data, enable, control], clock)
     naja.SNLDesign.addClockToOutputsArcs(clock, q)
