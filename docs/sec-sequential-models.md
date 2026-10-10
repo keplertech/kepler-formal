@@ -46,6 +46,17 @@ state. Every latch output is opaque, including latches used in clock-gating
 structures, and any requested top-level output whose cone reaches it is
 skipped. SEC does not infer latch behavior from cell or pin names.
 
+## X Constant Literals
+
+An RTL `x` literal, typically a `case` default such as `default: y = 'x;`, is
+kept by the frontends as an X-constant net. SEC models each such net as a
+state bit with no initial value whose next state is itself: under the
+dual-rail encoding it is X forever, so a binary value on the other side is not
+a binary-defined difference. This is the usual don't-care reading of such
+literals. Under the binary encoding the bit behaves like any uninitialized
+register, and dependent outputs are skipped. Z literals remain unsupported and
+skip the cones that read them.
+
 ## Opaque Outputs
 
 Opacity is strict and local to an output terminal. During backward cone

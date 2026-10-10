@@ -16528,6 +16528,87 @@ TEST_F(
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
 }
 
+namespace {
+
+// A registered read mux whose `case` default is the given literal: `'x` is
+// the usual don't-care idiom for unlisted addresses.
+std::string caseDefaultModuleSource(const std::string& name,
+                                    const std::string& defaultValue) {
+  return "module " + name + R"((
+  input  logic       clk_i,
+  input  logic [1:0] addr_i,
+  input  logic [7:0] a_i,
+  input  logic [7:0] b_i,
+  output logic [7:0] dat_o
+);
+  logic [7:0] dat;
+  always_comb begin
+    case (addr_i)
+      2'd0:    dat = a_i;
+      2'd1:    dat = b_i;
+      default: dat = )" + defaultValue + R"(;
+    endcase
+  end
+  always_ff @(posedge clk_i) dat_o <= dat;
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DualRailSecModelsCaseDefaultXLiteralAsPermanentX) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* xTop = loadSystemVerilogTopFromSource(
+      library, "case_default_x", caseDefaultModuleSource("case_default_x", "8'bx"));
+  auto* xCopy = loadSystemVerilogTopFromSource(
+      library, "case_default_x_copy",
+      caseDefaultModuleSource("case_default_x_copy", "8'bx"));
+  auto* zeroTop = loadSystemVerilogTopFromSource(
+      library, "case_default_zero",
+      caseDefaultModuleSource("case_default_zero", "8'b0"));
+
+  // The X literal is modeled, not skipped: every output stays covered and the
+  // model carries one uninitialized self-looping state bit for it.
+  const auto extracted = SequentialDesignModel::extract(xTop);
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_EQ(extracted.observedOutputs.size(), 8u);
+  size_t xStates = 0;
+  for (const auto& [key, name] : extracted.displayNameByKey) {
+    if (name.rfind("1'bx#", 0) != 0) {
+      continue;
+    }
+    ++xStates;
+    EXPECT_EQ(extracted.initialStateValueByKey.count(key), 0u);
+    const auto nextIt = extracted.nextStateExprByStateKey.find(key);
+    ASSERT_NE(nextIt, extracted.nextStateExprByStateKey.end());
+    EXPECT_EQ(nextIt->second, BoolExpr::Var(extracted.inputVarByKey.at(key)));
+  }
+  EXPECT_EQ(xStates, 1u);
+
+  // X on both sides, and X against a synthesized don't-care value, are both
+  // "no binary-defined difference" under the dual-rail encoding.
+  for (auto* other : {xCopy, zeroTop}) {
+    SequentialEquivalenceStrategy strategy(
+        xTop, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady);
+    const auto result = strategy.run(4);
+    EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent)
+        << result.reason;
+    EXPECT_EQ(result.totalOutputs, 8u);
+    EXPECT_EQ(result.coveredOutputs, 8u);
+  }
+
+  // The binary encoding has no X value: the bit is an uninitialized register
+  // there, so the dependent outputs are skipped rather than reported different.
+  const auto binary = makeBinarySecStrategy(xTop, xCopy).run(4);
+  EXPECT_NE(binary.status, SequentialEquivalenceStatus::Different);
+}
+
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractModelsInferredMemoryWithConstantFalseCommitGuard) {
   NLUniverse::create();

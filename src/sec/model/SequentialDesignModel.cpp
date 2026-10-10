@@ -681,13 +681,15 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
     bool secDiagEnabled,
     const char* topName,
     const char* phaseLabel,
-    const LeafBoundary* boundary) {
+    const LeafBoundary* boundary,
+    bool modelXConstants) {
   MaterializedBuilderOutputs result;
 
   KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
   builder.setRetainDnl(true);
   builder.setLeafBoundary(boundary);
   builder.setStopAtOpaqueInternalOutputs(true);
+  builder.setModelXConstants(modelXConstants);
   std::vector<naja::DNL::DNLID> normalizedRoots;
   normalizedRoots.reserve(requestedOutputs.size());
   std::unordered_map<naja::DNL::DNLID, std::vector<naja::DNL::DNLID>> requestedByRoot;
@@ -3352,6 +3354,70 @@ size_t getNextSyntheticVarID(const SequentialDesignModel& model) {
   return nextVarID;
 }
 
+constexpr uint64_t kXConstantStateTag = uint64_t{1} << 61;
+
+SignalKey xConstantStateKey(naja::DNL::DNLID isoID) {
+  return {{kXConstantStateTag, static_cast<uint64_t>(isoID)}, {0}};
+}
+
+bool isXConstantStateKey(const SignalKey& key) {
+  return key.first.size() == 2 && key.first.front() == kXConstantStateTag;
+}
+
+// Drop the X-constant states no modeled cone reads, for example an X write
+// enable that the structured-memory rules handled instead.
+void pruneUnusedXConstantStates(SequentialDesignModel& model) {
+  std::vector<SignalKey> xKeys;
+  for (const auto& key : model.stateBits) {
+    if (isXConstantStateKey(key)) {
+      xKeys.push_back(key);
+    }
+  }
+  if (xKeys.empty()) {
+    return;
+  }
+  std::unordered_set<size_t> used;
+  const auto collect = [&used](BoolExpr* expr) {
+    if (expr != nullptr) {
+      const auto support = expr->getSupportVars();
+      used.insert(support.begin(), support.end());
+    }
+  };
+  for (const auto& [_, expr] : model.observedOutputExprByKey) {
+    collect(expr);
+  }
+  for (const auto& [key, expr] : model.nextStateExprByStateKey) {
+    if (!isXConstantStateKey(key)) {
+      collect(expr);
+    }
+  }
+  for (const auto& key : xKeys) {
+    if (used.contains(model.inputVarByKey.at(key))) {
+      continue;
+    }
+    std::erase(model.stateBits, key);
+    model.inputVarByKey.erase(key);
+    model.nextStateExprByStateKey.erase(key);
+    model.displayNameByKey.erase(key);
+  }
+}
+
+// An X-constant literal (`1'bx`) becomes a state bit with no initial value
+// whose next state is itself: permanently X under the dual-rail encoding, so a
+// binary value on the other side is not a difference. Register these before
+// other synthetic state so later variable IDs are allocated above them.
+void assignXConstantStateVars(
+    const ExtractContext& ctx,
+    SequentialDesignModel& model) {
+  for (const auto& [isoID, varID] : ctx.builder.getXConstantVars()) {
+    const SignalKey key = xConstantStateKey(isoID);
+    model.stateBits.push_back(key);
+    model.inputVarByKey.emplace(key, varID);
+    model.nextStateExprByStateKey.emplace(key, BoolExpr::Var(varID));
+    model.displayNameByKey.emplace(key, "1'bx#" + std::to_string(isoID));
+  }
+}
+
 void assignStructuredMemoryStateVars(
     const ExtractContext& ctx,
     SequentialDesignModel& model) {
@@ -4117,7 +4183,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       const auto dependencyOutputs = materializeBuilderOutputs(
           batchOutputTerms, builderInputs, termDNLID2varID,
           ctx.collectedSkippedOutputs, ctx.secDiagEnabled, ctx.topName.c_str(),
-          "dependency build", ctx.boundary);
+          "dependency build", ctx.boundary, /*modelXConstants=*/true);
       appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
       appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
       mergeBuilderTermVarIDs(termDNLID2varID,
@@ -4869,6 +4935,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   };
   ctx.builder.setRetainDnl(true);
   ctx.builder.setBoundaryPairs(pairs, side);
+  ctx.builder.setModelXConstants(true);
 
   // Phase 1: collect the raw boundary, classify top I/O vs sequential state,
   // and scan leaf sequentials so the later formula build knows what it must
@@ -4911,6 +4978,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   std::vector<naja::DNL::DNLID> builderOutputs = ctx.builder.getOutputs();
   std::vector<size_t> termDNLID2varID = ctx.builder.getTermDNLID2VarID();
   recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
+  assignXConstantStateVars(ctx, model);
 
   std::unordered_map<naja::DNL::DNLID, BoolExpr*> outputExprByTerm;
   const auto& outputTerms = builderOutputs;
@@ -4937,7 +5005,10 @@ SequentialDesignModel SequentialDesignModel::extract(
         ctx.collectedSkippedOutputs,
         ctx.secDiagEnabled,
         ctx.topName.c_str(),
-        "structured memory dependency build", ctx.boundary);
+        // Memory control pins keep their existing rules: an X write enable
+        // stays a disabled write rather than a modeled X.
+        "structured memory dependency build", ctx.boundary,
+        /*modelXConstants=*/false);
     appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
     appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
     mergeBuilderTermVarIDs(termDNLID2varID, dependencyOutputs.termDNLID2varID);
@@ -4993,6 +5064,7 @@ SequentialDesignModel SequentialDesignModel::extract(
       outputExprByTerm,
       skippedOutputsByTerm);
   applyRebuiltTransitionArtifacts(rebuiltArtifacts, model);
+  pruneUnusedXConstantStates(model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
