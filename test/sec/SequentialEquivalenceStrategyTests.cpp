@@ -16530,26 +16530,19 @@ TEST_F(
 
 namespace {
 
-// A registered read mux whose `case` default is the given literal: `'x` is
-// the usual don't-care idiom for unlisted addresses.
-std::string caseDefaultModuleSource(const std::string& name,
-                                    const std::string& defaultValue) {
+// The two smallest shapes an `x` literal takes in RTL: one branch of a
+// register's next state, and one branch of a combinational output.
+std::string xLiteralModuleSource(const std::string& name,
+                                 const std::string& literal) {
   return "module " + name + R"((
-  input  logic       clk_i,
-  input  logic [1:0] addr_i,
-  input  logic [7:0] a_i,
-  input  logic [7:0] b_i,
-  output logic [7:0] dat_o
+  input  logic clk,
+  input  logic s,
+  input  logic a,
+  output logic q,
+  output logic y
 );
-  logic [7:0] dat;
-  always_comb begin
-    case (addr_i)
-      2'd0:    dat = a_i;
-      2'd1:    dat = b_i;
-      default: dat = )" + defaultValue + R"(;
-    endcase
-  end
-  always_ff @(posedge clk_i) dat_o <= dat;
+  always_ff @(posedge clk) q <= s ? a : )" + literal + R"(;
+  assign y = s ? a : )" + literal + R"(;
 endmodule
 )";
 }
@@ -16557,26 +16550,24 @@ endmodule
 }  // namespace
 
 TEST_F(SequentialEquivalenceStrategyTests,
-       DualRailSecModelsCaseDefaultXLiteralAsPermanentX) {
+       DualRailSecModelsXLiteralAsPermanentX) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
   auto* library =
       NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
   auto* xTop = loadSystemVerilogTopFromSource(
-      library, "case_default_x", caseDefaultModuleSource("case_default_x", "8'bx"));
+      library, "x_literal", xLiteralModuleSource("x_literal", "1'bx"));
   auto* xCopy = loadSystemVerilogTopFromSource(
-      library, "case_default_x_copy",
-      caseDefaultModuleSource("case_default_x_copy", "8'bx"));
+      library, "x_literal_copy", xLiteralModuleSource("x_literal_copy", "1'bx"));
   auto* zeroTop = loadSystemVerilogTopFromSource(
-      library, "case_default_zero",
-      caseDefaultModuleSource("case_default_zero", "8'b0"));
+      library, "zero_literal", xLiteralModuleSource("zero_literal", "1'b0"));
 
-  // The X literal is modeled, not skipped: every output stays covered and the
-  // model carries one uninitialized self-looping state bit for it.
+  // The X literal is modeled, not skipped: both outputs stay covered and the
+  // model carries uninitialized self-looping state for the literal.
   const auto extracted = SequentialDesignModel::extract(xTop);
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
   EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
-  EXPECT_EQ(extracted.observedOutputs.size(), 8u);
+  EXPECT_EQ(extracted.observedOutputs.size(), 2u);
   size_t xStates = 0;
   for (const auto& [key, name] : extracted.displayNameByKey) {
     if (name.rfind("1'bx#", 0) != 0) {
@@ -16588,7 +16579,9 @@ TEST_F(SequentialEquivalenceStrategyTests,
     ASSERT_NE(nextIt, extracted.nextStateExprByStateKey.end());
     EXPECT_EQ(nextIt->second, BoolExpr::Var(extracted.inputVarByKey.at(key)));
   }
-  EXPECT_EQ(xStates, 1u);
+  // The frontend may share one constant net between the two literals.
+  EXPECT_GE(xStates, 1u);
+  EXPECT_LE(xStates, 2u);
 
   // X on both sides, and X against a synthesized don't-care value, are both
   // "no binary-defined difference" under the dual-rail encoding.
@@ -16599,8 +16592,8 @@ TEST_F(SequentialEquivalenceStrategyTests,
     const auto result = strategy.run(4);
     EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent)
         << result.reason;
-    EXPECT_EQ(result.totalOutputs, 8u);
-    EXPECT_EQ(result.coveredOutputs, 8u);
+    EXPECT_EQ(result.totalOutputs, 2u);
+    EXPECT_EQ(result.coveredOutputs, 2u);
   }
 
   // The binary encoding has no X value: the bit is an uninitialized register
