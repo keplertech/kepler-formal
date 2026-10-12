@@ -2620,17 +2620,23 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
   }
 
   const auto* primitive = instance.getSNLModel();
-  const bool hasSequentialModel =
-      naja::NL::SNLDesignModeling::hasSequentialModel(primitive);
-  if (hasSequentialModel &&
-      naja::NL::SNLDesignModeling::getSequentialModel(primitive).kind ==
+  // Resolve the model per instance: a primitive modeled with
+  // setSequentialModelFromParameters selects its model from the instance
+  // parameters, and the design overload throws for it.
+  const naja::NL::SNLDesignModeling::SequentialModel* sequentialModel =
+      naja::NL::SNLDesignModeling::hasSequentialModel(primitive)
+          ? &naja::NL::SNLDesignModeling::getSequentialModel(
+                instance.getSNLInstance())
+          : nullptr;
+  if (sequentialModel != nullptr &&
+      sequentialModel->kind ==
           naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch) {
     for (const auto termID : physicalStateOutputTermIDs) {
       scan.opaqueStateOutputs.push_back(
           {termID, "Naja latch sequential models are not supported by SEC"});
     }
-  } else if (hasSequentialModel) {
-    scan.model = &naja::NL::SNLDesignModeling::getSequentialModel(primitive);
+  } else if (sequentialModel != nullptr) {
+    scan.model = sequentialModel;
     scan.opaqueStateReasons.resize(scan.model->states.size());
     std::unordered_set<naja::DNL::DNLID> modeledPhysicalOutputs;
     for (const auto& output : scan.model->outputs) {

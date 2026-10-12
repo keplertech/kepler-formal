@@ -3057,6 +3057,182 @@ TEST_F(KeplerFormalCliTests, ConfigPythonDesignInputWithPythonCellModelsOnly) {
   std::filesystem::remove_all(tmpDir);
 }
 
+namespace {
+
+// Cells for keplertech/kepler-formal#278: a flop whose clock edge is selected
+// per instance by its EDGE parameter (setSequentialModelFromParameters). The
+// primitive alone has no single sequential model; SEC must resolve it from
+// each instance.
+const char* const kPythonParameterizedEdgeCells =
+    "import naja\n"
+    "\n"
+    "def constructPrimitives(lib):\n"
+    "    inv = naja.SNLDesign.createPrimitive(lib, 'INV')\n"
+    "    naja.SNLScalarTerm.create(inv, naja.SNLTerm.Direction.Input, 'A')\n"
+    "    naja.SNLScalarTerm.create(inv, naja.SNLTerm.Direction.Output, 'Y')\n"
+    "    inv.setTruthTable(0b01)\n"
+    "\n"
+    "    dff = naja.SNLDesign.createPrimitive(lib, 'PDFF')\n"
+    "    d = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'D')\n"
+    "    ck = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'CK')\n"
+    "    q = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Output, 'Q')\n"
+    "    naja.SNLParameter.createBinary(dff, 'EDGE', 1, 0)\n"
+    "    dff.setSequentialModelFromParameters(['EDGE'], [\n"
+    "        {'values': [0], 'clocked_on': 'CK',\n"
+    "         'states': [{'name': 'IQ', 'next_state': 'D'}], 'outputs': [(q, 'IQ')]},\n"
+    "        {'values': [1], 'clocked_on': '!CK',\n"
+    "         'states': [{'name': 'IQ', 'next_state': 'D'}], 'outputs': [(q, 'IQ')]},\n"
+    "    ])\n"
+    "    naja.SNLDesign.addClockToOutputsArcs(ck, [q])\n"
+    "    naja.SNLDesign.addInputsToClockArcs([d], ck)\n";
+
+// One flop per EDGE value, both sampling the inverted input.
+const char* const kParameterizedEdgeRtl =
+    "module top(input logic clk, input logic d,\n"
+    "           output logic q_pos, output logic q_neg);\n"
+    "  always_ff @(posedge clk) q_pos <= ~d;\n"
+    "  always_ff @(negedge clk) q_neg <= ~d;\n"
+    "endmodule\n";
+
+const char* const kParameterizedEdgeGates =
+    "module top(clk, d, q_pos, q_neg);\n"
+    "  input clk;\n"
+    "  input d;\n"
+    "  output q_pos;\n"
+    "  output q_neg;\n"
+    "  wire dn;\n"
+    "  INV u_inv (.A(d), .Y(dn));\n"
+    "  PDFF #(.EDGE(1'b0)) u_ff_pos (.D(dn), .CK(clk), .Q(q_pos));\n"
+    "  PDFF #(.EDGE(1'b1)) u_ff_neg (.D(dn), .CK(clk), .Q(q_neg));\n"
+    "endmodule\n";
+
+}  // namespace
+
+// keplertech/kepler-formal#278: SEC aborted with "Parameterized sequential
+// model requires an instance" on any netlist using such a primitive, in both
+// RTL-vs-gate and gate-vs-gate runs.
+TEST_F(KeplerFormalCliTests,
+       ConfigSecResolvesParameterizedSequentialModelPerInstance) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_param_seq_model");
+  const auto cells = tmpDir / "prims.py";
+  { std::ofstream out(cells); out << kPythonParameterizedEdgeCells; }
+  const auto rtl = tmpDir / "rtl.sv";
+  { std::ofstream out(rtl); out << kParameterizedEdgeRtl; }
+  const auto gates = tmpDir / "gate.v";
+  { std::ofstream out(gates); out << kParameterizedEdgeGates; }
+
+  // RTL vs gate.
+  const auto sv2vCfg = writeTempConfig(
+      "format: sv2v\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 8\n"
+      "input_paths:\n"
+      "  - " + rtl.string() + "\n"
+      "  - " + gates.string() + "\n"
+      "sv_design1_top: top\n"
+      "verilog_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + cells.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(sv2vCfg), kSecProvedExitCode);
+  std::filesystem::remove(sv2vCfg);
+
+  // Gate vs itself.
+  const auto gateCfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 8\n"
+      "input_paths:\n"
+      "  - " + gates.string() + "\n"
+      "  - " + gates.string() + "\n"
+      "verilog_design1_top: top\n"
+      "verilog_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + cells.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(gateCfg), kSecProvedExitCode);
+  std::filesystem::remove(gateCfg);
+  std::filesystem::remove_all(tmpDir);
+}
+
+// keplertech/kepler-formal#277: a macro defined in an earlier file of a file
+// list is only visible to later files when slang compiles them as one unit.
+TEST_F(KeplerFormalCliTests, SvSingleUnitSharesMacrosAcrossFlistFiles) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_sv_single_unit");
+  const auto defs = tmpDir / "defs.svh";
+  const auto leaf = tmpDir / "a.sv";
+  const auto top = tmpDir / "top.sv";
+  const auto flist = tmpDir / "design.f";
+  {
+    std::ofstream out(defs);
+    out << "`define REG(q, d, clk) always_ff @(posedge clk) q <= d;\n";
+  }
+  {
+    std::ofstream out(leaf);
+    out << "`include \"defs.svh\"\n"
+           "module a (input logic clk, input logic d, output logic q);\n"
+           "  `REG(q, d, clk)\n"
+           "endmodule\n";
+  }
+  {
+    // Uses `REG without including defs.svh.
+    std::ofstream out(top);
+    out << "module top (input logic clk, input logic d, output logic q);\n"
+           "  logic m;\n"
+           "  a u_a (.clk(clk), .d(d), .q(m));\n"
+           "  `REG(q, m, clk)\n"
+           "endmodule\n";
+  }
+  {
+    std::ofstream out(flist);
+    out << "+incdir+" << tmpDir.string() << "\n"
+        << leaf.string() << "\n"
+        << top.string() << "\n";
+  }
+
+  const std::vector<std::string> separateUnits = {
+      "kepler-formal", "-sv", "-v", "sec",
+      "--sv_design1_flist", flist.string(), "--sv_design1_top", "top",
+      "--sv_design2_flist", flist.string(), "--sv_design2_top", "top"};
+  // One unit per file: `REG is unknown in top.sv.
+  EXPECT_EQ(runWithArgs(separateUnits), EXIT_FAILURE);
+
+  auto singleUnit = separateUnits;
+  singleUnit.push_back("--sv_single_unit");
+  EXPECT_EQ(runWithArgs(singleUnit), kSecProvedExitCode);
+
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sv_single_unit: true\n"
+      "sv_design1_flist: " + flist.string() + "\n"
+      "sv_design1_top: top\n"
+      "sv_design2_flist: " + flist.string() + "\n"
+      "sv_design2_top: top\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+
+  // The option belongs to SystemVerilog input only.
+  const auto verilog = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal", "-verilog", "-v", "lec",
+                   "--design1", verilog.design0Path.string(),
+                   "--design2", verilog.design1Path.string(),
+                   "--sv_single_unit"}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(verilog.tmpDir);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, CliPythonTopOptionsRejectedWithOtherFormats) {
   const auto fixture = createEquivalentDesignFixture(
       "v",
