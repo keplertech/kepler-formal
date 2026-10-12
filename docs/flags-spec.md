@@ -54,6 +54,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
 | `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `--sv_single_unit` | Compile all SystemVerilog sources of each design, including flist entries, as one slang compilation unit so a macro defined in one file is visible in later files. Default: one unit per file. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
 | `--vhdl_design1_top <top>`, `--vhdl_design2_top <top>` | Per-design VHDL top entities. Only valid in `vhdl` mode. |
 | `--python_design1_top <top>`, `--python_design2_top <top>` | Per-design top modules of Python-built designs. Only valid in `python` mode. |
@@ -93,6 +94,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |
 | `verilog_design1_top`, `verilog_design2_top` | string | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
 | `vhdl_design1_top`, `vhdl_design2_top` | string | Per-design VHDL top entities. Only valid in `vhdl` mode. |
 | `python_design1_top`, `python_design2_top` | string | Per-design top modules of Python-built designs. Only valid in `python` mode. |
