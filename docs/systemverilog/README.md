@@ -41,7 +41,7 @@ build/src/bin/kepler-formal <-systemverilog/-sv> -v sec [--verilog_preprocessing
 build/src/bin/kepler-formal -systemverilog -v sec \
   --sv_design1_flist <file> --sv_design1_top <name> \
   --sv_design2_flist <file> --sv_design2_top <name> \
-  [--liberty <library-file>...]
+  [--sv_single_unit] [--liberty <library-file>...]
 
 # RTL SystemVerilog vs gate-level Verilog for SEC
 build/src/bin/kepler-formal -sv2v -v sec \
@@ -57,6 +57,13 @@ build/src/bin/kepler-formal -sv2v -v sec \
 ```
 
 The preprocessing flag is spelled `--verilog_preprocessing`.
+
+By default slang compiles each source file as its own compilation unit, so a
+`` `define`` in one file is not visible in the next one unless that file
+`` `include``s it. Code bases written for tools that compile everything as one
+unit (Verilator always does) need `--sv_single_unit` (YAML:
+`sv_single_unit: true`), which compiles all sources of each design, flist
+entries included, as a single unit in source order.
 
 ## Flist mode
 

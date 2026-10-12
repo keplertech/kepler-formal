@@ -3160,6 +3160,79 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(tmpDir);
 }
 
+// keplertech/kepler-formal#277: a macro defined in an earlier file of a file
+// list is only visible to later files when slang compiles them as one unit.
+TEST_F(KeplerFormalCliTests, SvSingleUnitSharesMacrosAcrossFlistFiles) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_sv_single_unit");
+  const auto defs = tmpDir / "defs.svh";
+  const auto leaf = tmpDir / "a.sv";
+  const auto top = tmpDir / "top.sv";
+  const auto flist = tmpDir / "design.f";
+  {
+    std::ofstream out(defs);
+    out << "`define REG(q, d, clk) always_ff @(posedge clk) q <= d;\n";
+  }
+  {
+    std::ofstream out(leaf);
+    out << "`include \"defs.svh\"\n"
+           "module a (input logic clk, input logic d, output logic q);\n"
+           "  `REG(q, d, clk)\n"
+           "endmodule\n";
+  }
+  {
+    // Uses `REG without including defs.svh.
+    std::ofstream out(top);
+    out << "module top (input logic clk, input logic d, output logic q);\n"
+           "  logic m;\n"
+           "  a u_a (.clk(clk), .d(d), .q(m));\n"
+           "  `REG(q, m, clk)\n"
+           "endmodule\n";
+  }
+  {
+    std::ofstream out(flist);
+    out << "+incdir+" << tmpDir.string() << "\n"
+        << leaf.string() << "\n"
+        << top.string() << "\n";
+  }
+
+  const std::vector<std::string> separateUnits = {
+      "kepler-formal", "-sv", "-v", "sec",
+      "--sv_design1_flist", flist.string(), "--sv_design1_top", "top",
+      "--sv_design2_flist", flist.string(), "--sv_design2_top", "top"};
+  // One unit per file: `REG is unknown in top.sv.
+  EXPECT_EQ(runWithArgs(separateUnits), EXIT_FAILURE);
+
+  auto singleUnit = separateUnits;
+  singleUnit.push_back("--sv_single_unit");
+  EXPECT_EQ(runWithArgs(singleUnit), kSecProvedExitCode);
+
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sv_single_unit: true\n"
+      "sv_design1_flist: " + flist.string() + "\n"
+      "sv_design1_top: top\n"
+      "sv_design2_flist: " + flist.string() + "\n"
+      "sv_design2_top: top\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+
+  // The option belongs to SystemVerilog input only.
+  const auto verilog = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal", "-verilog", "-v", "lec",
+                   "--design1", verilog.design0Path.string(),
+                   "--design2", verilog.design1Path.string(),
+                   "--sv_single_unit"}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(verilog.tmpDir);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, CliPythonTopOptionsRejectedWithOtherFormats) {
   const auto fixture = createEquivalentDesignFixture(
       "v",

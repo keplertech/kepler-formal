@@ -78,7 +78,7 @@ static void print_usage(const char* prog) {
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
@@ -517,6 +517,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "verilog_design2_top",
       "sv_design1_top",
       "sv_design2_top",
+      "sv_single_unit",
       "vhdl_design1_top",
       "vhdl_design2_top",
       "python_design1_top",
@@ -561,6 +562,9 @@ struct DesignInputs {
 struct SystemVerilogDesignOptions {
   std::optional<std::string> flist;
   std::optional<std::string> top;
+  // Compile every source of the design, including flist entries, as one
+  // slang compilation unit so macros carry over between files.
+  bool singleUnit = false;
 };
 
 struct SystemVerilogOptions {
@@ -1177,7 +1181,7 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
   // Generated SV2V primitive stubs may be parsed with RTL that has no enclosing
   // timescale, so force a Slang command file when stubs are present.
   const bool addDefaultTimescale = primitiveLibraries != nullptr;
-  if (designOptions.top || addDefaultTimescale) {
+  if (designOptions.top || designOptions.singleUnit || addDefaultTimescale) {
   // LCOV_EXCL_STOP
     const auto temporaryTopFlistPath =
         // LCOV_EXCL_START
@@ -1205,6 +1209,9 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
     }
     if (designOptions.top) {
       topFlist << "--top " << *designOptions.top << "\n";
+    }
+    if (designOptions.singleUnit) {
+      topFlist << "--single-unit\n";
     }
     if (designOptions.flist) {
       topFlist << "-f "
@@ -1338,6 +1345,7 @@ static int KeplerFormalMainImpl(
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
   bool verilogPreprocessing = false;
+  bool svSingleUnit = false;
   std::string dumpCnfPath;
   std::string dumpPoCnfPath;
 
@@ -1604,6 +1612,11 @@ static int KeplerFormalMainImpl(
           verilogPreprocessing = cfg["verilog_preprocessing"].as<bool>();
         }
         // LCOV_EXCL_STOP
+
+        // sv_single_unit (optional)
+        if (cfg["sv_single_unit"] && cfg["sv_single_unit"].IsScalar()) {
+          svSingleUnit = cfg["sv_single_unit"].as<bool>();
+        }
 
         // solver (glucose | kissat | cadical)
         if (cfg["solver"] && cfg["solver"].IsScalar()) {
@@ -2067,6 +2080,10 @@ static int KeplerFormalMainImpl(
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--sv_single_unit" || arg == "--sv-single-unit") {
+        svSingleUnit = true;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--compact") {
         compactMode = true;
@@ -2205,10 +2222,16 @@ static int KeplerFormalMainImpl(
   }
   if (runResult != nullptr) {
     runResult->inputFormat = inputFormatToken;
+    runResult->svSingleUnit = svSingleUnit;
     runResult->verification = verificationModeName(verificationMode);
     runResult->logFile = runLogFilePath;
   }
   SPDLOG_INFO("Input format: {}", inputFormatName);
+  if (inputFormatType == FormatType::SYSTEMVERILOG ||
+      inputFormatType == FormatType::SV2V) {
+    SPDLOG_INFO("SystemVerilog compilation units: {}",
+                svSingleUnit ? "single" : "one per file");
+  }
   if (!runLogFilePath.empty()) {
     SPDLOG_INFO("Run log: {}", runLogFilePath);
   }
@@ -2345,9 +2368,12 @@ static int KeplerFormalMainImpl(
       // LCOV_EXCL_STOP
     }
   }
+  systemVerilogOptions.design0.singleUnit = svSingleUnit;
+  systemVerilogOptions.design1.singleUnit = svSingleUnit;
   if (inputFormatType != FormatType::SYSTEMVERILOG &&
       inputFormatType != FormatType::SV2V &&
-      (systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
+      (svSingleUnit ||
+       systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
        systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL(
