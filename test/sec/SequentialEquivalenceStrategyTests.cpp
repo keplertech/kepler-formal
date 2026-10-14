@@ -16629,6 +16629,80 @@ TEST_F(
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
 }
 
+namespace {
+
+// The two smallest shapes an `x` literal takes in RTL: one branch of a
+// register's next state, and one branch of a combinational output.
+std::string xLiteralModuleSource(const std::string& name,
+                                 const std::string& literal) {
+  return "module " + name + R"((
+  input  logic clk,
+  input  logic s,
+  input  logic a,
+  output logic q,
+  output logic y
+);
+  always_ff @(posedge clk) q <= s ? a : )" + literal + R"(;
+  assign y = s ? a : )" + literal + R"(;
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DualRailSecModelsXLiteralAsPermanentX) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* xTop = loadSystemVerilogTopFromSource(
+      library, "x_literal", xLiteralModuleSource("x_literal", "1'bx"));
+  auto* xCopy = loadSystemVerilogTopFromSource(
+      library, "x_literal_copy", xLiteralModuleSource("x_literal_copy", "1'bx"));
+  auto* zeroTop = loadSystemVerilogTopFromSource(
+      library, "zero_literal", xLiteralModuleSource("zero_literal", "1'b0"));
+
+  // The X literal is modeled, not skipped: both outputs stay covered and the
+  // model carries uninitialized self-looping state for the literal.
+  const auto extracted = SequentialDesignModel::extract(xTop);
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_EQ(extracted.observedOutputs.size(), 2u);
+  size_t xStates = 0;
+  for (const auto& [key, name] : extracted.displayNameByKey) {
+    if (name.rfind("1'bx#", 0) != 0) {
+      continue;
+    }
+    ++xStates;
+    EXPECT_EQ(extracted.initialStateValueByKey.count(key), 0u);
+    const auto nextIt = extracted.nextStateExprByStateKey.find(key);
+    ASSERT_NE(nextIt, extracted.nextStateExprByStateKey.end());
+    EXPECT_EQ(nextIt->second, BoolExpr::Var(extracted.inputVarByKey.at(key)));
+  }
+  // The frontend may share one constant net between the two literals.
+  EXPECT_GE(xStates, 1u);
+  EXPECT_LE(xStates, 2u);
+
+  // X on both sides, and X against a synthesized don't-care value, are both
+  // "no binary-defined difference" under the dual-rail encoding.
+  for (auto* other : {xCopy, zeroTop}) {
+    SequentialEquivalenceStrategy strategy(
+        xTop, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady);
+    const auto result = strategy.run(4);
+    EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent)
+        << result.reason;
+    EXPECT_EQ(result.totalOutputs, 2u);
+    EXPECT_EQ(result.coveredOutputs, 2u);
+  }
+
+  // The binary encoding has no X value: the bit is an uninitialized register
+  // there, so the dependent outputs are skipped rather than reported different.
+  const auto binary = makeBinarySecStrategy(xTop, xCopy).run(4);
+  EXPECT_NE(binary.status, SequentialEquivalenceStatus::Different);
+}
+
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractModelsInferredMemoryWithConstantFalseCommitGuard) {
   NLUniverse::create();

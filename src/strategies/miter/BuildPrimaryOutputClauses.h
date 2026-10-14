@@ -98,6 +98,15 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   void setStopAtOpaqueInternalOutputs(bool stop) {
     stopAtOpaqueInternalOutputs_ = stop;
   }
+  // Give every X-constant net (`1'bx`) its own variable instead of skipping
+  // the cones that read it. SEC models those variables as permanently-X
+  // state. Off by default: the binary LEC encoding has no X value.
+  void setModelXConstants(bool model) { modelXConstants_ = model; }
+  // (iso, variable) pairs assigned by build(); deterministic for one DNL.
+  const std::vector<std::pair<naja::DNL::DNLID, size_t>>& getXConstantVars()
+      const {
+    return xConstantVars_;
+  }
   const std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash>&
   getInputsMap() const {
     return inputsMap_;
@@ -155,6 +164,8 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   size_t lastCommonID = 1;
   std::unordered_map<naja::DNL::DNLID, SkippedOutputInfo> skippedOutputs_;
   bool stopAtOpaqueInternalOutputs_ = false;
+  bool modelXConstants_ = false;
+  std::vector<std::pair<naja::DNL::DNLID, size_t>> xConstantVars_;
   mutable std::mutex skippedOutputsMutex_;
 
   struct hash {
