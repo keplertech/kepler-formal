@@ -828,6 +828,7 @@ jobs:
     - name: Read regression job results
       uses: actions/github-script@v7
       with:
+        retries: 3
         script: |
           const fs = require('fs');
           const path = require('path');
@@ -868,6 +869,7 @@ jobs:
       uses: actions/github-script@v7
       continue-on-error: true
       with:
+        retries: 3
         script: |
           const runs = await github.rest.actions.listWorkflowRuns({
             ...context.repo,
