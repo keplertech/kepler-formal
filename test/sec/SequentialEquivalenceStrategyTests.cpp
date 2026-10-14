@@ -37,6 +37,8 @@
 #include "SNLBusTerm.h"
 #include "SNLBusTermBit.h"
 #include "SNLInstance.h"
+#include "SNLInstParameter.h"
+#include "SNLParameter.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "common/AlignedSignals.h"
@@ -16038,6 +16040,105 @@ TEST_F(SequentialEquivalenceStrategyTests,
                                  {extracted.inputVarByKey.at(in1Key), true}}));
   EXPECT_TRUE(q1Expr->evaluate({{extracted.inputVarByKey.at(in0Key), false},
                                 {extracted.inputVarByKey.at(in1Key), true}}));
+}
+
+// keplertech/kepler-formal#278: a primitive modeled with
+// setSequentialModelFromParameters selects its sequential model per instance.
+// Extraction must resolve it from the instance; the primitive alone throws.
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractResolvesParameterizedModelPerInstance) {
+  using Operator = SNLDesignModeling::BooleanExpression::Operator;
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  auto* model =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("PDFF"));
+  auto* data =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("D"));
+  auto* clock =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("CK"));
+  auto* output =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
+  SNLDesignModeling::addInputsToClockArcs({data}, clock);
+  SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+  auto* edge = SNLParameter::create(
+      model, NLName("EDGE"), SNLParameter::Type::Binary, "0");
+
+  SNLDesignModeling::SequentialModelTable table;
+  for (const uint64_t edgeValue : {uint64_t{0}, uint64_t{1}}) {
+    SNLDesignModeling::SequentialModel entry;
+    entry.clockedOn = makeSequentialTermExpression(clock);
+    if (edgeValue == 1) {
+      entry.clockedOn.root =
+          entry.clockedOn.addOperation(Operator::Not, {entry.clockedOn.root});
+    }
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(data);
+    entry.states.push_back(std::move(state));
+    entry.outputs.push_back({output, makeSequentialStateExpression(0)});
+    table.emplace(std::vector<uint64_t>{edgeValue}, std::move(entry));
+  }
+  SNLDesignModeling::setSequentialModelFromParameters(model, {"EDGE"}, table);
+  EXPECT_ANY_THROW(SNLDesignModeling::getSequentialModel(model));
+
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topPos =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out_pos"));
+  auto* topNeg =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out_neg"));
+  auto* netIn = SNLScalarNet::create(top, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netPos = SNLScalarNet::create(top, NLName("net_pos"));
+  auto* netNeg = SNLScalarNet::create(top, NLName("net_neg"));
+  topIn->setNet(netIn);
+  topClock->setNet(netClock);
+  topPos->setNet(netPos);
+  topNeg->setNet(netNeg);
+
+  // ff_pos keeps the EDGE default (0); ff_neg overrides it to 1.
+  auto* ffPos = SNLInstance::create(top, model, NLName("ff_pos"));
+  auto* ffNeg = SNLInstance::create(top, model, NLName("ff_neg"));
+  SNLInstParameter::create(ffNeg, edge, "1");
+  for (const auto& [ff, netQ] :
+       {std::pair{ffPos, netPos}, std::pair{ffNeg, netNeg}}) {
+    ff->getInstTerm(data)->setNet(netIn);
+    ff->getInstTerm(clock)->setNet(netClock);
+    ff->getInstTerm(output)->setNet(netQ);
+  }
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.skippedStateBits.empty());
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  ASSERT_EQ(extracted.stateBits.size(), 2u);
+  const auto posKey = findKeyByDisplayName(extracted, "ff_pos.Q[0]");
+  const auto negKey = findKeyByDisplayName(extracted, "ff_neg.Q[0]");
+  ASSERT_NE(
+      extracted.clockEventByStateKey.find(posKey),
+      extracted.clockEventByStateKey.end());
+  ASSERT_NE(
+      extracted.clockEventByStateKey.find(negKey),
+      extracted.clockEventByStateKey.end());
+  EXPECT_EQ(extracted.clockEventByStateKey.at(posKey).phase, ClockPhase::Pos);
+  EXPECT_EQ(extracted.clockEventByStateKey.at(negKey).phase, ClockPhase::Neg);
+
+  const auto inVar =
+      extracted.inputVarByKey.at(findKeyByDisplayName(extracted, "in[0]"));
+  for (const auto& key : {posKey, negKey}) {
+    auto* next = extracted.nextStateExprByStateKey.at(key);
+    EXPECT_TRUE(next->evaluate({{inVar, true}}));
+    EXPECT_FALSE(next->evaluate({{inVar, false}}));
+  }
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

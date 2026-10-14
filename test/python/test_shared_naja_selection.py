@@ -30,7 +30,7 @@ endforeach()
 """
 
 
-def _make_provider(site: Path, version: str = "0.7.27", git_hash: str = "abc1234") -> Path:
+def _make_provider(site: Path, version: str = "0.7.28", git_hash: str = "abc1234") -> Path:
     """Create an importable fake NajaEDA development wheel installed in ``site``."""
     package = site / "najaeda"
     (package / "sdk/include/naja/core").mkdir(parents=True)

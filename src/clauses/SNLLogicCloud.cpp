@@ -1292,7 +1292,8 @@ bool SNLLogicCloud::rejectOpaqueInternalOutput(naja::DNL::DNLID termID) {
       const auto* model = term.getDNLInstance().getSNLModel();
       if (model == nullptr || !SNLDesignModeling::hasSequentialModel(model)) {
         reason = "Missing Naja sequential model";
-      } else if (SNLDesignModeling::getSequentialModel(model).kind ==
+      } else if (SNLDesignModeling::getSequentialModel(
+                     term.getDNLInstance().getSNLInstance()).kind ==
                  SNLDesignModeling::SequentialModel::Kind::Latch) {
         reason = "Naja latch sequential models are not supported by SEC";
       } else {

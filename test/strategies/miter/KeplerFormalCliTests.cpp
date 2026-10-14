@@ -2638,6 +2638,616 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vPythonPrimitivesBuildsComplexStubLibrary)
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+namespace {
+
+// Python design input: a script builds its design with the naja module. The
+// primitives come from py_tech_files or Liberty; a Liberty library keeps its
+// own name, so scripts look a cell up in every primitive library.
+const char* const kPythonDesignHelpers =
+    "import naja\n"
+    "\n"
+    "def primitive(lib, name):\n"
+    "    for primitives in lib.getDB().getPrimitiveLibraries():\n"
+    "        model = primitives.getSNLDesign(name)\n"
+    "        if model is not None:\n"
+    "            return model\n"
+    "    raise RuntimeError('primitive %s was not loaded' % name)\n"
+    "\n"
+    "def connect(instance, pin, net):\n"
+    "    instance.getInstTerm(instance.getModel().getScalarTerm(pin)).setNet(net)\n"
+    "\n"
+    "def ports(design, inputs, outputs):\n"
+    "    nets = {}\n"
+    "    for name in inputs:\n"
+    "        term = naja.SNLScalarTerm.create(design, naja.SNLTerm.Direction.Input, name)\n"
+    "        nets[name] = naja.SNLScalarNet.create(design, name)\n"
+    "        term.setNet(nets[name])\n"
+    "    for name in outputs:\n"
+    "        term = naja.SNLScalarTerm.create(design, naja.SNLTerm.Direction.Output, name)\n"
+    "        nets[name] = naja.SNLScalarNet.create(design, name)\n"
+    "        term.setNet(nets[name])\n"
+    "    return nets\n"
+    "\n"
+    "def wires(design, nets, names):\n"
+    "    for name in names:\n"
+    "        nets[name] = naja.SNLScalarNet.create(design, name)\n"
+    "\n";
+
+const char* const kPythonGatePrimitives =
+    "import naja\n"
+    "\n"
+    "def gate(lib, name, inputs, output, truth_table):\n"
+    "    primitive = naja.SNLDesign.createPrimitive(lib, name)\n"
+    "    for input_name in inputs:\n"
+    "        naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, input_name)\n"
+    "    naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Output, output)\n"
+    "    primitive.setTruthTable(truth_table)\n"
+    "\n"
+    "def constructPrimitives(lib):\n"
+    "    gate(lib, 'INV', ['A'], 'Y', 0b01)\n"
+    "    gate(lib, 'AND2', ['A', 'B'], 'Y', 0b1000)\n"
+    "    gate(lib, 'OR2', ['A', 'B'], 'Y', 0b1110)\n";
+
+// y = ~(a & b) as AND2 then INV.
+const char* const kPythonNandDesignA =
+    "def constructLibrary(lib):\n"
+    "    and2, inv = primitive(lib, 'AND2'), primitive(lib, 'INV')\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['a', 'b'], ['y'])\n"
+    "    wires(top, n, ['ab'])\n"
+    "    g = naja.SNLInstance.create(top, and2, 'g')\n"
+    "    connect(g, 'A', n['a']); connect(g, 'B', n['b']); connect(g, 'Y', n['ab'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i')\n"
+    "    connect(i, 'A', n['ab']); connect(i, 'Y', n['y'])\n";
+
+// y = ~a | ~b: the same function by De Morgan.
+const char* const kPythonNandDesignB =
+    "def constructLibrary(lib):\n"
+    "    or2, inv = primitive(lib, 'OR2'), primitive(lib, 'INV')\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['a', 'b'], ['y'])\n"
+    "    wires(top, n, ['na', 'nb'])\n"
+    "    for x in ('a', 'b'):\n"
+    "        i = naja.SNLInstance.create(top, inv, 'i' + x)\n"
+    "        connect(i, 'A', n[x]); connect(i, 'Y', n['n' + x])\n"
+    "    o = naja.SNLInstance.create(top, or2, 'o')\n"
+    "    connect(o, 'A', n['na']); connect(o, 'B', n['nb']); connect(o, 'Y', n['y'])\n";
+
+// y = a & b: a different function.
+const char* const kPythonAndDesign =
+    "def constructLibrary(lib):\n"
+    "    and2 = primitive(lib, 'AND2')\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['a', 'b'], ['y'])\n"
+    "    g = naja.SNLInstance.create(top, and2, 'g')\n"
+    "    connect(g, 'A', n['a']); connect(g, 'B', n['b']); connect(g, 'Y', n['y'])\n";
+
+// 2-bit counter with synchronous reset from Nangate cells:
+// d0 = ~q0 & ~rst, d1 = (q1 ^ q0) & ~rst.
+const char* const kPythonCounterDesignA =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, xor2, dff = (primitive(lib, c) for c in ('INV_X1', 'AND2_X1', 'XOR2_X1', 'DFF_X1'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 't0', 't1', 'd0', 'd1', 'qn0', 'qn1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'ZN', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'ZN', n['t0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A1', n['t0']); connect(i, 'A2', n['nrst']); connect(i, 'ZN', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, xor2, 'x_d1'); connect(i, 'A', n['q1']); connect(i, 'B', n['q0']); connect(i, 'Z', n['t1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A1', n['t1']); connect(i, 'A2', n['nrst']); connect(i, 'ZN', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k]); connect(r, 'QN', n['qn' + k])\n";
+
+// The same counter restructured: XOR from AND/OR, QN instead of the inverter.
+const char* const kPythonCounterDesignB =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, or2, dff = (primitive(lib, c) for c in ('INV_X1', 'AND2_X1', 'OR2_X1', 'DFF_X1'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 'p', 'm', 's', 'd0', 'd1', 'qn0', 'qn1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'ZN', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A1', n['qn0']); connect(i, 'A2', n['nrst']); connect(i, 'ZN', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_p'); connect(i, 'A1', n['q1']); connect(i, 'A2', n['qn0']); connect(i, 'ZN', n['p'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_m'); connect(i, 'A1', n['qn1']); connect(i, 'A2', n['q0']); connect(i, 'ZN', n['m'])\n"
+    "    i = naja.SNLInstance.create(top, or2, 'o_s'); connect(i, 'A1', n['p']); connect(i, 'A2', n['m']); connect(i, 'ZN', n['s'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A1', n['s']); connect(i, 'A2', n['nrst']); connect(i, 'ZN', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k]); connect(r, 'QN', n['qn' + k])\n";
+
+// Two modules; "other" must not be picked when the top is named.
+const char* const kPythonTwoModuleDesign =
+    "def constructLibrary(lib):\n"
+    "    and2 = primitive(lib, 'AND2')\n"
+    "    for name in ('other', 'top'):\n"
+    "        design = naja.SNLDesign.create(lib, name)\n"
+    "        n = ports(design, ['a', 'b'], ['y'])\n"
+    "        g = naja.SNLInstance.create(design, and2, 'g')\n"
+    "        connect(g, 'A', n['a']); connect(g, 'B', n['b']); connect(g, 'Y', n['y'])\n";
+
+std::filesystem::path writePythonDesign(const std::filesystem::path& path,
+                                        const char* body) {
+  std::ofstream out(path);
+  out << kPythonDesignHelpers << body;
+  return path;
+}
+
+}  // namespace
+
+// SEC verdicts are visible through exit codes, so the equal and the different
+// pair are checked that way; the run log holds the netlist report, not the
+// verdict.
+TEST_F(KeplerFormalCliTests, ConfigPythonDesignInputProvesAndRefutes) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  ASSERT_TRUE(std::filesystem::exists(pyModuleDir / "naja.so"));
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_python_lec");
+  const auto primitives = tmpDir / "primitives.py";
+  { std::ofstream out(primitives); out << kPythonGatePrimitives; }
+  const auto nandA = writePythonDesign(tmpDir / "nand_a.py", kPythonNandDesignA);
+  const auto nandB = writePythonDesign(tmpDir / "nand_b.py", kPythonNandDesignB);
+  const auto andC = writePythonDesign(tmpDir / "and_c.py", kPythonAndDesign);
+
+  const auto runSec = [&](const std::filesystem::path& design0,
+                          const std::filesystem::path& design1,
+                          const char* format) {
+    const auto cfgPath = writeTempConfig(
+        std::string("format: ") + format + "\n"
+        "verification: sec\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + design0.string() + "\n"
+        "  - " + design1.string() + "\n"
+        "py_tech_files:\n"
+        "  - " + primitives.string() + "\n");
+    const int rc = runWithConfigFile(cfgPath);
+    std::filesystem::remove(cfgPath);
+    return rc;
+  };
+
+  EXPECT_EQ(runSec(nandA, nandB, "python"), kSecProvedExitCode);
+  EXPECT_EQ(runSec(nandA, andC, "py"), kSecCounterexampleExitCode);
+  // LEC accepts the format as well.
+  const auto lecCfg = writeTempConfig(
+      "format: python\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + nandA.string() + "\n"
+      "  - " + nandB.string() + "\n"
+      "py_tech_files:\n"
+      "  - " + primitives.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(lecCfg), EXIT_SUCCESS);
+  std::filesystem::remove(lecCfg);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigPythonDesignInputSelectsNamedTop) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_python_top");
+  const auto primitives = tmpDir / "primitives.py";
+  { std::ofstream out(primitives); out << kPythonGatePrimitives; }
+  const auto andC = writePythonDesign(tmpDir / "and_c.py", kPythonAndDesign);
+  const auto two = writePythonDesign(tmpDir / "two.py", kPythonTwoModuleDesign);
+
+  const auto cfgPath = writeTempConfig(
+      "format: python\n"
+      "verification: sec\n"
+      "max_k: 2\n"
+      "input_paths:\n"
+      "  - " + andC.string() + "\n"
+      "  - " + two.string() + "\n"
+      "python_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + primitives.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+
+  // Without a name, two candidate tops are an error rather than a guess.
+  const auto ambiguousCfg = writeTempConfig(
+      "format: python\n"
+      "verification: sec\n"
+      "max_k: 2\n"
+      "input_paths:\n"
+      "  - " + andC.string() + "\n"
+      "  - " + two.string() + "\n"
+      "py_tech_files:\n"
+      "  - " + primitives.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(ambiguousCfg), EXIT_FAILURE);
+  std::filesystem::remove(ambiguousCfg);
+
+  // A top that the script never created is an error, not a silent fallback.
+  const auto badCfg = writeTempConfig(
+      "format: python\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + andC.string() + "\n"
+      "  - " + andC.string() + "\n"
+      "python_design1_top: nope\n"
+      "py_tech_files:\n"
+      "  - " + primitives.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(badCfg), EXIT_FAILURE);
+  std::filesystem::remove(badCfg);
+
+  // A script without constructLibrary fails to load.
+  const auto noEntry = tmpDir / "no_entry.py";
+  { std::ofstream out(noEntry); out << "import naja\n\ndef other(lib):\n    pass\n"; }
+  const auto noEntryCfg = writeTempConfig(
+      "format: python\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + noEntry.string() + "\n"
+      "  - " + noEntry.string() + "\n"
+      "py_tech_files:\n"
+      "  - " + primitives.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(noEntryCfg), EXIT_FAILURE);
+  std::filesystem::remove(noEntryCfg);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliPythonDesignInputSecWithLibertyCells) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto liberty =
+      repoRoot() / "examples" / "tinyrocket" / "NangateOpenCellLibrary_typical.lib";
+  ASSERT_TRUE(std::filesystem::exists(liberty));
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_python_sec");
+  const auto counterA = writePythonDesign(tmpDir / "counter_a.py", kPythonCounterDesignA);
+  const auto counterB = writePythonDesign(tmpDir / "counter_b.py", kPythonCounterDesignB);
+
+  const std::vector<std::string> base = {
+      "kepler-formal", "-python", "-v", "sec",
+      "--design1", counterA.string(), "--design2", counterB.string(),
+      "--liberty", liberty.string(),
+      "--sec-reset-cycles", "1", "--sec-reset-port", "rst=1"};
+  EXPECT_EQ(runWithArgs(base), kSecProvedExitCode);
+
+  // Compact SEC loads each design through its own path; cover it too, with
+  // the same design on both sides.
+  std::vector<std::string> compact = base;
+  compact[7] = counterA.string();
+  compact.push_back("--compact");
+  EXPECT_EQ(runWithArgs(compact), kSecProvedExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
+namespace {
+
+// A technology-free cell set: gates by truth table and a flop by sequential
+// model, all defined in Python. No Liberty file takes part in the run.
+const char* const kPythonGenericCells =
+    "import naja\n"
+    "\n"
+    "def gate(lib, name, inputs, output, truth_table):\n"
+    "    primitive = naja.SNLDesign.createPrimitive(lib, name)\n"
+    "    for input_name in inputs:\n"
+    "        naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, input_name)\n"
+    "    naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Output, output)\n"
+    "    primitive.setTruthTable(truth_table)\n"
+    "\n"
+    "def flop(lib):\n"
+    "    primitive = naja.SNLDesign.createPrimitive(lib, 'DFF')\n"
+    "    d = naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, 'D')\n"
+    "    ck = naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, 'CK')\n"
+    "    q = naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Output, 'Q')\n"
+    "    naja.SNLDesign.addInputsToClockArcs([d], ck)\n"
+    "    naja.SNLDesign.addClockToOutputsArcs(ck, q)\n"
+    "    ck.setRole(naja.SNLTermRole.Clock)\n"
+    "    d.setRole(naja.SNLTermRole.DataInput)\n"
+    "    q.setRole(naja.SNLTermRole.DataOutput)\n"
+    "    primitive.setSequentialModel(\n"
+    "        clocked_on='CK', states=[{'name': 'IQ', 'next_state': 'D'}], outputs=[(q, 'IQ')])\n"
+    "\n"
+    "def constructPrimitives(lib):\n"
+    "    gate(lib, 'INV', ['A'], 'Y', 0b01)\n"
+    "    gate(lib, 'AND2', ['A', 'B'], 'Y', 0b1000)\n"
+    "    gate(lib, 'OR2', ['A', 'B'], 'Y', 0b1110)\n"
+    "    gate(lib, 'XOR2', ['A', 'B'], 'Y', 0b0110)\n"
+    "    flop(lib)\n";
+
+// 2-bit counter with synchronous reset on the generic cells:
+// d0 = ~q0 & ~rst, d1 = (q1 ^ q0) & ~rst.
+const char* const kPythonGenericCounterA =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, xor2, dff = (primitive(lib, c) for c in ('INV', 'AND2', 'XOR2', 'DFF'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 't0', 't1', 'd0', 'd1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'Y', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'Y', n['t0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A', n['t0']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, xor2, 'x_d1'); connect(i, 'A', n['q1']); connect(i, 'B', n['q0']); connect(i, 'Y', n['t1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A', n['t1']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k])\n";
+
+// The same counter with the XOR rebuilt from AND, OR and INV.
+const char* const kPythonGenericCounterB =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, or2, dff = (primitive(lib, c) for c in ('INV', 'AND2', 'OR2', 'DFF'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 'nq0', 'nq1', 'p', 'm', 's', 'd0', 'd1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'Y', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'Y', n['nq0'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q1'); connect(i, 'A', n['q1']); connect(i, 'Y', n['nq1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A', n['nq0']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_p'); connect(i, 'A', n['q1']); connect(i, 'B', n['nq0']); connect(i, 'Y', n['p'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_m'); connect(i, 'A', n['nq1']); connect(i, 'B', n['q0']); connect(i, 'Y', n['m'])\n"
+    "    i = naja.SNLInstance.create(top, or2, 'o_s'); connect(i, 'A', n['p']); connect(i, 'B', n['m']); connect(i, 'Y', n['s'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A', n['s']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k])\n";
+
+// Counter A with OR in place of XOR on bit 1: bit 1 sticks once set, so the
+// two counters part ways on the fourth count with both values defined. A
+// combinational check of the cones could not tell this from counter A's
+// gate choice; the flop model makes it a sequential difference.
+const char* const kPythonGenericCounterBroken =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, or2, dff = (primitive(lib, c) for c in ('INV', 'AND2', 'OR2', 'DFF'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 't0', 't1', 'd0', 'd1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'Y', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'Y', n['t0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A', n['t0']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, or2, 'o_d1'); connect(i, 'A', n['q1']); connect(i, 'B', n['q0']); connect(i, 'Y', n['t1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A', n['t1']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k])\n";
+
+}  // namespace
+
+// Python input with the cells' behaviour defined in Python too: no Liberty
+// file anywhere. Two counters built differently from the same generic cells
+// prove equal, and a counter that counts differently is refuted, so the flop's
+// sequential model is what the proof runs on.
+TEST_F(KeplerFormalCliTests, ConfigPythonDesignInputWithPythonCellModelsOnly) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_python_cells");
+  const auto cells = tmpDir / "cells.py";
+  { std::ofstream out(cells); out << kPythonGenericCells; }
+  const auto counterA = writePythonDesign(tmpDir / "counter_a.py", kPythonGenericCounterA);
+  const auto counterB = writePythonDesign(tmpDir / "counter_b.py", kPythonGenericCounterB);
+  const auto broken = writePythonDesign(tmpDir / "counter_broken.py", kPythonGenericCounterBroken);
+
+  const auto runSec = [&](const std::filesystem::path& design0,
+                          const std::filesystem::path& design1) {
+    const auto cfgPath = writeTempConfig(
+        "format: python\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "max_k: 8\n"
+        "input_paths:\n"
+        "  - " + design0.string() + "\n"
+        "  - " + design1.string() + "\n"
+        "py_tech_files:\n"
+        "  - " + cells.string() + "\n"
+        "sec_reset:\n"
+        "  cycles: 1\n"
+        "  ports:\n"
+        "    - name: rst\n"
+        "      active_value: 1\n");
+    const int rc = runWithConfigFile(cfgPath);
+    std::filesystem::remove(cfgPath);
+    return rc;
+  };
+
+  EXPECT_EQ(runSec(counterA, counterB), kSecProvedExitCode);
+  EXPECT_EQ(runSec(counterA, counterA), kSecProvedExitCode);
+  EXPECT_EQ(runSec(counterA, broken), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
+namespace {
+
+// Cells for keplertech/kepler-formal#278: a flop whose clock edge is selected
+// per instance by its EDGE parameter (setSequentialModelFromParameters). The
+// primitive alone has no single sequential model; SEC must resolve it from
+// each instance.
+const char* const kPythonParameterizedEdgeCells =
+    "import naja\n"
+    "\n"
+    "def constructPrimitives(lib):\n"
+    "    inv = naja.SNLDesign.createPrimitive(lib, 'INV')\n"
+    "    naja.SNLScalarTerm.create(inv, naja.SNLTerm.Direction.Input, 'A')\n"
+    "    naja.SNLScalarTerm.create(inv, naja.SNLTerm.Direction.Output, 'Y')\n"
+    "    inv.setTruthTable(0b01)\n"
+    "\n"
+    "    dff = naja.SNLDesign.createPrimitive(lib, 'PDFF')\n"
+    "    d = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'D')\n"
+    "    ck = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'CK')\n"
+    "    q = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Output, 'Q')\n"
+    "    naja.SNLParameter.createBinary(dff, 'EDGE', 1, 0)\n"
+    "    dff.setSequentialModelFromParameters(['EDGE'], [\n"
+    "        {'values': [0], 'clocked_on': 'CK',\n"
+    "         'states': [{'name': 'IQ', 'next_state': 'D'}], 'outputs': [(q, 'IQ')]},\n"
+    "        {'values': [1], 'clocked_on': '!CK',\n"
+    "         'states': [{'name': 'IQ', 'next_state': 'D'}], 'outputs': [(q, 'IQ')]},\n"
+    "    ])\n"
+    "    naja.SNLDesign.addClockToOutputsArcs(ck, [q])\n"
+    "    naja.SNLDesign.addInputsToClockArcs([d], ck)\n";
+
+// One flop per EDGE value, both sampling the inverted input.
+const char* const kParameterizedEdgeRtl =
+    "module top(input logic clk, input logic d,\n"
+    "           output logic q_pos, output logic q_neg);\n"
+    "  always_ff @(posedge clk) q_pos <= ~d;\n"
+    "  always_ff @(negedge clk) q_neg <= ~d;\n"
+    "endmodule\n";
+
+const char* const kParameterizedEdgeGates =
+    "module top(clk, d, q_pos, q_neg);\n"
+    "  input clk;\n"
+    "  input d;\n"
+    "  output q_pos;\n"
+    "  output q_neg;\n"
+    "  wire dn;\n"
+    "  INV u_inv (.A(d), .Y(dn));\n"
+    "  PDFF #(.EDGE(1'b0)) u_ff_pos (.D(dn), .CK(clk), .Q(q_pos));\n"
+    "  PDFF #(.EDGE(1'b1)) u_ff_neg (.D(dn), .CK(clk), .Q(q_neg));\n"
+    "endmodule\n";
+
+}  // namespace
+
+// keplertech/kepler-formal#278: SEC aborted with "Parameterized sequential
+// model requires an instance" on any netlist using such a primitive, in both
+// RTL-vs-gate and gate-vs-gate runs.
+TEST_F(KeplerFormalCliTests,
+       ConfigSecResolvesParameterizedSequentialModelPerInstance) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_param_seq_model");
+  const auto cells = tmpDir / "prims.py";
+  { std::ofstream out(cells); out << kPythonParameterizedEdgeCells; }
+  const auto rtl = tmpDir / "rtl.sv";
+  { std::ofstream out(rtl); out << kParameterizedEdgeRtl; }
+  const auto gates = tmpDir / "gate.v";
+  { std::ofstream out(gates); out << kParameterizedEdgeGates; }
+
+  // RTL vs gate.
+  const auto sv2vCfg = writeTempConfig(
+      "format: sv2v\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 8\n"
+      "input_paths:\n"
+      "  - " + rtl.string() + "\n"
+      "  - " + gates.string() + "\n"
+      "sv_design1_top: top\n"
+      "verilog_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + cells.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(sv2vCfg), kSecProvedExitCode);
+  std::filesystem::remove(sv2vCfg);
+
+  // Gate vs itself.
+  const auto gateCfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 8\n"
+      "input_paths:\n"
+      "  - " + gates.string() + "\n"
+      "  - " + gates.string() + "\n"
+      "verilog_design1_top: top\n"
+      "verilog_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + cells.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(gateCfg), kSecProvedExitCode);
+  std::filesystem::remove(gateCfg);
+  std::filesystem::remove_all(tmpDir);
+}
+
+// keplertech/kepler-formal#277: a macro defined in an earlier file of a file
+// list is only visible to later files when slang compiles them as one unit.
+TEST_F(KeplerFormalCliTests, SvSingleUnitSharesMacrosAcrossFlistFiles) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_sv_single_unit");
+  const auto defs = tmpDir / "defs.svh";
+  const auto leaf = tmpDir / "a.sv";
+  const auto top = tmpDir / "top.sv";
+  const auto flist = tmpDir / "design.f";
+  {
+    std::ofstream out(defs);
+    out << "`define REG(q, d, clk) always_ff @(posedge clk) q <= d;\n";
+  }
+  {
+    std::ofstream out(leaf);
+    out << "`include \"defs.svh\"\n"
+           "module a (input logic clk, input logic d, output logic q);\n"
+           "  `REG(q, d, clk)\n"
+           "endmodule\n";
+  }
+  {
+    // Uses `REG without including defs.svh.
+    std::ofstream out(top);
+    out << "module top (input logic clk, input logic d, output logic q);\n"
+           "  logic m;\n"
+           "  a u_a (.clk(clk), .d(d), .q(m));\n"
+           "  `REG(q, m, clk)\n"
+           "endmodule\n";
+  }
+  {
+    std::ofstream out(flist);
+    out << "+incdir+" << tmpDir.string() << "\n"
+        << leaf.string() << "\n"
+        << top.string() << "\n";
+  }
+
+  const std::vector<std::string> separateUnits = {
+      "kepler-formal", "-sv", "-v", "sec",
+      "--sv_design1_flist", flist.string(), "--sv_design1_top", "top",
+      "--sv_design2_flist", flist.string(), "--sv_design2_top", "top"};
+  // One unit per file: `REG is unknown in top.sv.
+  EXPECT_EQ(runWithArgs(separateUnits), EXIT_FAILURE);
+
+  auto singleUnit = separateUnits;
+  singleUnit.push_back("--sv_single_unit");
+  EXPECT_EQ(runWithArgs(singleUnit), kSecProvedExitCode);
+
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sv_single_unit: true\n"
+      "sv_design1_flist: " + flist.string() + "\n"
+      "sv_design1_top: top\n"
+      "sv_design2_flist: " + flist.string() + "\n"
+      "sv_design2_top: top\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  std::filesystem::remove(cfgPath);
+
+  // The option belongs to SystemVerilog input only.
+  const auto verilog = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal", "-verilog", "-v", "lec",
+                   "--design1", verilog.design0Path.string(),
+                   "--design2", verilog.design1Path.string(),
+                   "--sv_single_unit"}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(verilog.tmpDir);
+  std::filesystem::remove_all(tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliPythonTopOptionsRejectedWithOtherFormats) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module top(input a, output y);\n"
+      "  assign y = a;\n"
+      "endmodule\n");
+  EXPECT_EQ(
+      runWithArgs({"kepler-formal", "-verilog", "-v", "lec",
+                   "--design1", fixture.design0Path.string(),
+                   "--design2", fixture.design1Path.string(),
+                   "--python_design1_top", "top"}),
+      EXIT_FAILURE);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSv2vUnnamedPythonPrimitiveLibraryCreatesNoStub) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_unnamed_py_prims");

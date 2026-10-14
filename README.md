@@ -152,7 +152,7 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ```bash
 # Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl> [options] \
+build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl/-python> [options] \
   <design1> <design2> [<library-file>...]
 
 # Multi-file Verilog
@@ -186,10 +186,12 @@ build/src/bin/kepler-formal -vhdl -v sec \
 | `-systemverilog`, `-sv` | Parse both designs as SystemVerilog. Requires SEC. |
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
 | `-vhdl` | Parse both designs as VHDL. Requires SEC. Experimental; see [VHDL support](docs/vhdl/README.md). |
+| `-python`, `-py` | Build both designs from Python scripts through the Naja Python API; see [Python design input](docs/python-design-input.md). |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
 | `--vhdl_design1_top <top>`, `--vhdl_design2_top <top>` | Select the top entity for each VHDL design. |
+| `--python_design1_top <top>`, `--python_design2_top <top>` | Select the top module for each Python-built design. |
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
@@ -210,7 +212,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, or `vhd`. Defaults to `verilog` if omitted. |
+| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `python`, or `py`. Defaults to `verilog` if omitted. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `btor2_export` | bool | Enable BTOR2 export before solving; SEC only. Defaults to `false`. |
 | `btor2_export_path` | string | BTOR2 destination; defaults to `miter.btor2` when enabled. Requires `btor2_export: true`. |

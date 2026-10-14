@@ -24,7 +24,7 @@ import tempfile
 # version number as the NajaEDA release it is based on, so the version alone
 # cannot tell the two providers apart.
 USE_PUBLISHED_PROVIDER = os.environ.get("KEPLER_USE_PUBLISHED_NAJAEDA") == "1"
-PROVIDER_REQUIREMENT = "najaeda==0.7.24" if USE_PUBLISHED_PROVIDER else "najaeda==0.7.27"
+PROVIDER_REQUIREMENT = "najaeda==0.7.24" if USE_PUBLISHED_PROVIDER else "najaeda==0.7.28"
 
 
 def run(*arguments: str, env: dict[str, str] | None = None) -> None:

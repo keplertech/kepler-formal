@@ -18,7 +18,7 @@ For local regression without wheels or publishing, use the
 packages from this checkout and tests their shared runtime.
 
 The default development build links the NajaEDA wheel built from
-`thirdparty/naja` (version `0.7.27`), which ships the headers matching its
+`thirdparty/naja` (version `0.7.28`), which ships the headers matching its
 libraries under `najaeda/sdk/include`. Build both packages from this
 recursive checkout in one virtual environment, with the native build
 dependencies installed:

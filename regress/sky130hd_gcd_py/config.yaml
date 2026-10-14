@@ -1,0 +1,13 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+# The sky130hd_gcd LEC regression with both netlists given as Python scripts
+# (format: python). The scripts were generated from the Verilog netlists of
+# kepler-formal-regress/sky130hd_gcd by verilog_to_naja_py.py, so the loaded
+# designs, the verdict and the exported CNF are the same as for the Verilog
+# inputs; the golden archives are those of sky130hd_gcd.
+format: python
+input_paths:
+  - ./gcd_before.py
+  - ./gcd_after.py
+liberty_files:
+  - ../../kepler-formal-regress/sky130hd_gcd/sky130_fd_sc_hd__tt_025C_1v80.lib

@@ -65,6 +65,10 @@ class HostPrimitiveLoader final : public KEPLER_FORMAL::PrimitiveLibraryLoader {
   void load(naja::NL::NLLibrary*, const std::filesystem::path&) const override {
     loaded = true;
   }
+  void loadDesignLibrary(naja::NL::NLLibrary*,
+                         const std::filesystem::path&) const override {
+    loaded = true;
+  }
   bool reject = false;
   mutable bool loaded = false;
 };

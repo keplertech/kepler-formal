@@ -24,6 +24,8 @@ struct RunResult {
   RunStatus status = RunStatus::Error;
   int exitCode = 1;
   std::string inputFormat;
+  // SystemVerilog sources were compiled as one slang unit (--sv_single_unit).
+  bool svSingleUnit = false;
   std::string verification;
   std::string logFile;
   size_t bound = 0;

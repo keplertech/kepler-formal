@@ -56,7 +56,7 @@ and [GitHub environment protection documentation](https://docs.github.com/en/act
 
 After the workflow is present on the repository's default branch, open
 **Actions → Python wheels → Run workflow**. Leave `publish` unchecked and
-`version` empty. These jobs use locally built NajaEDA `0.7.27` from the
+`version` empty. These jobs use locally built NajaEDA `0.7.28` from the
 pinned submodule, whose wheel ships its headers. The workflow builds, repairs,
 and tests wheels, then stores them as Actions artifacts. Use this to check a
 branch before merging.

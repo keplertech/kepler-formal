@@ -79,6 +79,11 @@ stdenv.mkDerivation {
     "-DSLANG_INCLUDE_TOOLS=OFF"
     "-DSLANG_INCLUDE_INSTALL=OFF"
     "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
+    # slang 12 fetches fmt, boost::regex and tomlplusplus itself unless told
+    # to use the installed ones; FetchContent cannot download offline.
+    "-DSLANG_USE_SYSTEM_FMT=ON"
+    "-DSLANG_USE_SYSTEM_BOOST=ON"
+    "-DSLANG_USE_SYSTEM_TOMLPLUSPLUS=ON"
     "-DPython3_EXECUTABLE=${lib.getExe python312}"
     "-DPython_EXECUTABLE=${lib.getExe python312}"
     "-DCMAKE_INSTALL_LIBDIR=lib"
