@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2023 The Naja verilog authors <https://github.com/keplertech/naja-verilog/blob/main/AUTHORS>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bazel module for naja-verilog.
+
+CMake remains the primary build system used by CI and installation.
+Bazel is kept as a validated smoke test and lets the parent naja module
+consume naja-verilog through bzlmod.
+
+ci/check_submodule_bazel_sync.py verifies that this file's googletest
+version still names the exact tag pinned by CMake's googletest submodule.
+"""
+
+module(
+    name = "naja-verilog",
+    version = "0.0.0-20261014-4459520a",
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.22")
+# Keep this version aligned with the thirdparty/googletest gitlink.
+bazel_dep(name = "googletest", version = "1.18.0")
+
+# googletest 1.18.0 uses abseil-cpp 20260526.0 (compatibility level 0),
+# while protobuf uses abseil-cpp 20250814.1 (compatibility level 1).
+# Allow both for standalone builds; consumers ignore this root-only override.
+multiple_version_override(
+    module_name = "abseil-cpp",
+    versions = [
+        "20250814.1",
+        "20260526.0",
+    ],
+)
+
+# Parser generation and scanner headers come from modules, also as a dependency.
+bazel_dep(name = "bison", version = "3.8.2.bcr.10")
+bazel_dep(name = "flex", version = "2.6.4.bcr.6")

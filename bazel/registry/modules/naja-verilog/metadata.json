@@ -1,0 +1,22 @@
+{
+    "homepage": "https://github.com/keplertech/naja-verilog",
+    "maintainers": [
+        {
+            "github": "xtofalex",
+            "github_user_id": 3635601,
+            "name": "Christophe Alexandre"
+        },
+        {
+            "github": "nanocoh",
+            "github_user_id": 115838389,
+            "name": "Noam Cohen"
+        }
+    ],
+    "repository": [
+        "github:keplertech/naja-verilog"
+    ],
+    "versions": [
+        "0.0.0-20261014-4459520a"
+    ],
+    "yanked_versions": {}
+}
