@@ -34,4 +34,4 @@ multiple_version_override(
 
 # Parser generation and scanner headers come from modules, also as a dependency.
 bazel_dep(name = "bison", version = "3.8.2.bcr.10")
-bazel_dep(name = "flex", version = "2.6.4.bcr.6")
+bazel_dep(name = "flex", version = "2.6.4.bcr.7")
