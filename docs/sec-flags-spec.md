@@ -178,7 +178,9 @@ output pins are shared environment inputs. SEC therefore proves
 that the surrounding designs drive the block identically and remain equivalent
 for every possible value returned by the abstracted block. Interface names,
 directions, widths, and bit ranges are validated across the paired paths before
-proof. Verification treats the selected leaf pins as boundaries without
+proof. An input pin unconnected on both sides has no driving cone and is
+skipped; one unconnected on a single side is rejected. Verification treats the
+selected leaf pins as boundaries without
 cloning or rewiring the netlists. The behavior is the same in normal and compact
 SEC, for `v`, `sv`, and `sv2v` inputs. Compact self-model reuse is
 disabled when any paired left/right instance paths differ.

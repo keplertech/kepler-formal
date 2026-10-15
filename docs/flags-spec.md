@@ -168,7 +168,9 @@ instances remain part of the normal equivalence result. These are logical
 verification boundaries: no netlist instances, ports, or connections are changed.
 
 The two sides must expose matching pin names, bit ranges, and directions at
-each paired boundary. Instance input pins must be connected, and nonconstant
+each paired boundary. An instance input pin left unconnected on both sides has
+no driving cone and is skipped (abstracts that model power pins as logic inputs
+are the common case); one unconnected on a single side is rejected. Nonconstant
 input nets must have exactly one driver; unused output pins are allowed.
 Inout pins, aliased, constant-connected or multiply driven output nets,
 duplicate paths, and selections where one path is an ancestor of another are

@@ -553,6 +553,11 @@ OpaqueBoundaryCliFixture createOpaqueBoundaryFixture(
         "    pin (A) { direction : input; }\n"
         "    pin (Y) { direction : output; function : \"1\"; }\n"
         "  }\n"
+        "  cell (BOUNDARY_PWR) {\n"
+        "    pin (A) { direction : input; }\n"
+        "    pin (VDD) { direction : input; }\n"
+        "    pin (Y) { direction : output; function : \"0\"; }\n"
+        "  }\n"
         "}\n";
   }
   return fixture;
@@ -1535,6 +1540,43 @@ TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryEscapedSlashSelectsFlattenedLeaf
   std::filesystem::remove(escapedPath);
   std::filesystem::remove(hierarchicalPath);
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundarySkipsInputUnconnectedOnBothSides) {
+  // Abstract libraries can model power pins as logic inputs that no netlist
+  // connects; the pin is skipped when both sides leave it unconnected and
+  // rejected when only one side does.
+  const auto makeDesign = [](const std::string& vdd) {
+    return "module top(input a, output y);\n"
+           "  BOUNDARY_PWR u_boundary(.A(a), " + vdd + ".Y(y));\n"
+           "endmodule\n";
+  };
+  const auto fixture = createOpaqueBoundaryFixture(makeDesign(""), makeDesign(""));
+  const auto oneSided = createOpaqueBoundaryFixture(makeDesign(""), makeDesign(".VDD(a), "));
+  const auto config = [&](const OpaqueBoundaryCliFixture& f) {
+    return writeTempConfig(
+        "format: verilog\n"
+        "input_paths:\n"
+        "  - " + f.design0Path.string() + "\n"
+        "  - " + f.design1Path.string() + "\n"
+        "liberty_files: [" + f.libertyPath.string() + "]\n"
+        "set_as_boundary:\n"
+        "  - [u_boundary, u_boundary]\n");
+  };
+  const auto skippedPath = config(fixture);
+  const auto oneSidedPath = config(oneSided);
+
+  const auto skipped = runStructuredWithConfigFile(skippedPath);
+  EXPECT_EQ(skipped.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(skipped.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  const auto rejected = runStructuredWithConfigFile(oneSidedPath);
+  EXPECT_EQ(rejected.exitCode, EXIT_FAILURE);
+  EXPECT_EQ(rejected.result.status, KEPLER_FORMAL::RunStatus::Error);
+
+  std::filesystem::remove(skippedPath);
+  std::filesystem::remove(oneSidedPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+  std::filesystem::remove_all(oneSided.tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, CliSetAsBoundaryAcceptsNestedSelfBoundary) {

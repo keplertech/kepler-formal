@@ -271,12 +271,14 @@ TEST_F(DesignBoundaryTests, RejectsInvalidDuplicateAndNestedPaths) {
       std::invalid_argument);
 }
 
-TEST_F(DesignBoundaryTests, RejectsUnconnectedInputAndPinlessInstance) {
+TEST_F(DesignBoundaryTests, AcceptsUnconnectedInputAndRejectsPinlessInstance) {
   auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
   auto* top = SNLDesign::create(designs_, NLName("top"));
   SNLInstance::create(top, block, NLName("u"));
-  EXPECT_THROW(
-      BoundarySelection(top, {{"u", "u"}}, 0), std::invalid_argument);
+  // An unconnected input is kept in the interface but marked unconnected.
+  BoundarySelection unconnected(top, {{"u", "u"}}, 0);
+  ASSERT_NE(nullptr, findPort(unconnected, 0, "A"));
+  EXPECT_FALSE(findPort(unconnected, 0, "A")->connected);
 
   auto* empty = createScalarBlock("EMPTY", {}, {});
   auto* emptyTop = SNLDesign::create(designs_, NLName("empty_top"));
@@ -455,6 +457,53 @@ TEST_F(DesignBoundaryTests, EscapedSlashSelectsFlattenedLeafNames) {
       "does not resolve at `wrap/u1`");
   expectInvalidBoundary(
       top, {{"u0\\/r0\\", "u0\\/r0\\"}}, 0, "unterminated escape");
+}
+
+TEST_F(DesignBoundaryTests, SkipsInputPinsUnconnectedOnBothSides) {
+  // Abstracts can model non-logic pins (VDD) as inputs that no netlist
+  // connects.  Such a pin has no driving cone: it stays in the interface,
+  // takes no terminal, and must be unconnected on both sides.
+  auto* block = createScalarBlock("BLOCK", {"A", "VDD"}, {"Y"});
+  auto* a = block->getScalarTerm(NLName("A"));
+  auto* vdd = block->getScalarTerm(NLName("VDD"));
+  auto* y = block->getScalarTerm(NLName("Y"));
+  auto makeTop = [&](const char* name, bool connectVdd) {
+    auto* top = SNLDesign::create(designs_, NLName(name));
+    auto* instance = SNLInstance::create(top, block, NLName("u"));
+    instance->getInstTerm(a)->setNet(addPort(top, "a", SNLTerm::Direction::Input));
+    instance->getInstTerm(y)->setNet(addPort(top, "y", SNLTerm::Direction::Output));
+    if (connectVdd) {
+      instance->getInstTerm(vdd)->setNet(
+          addPort(top, "vdd", SNLTerm::Direction::Input));
+    }
+    return top;
+  };
+  auto* top = makeTop("top", false);
+  universe_->setTopDesign(top);
+  BoundarySelection selection(top, {{"u", "u"}}, 0);
+  ASSERT_EQ(3u, selection.getPorts().size());
+  EXPECT_TRUE(findPort(selection, 0, "A")->connected);
+  EXPECT_FALSE(findPort(selection, 0, "VDD")->connected);
+  const auto* dnl = naja::DNL::get();
+  LeafBoundary boundary(*dnl, {{"u", "u"}}, 0);
+  EXPECT_EQ(1u, boundary.getInputs().size());
+  EXPECT_EQ(1u, boundary.getOutputs().size());
+  EXPECT_EQ(3u, boundary.getPorts().size());
+  validateBoundaryInterfaces(selection.getPorts(), selection.getPorts());
+
+  naja::DNL::destroy();
+  auto* connected = makeTop("top_connected", true);
+  universe_->setTopDesign(connected);
+  BoundarySelection connectedSelection(connected, {{"u", "u"}}, 1);
+  EXPECT_TRUE(findPort(connectedSelection, 0, "VDD")->connected);
+  try {
+    validateBoundaryInterfaces(selection.getPorts(), connectedSelection.getPorts());
+    FAIL() << "one-sided unconnected input accepted";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string::npos,
+              std::string(error.what()).find("unconnected on the left side only"))
+        << error.what();
+  }
 }
 
 TEST_F(DesignBoundaryTests, RejectsConstantDrivenBoundaryOutput) {

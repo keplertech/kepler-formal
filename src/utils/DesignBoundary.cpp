@@ -170,10 +170,9 @@ void validateInputConnectivity(const std::string& path,
                                const SNLInstTerm* input) {
   SNLBitNet* net = input->getNet();
   if (net == nullptr) {
-    throw std::invalid_argument(
-        "boundary instance " + quote(path) + " pin " +
-        quote(input->getBitTerm()->getName().getString()) +
-        " is unconnected");
+    // No driving cone to compare; validateBoundaryInterfaces requires the
+    // other side to leave the pin unconnected as well.
+    return;
   }
   if (net->isConstant()) {
     return;
@@ -328,6 +327,8 @@ std::vector<BoundarySpec> preflight(SNLDesign* top,
 
       PinSpec pin;
       pin.port = describePort(spec.pairIndex, bitTerm);
+      pin.port.connected = direction != SNLTerm::Direction::Input ||
+                           instTerm->getNet() != nullptr;
       pin.term = bitTerm;
       if (!generatedTopNames.insert(pin.port.topTermName).second) {
         throw std::invalid_argument(
@@ -409,6 +410,11 @@ LeafBoundary::LeafBoundary(const naja::DNL::DNLFull& dnl,
     }
     instances_.insert(instance->getID());
     for (const auto& pin : spec.pins) {
+      if (!pin.port.connected) {
+        // Kept for interface validation only; no terminal takes part.
+        ports_.push_back(pin.port);
+        continue;
+      }
       const auto& term = instance->getTerminalFromBitTerm(pin.term);
       const DNLID id = term.getID();
       // Leaf outputs must remain actual drivers in the original flattened DNL.
@@ -451,6 +457,12 @@ void validateBoundaryInterfaces(const std::vector<BoundaryPort>& left,
     if (leftPort->isInput != rightPort.isInput) {
       throw std::invalid_argument(
           "boundary direction mismatch for " + describePortKey(key));
+    }
+    if (leftPort->connected != rightPort.connected) {
+      throw std::invalid_argument(
+          "boundary input pin " + describePortKey(key) +
+          " is unconnected on the " +
+          (leftPort->connected ? "right" : "left") + " side only");
     }
     if (leftPort->width != rightPort.width ||
         leftPort->msb != rightPort.msb || leftPort->lsb != rightPort.lsb) {
