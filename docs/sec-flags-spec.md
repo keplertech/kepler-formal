@@ -199,8 +199,9 @@ set_as_boundary:
 
 `/` separates hierarchy levels. A literal slash inside an instance name is
 written `\/` (the SDC escaping convention used by OpenSTA), so a flattened
-netlist leaf written `\u0/r0 ` in Verilog is selected by `u0\/r0`, while
-`u0/r0` always names instance `r0` inside instance `u0`. Paths are never
+netlist leaf written `\u_block/u_leaf ` in Verilog is selected by
+`u_block\/u_leaf`, while `u_block/u_leaf` always names instance `u_leaf`
+inside instance `u_block`. Paths are never
 reinterpreted.
 
 User-defined boundaries cannot currently be combined with scope extraction or

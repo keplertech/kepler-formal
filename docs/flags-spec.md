@@ -182,8 +182,9 @@ formats (`v`, `sv`, and `sv2v`; SV formats require SEC). Paths use elaborated
 instance names, which can differ from source names for generated SV scopes.
 `/` separates hierarchy levels. A literal slash inside an instance name is
 written `\/` (the SDC escaping convention used by OpenSTA), so a flattened
-netlist leaf written `\u0/r0 ` in Verilog is selected by `u0\/r0`, while
-`u0/r0` always names instance `r0` inside instance `u0`. Paths are never
+netlist leaf written `\u_block/u_leaf ` in Verilog is selected by
+`u_block\/u_leaf`, while `u_block/u_leaf` always names instance `u_leaf`
+inside instance `u_block`. Paths are never
 reinterpreted.
 Boundary selection cannot currently be combined with `use_scopes` or `clean_scopes`.
 

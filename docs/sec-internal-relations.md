@@ -21,8 +21,9 @@ only after a proof over the original transitions and the boot state.
 - **Same output net.** Both state bits' output pins sit on nets with the same
   name: the parent instance path, the net name and the bit. Netlist flows keep
   net names where they rename or re-cluster instances, for example multibit
-  flop clustering turns `u0.w[0][13]$_DFF_P_/QN` into `_tray_size2_1098/QN0`
-  while the net `_00641_` stays. This guess is applied in addition to the pin
+  flop clustering moves a flop's output pin onto a tray cell with a new
+  instance name and pin name while the net it drives keeps its name. This
+  guess is applied in addition to the pin
   name, never instead of it. A state bit is its output pin, so two pins on one
   net are proposed as equal; the tray-versus-flop polarity of the Liberty state
   variable does not enter.
@@ -63,14 +64,15 @@ one transition.
   candidate is proved without the solver. The table is freed when the round
   ends. Expressions themselves are never freed, so building the rewrite of a
   whole design would keep a second copy of its logic for the rest of the run
-  (about 3.5 GB on nangate45_black_parrot). Short AND/OR
+  (several gigabytes on a large design). Short AND/OR
   chains are rebuilt from their sorted operands, because physical optimization
   swaps the pins of symmetric gates and that re-brackets the chain. Sorting the
   operands of an AND or an OR cannot change the function, so a pin swap on a
   gate that is not symmetric, a mux for example, still compares as different.
   The step is skipped when X equality is disallowed, since definedness is not
-  structural. On nangate45_black_parrot all 666,417 candidates are proved this
-  way in one round. This is an implementation choice, not a technique from the
+  structural. On a large design with several hundred thousand candidates, all
+  of them are proved this way in one round. This is an implementation choice,
+  not a technique from the
   papers.
 - **Speculative reduction.** The candidates that remain go to the solver. The
   hypotheses are applied by literal substitution: both registers of a pair
@@ -172,18 +174,18 @@ The `SEC summary` diagnostics line reports the candidates by source
   reach; the output check still reports the counterexample.
 - Flows that re-cluster or rename registers, for example multibit flop
   clustering, keep their net names, so the net-name guess and the propagation
-  rounds recover the pairs the pin names lose. On the asap7 aes-mbff
-  synthesis-versus-final pair (562 registers, 26 of them multibit trays holding
-  64 bits), pin names alone proposed 498 pairs, 368 of them were refuted
-  because their cones read the unpaired tray bits, 130 survived, and PDR was
-  still inconclusive after 27 minutes. With the net-name guess the 64 tray bits
-  are proposed as well, all 562 pairs are proved structurally in one round
-  (1,124 rail equalities), and PDR proves the design at k = 1 in 3 seconds.
-  The plain aes pair is unchanged: 530 pairs by pin name, k = 1, 2 seconds.
+  rounds recover the pairs the pin names lose. On a synthesis-versus-final
+  pair where about a tenth of the register bits were clustered into multibit
+  trays, pin names alone proposed most pairs, but the majority were refuted
+  because their cones read the unpaired tray bits, and PDR was still
+  inconclusive after tens of minutes. With the net-name guess the tray bits
+  are proposed as well, every pair is proved structurally in one round, and
+  PDR proves the design at k = 1 in seconds. A pair without clustering is
+  unchanged.
 - Equivalent designs whose logic was rebuilt (for example synthesis netlist
   versus final netlist) can prove few pairs: one pair the solver leaves
-  undecided is dropped, and so is every pair that reads it. sky130hs_riscv32i
-  keeps 64 of 2,112 rail equalities this way, while the synthesis-versus-final
-  nangate45_black_parrot pair proves all of them structurally. Mishchenko et
+  undecided is dropped, and so is every pair that reads it. One such pair
+  keeps only a few percent of its rail equalities this way, while another
+  proves all of them structurally. Mishchenko et
   al. address the general case with signal correspondence from random
   simulation, which also relates internal nodes. That is not implemented.
