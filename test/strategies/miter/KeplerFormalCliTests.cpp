@@ -1503,6 +1503,40 @@ TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryAbstractsInstanceOutput) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryEscapedSlashSelectsFlattenedLeaf) {
+  // Flattened netlists keep the hierarchical origin inside the escaped leaf
+  // instance name (`\u0/r0 `); the path `u0\/r0` selects it and `u0/r0`
+  // (instance `r0` inside `u0`) does not resolve.
+  const auto fixture = createOpaqueBoundaryFixture(
+      "module top(input a, output y);\n"
+      "  BOUNDARY_ZERO \\u0/r0 (.A(a), .Y(y));\n"
+      "endmodule\n",
+      "module top(input a, output y);\n"
+      "  BOUNDARY_ONE \\u0/r0 (.A(a), .Y(y));\n"
+      "endmodule\n");
+  const std::string header =
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files: [" + fixture.libertyPath.string() + "]\n"
+      "set_as_boundary:\n";
+  const auto escapedPath = writeTempConfig(
+      header + "  - ['u0\\/r0', 'u0\\/r0']\n");
+  const auto hierarchicalPath = writeTempConfig(
+      header + "  - ['u0/r0', 'u0/r0']\n");
+
+  const auto bounded = runStructuredWithConfigFile(escapedPath);
+  EXPECT_EQ(bounded.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(bounded.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  const auto unresolved = runStructuredWithConfigFile(hierarchicalPath);
+  EXPECT_NE(unresolved.exitCode, EXIT_SUCCESS);
+
+  std::filesystem::remove(escapedPath);
+  std::filesystem::remove(hierarchicalPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, CliSetAsBoundaryAcceptsNestedSelfBoundary) {
   const auto fixture = createEquivalentDesignFixture(
       "v",

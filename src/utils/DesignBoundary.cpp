@@ -54,33 +54,50 @@ std::string quote(const std::string& text) {
   return "`" + text + "`";
 }
 
+// Splits a top-relative boundary path into instance names.  `/` separates
+// hierarchy levels and a backslash escapes the next character, so `\/` is a
+// literal slash inside one instance name (the SDC escaping convention used by
+// OpenSTA).  Flattened netlists keep the hierarchical origin inside the leaf
+// name (Verilog `\u0/r0 `); such a leaf is addressed as `u0\/r0`, while
+// `u0/r0` always names instance `r0` inside instance `u0`.
 std::vector<std::string> splitPath(const std::string& path) {
   if (path.empty()) {
     throw std::invalid_argument("boundary instance path must not be empty");
   }
-  if (path.front() == '/' || path.back() == '/') {
+  std::vector<std::string> result;
+  std::string component;
+  bool escaped = false;
+  for (const char character : path) {
+    if (escaped) {
+      component += character;
+      escaped = false;
+    } else if (character == '\\') {
+      escaped = true;
+    } else if (character == '/') {
+      if (component.empty()) {
+        throw std::invalid_argument(
+            "boundary instance path " + quote(path) +
+            (result.empty()
+                 ? " must be top-relative without a leading or trailing slash"
+                 : " contains an empty component"));
+      }
+      result.push_back(std::move(component));
+      component.clear();
+    } else {
+      component += character;
+    }
+  }
+  if (escaped) {
+    throw std::invalid_argument(
+        "boundary instance path " + quote(path) +
+        " ends with an unterminated escape");
+  }
+  if (component.empty()) {
     throw std::invalid_argument(
         "boundary instance path " + quote(path) +
         " must be top-relative without a leading or trailing slash");
   }
-
-  std::vector<std::string> result;
-  size_t begin = 0;
-  while (begin < path.size()) {
-    const size_t end = path.find('/', begin);
-    const size_t length =
-        end == std::string::npos ? path.size() - begin : end - begin;
-    if (length == 0) {
-      throw std::invalid_argument(
-          "boundary instance path " + quote(path) +
-          " contains an empty component");
-    }
-    result.emplace_back(path.substr(begin, length));
-    if (end == std::string::npos) {
-      break;
-    }
-    begin = end + 1;
-  }
+  result.push_back(std::move(component));
   return result;
 }
 
