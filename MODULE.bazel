@@ -16,7 +16,7 @@ module(
 bazel_dep(name = "cadical", version = "3.0.0")
 bazel_dep(name = "glucose", version = "4.2.1-20251230-674dbba")
 bazel_dep(name = "kissat", version = "4.0.4")
-bazel_dep(name = "naja", version = "0.7.26-20261003-d298a369")
+bazel_dep(name = "naja", version = "0.7.26-20261014-3da8811d")
 bazel_dep(name = "onetbb", version = "2023.1.0")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.25")

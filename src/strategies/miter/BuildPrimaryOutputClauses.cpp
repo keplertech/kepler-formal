@@ -715,6 +715,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     const auto& iso =
         dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
     if (!iso.isConstant0() && !iso.isConstant1() &&
+        !(modelXConstants_ && iso.isConstantX()) &&
         iso.getDrivers().empty()) {
       const auto skip = describeUnmappedTerm(out, "its iso has no drivers");
       skippedOutputs_[out] = skip;
@@ -835,6 +836,23 @@ void BuildPrimaryOutputClauses::initVarNames() {
         termDNLID2varID_[termID] = 1;
     }
   }
+  xConstantVars_.clear();
+  if (modelXConstants_) {
+    // Number X variables past every terminal: input variables are numbered
+    // from 2 and never exceed the terminal count, so builders with different
+    // input lists still agree on each X variable (the iso set is ordered).
+    size_t nextVar = termDNLID2varID_.size() + 2;
+    for (DNLID isoID : naja::DNL::get()->getDNLIsoDB().getConstantXIsos()) {
+      const auto& iso = naja::DNL::get()->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      for (auto termID : iso.getReaders()) {
+        termDNLID2varID_[termID] = nextVar;
+      }
+      for (auto termID : iso.getDrivers()) {
+        termDNLID2varID_[termID] = nextVar;
+      }
+      xConstantVars_.emplace_back(isoID, nextVar++);
+    }
+  }
 }
 
 void BuildPrimaryOutputClauses::build() {
@@ -913,6 +931,10 @@ void BuildPrimaryOutputClauses::build() {
       }
       if (iso.isConstant1()) {
         POs_[i] = BoolExpr::createTrue();
+        return;
+      }
+      if (modelXConstants_ && iso.isConstantX()) {
+        POs_[i] = BoolExpr::Var(termDNLID2varID_[out]);
         return;
       }
     }

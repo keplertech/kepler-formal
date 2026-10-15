@@ -37,6 +37,8 @@
 #include "SNLBusTerm.h"
 #include "SNLBusTermBit.h"
 #include "SNLInstance.h"
+#include "SNLInstParameter.h"
+#include "SNLParameter.h"
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "common/AlignedSignals.h"
@@ -16081,6 +16083,105 @@ TEST_F(SequentialEquivalenceStrategyTests,
                                 {extracted.inputVarByKey.at(in1Key), true}}));
 }
 
+// keplertech/kepler-formal#278: a primitive modeled with
+// setSequentialModelFromParameters selects its sequential model per instance.
+// Extraction must resolve it from the instance; the primitive alone throws.
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractResolvesParameterizedModelPerInstance) {
+  using Operator = SNLDesignModeling::BooleanExpression::Operator;
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  auto* model =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("PDFF"));
+  auto* data =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("D"));
+  auto* clock =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("CK"));
+  auto* output =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
+  SNLDesignModeling::addInputsToClockArcs({data}, clock);
+  SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+  auto* edge = SNLParameter::create(
+      model, NLName("EDGE"), SNLParameter::Type::Binary, "0");
+
+  SNLDesignModeling::SequentialModelTable table;
+  for (const uint64_t edgeValue : {uint64_t{0}, uint64_t{1}}) {
+    SNLDesignModeling::SequentialModel entry;
+    entry.clockedOn = makeSequentialTermExpression(clock);
+    if (edgeValue == 1) {
+      entry.clockedOn.root =
+          entry.clockedOn.addOperation(Operator::Not, {entry.clockedOn.root});
+    }
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(data);
+    entry.states.push_back(std::move(state));
+    entry.outputs.push_back({output, makeSequentialStateExpression(0)});
+    table.emplace(std::vector<uint64_t>{edgeValue}, std::move(entry));
+  }
+  SNLDesignModeling::setSequentialModelFromParameters(model, {"EDGE"}, table);
+  EXPECT_ANY_THROW(SNLDesignModeling::getSequentialModel(model));
+
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topPos =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out_pos"));
+  auto* topNeg =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out_neg"));
+  auto* netIn = SNLScalarNet::create(top, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netPos = SNLScalarNet::create(top, NLName("net_pos"));
+  auto* netNeg = SNLScalarNet::create(top, NLName("net_neg"));
+  topIn->setNet(netIn);
+  topClock->setNet(netClock);
+  topPos->setNet(netPos);
+  topNeg->setNet(netNeg);
+
+  // ff_pos keeps the EDGE default (0); ff_neg overrides it to 1.
+  auto* ffPos = SNLInstance::create(top, model, NLName("ff_pos"));
+  auto* ffNeg = SNLInstance::create(top, model, NLName("ff_neg"));
+  SNLInstParameter::create(ffNeg, edge, "1");
+  for (const auto& [ff, netQ] :
+       {std::pair{ffPos, netPos}, std::pair{ffNeg, netNeg}}) {
+    ff->getInstTerm(data)->setNet(netIn);
+    ff->getInstTerm(clock)->setNet(netClock);
+    ff->getInstTerm(output)->setNet(netQ);
+  }
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.skippedStateBits.empty());
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  ASSERT_EQ(extracted.stateBits.size(), 2u);
+  const auto posKey = findKeyByDisplayName(extracted, "ff_pos.Q[0]");
+  const auto negKey = findKeyByDisplayName(extracted, "ff_neg.Q[0]");
+  ASSERT_NE(
+      extracted.clockEventByStateKey.find(posKey),
+      extracted.clockEventByStateKey.end());
+  ASSERT_NE(
+      extracted.clockEventByStateKey.find(negKey),
+      extracted.clockEventByStateKey.end());
+  EXPECT_EQ(extracted.clockEventByStateKey.at(posKey).phase, ClockPhase::Pos);
+  EXPECT_EQ(extracted.clockEventByStateKey.at(negKey).phase, ClockPhase::Neg);
+
+  const auto inVar =
+      extracted.inputVarByKey.at(findKeyByDisplayName(extracted, "in[0]"));
+  for (const auto& key : {posKey, negKey}) {
+    auto* next = extracted.nextStateExprByStateKey.at(key);
+    EXPECT_TRUE(next->evaluate({{inVar, true}}));
+    EXPECT_FALSE(next->evaluate({{inVar, false}}));
+  }
+}
+
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractClassifiesNegativeEdgePrimitiveClock) {
   NLUniverse::create();
@@ -16567,6 +16668,80 @@ TEST_F(
   const auto extracted = SequentialDesignModel::extract(top);
   // Guard the exact configured CVA6 perf-counter memory path used by full SEC.
   EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+}
+
+namespace {
+
+// The two smallest shapes an `x` literal takes in RTL: one branch of a
+// register's next state, and one branch of a combinational output.
+std::string xLiteralModuleSource(const std::string& name,
+                                 const std::string& literal) {
+  return "module " + name + R"((
+  input  logic clk,
+  input  logic s,
+  input  logic a,
+  output logic q,
+  output logic y
+);
+  always_ff @(posedge clk) q <= s ? a : )" + literal + R"(;
+  assign y = s ? a : )" + literal + R"(;
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DualRailSecModelsXLiteralAsPermanentX) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* xTop = loadSystemVerilogTopFromSource(
+      library, "x_literal", xLiteralModuleSource("x_literal", "1'bx"));
+  auto* xCopy = loadSystemVerilogTopFromSource(
+      library, "x_literal_copy", xLiteralModuleSource("x_literal_copy", "1'bx"));
+  auto* zeroTop = loadSystemVerilogTopFromSource(
+      library, "zero_literal", xLiteralModuleSource("zero_literal", "1'b0"));
+
+  // The X literal is modeled, not skipped: both outputs stay covered and the
+  // model carries uninitialized self-looping state for the literal.
+  const auto extracted = SequentialDesignModel::extract(xTop);
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  EXPECT_EQ(extracted.observedOutputs.size(), 2u);
+  size_t xStates = 0;
+  for (const auto& [key, name] : extracted.displayNameByKey) {
+    if (name.rfind("1'bx#", 0) != 0) {
+      continue;
+    }
+    ++xStates;
+    EXPECT_EQ(extracted.initialStateValueByKey.count(key), 0u);
+    const auto nextIt = extracted.nextStateExprByStateKey.find(key);
+    ASSERT_NE(nextIt, extracted.nextStateExprByStateKey.end());
+    EXPECT_EQ(nextIt->second, BoolExpr::Var(extracted.inputVarByKey.at(key)));
+  }
+  // The frontend may share one constant net between the two literals.
+  EXPECT_GE(xStates, 1u);
+  EXPECT_LE(xStates, 2u);
+
+  // X on both sides, and X against a synthesized don't-care value, are both
+  // "no binary-defined difference" under the dual-rail encoding.
+  for (auto* other : {xCopy, zeroTop}) {
+    SequentialEquivalenceStrategy strategy(
+        xTop, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady);
+    const auto result = strategy.run(4);
+    EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent)
+        << result.reason;
+    EXPECT_EQ(result.totalOutputs, 2u);
+    EXPECT_EQ(result.coveredOutputs, 2u);
+  }
+
+  // The binary encoding has no X value: the bit is an uninitialized register
+  // there, so the dependent outputs are skipped rather than reported different.
+  const auto binary = makeBinarySecStrategy(xTop, xCopy).run(4);
+  EXPECT_NE(binary.status, SequentialEquivalenceStatus::Different);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

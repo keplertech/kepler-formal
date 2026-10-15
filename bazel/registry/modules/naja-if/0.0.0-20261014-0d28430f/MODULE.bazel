@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2025 The Naja authors <https://github.com/najaeda/naja/blob/main/AUTHORS>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native schema libraries for source builds and registry distribution.
+
+Both CMake and Bazel generate C++ from schema/ in this checkout. Cap'n Proto
+libraries and code-generation tools come from the Bazel dependency graph.
+The release version is set in the registry's MODULE.bazel at publication time.
+"""
+
+module(
+    name = "naja-if",
+    version = "0.0.0-20261014-0d28430f",
+)
+
+bazel_dep(name = "capnp-cpp", version = "1.4.0")

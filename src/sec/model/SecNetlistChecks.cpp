@@ -179,8 +179,9 @@ void addSequentialDependencies(const naja::DNL::DNLInstanceFull& instance,
       !naja::NL::SNLDesignModeling::hasSequentialModel(primitive)) {
     return;
   }
-  const auto& model =
-      naja::NL::SNLDesignModeling::getSequentialModel(primitive);
+  // Per-instance resolution: parameterized models depend on instance parameters.
+  const auto& model = naja::NL::SNLDesignModeling::getSequentialModel(
+      instance.getSNLInstance());
   if (model.kind !=
       naja::NL::SNLDesignModeling::SequentialModel::Kind::FlipFlop) {
     return;
