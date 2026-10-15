@@ -254,6 +254,10 @@ The YAML spelling `learn_ineternal_relations` is accepted as an alias for
 
 The algorithm follows the candidate/refinement and inductive correspondence
 approach in [Mishchenko et al., ICCAD 2008](https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_seq.pdf).
+Candidates come from pin names, output-net names and shared drivers, and are
+propagated to a fixed point by merging proved pairs and rehashing the
+transitions (van Eijk, IEEE TCAD 19(7), 2000; Kuehlmann, Paruthi, Krohm and
+Ganai, IEEE TCAD 21(12), 2002). See `docs/sec-internal-relations.md`.
 The ternary representation follows [Khasidashvili and Hanna, 2003](https://people.eecs.berkeley.edu/~alanmi/courses/2007_290N/papers/sec_intel_bmc03.pdf).
 The X option applies only to the internal candidate check; the existing output
 property and selected engine are unchanged. Turning off both switches retains

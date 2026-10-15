@@ -636,12 +636,24 @@ void learnInternalStateRelations(
       &problem.state0Symbols, &problem.state1Symbols};
   using Location = std::pair<size_t, size_t>;
   std::vector<InternalRelationCandidate> candidates;
-  auto append = [&](Location lhs, Location rhs) {
+  // Every relation is proposed once, whichever guess finds it.
+  std::set<std::pair<size_t, size_t>> proposed;
+  // `swapped` pairs the rails crosswise: in the dual-rail encoding the
+  // complement of a value is its rails exchanged (X stays X), so two registers
+  // that always hold complementary values are related without any negation.
+  // The binary encoding has no such pair; complements are not proposed there.
+  auto append = [&](Location lhs, Location rhs, bool swapped) {
+    if (swapped && width != 2) {
+      return false;
+    }
     InternalRelationCandidate candidate;
     for (size_t rail = 0; rail < width; ++rail) {
       candidate.equalities.emplace_back(
           symbols[lhs.first]->at(width * lhs.second + rail),
-          symbols[rhs.first]->at(width * rhs.second + rail));
+          symbols[rhs.first]->at(width * rhs.second + (swapped ? 1 - rail : rail)));
+    }
+    if (!proposed.insert(candidate.equalities.front()).second) {
+      return false;
     }
     if (width == 2) {
       for (const auto& location : {lhs, rhs}) {
@@ -651,10 +663,17 @@ void learnInternalStateRelations(
       }
     }
     candidates.push_back(std::move(candidate));
+    return true;
   };
-  // Names and shared drivers are guesses only. Neither participates in the
-  // certificate: the SAT learner checks the original transitions and boot.
+  // Names, net names and shared drivers are guesses only. None participates
+  // in the certificate: the SAT learner checks the original transitions and
+  // boot.  Net names survive flows that re-cluster or rename instances, such
+  // as multibit flop clustering, where pin names do not.
   std::unordered_map<std::string, Location> namedStates;
+  std::unordered_map<std::string, Location> netNamedStates;
+  size_t nameCandidates = 0;
+  size_t netCandidates = 0;
+  size_t driverCandidates = 0;
   for (size_t side = 0; side < models.size(); ++side) {
     const auto& model = *models[side];
     std::unordered_map<BoolExpr*, Location> sharedDrivers;
@@ -665,17 +684,124 @@ void learnInternalStateRelations(
           name != model.displayNameByKey.end() && !name->second.empty()) {
         auto [existing, inserted] = namedStates.emplace(name->second, location);
         if (!inserted) {
-          append(existing->second, location);
+          nameCandidates += append(existing->second, location, false);
+        }
+      }
+      if (auto net = model.outputNetNameByKey.find(key);
+          net != model.outputNetNameByKey.end() && !net->second.empty()) {
+        auto [existing, inserted] = netNamedStates.emplace(net->second, location);
+        if (!inserted) {
+          netCandidates += append(existing->second, location, false);
         }
       }
       auto [driver, inserted] = sharedDrivers.emplace(
           model.nextStateExprByStateKey.at(key), location);
       if (!inserted) {
-        append(driver->second, location);
+        driverCandidates += append(driver->second, location, false);
       }
     }
   }
-  const auto proved = proveInternalRelations(problem, candidates, options, solverType);
+  auto proved = proveInternalRelations(problem, candidates, options, solverType);
+
+  // Propagation to a fixed point (van Eijk, TCAD 2000): a register one stage
+  // behind proved pairs has, once those pairs are merged, the same next-state
+  // formula as its counterpart, so it is found by rewriting every transition
+  // under the proved relations and numbering the result.  Equal numbers
+  // propose an equality; in dual rail, numbers equal across the rails propose
+  // a complement (the complemented edges of Kuehlmann et al., TCAD 2002).
+  // Each round reaches one register stage deeper and re-proves the whole
+  // candidate set, so the result stays a jointly inductive certificate.
+  constexpr size_t kPropagationRoundLimit = 32;
+  // The first round runs with nothing merged: that is the cross-design
+  // structural guess, registers whose transitions already read the same
+  // inputs.
+  size_t propagatedCandidates = 0;
+  size_t propagationRounds = 0;
+  {
+    TransitionExprResolver transitions(problem);
+    for (; propagationRounds < kPropagationRoundLimit; ++propagationRounds) {
+      std::unordered_map<size_t, size_t> merged;
+      merged.reserve(problem.allSymbols.size());
+      for (size_t symbol : problem.allSymbols) {
+        merged.emplace(symbol, symbol);
+      }
+      auto representative = [&merged](size_t symbol) {
+        while (merged.at(symbol) != symbol) {
+          merged[symbol] = merged.at(merged.at(symbol));
+          symbol = merged.at(symbol);
+        }
+        return symbol;
+      };
+      for (const auto& [lhs, rhs] : proved) {
+        const size_t a = representative(lhs);
+        const size_t b = representative(rhs);
+        if (a != b) {
+          merged[std::max(a, b)] = std::min(a, b);
+        }
+      }
+      for (size_t symbol : problem.allSymbols) {
+        merged[symbol] = representative(symbol);
+      }
+      struct Entry {
+        Location location;
+        bool swapped;
+      };
+      std::unordered_map<uint64_t, std::vector<Entry>> buckets;
+      {
+        RewriteTable table(merged);
+        for (size_t side = 0; side < models.size(); ++side) {
+          for (size_t i = 0; i < models[side]->stateBits.size(); ++i) {
+            std::array<uint32_t, 2> numbers{0, 0};
+            bool complete = true;
+            for (size_t rail = 0; rail < width && complete; ++rail) {
+              const size_t symbol = symbols[side]->at(width * i + rail);
+              complete = transitions.contains(symbol) &&
+                         (numbers[rail] = table.numberOf(transitions.at(symbol))) != 0;
+            }
+            if (!complete) {
+              continue;
+            }
+            // Rails ordered by number: two registers whose rails match
+            // crosswise land in one bucket with opposite orientation.
+            const bool swapped = width == 2 && numbers[0] > numbers[1];
+            const uint64_t key = width == 2
+                ? (uint64_t{std::min(numbers[0], numbers[1])} << 32) | std::max(numbers[0], numbers[1])
+                : numbers[0];
+            buckets[key].push_back({{side, i}, swapped});
+          }
+        }
+      }
+      size_t added = 0;
+      for (const auto& [key, entries] : buckets) {
+        const Entry& first = entries.front();
+        const size_t firstSymbol = symbols[first.location.first]->at(width * first.location.second);
+        for (size_t j = 1; j < entries.size(); ++j) {
+          const Entry& other = entries[j];
+          const size_t otherSymbol = symbols[other.location.first]->at(width * other.location.second);
+          if (representative(firstSymbol) == representative(otherSymbol)) {
+            continue;
+          }
+          const bool swapped = first.swapped != other.swapped;
+          // Both rails equal means value and complement coincide (X held):
+          // there is nothing to orient, propose the plain equality only.
+          if (swapped && (key >> 32) == (key & 0xffffffffu)) {
+            continue;
+          }
+          added += append(first.location, other.location, swapped);
+        }
+      }
+      if (added == 0) {
+        break;
+      }
+      propagatedCandidates += added;
+      auto next = proveInternalRelations(problem, candidates, options, solverType);
+      if (next.size() <= proved.size()) {
+        break;
+      }
+      proved = std::move(next);
+    }
+  }
+
   problem.sameFrameStateEqualityPairs0.insert(
       problem.sameFrameStateEqualityPairs0.end(), proved.begin(), proved.end());
   // The conjunction costs nodes that are never freed for every relation, and
@@ -689,8 +815,12 @@ void learnInternalStateRelations(
   }
   if (diagnostics) {
     printf("SEC summary: internal_relation_candidates=%zu proved_rail_equalities=%zu "
-           "allow_x_equality_in_internal_relations=%d\n",
-           candidates.size(), proved.size(), options.allowXEqualityInInternalRelations);
+           "allow_x_equality_in_internal_relations=%d name_candidates=%zu "
+           "net_name_candidates=%zu driver_candidates=%zu propagated_candidates=%zu "
+           "propagation_rounds=%zu\n",
+           candidates.size(), proved.size(), options.allowXEqualityInInternalRelations,
+           nameCandidates, netCandidates, driverCandidates, propagatedCandidates,
+           propagationRounds);
     fflush(stdout);
   }
 }

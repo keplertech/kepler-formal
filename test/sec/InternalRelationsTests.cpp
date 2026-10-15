@@ -175,7 +175,12 @@ TEST_F(InternalRelationsTests, OutputAssumptionsCannotCertifyAnInvalidInternalRe
   problem.transitions1 = {{4, BoolExpr::createFalse()}, {5, BoolExpr::createTrue()}};
   const auto model = heldModel(false, false);
   learnInternalStateRelations(model, model, problem, {}, Config::SolverType::KISSAT, false);
-  EXPECT_TRUE(problem.sameFrameStateEqualityPairs0.empty());
+  // The same-name guess proposes equality, which the induction step refutes:
+  // one register becomes constant 1, the other constant 0. What survives is
+  // the valid complement found by rehashing (rails crosswise), never the
+  // equality the false property would have "justified".
+  EXPECT_EQ(problem.sameFrameStateEqualityPairs0,
+            (std::vector<std::pair<size_t, size_t>>{{2, 5}, {3, 4}}));
 }
 
 TEST_F(InternalRelationsTests, SharedDriversSuggestOnlyInitiallyCompatibleSameDesignRelations) {
@@ -200,6 +205,96 @@ TEST_F(InternalRelationsTests, SharedDriversSuggestOnlyInitiallyCompatibleSameDe
   problem.initialStateAssignments[1].second = true;
   learnInternalStateRelations(model, {}, problem, {}, Config::SolverType::KISSAT, false);
   EXPECT_TRUE(problem.sameFrameStateEqualityPairs0.empty());
+}
+
+// Two designs with a two-stage pipeline fed by input symbol 6. Only the first
+// stage reads the input directly; the second stage reads the first.
+struct TwoStage {
+  SequentialDesignModel model0;
+  SequentialDesignModel model1;
+  KInductionProblem problem;
+};
+
+TwoStage twoStagePipelines(bool sameNetNames) {
+  TwoStage t;
+  const SignalKey a0{{1}, {0}}, a1{{1}, {1}}, b0{{2}, {0}}, b1{{2}, {1}};
+  t.model0.stateBits = {a0, a1};
+  t.model1.stateBits = {b0, b1};
+  t.model0.displayNameByKey = {{a0, "a0"}, {a1, "a1"}};
+  t.model1.displayNameByKey = {{b0, "b0"}, {b1, "b1"}};
+  t.model0.nextStateExprByStateKey = {{a0, BoolExpr::Var(6)}, {a1, BoolExpr::Var(2)}};
+  t.model1.nextStateExprByStateKey = {{b0, BoolExpr::Var(6)}, {b1, BoolExpr::Var(4)}};
+  if (sameNetNames) {
+    t.model0.outputNetNameByKey = {{a0, "n0"}, {a1, "n1"}};
+    t.model1.outputNetNameByKey = {{b0, "n0"}, {b1, "n1"}};
+  }
+  t.problem.allSymbols = {2, 3, 4, 5, 6};
+  t.problem.inputSymbols = {6};
+  t.problem.state0Symbols = {2, 3};
+  t.problem.state1Symbols = {4, 5};
+  t.problem.initialStateAssignments = {{2, false}, {3, false}, {4, false}, {5, false}};
+  t.problem.transitions0 = {{2, BoolExpr::Var(6)}, {3, BoolExpr::Var(2)}};
+  t.problem.transitions1 = {{4, BoolExpr::Var(6)}, {5, BoolExpr::Var(4)}};
+  return t;
+}
+
+TEST_F(InternalRelationsTests, PropagationReachesRegistersBehindProvedOnes) {
+  // No names match. Stage 0 of both designs reads the same input and is found
+  // structurally; stage 1 reads different state symbols and is found only
+  // after stage 0 is merged and the transitions rehashed (van Eijk, 2000).
+  auto t = twoStagePipelines(false);
+  learnInternalStateRelations(t.model0, t.model1, t.problem, {}, Config::SolverType::KISSAT, false);
+  EXPECT_EQ(t.problem.sameFrameStateEqualityPairs0,
+            (std::vector<std::pair<size_t, size_t>>{{2, 4}, {3, 5}}));
+}
+
+TEST_F(InternalRelationsTests, OutputNetNamesProposeWhatRehashingCannotSee) {
+  // Stage 1 of design 1 computes the same function with a different shape, so
+  // it never hashes equal to its counterpart. The shared output net name
+  // proposes the pair and the solver proves it.
+  for (bool sameNetNames : {false, true}) {
+    auto t = twoStagePipelines(sameNetNames);
+    // (s & x) | (s & !x) == s, a shape neither the factory nor the rewrite
+    // table folds; only the solver sees through it.
+    BoolExpr* reshaped = BoolExpr::Or(
+        BoolExpr::And(BoolExpr::Var(4), BoolExpr::Var(6)),
+        BoolExpr::And(BoolExpr::Var(4), BoolExpr::Not(BoolExpr::Var(6))));
+    t.model1.nextStateExprByStateKey[t.model1.stateBits[1]] = reshaped;
+    t.problem.transitions1[1].second = reshaped;
+    learnInternalStateRelations(t.model0, t.model1, t.problem, {}, Config::SolverType::KISSAT, false);
+    const std::vector<std::pair<size_t, size_t>> expected =
+        sameNetNames ? std::vector<std::pair<size_t, size_t>>{{2, 4}, {3, 5}}
+                     : std::vector<std::pair<size_t, size_t>>{{2, 4}};
+    EXPECT_EQ(t.problem.sameFrameStateEqualityPairs0, expected) << "sameNetNames=" << sameNetNames;
+  }
+}
+
+TEST_F(InternalRelationsTests, DualRailComplementsArePairedAcrossRails) {
+  // Design 0 exposes Q, design 1 exposes QN of the same register: the rails
+  // of one are the rails of the other exchanged. Rehashing pairs them with the
+  // rails crosswise, which needs no negation in the dual-rail encoding.
+  const SignalKey q{{1}, {0}}, qn{{2}, {0}};
+  SequentialDesignModel model0, model1;
+  model0.stateBits = {q};
+  model1.stateBits = {qn};
+  model0.displayNameByKey = {{q, "q"}};
+  model1.displayNameByKey = {{qn, "qn"}};
+  model0.nextStateExprByStateKey = {{q, BoolExpr::Var(10)}};
+  model1.nextStateExprByStateKey = {{qn, BoolExpr::Var(11)}};
+  KInductionProblem problem;
+  problem.usesDualRailStateEncoding = true;
+  problem.allSymbols = {2, 3, 4, 5, 10, 11};
+  problem.inputSymbols = {10, 11};
+  problem.state0Symbols = {2, 3};
+  problem.state1Symbols = {4, 5};
+  problem.dualRailStatePairs = {{2, 3}, {4, 5}};
+  problem.initialStateAssignments = {{2, true}, {3, true}, {4, true}, {5, true}};
+  // Q may be one when D may be one; QN may be one when D may be zero.
+  problem.transitions0 = {{2, BoolExpr::Var(10)}, {3, BoolExpr::Var(11)}};
+  problem.transitions1 = {{4, BoolExpr::Var(11)}, {5, BoolExpr::Var(10)}};
+  learnInternalStateRelations(model0, model1, problem, {}, Config::SolverType::KISSAT, false);
+  EXPECT_EQ(problem.sameFrameStateEqualityPairs0,
+            (std::vector<std::pair<size_t, size_t>>{{2, 5}, {3, 4}}));
 }
 
 TEST_F(InternalRelationsTests, SameNamesAndMatchingStartupXCannotHideBinaryMismatch) {
