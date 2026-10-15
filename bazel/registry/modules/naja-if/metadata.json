@@ -1,0 +1,22 @@
+{
+    "homepage": "https://github.com/keplertech/naja-if",
+    "maintainers": [
+        {
+            "github": "xtofalex",
+            "github_user_id": 3635601,
+            "name": "Christophe Alexandre"
+        },
+        {
+            "github": "nanocoh",
+            "github_user_id": 115838389,
+            "name": "Noam Cohen"
+        }
+    ],
+    "repository": [
+        "github:keplertech/naja-if"
+    ],
+    "versions": [
+        "0.0.0-20261014-0d28430f"
+    ],
+    "yanked_versions": {}
+}
