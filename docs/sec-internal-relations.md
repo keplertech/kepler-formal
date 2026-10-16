@@ -18,10 +18,20 @@ only after a proof over the original transitions and the boot state.
   Memory cells are named from the instance path plus cell and bit index. The
   strings must match exactly, so a flow that renames or flattens instances
   produces no candidate for the affected registers.
+- **Same output net.** Both state bits' output pins sit on nets with the same
+  name: the parent instance path, the net name and the bit. Netlist flows keep
+  net names where they rename or re-cluster instances, for example multibit
+  flop clustering moves a flop's output pin onto a tray cell with a new
+  instance name and pin name while the net it drives keeps its name. This
+  guess is applied in addition to the pin
+  name, never instead of it. A state bit is its output pin, so two pins on one
+  net are proposed as equal; the tray-versus-flop polarity of the Liberty state
+  variable does not enter.
 - **Same driver.** Inside one design, both have the identical next-state
   expression.
 
-Candidates are not guessed from simulation.
+Candidates are not guessed from simulation. After the first proof the
+candidates are extended by propagation, see section 7.
 
 In the dual-rail encoding a candidate equates both rails of the two registers.
 With `allow_x_equality_in_internal_relations: false` it also requires both
@@ -54,14 +64,15 @@ one transition.
   candidate is proved without the solver. The table is freed when the round
   ends. Expressions themselves are never freed, so building the rewrite of a
   whole design would keep a second copy of its logic for the rest of the run
-  (about 3.5 GB on nangate45_black_parrot). Short AND/OR
+  (several gigabytes on a large design). Short AND/OR
   chains are rebuilt from their sorted operands, because physical optimization
   swaps the pins of symmetric gates and that re-brackets the chain. Sorting the
   operands of an AND or an OR cannot change the function, so a pin swap on a
   gate that is not symmetric, a mux for example, still compares as different.
   The step is skipped when X equality is disallowed, since definedness is not
-  structural. On nangate45_black_parrot all 666,417 candidates are proved this
-  way in one round. This is an implementation choice, not a technique from the
+  structural. On a large design with several hundred thousand candidates, all
+  of them are proved this way in one round. This is an implementation choice,
+  not a technique from the
   papers.
 - **Speculative reduction.** The candidates that remain go to the solver. The
   hypotheses are applied by literal substitution: both registers of a pair
@@ -112,16 +123,69 @@ With `KEPLER_SEC_DIAG` set, each round prints how many candidates were active,
 proved structurally and dropped, and each solver partition prints its status
 and the work it used.
 
+## 7. Propagation to a fixed point
+
+A register one stage behind proved pairs is not a candidate by name or driver:
+its next-state formula reads its own design's registers, so it never hashes
+equal to its counterpart. Once the proved pairs are merged, that is, one
+register of each pair is read in place of the other, the two formulas become
+one, and the pair can be proposed. This is the structural-similarity iteration
+of van Eijk (TCAD 2000) and the merge-and-rehash of AIG sweeping (Kuehlmann,
+Paruthi, Krohm, Ganai, TCAD 2002).
+
+After the guessed candidates are proved (possibly none of them),
+`learnInternalStateRelations` repeats:
+
+1. Build the merge map from the proved pairs (a union of the equalities, so
+   chains of pairs share one representative). In the first round nothing is
+   merged yet, so that round is the cross-design structural guess: registers
+   whose transitions already read the same inputs.
+2. Number every state bit's transition under that merge with the same table
+   section 4 uses for structural proofs, one number per rail. The table is
+   freed when the round ends, so no rewritten logic is kept.
+3. Put state bits with equal numbers in one bucket, across both designs. In
+   the dual-rail encoding the two rails are ordered by number, so a register
+   whose rails match another's crosswise lands in the same bucket with the
+   opposite orientation: the complement of a value is its rails exchanged (X
+   stays X), and such a pair is proposed with the rails swapped. These are the
+   complemented edges of Kuehlmann et al.; in the binary encoding a complement
+   has no rail to swap and is not proposed.
+4. Propose every unrelated member of a bucket against its first member, then
+   re-prove the whole candidate set with section 4. The result is still one
+   jointly inductive certificate; nothing proved in an earlier round is kept
+   without being re-proved with the rest.
+5. Stop when a round proposes nothing new, when the proof does not grow, or
+   after 32 rounds.
+
+Each round reaches one register stage deeper, so a pipeline of depth d needs
+about d rounds. Registers in a feedback loop are reached as a group: all
+members of a cycle are proposed in the round their inputs are merged, and the
+joint induction proves them together.
+
+The `SEC summary` diagnostics line reports the candidates by source
+(`name_candidates`, `net_name_candidates`, `driver_candidates`,
+`propagated_candidates`) and the number of propagation rounds.
+
 ## What it does and does not help
 
 - Two designs with the same register names and near-identical logic behind
   them are proved quickly, because the merged transitions collapse.
 - Designs that really differ keep only the registers the difference cannot
   reach; the output check still reports the counterexample.
+- Flows that re-cluster or rename registers, for example multibit flop
+  clustering, keep their net names, so the net-name guess and the propagation
+  rounds recover the pairs the pin names lose. On a synthesis-versus-final
+  pair where about a tenth of the register bits were clustered into multibit
+  trays, pin names alone proposed most pairs, but the majority were refuted
+  because their cones read the unpaired tray bits, and PDR was still
+  inconclusive after tens of minutes. With the net-name guess the tray bits
+  are proposed as well, every pair is proved structurally in one round, and
+  PDR proves the design at k = 1 in seconds. A pair without clustering is
+  unchanged.
 - Equivalent designs whose logic was rebuilt (for example synthesis netlist
   versus final netlist) can prove few pairs: one pair the solver leaves
-  undecided is dropped, and so is every pair that reads it. sky130hs_riscv32i
-  keeps 64 of 2,112 rail equalities this way, while the synthesis-versus-final
-  nangate45_black_parrot pair proves all of them structurally. Mishchenko et
-  al. address the general case with signal correspondence, which also relates
-  internal nodes. That is not implemented.
+  undecided is dropped, and so is every pair that reads it. One such pair
+  keeps only a few percent of its rail equalities this way, while another
+  proves all of them structurally. Mishchenko et
+  al. address the general case with signal correspondence from random
+  simulation, which also relates internal nodes. That is not implemented.

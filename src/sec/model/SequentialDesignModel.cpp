@@ -30,7 +30,9 @@
 #include "SNLBusTerm.h"
 #include "SNLBusTermBit.h"
 #include "SNLDesignModeling.h"
+#include "SNLBusNetBit.h"
 #include "SNLInstParameter.h"
+#include "SNLInstTerm.h"
 #include "SNLInstance.h"
 #include "SNLPath.h"
 #include "../../clauses/SNLLogicCloud.h"
@@ -1096,6 +1098,29 @@ std::string getTerminalDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
   }
   oss << terminal.getSnlBitTerm()->getName().getString() << "["
       << terminal.getSnlBitTerm()->getBit() << "]";
+  return oss.str();
+}
+
+// The net connected to an instance pin, named like the pin's display name
+// but at the parent's level: the net lives in the instance's parent.
+std::string getTerminalNetDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
+  const auto* instTerm = terminal.getSnlTerm();
+  if (instTerm == nullptr) {
+    return {};
+  }
+  const auto* net = instTerm->getNet();
+  if (net == nullptr || net->getName().getString().empty()) {
+    return {};
+  }
+  std::ostringstream oss;
+  const auto pathNames = terminal.getDNLInstance().getPath().getPathNames();
+  for (size_t i = 0; i + 1 < pathNames.size(); ++i) {
+    oss << pathNames[i].getString() << ".";
+  }
+  oss << net->getName().getString();
+  if (const auto* bit = dynamic_cast<const naja::NL::SNLBusNetBit*>(net)) {
+    oss << "[" << bit->getBit() << "]";
+  }
   return oss.str();
 }
 
@@ -2583,6 +2608,9 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
     model.displayNameByKey.try_emplace(key, getTerminalDisplayName(term));
     if (isSequentialStateOutput(term)) {
       ctx.stateBits.insert(key);
+      if (auto netName = getTerminalNetDisplayName(term); !netName.empty()) {
+        model.outputNetNameByKey.try_emplace(key, std::move(netName));
+      }
     } else if (term.isTopPort()) {
       ctx.environmentInputs.insert(key);
     } else {

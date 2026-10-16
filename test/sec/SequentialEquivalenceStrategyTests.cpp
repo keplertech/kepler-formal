@@ -13629,12 +13629,16 @@ TEST_F(SequentialEquivalenceStrategyTests,
     model1.observedOutputExprByKey.emplace(out, BoolExpr::Var(5));
   }
 
+  // Without learned state relations, wide reset/bootstrap state-dependent
+  // outputs cannot be proved by a cross-design startup relation.  Binary SEC
+  // reports the conservative skip surface instead of proving outputs from
+  // internal element names.  (With learning on, see the end of this test:
+  // propagation certifies b_q0 == b_q1 and then a_q0 == a_q1 by induction,
+  // and the outputs are proved from those relations, not from names.)
   auto strategy = makeBinaryExtractedSecStrategy(SecEngine::Pdr);
+  strategy.setInternalRelationOptions({false, true});
   const auto result = strategy.runExtractedModels(model0, model1, 1);
 
-  // Wide reset/bootstrap state-dependent outputs cannot be proved by a
-  // cross-design startup relation.  Binary SEC reports the conservative skip
-  // surface instead of proving outputs from internal element names.
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
   EXPECT_EQ(result.bound, 0u);
   EXPECT_EQ(result.coveredOutputs, 0u);
@@ -13650,6 +13654,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       SecEngine::KInduction,
       SecEncoding::DualRailSteady);
+  dualRailKiStrategy.setInternalRelationOptions({false, true});
   const auto dualRailKiResult =
       dualRailKiStrategy.runExtractedModels(model0, model1, 1);
   EXPECT_EQ(dualRailKiResult.status, SequentialEquivalenceStatus::Inconclusive);
@@ -13658,16 +13663,39 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_EQ(dualRailKiResult.totalOutputs, kWideStartupRelationOutputs);
   EXPECT_FALSE(dualRailKiResult.skippedObservedOutputs.empty());
 
+  // With learning (the default), the registers are paired structurally: b_q
+  // of both designs hold the same constant transition, and once merged the
+  // a_q transitions coincide (van Eijk, 2000).  Both relations are certified
+  // by induction from the boot state.  Binary SEC still skips the
+  // reset-unanchored outputs, relations or not; the dual-rail engines prove
+  // them from the certified relations.
+  auto learning = makeBinaryExtractedSecStrategy(SecEngine::Pdr);
+  const auto learned = learning.runExtractedModels(model0, model1, 1);
+  EXPECT_EQ(learned.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(learned.coveredOutputs, 0u);
+  EXPECT_EQ(learned.skippedObservedOutputs.size(), kWideStartupRelationOutputs);
+  SequentialEquivalenceStrategy learningDualRailKi(
+      nullptr,
+      nullptr,
+      KEPLER_FORMAL::Config::SolverType::KISSAT,
+      SecEngine::KInduction,
+      SecEncoding::DualRailSteady);
+  const auto learnedDualRail = learningDualRailKi.runExtractedModels(model0, model1, 1);
+  EXPECT_EQ(learnedDualRail.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(learnedDualRail.coveredOutputs, kWideStartupRelationOutputs);
+
   SequentialEquivalenceStrategy dualRailImcStrategy(
       nullptr,
       nullptr,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       SecEngine::Imc,
       SecEncoding::DualRailSteady);
+  // Without an initial predicate, and with X/X internal relations disallowed,
+  // IMC must not turn an X-only startup relation into an equivalence proof or
+  // count guarded equality as output coverage.
+  dualRailImcStrategy.setInternalRelationOptions({true, false});
   const auto dualRailImcResult =
       dualRailImcStrategy.runExtractedModels(model0, model1, 1);
-  // Without an initial predicate, IMC must not turn an X-only startup relation
-  // into an equivalence proof or count guarded equality as output coverage.
   EXPECT_EQ(dualRailImcResult.status, SequentialEquivalenceStatus::Inconclusive);
   EXPECT_EQ(dualRailImcResult.bound, 1u);
   EXPECT_EQ(dualRailImcResult.coveredOutputs, 0u);
@@ -13675,6 +13703,19 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_EQ(
       dualRailImcResult.skippedObservedOutputs.size(),
       kWideStartupRelationOutputs);
+
+  // With the default options the X/X relations b_q0 == b_q1 and then
+  // a_q0 == a_q1 are certified by induction from the boot state, and IMC
+  // proves the outputs from those certified relations.
+  SequentialEquivalenceStrategy learningDualRailImc(
+      nullptr,
+      nullptr,
+      KEPLER_FORMAL::Config::SolverType::KISSAT,
+      SecEngine::Imc,
+      SecEncoding::DualRailSteady);
+  const auto learnedImc = learningDualRailImc.runExtractedModels(model0, model1, 1);
+  EXPECT_EQ(learnedImc.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(learnedImc.coveredOutputs, kWideStartupRelationOutputs);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

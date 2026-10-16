@@ -178,7 +178,9 @@ output pins are shared environment inputs. SEC therefore proves
 that the surrounding designs drive the block identically and remain equivalent
 for every possible value returned by the abstracted block. Interface names,
 directions, widths, and bit ranges are validated across the paired paths before
-proof. Verification treats the selected leaf pins as boundaries without
+proof. An input pin unconnected on both sides has no driving cone and is
+skipped; one unconnected on a single side is rejected. Verification treats the
+selected leaf pins as boundaries without
 cloning or rewiring the netlists. The behavior is the same in normal and compact
 SEC, for `v`, `sv`, and `sv2v` inputs. Compact self-model reuse is
 disabled when any paired left/right instance paths differ.
@@ -194,6 +196,13 @@ kepler-formal -v sec -verilog rtl.v gate.v \
 set_as_boundary:
   - [u_subsystem/u_sram, u_subsystem/u_sram_macro]
 ```
+
+`/` separates hierarchy levels. A literal slash inside an instance name is
+written `\/` (the SDC escaping convention used by OpenSTA), so a flattened
+netlist leaf written `\u_block/u_leaf ` in Verilog is selected by
+`u_block\/u_leaf`, while `u_block/u_leaf` always names instance `u_leaf`
+inside instance `u_block`. Paths are never
+reinterpreted.
 
 User-defined boundaries cannot currently be combined with scope extraction or
 scope cleaning.
@@ -254,6 +263,10 @@ The YAML spelling `learn_ineternal_relations` is accepted as an alias for
 
 The algorithm follows the candidate/refinement and inductive correspondence
 approach in [Mishchenko et al., ICCAD 2008](https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_seq.pdf).
+Candidates come from pin names, output-net names and shared drivers, and are
+propagated to a fixed point by merging proved pairs and rehashing the
+transitions (van Eijk, IEEE TCAD 19(7), 2000; Kuehlmann, Paruthi, Krohm and
+Ganai, IEEE TCAD 21(12), 2002). See `docs/sec-internal-relations.md`.
 The ternary representation follows [Khasidashvili and Hanna, 2003](https://people.eecs.berkeley.edu/~alanmi/courses/2007_290N/papers/sec_intel_bmc03.pdf).
 The X option applies only to the internal candidate check; the existing output
 property and selected engine are unchanged. Turning off both switches retains

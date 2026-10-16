@@ -168,7 +168,9 @@ instances remain part of the normal equivalence result. These are logical
 verification boundaries: no netlist instances, ports, or connections are changed.
 
 The two sides must expose matching pin names, bit ranges, and directions at
-each paired boundary. Instance input pins must be connected, and nonconstant
+each paired boundary. An instance input pin left unconnected on both sides has
+no driving cone and is skipped (abstracts that model power pins as logic inputs
+are the common case); one unconnected on a single side is rejected. Nonconstant
 input nets must have exactly one driver; unused output pins are allowed.
 Inout pins, aliased, constant-connected or multiply driven output nets,
 duplicate paths, and selections where one path is an ancestor of another are
@@ -178,6 +180,12 @@ Kepler Formal validates these conditions before starting the proof. Boundary
 selection supports both LEC and SEC, including compact mode, and all input
 formats (`v`, `sv`, and `sv2v`; SV formats require SEC). Paths use elaborated
 instance names, which can differ from source names for generated SV scopes.
+`/` separates hierarchy levels. A literal slash inside an instance name is
+written `\/` (the SDC escaping convention used by OpenSTA), so a flattened
+netlist leaf written `\u_block/u_leaf ` in Verilog is selected by
+`u_block\/u_leaf`, while `u_block/u_leaf` always names instance `u_leaf`
+inside instance `u_block`. Paths are never
+reinterpreted.
 Boundary selection cannot currently be combined with `use_scopes` or `clean_scopes`.
 
 The equivalent YAML form is:
