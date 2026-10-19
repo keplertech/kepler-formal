@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "common/BoolExprUtils.h"
 #include "common/SecDiag.h"
 #include "model/SequentialDesignModel.h"
 #include "kinduction/SatEncoding.h"
@@ -693,6 +694,106 @@ void learnInternalStateRelations(
            candidates.size(), proved.size(), options.allowXEqualityInInternalRelations);
     fflush(stdout);
   }
+  dischargeStructurallyEquivalentOutputs(problem, diagnostics);
+}
+
+size_t dischargeStructurallyEquivalentOutputs(KInductionProblem& problem,
+                                              bool diagnostics) {
+  const size_t outputs = problem.observedOutputExprs0.size();
+  if (outputs == 0 || problem.observedOutputExprs1.size() != outputs) {
+    return 0;
+  }
+  const bool dualRail = problem.usesDualRailStateEncoding;
+  if (dualRail && (problem.dualRailObservedOutputs0.size() != outputs ||
+                   problem.dualRailObservedOutputs1.size() != outputs)) {
+    return 0;
+  }
+
+  // Merge: one representative per equality class of the certified same-frame
+  // equalities (the proved register pairs and the definitional complement
+  // pairs), so that a register of design 1 is read as its design-0 partner.
+  std::unordered_map<size_t, size_t> merged;
+  auto representative = [&merged](size_t symbol) {
+    auto it = merged.find(symbol);
+    while (it != merged.end() && it->second != symbol) {
+      symbol = it->second;
+      it = merged.find(symbol);
+    }
+    return symbol;
+  };
+  for (const auto* pairs :
+       {&problem.sameFrameStateEqualityPairs0, &problem.sameFrameStateEqualityPairs1}) {
+    for (const auto& [lhs, rhs] : *pairs) {
+      const size_t a = representative(lhs);
+      const size_t b = representative(rhs);
+      if (a != b) {
+        merged[std::max(a, b)] = std::min(a, b);
+      }
+    }
+  }
+  for (auto& [symbol, root] : merged) {
+    root = representative(symbol);
+  }
+
+  // Hash: two cones get one number exactly when they are the same formula
+  // under the merge.  Numbering never builds the rewritten logic.
+  RewriteTable table(merged);
+  if (problem.structurallyProvedOutputs.size() != outputs) {
+    problem.structurallyProvedOutputs.assign(outputs, false);
+  }
+  size_t discharged = 0;
+  for (size_t i = 0; i < outputs; ++i) {
+    if (problem.structurallyProvedOutputs[i]) {
+      ++discharged;
+      continue;
+    }
+    bool same = false;
+    if (dualRail) {
+      const auto& rails0 = problem.dualRailObservedOutputs0[i];
+      const auto& rails1 = problem.dualRailObservedOutputs1[i];
+      const uint32_t one0 = table.numberOf(rails0.mayBeOne);
+      const uint32_t zero0 = table.numberOf(rails0.mayBeZero);
+      same = one0 != 0 && zero0 != 0 &&
+             one0 == table.numberOf(rails1.mayBeOne) &&
+             zero0 == table.numberOf(rails1.mayBeZero);
+    } else {
+      const uint32_t number0 = table.numberOf(problem.observedOutputExprs0[i]);
+      same = number0 != 0 && number0 == table.numberOf(problem.observedOutputExprs1[i]);
+    }
+    if (!same) {
+      continue;
+    }
+    // The cones are one formula over shared inputs and merged registers, so
+    // the output pair is equal in every state the equalities hold in, that is
+    // in every reachable state.  Nothing is left for an engine to prove.
+    problem.observedOutputExprs0[i] = BoolExpr::createTrue();
+    problem.observedOutputExprs1[i] = BoolExpr::createTrue();
+    if (problem.dualRailOutputStrictEqualityExprs.size() == outputs) {
+      problem.dualRailOutputStrictEqualityExprs[i] = BoolExpr::createTrue();
+    }
+    problem.structurallyProvedOutputs[i] = true;
+    ++discharged;
+  }
+  if (discharged != 0) {
+    // Both encodings build the property as the conjunction of the per-output
+    // equalities and share it with the induction property.
+    BoolExpr* property = BoolExpr::createTrue();
+    for (size_t i = 0; i < outputs; ++i) {
+      property = BoolExpr::And(
+          property,
+          makeEqualityExpr(problem.observedOutputExprs0[i], problem.observedOutputExprs1[i]));
+    }
+    problem.property = BoolExpr::simplify(property);
+    problem.bad = BoolExpr::simplify(BoolExpr::Not(problem.property));
+    problem.inductionProperty = problem.property;
+    problem.inductionBad = problem.bad;
+  }
+  if (diagnostics) {
+    printf("SEC summary: structurally_proved_outputs=%zu of %zu merged_equalities=%zu\n",
+           discharged, outputs, merged.size());
+    fflush(stdout);
+  }
+  return discharged;
 }
 
 }  // namespace KEPLER_FORMAL::SEC

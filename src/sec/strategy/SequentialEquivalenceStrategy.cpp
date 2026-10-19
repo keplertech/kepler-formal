@@ -2931,6 +2931,8 @@ KInductionProblem buildDualRailSecProblem(
     problem.observedOutputExprs1.push_back(BoolExpr::createTrue());
     problem.dualRailOutputStrictEqualityExprs.push_back(
         outputProperties.strictEquality);
+    problem.dualRailObservedOutputs0.push_back(out0);
+    problem.dualRailObservedOutputs1.push_back(out1);
     // LCOV_DISABLED_STOP
     // Dual-rail strategy construction only builds obligations.  The selected
     // engine must prove each top output; no side implication query can mark it
