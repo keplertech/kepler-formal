@@ -2688,8 +2688,16 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
       if (state.clear.has_value()) collectTerms(*state.clear);
       if (state.preset.has_value()) collectTerms(*state.preset);
     }
+    // Timing arcs are declared once per primitive while a model set with
+    // setSequentialModelFromParameters is selected per instance: an input
+    // with an input-to-clock arc that the selected model does not read (for
+    // example a disabled load enable or reset) is unused by this instance,
+    // not an unsupported update pin (keplertech/kepler-formal#280).
+    const bool parameterizedModel =
+        naja::NL::SNLDesignModeling::hasSequentialModelFromParameters(primitive);
     for (const auto& [modelTerm, _] : scan.modelTermIDs) {
-      if (isSequentialNextStateInput(
+      if (!parameterizedModel &&
+          isSequentialNextStateInput(
               instance.getTerminalFromBitTerm(
                   const_cast<naja::NL::SNLBitTerm*>(modelTerm))) &&
           modeledUpdateTerms.find(modelTerm) == modeledUpdateTerms.end()) {

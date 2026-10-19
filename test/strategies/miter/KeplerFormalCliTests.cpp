@@ -3162,6 +3162,149 @@ TEST_F(KeplerFormalCliTests,
 
 // keplertech/kepler-formal#277: a macro defined in an earlier file of a file
 // list is only visible to later files when slang compiles them as one unit.
+namespace {
+
+// Cells for keplertech/kepler-formal#280: a flop whose load enable EN is
+// optional, selected per instance by use_en. EN keeps its input-to-clock arc
+// on the primitive even when the selected model does not read it.
+const char* const kPythonOptionalEnableCells =
+    "import naja\n"
+    "\n"
+    "def constructPrimitives(lib):\n"
+    "    dff = naja.SNLDesign.createPrimitive(lib, 'DFFE')\n"
+    "    d = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'D')\n"
+    "    ck = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'CK')\n"
+    "    en = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Input, 'EN')\n"
+    "    q = naja.SNLScalarTerm.create(dff, naja.SNLTerm.Direction.Output, 'Q')\n"
+    "    naja.SNLParameter.createBinary(dff, 'use_en', 1, 0)\n"
+    "    dff.setSequentialModelFromParameters(['use_en'], [\n"
+    "        {'values': [0], 'clocked_on': 'CK',\n"
+    "         'states': [{'name': 'IQ', 'next_state': 'D'}], 'outputs': [(q, 'IQ')]},\n"
+    "        {'values': [1], 'clocked_on': 'CK',\n"
+    "         'states': [{'name': 'IQ', 'next_state': '(EN & D) | (!EN & IQ)'}],\n"
+    "         'outputs': [(q, 'IQ')]},\n"
+    "    ])\n"
+    "    naja.SNLDesign.addClockToOutputsArcs(ck, [q])\n"
+    "    naja.SNLDesign.addInputsToClockArcs([d, en], ck)\n";
+
+const char* const kOptionalEnableRtl =
+    "module top(input logic clk, input logic en, input logic d,\n"
+    "           output logic q_plain, output logic q_open, output logic q_en);\n"
+    "  always_ff @(posedge clk) q_plain <= d;\n"
+    "  always_ff @(posedge clk) q_open <= d;\n"
+    "  always_ff @(posedge clk) if (en) q_en <= d;\n"
+    "endmodule\n";
+
+// use_en=0 with EN tied to a constant, use_en=0 with EN unconnected, and
+// use_en=1 reading EN.
+const char* const kOptionalEnableGates =
+    "module top(clk, en, d, q_plain, q_open, q_en);\n"
+    "  input clk;\n"
+    "  input en;\n"
+    "  input d;\n"
+    "  output q_plain;\n"
+    "  output q_open;\n"
+    "  output q_en;\n"
+    "  DFFE #(.use_en(1'b0)) u_plain (.D(d), .CK(clk), .EN(1'b0), .Q(q_plain));\n"
+    "  DFFE #(.use_en(1'b0)) u_open (.D(d), .CK(clk), .Q(q_open));\n"
+    "  DFFE #(.use_en(1'b1)) u_en (.D(d), .CK(clk), .EN(en), .Q(q_en));\n"
+    "endmodule\n";
+
+}  // namespace
+
+// keplertech/kepler-formal#280: an input the selected per-instance model does
+// not read was reported as "Unsupported sequential primitive with update pin",
+// the register went opaque and SEC could not run.
+TEST_F(KeplerFormalCliTests,
+       ConfigSecSkipsPinsUnusedByParameterizedSequentialModel) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_param_unused_pin");
+  const auto cells = tmpDir / "prims.py";
+  { std::ofstream out(cells); out << kPythonOptionalEnableCells; }
+  const auto rtl = tmpDir / "rtl.sv";
+  { std::ofstream out(rtl); out << kOptionalEnableRtl; }
+  const auto gates = tmpDir / "gate.v";
+  { std::ofstream out(gates); out << kOptionalEnableGates; }
+
+  // RTL vs gate.
+  const auto sv2vCfg = writeTempConfig(
+      "format: sv2v\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 8\n"
+      "input_paths:\n"
+      "  - " + rtl.string() + "\n"
+      "  - " + gates.string() + "\n"
+      "sv_design1_top: top\n"
+      "verilog_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + cells.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(sv2vCfg), kSecProvedExitCode);
+  std::filesystem::remove(sv2vCfg);
+
+  // Gate vs itself.
+  const auto gateCfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 8\n"
+      "input_paths:\n"
+      "  - " + gates.string() + "\n"
+      "  - " + gates.string() + "\n"
+      "verilog_design1_top: top\n"
+      "verilog_design2_top: top\n"
+      "py_tech_files:\n"
+      "  - " + cells.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(gateCfg), kSecProvedExitCode);
+  std::filesystem::remove(gateCfg);
+  std::filesystem::remove_all(tmpDir);
+}
+
+namespace {
+
+// Sixteen registered words summed by an adder tree, without reset.  Compared
+// with itself, every register pair is proved, but the output cones are too
+// wide for the engine's per-query budget.  After merging the proved pairs the
+// two cones are one formula and are discharged structurally.
+const char* const kRegisteredSumRtl =
+    "module sum16(input logic clk, input logic [15:0][23:0] a,\n"
+    "             output logic [27:0] y);\n"
+    "  logic [15:0][23:0] r;\n"
+    "  always_ff @(posedge clk) r <= a;\n"
+    "  always_comb begin\n"
+    "    y = '0;\n"
+    "    for (int i = 0; i < 16; i++) y += r[i];\n"
+    "  end\n"
+    "endmodule\n";
+
+}  // namespace
+
+// Van Eijk's merge step: identical output cones over proved register pairs
+// are discharged structurally instead of being searched by the engine.
+TEST_F(KeplerFormalCliTests, ConfigSecDischargesIdenticalConesOverProvedRegisters) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_structural_discharge");
+  const auto rtl = tmpDir / "sum16.sv";
+  { std::ofstream out(rtl); out << kRegisteredSumRtl; }
+
+  const auto cfg = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "sec_engine: pdr\n"
+      "max_k: 4\n"
+      "input_paths:\n"
+      "  - " + rtl.string() + "\n"
+      "  - " + rtl.string() + "\n"
+      "sv_design1_top: sum16\n"
+      "sv_design2_top: sum16\n");
+  EXPECT_EQ(runWithConfigFile(cfg), kSecProvedExitCode);
+  std::filesystem::remove(cfg);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, SvSingleUnitSharesMacrosAcrossFlistFiles) {
   const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_sv_single_unit");
   const auto defs = tmpDir / "defs.svh";

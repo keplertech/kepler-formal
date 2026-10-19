@@ -112,6 +112,36 @@ With `KEPLER_SEC_DIAG` set, each round prints how many candidates were active,
 proved structurally and dropped, and each solver partition prints its status
 and the work it used.
 
+## 7. Merging and the structural discharge of outputs
+
+The pairs are a certificate that, in every reachable state, each register of
+design 1 holds the value of its design-0 partner. Van Eijk (TCAD 2000) uses
+such a certificate twice: as hypotheses for the engine, and to merge the
+product machine, reading one register of each pair in place of the other so
+that logic the two designs share collapses into one copy. The first use is
+sections 1 to 6. The second is applied to the observed outputs.
+
+After the survivors are added to the problem, every certified same-frame
+equality (the proved pairs and the definitional complement pairs) is put into
+one equality class with a single representative. The two cones of each
+observed output are then numbered with the table of section 4 under that
+merge, so that they get one number exactly when they are the same formula once
+every merged register is read through its representative. In the dual-rail
+encoding both rails must match. An output whose cones match is proved: its
+obligation becomes the constant true, the property, bad and induction formulas
+are rebuilt from the remaining outputs, and it is flagged in
+`structurallyProvedOutputs`. No engine query is spent on it. An output whose
+cones differ anywhere keeps its obligation unchanged.
+
+This is what makes a design compared with itself, or with a netlist that kept
+the structure of its arithmetic, independent of the engine budget: once the
+registers are paired, the outputs are the same formula and nothing is left to
+search. A cone that synthesis restructured is not caught by the hash; it goes
+to the engine as before.
+
+With `KEPLER_SEC_DIAG` set, the pass prints the number of outputs discharged
+and the number of symbols merged.
+
 ## What it does and does not help
 
 - Two designs with the same register names and near-identical logic behind
@@ -124,4 +154,6 @@ and the work it used.
   keeps 64 of 2,112 rail equalities this way, while the synthesis-versus-final
   nangate45_black_parrot pair proves all of them structurally. Mishchenko et
   al. address the general case with signal correspondence, which also relates
-  internal nodes. That is not implemented.
+  internal nodes. That is not implemented: section 7 merges proved registers
+  and recognizes outputs whose cones become identical, but it does not prove
+  internal nodes equal when their cones differ.

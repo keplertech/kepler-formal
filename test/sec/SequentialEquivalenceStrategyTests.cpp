@@ -16477,6 +16477,143 @@ TEST_F(SequentialEquivalenceStrategyTests,
   }
 }
 
+// keplertech/kepler-formal#280: a primitive modeled with
+// setSequentialModelFromParameters declares its timing arcs once, while the
+// selected model may not read every arc input. Such an input (a disabled
+// load enable here) is unused by that instance, not an unsupported update pin.
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractSkipsPinsUnusedByParameterizedModel) {
+  using Operator = SNLDesignModeling::BooleanExpression::Operator;
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+
+  auto* model =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("DFFE"));
+  auto* data =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("D"));
+  auto* clock =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("CK"));
+  auto* enable =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("EN"));
+  auto* output =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
+  // EN has an input-to-clock arc whatever the selected model.
+  SNLDesignModeling::addInputsToClockArcs({data, enable}, clock);
+  SNLDesignModeling::addClockToOutputsArcs(clock, {output});
+  auto* useEnable = SNLParameter::create(
+      model, NLName("USE_EN"), SNLParameter::Type::Binary, "0");
+
+  SNLDesignModeling::SequentialModelTable table;
+  {
+    // USE_EN = 0: Q loads D on every edge; EN is not read.
+    SNLDesignModeling::SequentialModel entry;
+    entry.clockedOn = makeSequentialTermExpression(clock);
+    SNLDesignModeling::SequentialState state;
+    state.nextState = makeSequentialTermExpression(data);
+    entry.states.push_back(std::move(state));
+    entry.outputs.push_back({output, makeSequentialStateExpression(0)});
+    table.emplace(std::vector<uint64_t>{0}, std::move(entry));
+  }
+  {
+    // USE_EN = 1: Q loads D when EN is high, else keeps its value.
+    SNLDesignModeling::SequentialModel entry;
+    entry.clockedOn = makeSequentialTermExpression(clock);
+    SNLDesignModeling::SequentialState state;
+    auto& next = state.nextState;
+    const auto en = next.addTerm(enable);
+    const auto d = next.addTerm(data);
+    const auto iq = next.addState(0);
+    const auto notEn = next.addOperation(Operator::Not, {en});
+    const auto load = next.addOperation(Operator::And, {en, d});
+    const auto hold = next.addOperation(Operator::And, {notEn, iq});
+    next.root = next.addOperation(Operator::Or, {load, hold});
+    entry.states.push_back(std::move(state));
+    entry.outputs.push_back({output, makeSequentialStateExpression(0)});
+    table.emplace(std::vector<uint64_t>{1}, std::move(entry));
+  }
+  SNLDesignModeling::setSequentialModelFromParameters(model, {"USE_EN"}, table);
+  ASSERT_TRUE(SNLDesignModeling::hasSequentialModelFromParameters(model));
+
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* topIn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("in"));
+  auto* topEn =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topPlain = SNLScalarTerm::create(
+      top, SNLTerm::Direction::Output, NLName("out_plain"));
+  auto* topOpen =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out_open"));
+  auto* topEnabled =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("out_en"));
+  auto* netIn = SNLScalarNet::create(top, NLName("net_in"));
+  auto* netEn = SNLScalarNet::create(top, NLName("net_en"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netPlain = SNLScalarNet::create(top, NLName("net_plain"));
+  auto* netOpen = SNLScalarNet::create(top, NLName("net_open"));
+  auto* netEnabled = SNLScalarNet::create(top, NLName("net_enabled"));
+  topIn->setNet(netIn);
+  topEn->setNet(netEn);
+  topClock->setNet(netClock);
+  topPlain->setNet(netPlain);
+  topOpen->setNet(netOpen);
+  topEnabled->setNet(netEnabled);
+
+  // ff_plain: USE_EN default (0), EN driven but unused by the selected model.
+  // ff_open: USE_EN default (0), EN left unconnected.
+  // ff_en: USE_EN = 1, EN read by the selected model.
+  auto* ffPlain = SNLInstance::create(top, model, NLName("ff_plain"));
+  auto* ffOpen = SNLInstance::create(top, model, NLName("ff_open"));
+  auto* ffEnabled = SNLInstance::create(top, model, NLName("ff_en"));
+  SNLInstParameter::create(ffEnabled, useEnable, "1");
+  for (const auto& [ff, netQ] : {std::pair{ffPlain, netPlain},
+                                 std::pair{ffOpen, netOpen},
+                                 std::pair{ffEnabled, netEnabled}}) {
+    ff->getInstTerm(data)->setNet(netIn);
+    ff->getInstTerm(clock)->setNet(netClock);
+    ff->getInstTerm(output)->setNet(netQ);
+  }
+  ffPlain->getInstTerm(enable)->setNet(netEn);
+  ffEnabled->getInstTerm(enable)->setNet(netEn);
+
+  const auto extracted = SequentialDesignModel::extract(top);
+
+  EXPECT_FALSE(extracted.hasUnsupportedFeatures());
+  EXPECT_TRUE(extracted.skippedStateBits.empty());
+  EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
+  ASSERT_EQ(extracted.stateBits.size(), 3u);
+
+  const auto inVar =
+      extracted.inputVarByKey.at(findKeyByDisplayName(extracted, "in[0]"));
+  const auto enVar =
+      extracted.inputVarByKey.at(findKeyByDisplayName(extracted, "en[0]"));
+  for (const char* name : {"ff_plain.Q[0]", "ff_open.Q[0]"}) {
+    auto* next = extracted.nextStateExprByStateKey.at(
+        findKeyByDisplayName(extracted, name));
+    // EN plays no part: the next state is D for both EN values.
+    EXPECT_TRUE(next->evaluate({{inVar, true}, {enVar, false}}));
+    EXPECT_FALSE(next->evaluate({{inVar, false}, {enVar, true}}));
+  }
+  const auto enabledKey = findKeyByDisplayName(extracted, "ff_en.Q[0]");
+  const auto enabledStateVar = extracted.inputVarByKey.at(enabledKey);
+  auto* enabledNext = extracted.nextStateExprByStateKey.at(enabledKey);
+  // EN high loads D; EN low holds the state.
+  EXPECT_TRUE(enabledNext->evaluate(
+      {{inVar, true}, {enVar, true}, {enabledStateVar, false}}));
+  EXPECT_FALSE(enabledNext->evaluate(
+      {{inVar, false}, {enVar, true}, {enabledStateVar, true}}));
+  EXPECT_TRUE(enabledNext->evaluate(
+      {{inVar, false}, {enVar, false}, {enabledStateVar, true}}));
+  EXPECT_FALSE(enabledNext->evaluate(
+      {{inVar, true}, {enVar, false}, {enabledStateVar, false}}));
+}
+
 TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractClassifiesNegativeEdgePrimitiveClock) {
   NLUniverse::create();
