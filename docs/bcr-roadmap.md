@@ -23,26 +23,21 @@ slang's Python generators) come from Bazel modules.
 ## Dependencies
 
 `MODULE.bazel` contains only `bazel_dep`s. Everything on BCR comes from
-BCR: `onetbb`, `spdlog`, `yaml-cpp`, `googletest`, and, through naja,
-`capnp-cpp`, `boost.*`, `fmt`, `bison`, `flex`, `rules_python`, and
-others.
+BCR: `onetbb`, `spdlog`, `yaml-cpp`, `kissat`, `glucose`, `googletest`,
+and, through naja, `capnp-cpp`, `boost.*`, `fmt`, `bison`, `flex`,
+`sv-lang`, `rules_python`, and others.
 
 What is not on BCR yet comes from its open bazel-central-registry pull
 request, which `.bazelrc` lists by commit ahead of BCR:
 
 | Module | BCR pull request |
 |---|---|
-| `bison` 3.8.2.bcr.10 | bazelbuild/bazel-central-registry#10879 |
-| `sv-lang` 11.0.0-20260701-b60d729d.bcr.1 | bazelbuild/bazel-central-registry#10882 |
-| `naja-if` | bazelbuild/bazel-central-registry#10881 |
-| `naja-verilog` | bazelbuild/bazel-central-registry#10885 |
-| `kissat` 4.0.4 | bazelbuild/bazel-central-registry#10880 |
 | `cadical` 3.0.0 | bazelbuild/bazel-central-registry#10883 |
-| `glucose` 4.2.1-20251230-674dbba | bazelbuild/bazel-central-registry#10884 |
 
 `naja` itself is served from the in-tree
-[`bazel/registry/`](../bazel/registry/README.md) until it is released and
-on BCR.
+[`bazel/registry/`](../bazel/registry/README.md) until it is on BCR,
+together with the `naja-if` and `naja-verilog` versions its sources
+need, which are newer than the ones on BCR.
 
 ## Depending on kepler-formal
 
