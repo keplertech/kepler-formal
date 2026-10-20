@@ -69,12 +69,24 @@ public:
     return reportSkippedPOs_;
   }
 
+  // SEC latch abstraction: clock-driven latches are reduced by phase
+  // abstraction instead of staying opaque. On by default; off restores the
+  // previous behavior where every latch output is opaque.
+  static void setSecLatchAbstraction(bool enabled) {
+    secLatchAbstraction_ = enabled;
+  }
+
+  static bool getSecLatchAbstraction() {
+    return secLatchAbstraction_;
+  }
+
 private:
   Config() = default;
   ~Config() = default;
 
   inline static SolverType solverType_ = KISSAT;
   inline static bool reportSkippedPOs_ = false;
+  inline static bool secLatchAbstraction_ = true;
   inline static std::atomic<uint64_t> nextVerificationGeneration_{1};
   inline static std::atomic<uint64_t> verificationGeneration_{0};
 };

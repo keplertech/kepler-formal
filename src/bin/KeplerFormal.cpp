@@ -76,13 +76,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] | "
+      "[--report-skipped-pos] [--no-latch-abstraction] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] "
+      "[--report-skipped-pos] [--no-latch-abstraction] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -510,6 +510,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf_path",
       "compact_mode",
       "report_skipped_pos",
+      "latch_abstraction",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1344,6 +1345,7 @@ static int KeplerFormalMainImpl(
   bool compactMode = false;
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
+  bool latchAbstraction = true;
   bool verilogPreprocessing = false;
   bool svSingleUnit = false;
   std::string dumpCnfPath;
@@ -1605,6 +1607,11 @@ static int KeplerFormalMainImpl(
           reportSkippedPOs = cfg["report_skipped_pos"].as<bool>();
         }
         // LCOV_EXCL_STOP
+
+        // latch_abstraction (SEC, default true)
+        if (cfg["latch_abstraction"] && cfg["latch_abstraction"].IsScalar()) {
+          latchAbstraction = cfg["latch_abstraction"].as<bool>();
+        }
 
         // verilog_preprocessing (optional)
         if (cfg["verilog_preprocessing"] && cfg["verilog_preprocessing"].IsScalar()) {
@@ -2096,6 +2103,10 @@ static int KeplerFormalMainImpl(
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--no-latch-abstraction") {
+        latchAbstraction = false;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
@@ -2425,6 +2436,7 @@ static int KeplerFormalMainImpl(
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
+  KEPLER_FORMAL::Config::setSecLatchAbstraction(latchAbstraction);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -2454,6 +2466,7 @@ static int KeplerFormalMainImpl(
   }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -3555,6 +3568,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
 
   const auto previousSolver = Config::getSolverType();
   const bool previousReportSkippedPOs = Config::getReportSkippedPOs();
+  const bool previousLatchAbstraction = Config::getSecLatchAbstraction();
   const auto previousDefaultLogger = spdlog::default_logger();
   const auto previousNamedLogger = spdlog::get("kepler_formal_main_logger");
   const auto previousMiterLogger = spdlog::get("miter_logger");
@@ -3563,6 +3577,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   struct RunStateGuard {
     Config::SolverType solver;
     bool reportSkippedPOs;
+    bool latchAbstraction;
     std::shared_ptr<spdlog::logger> defaultLogger;
     std::shared_ptr<spdlog::logger> namedLogger;
     std::shared_ptr<spdlog::logger> miterLogger;
@@ -3571,6 +3586,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       cleanupKeplerFormalState();
       Config::setSolverType(solver);
       Config::setReportSkippedPOs(reportSkippedPOs);
+      Config::setSecLatchAbstraction(latchAbstraction);
       const auto restoreNamedLogger = [](
                                           const char* name,
                                           const std::shared_ptr<spdlog::logger>&
@@ -3590,6 +3606,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   } stateGuard{
       previousSolver,
       previousReportSkippedPOs,
+      previousLatchAbstraction,
       previousDefaultLogger,
       previousNamedLogger,
       previousMiterLogger,
@@ -3597,6 +3614,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
 
   Config::setSolverType(Config::SolverType::KISSAT);
   Config::setReportSkippedPOs(false);
+  Config::setSecLatchAbstraction(true);
   const int rc = runKeplerFormalWorkflow(argc, argv, result, primitiveLoader);
   result.exitCode = rc;
   if (rc != EXIT_SUCCESS && result.status == RunStatus::Error &&

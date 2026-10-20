@@ -40,11 +40,28 @@ This is different from a flip-flop's edge-triggered update. Naja represents
 that distinction with `SequentialModel::Kind::Latch`, and its built-in
 `naja_dlatch` has such a model.
 
-Kepler SEC does not currently implement generic level-sensitive transition
-semantics. It therefore does not consume a Naja latch model as ordinary SEC
-state. Every latch output is opaque, including latches used in clock-gating
-structures, and any requested top-level output whose cone reaches it is
-skipped. SEC does not infer latch behavior from cell or pin names.
+Kepler SEC does not implement generic level-sensitive transition semantics.
+Instead it applies phase abstraction (Hasteer, Mathur, Banerjee, "Efficient
+equivalence checking of multi-phase designs using phase abstraction and
+retiming", ACM TODAES 1998) to latches whose enable resolves to one phase of a
+clock through the clock carrier:
+
+- Enable active while the clock is high: the latch closes at the falling edge
+  and is kept as negative-phase state with `next = data_in`. A gated enable,
+  `clk & g`, becomes the usual clock-enable form `next = g ? data_in : q`.
+- Enable active while the clock is low: the latch is open when the
+  positive-edge state samples, so it is a wire. Its state variable is replaced
+  by its `data_in` formula everywhere and removed from the state. This is the
+  integrated clock-gate case: the gated clock's enable becomes the latch data
+  input.
+
+The published method assumes alternating phases, so SEC does not reduce a latch
+whose data input reads another latch; such latches, latches with clear or
+preset, gated transparent-low latches, and latches whose enable is not a clock
+phase stay opaque and are reported. SEC does not infer latch behavior from cell
+or pin names. The abstraction is on by default and `--no-latch-abstraction`
+(`latch_abstraction: false`) restores the previous behavior where every latch
+output is opaque.
 
 ## X Constant Literals
 

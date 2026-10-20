@@ -36,6 +36,7 @@
 #include "SNLInstance.h"
 #include "SNLPath.h"
 #include "../../clauses/SNLLogicCloud.h"
+#include "../../config/Config.h"
 #include "../../clauses/Tree2BoolExpr.h"
 #include "common/BoolExprUtils.h"
 #include "model/SecNetlistChecks.h"
@@ -81,6 +82,8 @@ struct PendingTransition {  // LCOV_EXCL_LINE
   const naja::NL::SNLDesignModeling::SequentialState* sequentialState = nullptr;
   const naja::NL::SNLDesignModeling::BooleanExpression* clockedOn = nullptr;
   std::vector<PendingPinTerm> clockTermIDs;
+  // Latch: `clockedOn` is the level-sensitive enable, `nextState` the data.
+  bool isLatch = false;
 };
 
 struct PendingMemoryReadPort {
@@ -128,6 +131,7 @@ struct SequentialInstanceScan {
   std::vector<OpaqueStateOutputTerm> opaqueStateOutputs;
   std::vector<std::optional<std::string>> opaqueStateReasons;
   const naja::NL::SNLDesignModeling::SequentialModel* model = nullptr;
+  bool isLatch = false;
 };
 
 struct BuiltObservedExpr {  // LCOV_EXCL_LINE
@@ -2664,13 +2668,16 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
           : nullptr;
   if (sequentialModel != nullptr &&
       sequentialModel->kind ==
-          naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch) {
+          naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch &&
+      !KEPLER_FORMAL::Config::getSecLatchAbstraction()) {
     for (const auto termID : physicalStateOutputTermIDs) {
       scan.opaqueStateOutputs.push_back(
           {termID, "Naja latch sequential models are not supported by SEC"});
     }
   } else if (sequentialModel != nullptr) {
     scan.model = sequentialModel;
+    scan.isLatch = sequentialModel->kind ==
+                   naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch;
     scan.opaqueStateReasons.resize(scan.model->states.size());
     std::unordered_set<naja::DNL::DNLID> modeledPhysicalOutputs;
     for (const auto& output : scan.model->outputs) {
@@ -3153,6 +3160,7 @@ void appendPendingTransitionsForInstance(
     pending.sequentialState = &scan.model->states[stateIndex];
     pending.clockedOn = &scan.model->clockedOn;
     pending.clockTermIDs = clockTermIDs;
+    pending.isLatch = scan.isLatch;
 
     for (const auto& candidate : scan.stateOutputs) {
       if (candidate.termID == stateOutput.termID ||
@@ -4004,7 +4012,105 @@ void materializeTopObservedOutputs(
 // LCOV_EXCL_STOP
 struct RebuiltTransitionArtifacts {
   std::unordered_set<SignalKey, SignalKeyHash> requiredStateKeys;
+  // Latches open while the positive-edge state samples: their state variable
+  // is replaced by this data-input formula and removed from the state.
+  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> transparentLatchExprByKey;
 };
+
+// Phase abstraction (Hasteer, Mathur, Banerjee, ACM TODAES 1998) for a latch
+// whose enable is one phase of a clock. The enable's clock event says when the
+// latch opens: at the positive edge it closes at the falling edge and becomes
+// negative-phase state; at the negative edge it is open when the positive-edge
+// state samples and becomes a wire carrying its data input. A latch reading
+// another latch is left opaque: the published method assumes alternating
+// phases and does not reduce such chains.
+std::optional<std::string> getLatchAbstractionUnsupportedReason(
+    const PendingTransition& pending,
+    const std::optional<ClockEvent>& clockEvent,
+    BoolExpr* nextStateExpr,
+    const std::unordered_set<size_t>& latchStateVarIDs,
+    const SequentialDesignModel& model) {
+  if (!clockEvent.has_value()) {
+    return "latch enable does not resolve to one phase of a clock";
+  }
+  if (clockEvent->phase == ClockPhase::Neg && clockEvent->enable != nullptr) {
+    return "latch open while the state samples has a gated enable";
+  }
+  if (pending.sequentialState->clear.has_value() ||
+      pending.sequentialState->preset.has_value()) {
+    return "latch with clear or preset is not supported";
+  }
+  const auto ownVarIt = model.inputVarByKey.find(pending.stateKey);
+  for (const auto varID : nextStateExpr->getSupportVars()) {
+    if ((ownVarIt == model.inputVarByKey.end() || varID != ownVarIt->second) &&
+        latchStateVarIDs.find(varID) != latchStateVarIDs.end()) {
+      return "latch data input reads another latch; cascaded latches are not "
+             "reduced";
+    }
+  }
+  return std::nullopt;
+}
+
+// Wire half of the latch abstraction: substitute each transparent latch by its
+// data-input formula everywhere and drop it from the state.
+void substituteTransparentLatches(
+    const RebuiltTransitionArtifacts& artifacts,
+    SequentialDesignModel& model) {
+  const auto& latches = artifacts.transparentLatchExprByKey;
+  if (latches.empty()) {
+    return;
+  }
+  std::unordered_map<size_t, BoolExpr*> replacements;
+  for (const auto& [key, expr] : latches) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      replacements.emplace(varIt->second, expr);
+    }
+  }
+  if (replacements.empty()) {
+    return;
+  }
+  for (auto& [key, expr] : model.nextStateExprByStateKey) {
+    if (latches.find(key) == latches.end()) {
+      expr = substituteBoolExprVariableExpressions(expr, replacements);
+    }
+  }
+  for (auto& [key, expr] : model.observedOutputExprByKey) {
+    expr = substituteBoolExprVariableExpressions(expr, replacements);
+  }
+  for (const auto& [key, _] : latches) {
+    std::erase(model.stateBits, key);
+    model.inputVarByKey.erase(key);
+    model.nextStateExprByStateKey.erase(key);
+    model.clockEventByStateKey.erase(key);
+    model.initialStateValueByKey.erase(key);
+    model.displayNameByKey.erase(key);
+  }
+  std::erase_if(model.complementedStateRelations, [&](const auto& relation) {
+    return latches.find(relation.primaryKey) != latches.end() ||
+           latches.find(relation.complementedKey) != latches.end();
+  });
+  if (std::getenv("KEPLER_SEC_DIAG") != nullptr) {
+    size_t staleReferences = 0;
+    const auto count = [&](BoolExpr* expr) {
+      if (expr == nullptr) {
+        return;
+      }
+      for (const auto varID : expr->getSupportVars()) {
+        staleReferences += replacements.find(varID) != replacements.end() ? 1 : 0;
+      }
+    };
+    for (const auto& [_, expr] : model.nextStateExprByStateKey) {
+      count(expr);
+    }
+    for (const auto& [_, expr] : model.observedOutputExprByKey) {
+      count(expr);
+    }
+    fprintf(stderr, "SEC diag: latch abstraction wires=%zu stale_references=%zu\n",
+            replacements.size(), staleReferences);
+    fflush(stderr);
+  }
+}
 
 template <typename EnqueueStateKey>
 void enqueueStateDependenciesFromFormula(
@@ -4099,6 +4205,23 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
     }
     requiredStateKeyByVarID.emplace(varIt->second, key);
     requiredStateVarIDs.insert(varIt->second);
+  }
+
+  std::unordered_set<size_t> latchStateVarIDs;
+  for (const auto& pending : ctx.pendingTransitions) {
+    if (!pending.isLatch) {
+      continue;
+    }
+    for (const auto& key : pending.complementedStateKeys) {
+      if (const auto varIt = model.inputVarByKey.find(key);
+          varIt != model.inputVarByKey.end()) {
+        latchStateVarIDs.insert(varIt->second);
+      }
+    }
+    if (const auto varIt = model.inputVarByKey.find(pending.stateKey);
+        varIt != model.inputVarByKey.end()) {
+      latchStateVarIDs.insert(varIt->second);
+    }
   }
 
   std::unordered_map<SignalKey, size_t, SignalKeyHash> pendingIndexByStateKey;
@@ -4374,8 +4497,27 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
           buildNextStateExpr(pending, termDNLID2varID, pureClockCarrierTermIDs,
                              topClockCarrierVarIDs, clockEventByCarrierVarID,
                              outputExprByTerm, transitionClockStripMemo);
-      const auto clockEvent = classifyPendingClockEvent(
+      auto clockEvent = classifyPendingClockEvent(
           pending, termDNLID2varID, outputExprByTerm, clockEventByCarrierVarID);
+      if (pending.isLatch) {
+        if (const auto reason = getLatchAbstractionUnsupportedReason(
+                pending, clockEvent, nextStateExpr, latchStateVarIDs, model)) {
+          markOpaqueState(pending, *reason);
+          continue;
+        }
+        if (clockEvent->phase == ClockPhase::Pos) {
+          // Open while the clock is high: closes at the falling edge.
+          clockEvent->phase = ClockPhase::Neg;
+        } else {
+          // Open while the clock is low: a wire when the state samples.
+          artifacts.transparentLatchExprByKey.emplace(pending.stateKey,
+                                                      nextStateExpr);
+          for (const auto& complementedKey : pending.complementedStateKeys) {
+            artifacts.transparentLatchExprByKey.emplace(
+                complementedKey, BoolExpr::Not(nextStateExpr));
+          }
+        }
+      }
       logUnpublishedTransitionSupport(ctx, model, pending, nextStateExpr,
                                       termDNLID2varID, topClockCarrierVarIDs,
                                       pureClockCarrierTermIDs);
@@ -5183,6 +5325,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   applyRebuiltTransitionArtifacts(rebuiltArtifacts, model);
   pruneUnusedXConstantStates(model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
+  substituteTransparentLatches(rebuiltArtifacts, model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 

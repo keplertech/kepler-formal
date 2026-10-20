@@ -60,6 +60,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--python_design1_top <top>`, `--python_design2_top <top>` | Per-design top modules of Python-built designs. Only valid in `python` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
+| `--no-latch-abstraction` | Disable the SEC latch abstraction (phase abstraction of clock-driven latches); latch outputs become opaque as before. |
 
 ## YAML config flags
 
@@ -92,6 +93,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
+| `latch_abstraction` | bool | Defaults to `true`. `false` has the same effect as `--no-latch-abstraction`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |

@@ -118,6 +118,7 @@ liberty_files:
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
+| `--no-latch-abstraction` | `latch_abstraction: false` | `true` | boolean | Disables the SEC latch abstraction described in [sec-sequential-models.md](sec-sequential-models.md); every latch output is opaque again, as before. |
 
 Accepted values for `sec_engine`:
 
