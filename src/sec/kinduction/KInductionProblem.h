@@ -209,6 +209,12 @@ struct KInductionProblem {
   // values: dual-rail candidates equate complete ternary encodings.
   std::vector<std::pair<size_t, size_t>> sameFrameStateEqualityPairs0;
   std::vector<std::pair<size_t, size_t>> sameFrameStateEqualityPairs1;
+  // Register pairs (design 1 symbol, design 2 symbol) proved equal on the
+  // binary next-state functions from the common initial state (van Eijk,
+  // TCAD 2000; Savoj et al., FMCAD 2010). Before the engines run, design 2's
+  // register takes design 1's transition formula, so the pair is inductive in
+  // the dual-rail model too.
+  std::vector<std::pair<size_t, size_t>> sharedTransitionPairs;
   // Only independently certified learned relations, for exact IMC queries.
   // Null when learning is disabled or no candidate was proved.
   // With learning enabled, allow_x_equality_in_internal_relations=false still

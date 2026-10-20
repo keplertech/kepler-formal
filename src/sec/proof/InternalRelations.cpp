@@ -8,11 +8,14 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <random>
 #include <set>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 
+#include "common/BoolExprUtils.h"
 #include "common/SecDiag.h"
 #include "model/SequentialDesignModel.h"
 #include "kinduction/SatEncoding.h"
@@ -376,28 +379,218 @@ void refuteBySimulation(const KInductionProblem& problem,
   }
 }
 
+// A binary obligation is the combinational equivalence of the design under
+// the hypotheses, the query a LEC solves with no limit; it is allowed a
+// hundred times the budget of a rail check.
+constexpr uint64_t kBinaryBudgetScale = 100;
+
+// The binary functions of both designs over the proof symbols: a register
+// by its may-be-one rail, an input by its shared symbol. The lazy store
+// keeps every next-state function before dual-rail lifting; lifted, the two
+// rails of one register are two unrelated copies of its logic to a solver.
+class BinaryFormulas {
+ public:
+  explicit BinaryFormulas(const LazyTransitionStore& store) : store_(store) {
+    for (size_t design = 0; design < 2; ++design) {
+      symbolMap_[design] = store.localToCombinedByDesign[design];
+      for (const auto& [local, rails] :
+           store.dualRailStateByLocalSymbolByDesign[design]) {
+        symbolMap_[design][local] = rails.mayBeOne;
+      }
+    }
+  }
+
+  bool isRailOne(size_t symbol) const {
+    const auto it = store_.sourceByStateSymbol.find(symbol);
+    return it != store_.sourceByStateSymbol.end() &&
+           it->second.rail == LazyTransitionRail::DualRailOne;
+  }
+
+  BoolExpr* remap(size_t design, BoolExpr* local) {
+    return remapBoolExprVariables(local, symbolMap_[design], memo_[design]);
+  }
+
+  BoolExpr* transition(size_t symbol) {
+    auto& expr = transitionBySymbol_[symbol];
+    if (expr == nullptr) {
+      const auto& source = store_.sourceByStateSymbol.at(symbol);
+      expr = remap(source.designIndex, source.localExpr);
+    }
+    return expr;
+  }
+
+ private:
+  const LazyTransitionStore& store_;
+  std::array<std::unordered_map<size_t, size_t>, 2> symbolMap_;
+  std::array<std::unordered_map<BoolExpr*, BoolExpr*>, 2> memo_;
+  std::unordered_map<size_t, BoolExpr*> transitionBySymbol_;
+};
+
+// Outputs whose two functions agree in binary semantics over the merged
+// registers are one Boolean function, so their exact ternary values agree
+// as well; the rail obligation of such an output is discharged.
+size_t dischargeBinaryEqualOutputs(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    const std::vector<std::pair<size_t, size_t>>& proved,
+    BinaryFormulas& binary,
+    Config::SolverType solverType,
+    KInductionProblem& problem) {
+  std::unordered_map<size_t, size_t> merged;
+  const auto representative = [&merged](size_t symbol) {
+    for (auto it = merged.find(symbol); it != merged.end(); it = merged.find(symbol)) {
+      symbol = it->second;
+    }
+    return symbol;
+  };
+  for (const auto& [lhs, rhs] : proved) {
+    const size_t a = representative(lhs);
+    const size_t b = representative(rhs);
+    if (a != b) {
+      merged[std::max(a, b)] = std::min(a, b);
+    }
+  }
+  for (auto& [_, target] : merged) {
+    target = representative(target);
+  }
+  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
+  std::array<std::unordered_map<std::string, SignalKey>, 2> keyByName;
+  for (size_t design = 0; design < 2; ++design) {
+    for (const auto& key : models[design]->allObservedOutputs) {
+      if (const auto name = models[design]->displayNameByKey.find(key);
+          name != models[design]->displayNameByKey.end()) {
+        keyByName[design].emplace(name->second, key);
+      }
+    }
+  }
+  const size_t count = std::min(problem.observedOutputNames.size(),
+                                problem.observedOutputExprs0.size());
+  std::vector<char> discharged(count, 0);
+  std::vector<size_t> pending;
+  std::vector<std::pair<BoolExpr*, BoolExpr*>> functions(count);
+  std::unordered_map<BoolExpr*, BoolExpr*> canonical;
+  for (size_t i = 0; i < count; ++i) {
+    std::array<BoolExpr*, 2> function{nullptr, nullptr};
+    for (size_t design = 0; design < 2; ++design) {
+      const auto key = keyByName[design].find(problem.observedOutputNames[i]);
+      if (key == keyByName[design].end()) {
+        break;
+      }
+      const auto expr = models[design]->observedOutputExprByKey.find(key->second);
+      if (expr == models[design]->observedOutputExprByKey.end()) {
+        break;
+      }
+      function[design] =
+          canonicalUnderMerge(binary.remap(design, expr->second), merged, canonical);
+    }
+    if (function[0] == nullptr || function[1] == nullptr) {
+      continue;
+    }
+    if (function[0] == function[1]) {
+      discharged[i] = 1;
+      continue;
+    }
+    functions[i] = {function[0], function[1]};
+    pending.push_back(i);
+  }
+  if (!pending.empty()) {
+    SATSolverWrapper::CadicalWorkBudget budget(
+        100000 * kBinaryBudgetScale, 10000000 * kBinaryBudgetScale,
+        100000000 * kBinaryBudgetScale);
+    SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
+    SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
+    // The functions already read the representative registers.
+    FrameFormulaEncoder current(solver, {}, true, 0);
+    std::vector<int> differences;
+    std::vector<int> badClause;
+    for (size_t i : pending) {
+      differences.push_back(current.encode(
+          BoolExpr::Xor(functions[i].first, functions[i].second)));
+      badClause.push_back(differences.back());
+    }
+    const int anyDifference = solver.newVar() + 2;
+    badClause.push_back(-anyDifference);
+    solver.addClause(badClause);
+    const auto status = solver.solveWithAssumptionsStatus(
+        {anyDifference}, 10000 * kBinaryBudgetScale, 1000000 * kBinaryBudgetScale,
+        10000000 * kBinaryBudgetScale);
+    for (size_t j = 0; j < pending.size(); ++j) {
+      discharged[pending[j]] =
+          status == SATSolverWrapper::SolveStatus::Unsat ||
+          solver.solveWithAssumptionsStatus({differences[j]}, 10000, 1000000, 10000000) ==
+              SATSolverWrapper::SolveStatus::Unsat;
+    }
+  }
+  size_t dischargedCount = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (!discharged[i]) {
+      continue;
+    }
+    ++dischargedCount;
+    problem.observedOutputExprs0[i] = BoolExpr::createTrue();
+    if (i < problem.dualRailOutputStrictEqualityExprs.size()) {
+      problem.dualRailOutputStrictEqualityExprs[i] = BoolExpr::createTrue();
+    }
+  }
+  if (dischargedCount > 0) {
+    // The dual-rail property is the conjunction of the output obligations.
+    BoolExpr* property = BoolExpr::createTrue();
+    for (BoolExpr* expr : problem.observedOutputExprs0) {
+      property = BoolExpr::And(property, expr);
+    }
+    problem.property = BoolExpr::simplify(property);
+    problem.bad = BoolExpr::simplify(BoolExpr::Not(problem.property));
+    problem.inductionProperty =
+        BoolExpr::simplify(BoolExpr::And(BoolExpr::createTrue(), property));
+    problem.inductionBad = BoolExpr::simplify(BoolExpr::Not(problem.inductionProperty));
+  }
+  return dischargedCount;
+}
+
 }  // namespace
 
 std::vector<std::pair<size_t, size_t>> proveInternalRelations(
     const KInductionProblem& problem,
     const std::vector<InternalRelationCandidate>& candidates,
     const InternalRelationOptions& options,
-    Config::SolverType solverType) {
+    Config::SolverType solverType,
+    bool commonStartBinary) {
   if (!options.learnInternalRelations || candidates.empty()) {
     return {};
   }
   const std::unordered_map<size_t, bool> initial(
       problem.initialStateAssignments.begin(), problem.initialStateAssignments.end());
   TransitionExprResolver transitions(problem);
+  // Complement candidates pair unlike rails and are not retried in binary
+  // semantics.
+  std::optional<BinaryFormulas> binary;
+  if (commonStartBinary) {
+    if (problem.lazyTransitions == nullptr) {
+      return {};
+    }
+    binary.emplace(*problem.lazyTransitions);
+  }
+  const auto transitionOf = [&](size_t symbol) {
+    return binary ? binary->transition(symbol) : transitions.at(symbol);
+  };
+  const auto checked = [&](const InternalRelationCandidate& candidate) {
+    return std::span(candidate.equalities)
+        .first(commonStartBinary ? 1 : candidate.equalities.size());
+  };
   std::vector<const InternalRelationCandidate*> active;
   for (const auto& candidate : candidates) {
     bool baseHolds = !candidate.equalities.empty();
+    if (binary) {
+      baseHolds &= binary->isRailOne(candidate.equalities.front().first) &&
+                   binary->isRailOne(candidate.equalities.front().second);
+    }
     for (const auto& [lhs, rhs] : candidate.equalities) {
       baseHolds &= initial.contains(lhs) && initial.contains(rhs) &&
                    initial.at(lhs) == initial.at(rhs) &&
                    transitions.contains(lhs) && transitions.contains(rhs);
     }
-    if (!options.allowXEqualityInInternalRelations) {
+    // Binary equality from the common initial state needs no defined values.
+    if (!options.allowXEqualityInInternalRelations && !commonStartBinary) {
       for (const auto& value : candidate.values) {
         baseHolds &= initial.contains(value.mayBeOne) &&
                      initial.contains(value.mayBeZero) &&
@@ -461,12 +654,12 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       for (size_t i = 0; i < active.size(); ++i) {
         // Definedness hypotheses are not structural.
         bool structural = options.allowXEqualityInInternalRelations;
-        for (const auto& [lhs, rhs] : active[i]->equalities) {
+        for (const auto& [lhs, rhs] : checked(*active[i])) {
           if (!structural) {
             break;
           }
-          const uint32_t left = table.numberOf(transitions.at(lhs));
-          structural = left != 0 && left == table.numberOf(transitions.at(rhs));
+          const uint32_t left = table.numberOf(transitionOf(lhs));
+          structural = left != 0 && left == table.numberOf(transitionOf(rhs));
         }
         if (!structural) {
           pending.push_back(i);
@@ -476,9 +669,9 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
     {
       std::unordered_map<BoolExpr*, BoolExpr*> canonical;
       for (size_t i : pending) {
-        for (const auto& [lhs, rhs] : active[i]->equalities) {
+        for (const auto& [lhs, rhs] : checked(*active[i])) {
           for (size_t symbol : {lhs, rhs}) {
-            rewritten[symbol] = canonicalUnderMerge(transitions.at(symbol), merged, canonical);
+            rewritten[symbol] = canonicalUnderMerge(transitionOf(symbol), merged, canonical);
           }
         }
       }
@@ -488,7 +681,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       std::unordered_set<BoolExpr*> counted;
       std::vector<BoolExpr*> stack;
       for (size_t i : pending) {
-        for (const auto& [lhs, rhs] : active[i]->equalities) {
+        for (const auto& [lhs, rhs] : checked(*active[i])) {
           stack.push_back(rewritten.at(lhs));
           stack.push_back(rewritten.at(rhs));
         }
@@ -514,7 +707,9 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       // Every limit allows 100 decisions and 1000 ticks for each conflict. A
       // tighter decision or tick limit gives up on queries the conflict limit
       // still allows, and one pair given up unravels every pair that reads it.
-      SATSolverWrapper::CadicalWorkBudget budget(100000, 10000000, 100000000);
+      const uint64_t scale = commonStartBinary ? kBinaryBudgetScale : 1;
+      SATSolverWrapper::CadicalWorkBudget budget(
+          100000 * scale, 10000000 * scale, 100000000 * scale);
       SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
       SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
       // A partition reads a small part of the design, so solver variables
@@ -530,7 +725,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
            ++end) {
         const auto* candidate = active[pending[end]];
         BoolExpr* relation = BoolExpr::createTrue();
-        for (const auto& [lhs, rhs] : candidate->equalities) {
+        for (const auto& [lhs, rhs] : checked(*candidate)) {
           for (size_t symbol : {lhs, rhs}) {
             if (targets.insert(symbol).second) {
               addLiteralEquivalence(solver, next.encode(BoolExpr::Var(symbol)),
@@ -540,7 +735,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
           relation = BoolExpr::And(relation, BoolExpr::Not(
               BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs))));
         }
-        if (!options.allowXEqualityInInternalRelations) {
+        if (!options.allowXEqualityInInternalRelations && !commonStartBinary) {
           for (const auto& value : candidate->values) {
             relation = BoolExpr::And(relation, BoolExpr::Xor(
                 BoolExpr::Var(value.mayBeOne), BoolExpr::Var(value.mayBeZero)));
@@ -551,12 +746,18 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
         solver.addClause({current.encode(relation)});
         conclusions.push_back(next.encode(relation));
         badClause.push_back(-conclusions.back());
+        if (commonStartBinary) {
+          continue;
+        }
         for (const auto& value : candidate->values) {
           solver.addClause({next.encode(BoolExpr::Var(value.mayBeOne)),
                             next.encode(BoolExpr::Var(value.mayBeZero))});
         }
       }
       for (const auto& value : problem.dualRailStatePairs) {
+        if (commonStartBinary) {
+          break;
+        }
         if (current.leafLits().contains(merged.at(value.mayBeOne)) ||
             current.leafLits().contains(merged.at(value.mayBeZero))) {
           solver.addClause({current.encode(BoolExpr::Var(value.mayBeOne)),
@@ -567,7 +768,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       badClause.push_back(-allTogether);
       solver.addClause(badClause);
       const auto status = solver.solveWithAssumptionsStatus(
-          {allTogether}, 10000, 1000000, 10000000);
+          {allTogether}, 10000 * scale, 1000000 * scale, 10000000 * scale);
       if (isSecDiagEnabled()) {
         printf("SEC diag: internal relations round=%zu partition=%zu..%zu vars=%d status=%s "
                "conflicts=%llu decisions=%llu ticks=%llu\n",
@@ -583,18 +784,36 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
         // Each pair is then its own obligation with its own budget, and only
         // the undecided ones are given up (Mony et al., sections 2 and 4.1).
         for (size_t i = begin; i < end; ++i) {
-          refuted[pending[i]] = solver.solveWithAssumptionsStatus(
-                                    {-conclusions[i - begin]}, 1000, 100000, 1000000) !=
-                                SATSolverWrapper::SolveStatus::Unsat;
+          // A lone binary obligation is a plain combinational check; give it
+          // the full budget rather than the quick retry.
+          const auto pairStatus =
+              commonStartBinary
+                  ? solver.solveWithAssumptionsStatus(
+                        {-conclusions[i - begin]}, 10000, 1000000, 10000000)
+                  : solver.solveWithAssumptionsStatus(
+                        {-conclusions[i - begin]}, 1000, 100000, 1000000);
+          refuted[pending[i]] = pairStatus != SATSolverWrapper::SolveStatus::Unsat;
+          if (refuted[pending[i]] && isSecDiagEnabled() && i - begin < 3) {
+            printf("SEC diag: internal relation given up (%s): %s\n",
+                   pairStatus == SATSolverWrapper::SolveStatus::Sat ? "sat" : "unknown",
+                   active[pending[i]]->label.c_str());
+          }
         }
       } else if (status == SATSolverWrapper::SolveStatus::Sat) {
         std::unordered_map<size_t, bool> counterexample;
         for (const auto& [symbol, literal] : current.leafLits()) {
           counterexample[symbol] = solver.getLiteralValue(literal);
         }
-        refuteBySimulation(problem, transitions, active, options, counterexample, refuted);
+        if (!commonStartBinary) {
+          refuteBySimulation(problem, transitions, active, options, counterexample, refuted);
+        }
         for (size_t i = begin; i < end; ++i) {
-          refuted[pending[i]] |= !solver.getLiteralValue(conclusions[i - begin]);
+          const bool refutedHere = !solver.getLiteralValue(conclusions[i - begin]);
+          refuted[pending[i]] |= refutedHere;
+          if (refutedHere && isSecDiagEnabled() && i - begin < 3) {
+            printf("SEC diag: internal relation refuted: %s\n",
+                   active[pending[i]]->label.c_str());
+          }
         }
       }
     }
@@ -660,6 +879,14 @@ void learnInternalStateRelations(
         candidate.values.push_back({
             symbols[location.first]->at(2 * location.second),
             symbols[location.first]->at(2 * location.second + 1)});
+      }
+    }
+    if (isSecDiagEnabled()) {
+      for (const auto& location : {lhs, rhs}) {
+        const auto& model = *models[location.first];
+        const auto name = model.displayNameByKey.find(model.stateBits.at(location.second));
+        candidate.label += (candidate.label.empty() ? "" : " ~ ") +
+            (name == model.displayNameByKey.end() ? std::string("?") : name->second);
       }
     }
     candidates.push_back(std::move(candidate));
@@ -802,6 +1029,37 @@ void learnInternalStateRelations(
     }
   }
 
+  size_t binaryRoundCandidates = 0;
+  size_t binaryRoundProved = 0;
+  size_t dischargedOutputs = 0;
+  if (options.binaryRelationRound && problem.usesDualRailStateEncoding &&
+      problem.lazyTransitions != nullptr) {
+    // Shapes of one function propagate X differently, so a true register
+    // pair can fail the rail check. Retry those pairs in binary semantics,
+    // which proves equality from any common initial state; design 2's
+    // register then takes design 1's transition in the proof problem.
+    std::unordered_set<size_t> provedSymbols;
+    for (const auto& [lhs, rhs] : proved) {
+      provedSymbols.insert(lhs);
+      provedSymbols.insert(rhs);
+    }
+    // Every candidate is a hypothesis again: a rail-equal pair is binary
+    // equal, and the others need it in the current frame.
+    binaryRoundCandidates = candidates.size() - proved.size();
+    const auto provedBinary =
+        proveInternalRelations(problem, candidates, options, solverType, true);
+    for (const auto& [lhs, rhs] : provedBinary) {
+      if (provedSymbols.contains(lhs)) {
+        continue;
+      }
+      problem.sharedTransitionPairs.emplace_back(lhs, rhs);
+      proved.push_back({lhs, rhs});
+      ++binaryRoundProved;
+    }
+    BinaryFormulas binary(*problem.lazyTransitions);
+    dischargedOutputs = dischargeBinaryEqualOutputs(
+        model0, model1, proved, binary, solverType, problem);
+  }
   problem.sameFrameStateEqualityPairs0.insert(
       problem.sameFrameStateEqualityPairs0.end(), proved.begin(), proved.end());
   // The conjunction costs nodes that are never freed for every relation, and
@@ -821,6 +1079,10 @@ void learnInternalStateRelations(
            candidates.size(), proved.size(), options.allowXEqualityInInternalRelations,
            nameCandidates, netCandidates, driverCandidates, propagatedCandidates,
            propagationRounds);
+    printf("SEC summary: binary_relation_round candidates=%zu proved_rail_equalities=%zu "
+           "discharged_outputs=%zu/%zu\n",
+           binaryRoundCandidates, binaryRoundProved, dischargedOutputs,
+           problem.observedOutputExprs0.size());
     fflush(stdout);
   }
 }
@@ -901,6 +1163,23 @@ void mergeProvedStateRelations(KInductionProblem& problem, bool diagnostics) {
     }
     for (auto& memo : store.dualRailRemapMemoByDesign) {
       memo.clear();
+    }
+  }
+  if (!problem.sharedTransitionPairs.empty()) {
+    std::unordered_map<size_t, BoolExpr*> transition0BySymbol;
+    for (const auto& [symbol, expr] : problem.transitions0) {
+      transition0BySymbol.emplace(symbol, expr);
+    }
+    std::unordered_map<size_t, BoolExpr*> sharedBySymbol;
+    for (const auto& [lhs, rhs] : problem.sharedTransitionPairs) {
+      if (const auto it = transition0BySymbol.find(lhs); it != transition0BySymbol.end()) {
+        sharedBySymbol.emplace(rhs, it->second);
+      }
+    }
+    for (auto& [symbol, expr] : problem.transitions1) {
+      if (const auto it = sharedBySymbol.find(symbol); it != sharedBySymbol.end()) {
+        expr = it->second;
+      }
     }
   }
   std::unordered_map<BoolExpr*, BoolExpr*> canonical;

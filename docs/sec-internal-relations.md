@@ -187,12 +187,51 @@ Lazily remapped problems are materialized first, since the merge changes every
 formula's support. Designs above a size limit keep the lazy store and the
 constraint-only behavior.
 
+## 9. Binary round and shared transitions
+
+The rail check compares the ternary values that the per-gate dual-rail
+lifting computes, and that lifting is a shape-dependent over-approximation of
+the exact unknown value: two shapes of one Boolean function can give X and a
+defined value for the same unknown inputs. A register pair whose logic the
+flow restructured can therefore fail the rail check although its two
+next-state functions are equal.
+
+Candidates the rail check leaves unproved are retried in binary semantics on
+the next-state functions the lazy store keeps before lifting: a register reads
+by its may-be-one rail, an input by its shared symbol. The base case is the
+common initial state (both registers hold the same value, or both are
+unknown), the step is the joint induction of section 4 with every rail-equal
+pair merged as well, and the query is the combinational equivalence a LEC
+solves, so it is allowed a hundred times the rail check's budget. A pair
+proved this way is equal from every common initial state (van Eijk, TCAD
+2000; Savoj et al., FMCAD 2010, Theorem 1).
+
+A proved pair is recorded as a shared transition: when the problem is merged
+(section 8), design 2's register takes design 1's transition formula. The
+exact ternary extension of a Boolean function depends only on the function,
+so the replacement does not change design 2's exact behavior; it removes the
+shape dependence of the lifting, and the rail equality of the pair is
+inductive by construction. Outputs get the same treatment: an output whose
+two functions agree in binary semantics over the merged registers is
+discharged, since one Boolean function has one exact ternary value. Every
+other pair and output stays with the dual-rail engines unchanged.
+
+The round is on by default and switched by `binary_relation_round`
+(`--binary-relation-round <bool>`). It needs learning, the dual-rail encoding
+and an engine that keeps the lazy transition store (k-induction or PDR). The
+summary line `SEC summary: binary_relation_round candidates=... proved_rail_equalities=... discharged_outputs=...`
+reports the pairs it retried, the rail equalities it proved and the outputs it
+discharged.
+
 ## What it does and does not help
 
 - Two designs with the same register names and near-identical logic behind
   them are proved quickly, because the merged transitions collapse.
 - Designs that really differ keep only the registers the difference cannot
   reach; the output check still reports the counterexample.
+- Logic the flow restructured, such as a resynthesized arithmetic cone or a
+  mux rewritten as and-or logic, is proved by the binary round, where the
+  rail check of the first rounds is shape sensitive.
 - Flows that re-cluster or rename registers, for example multibit flop
   clustering, keep their net names, so the net-name guess and the propagation
   rounds recover the pairs the pin names lose. On a synthesis-versus-final

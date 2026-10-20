@@ -33,6 +33,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
 | `--learn-internal-relations <bool>` | Learn certified internal register relations. Defaults to `true`; SEC only. |
 | `--allow-x-equality-in-internal-relations <bool>` | Permit X/X in internal relations only. Defaults to `true`; SEC only. |
+| `--binary-relation-round <bool>` | Retry unproved internal relations in binary semantics and share the proved transitions. Defaults to `true`; SEC only. |
 | `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
 | `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
 | `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
@@ -73,6 +74,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
 | `learn_internal_relations` | bool | Learn certified internal register relations. Defaults to `true`. Alias: `learn_ineternal_relations`. |
 | `allow_x_equality_in_internal_relations` | bool | Permit X/X in internal relations only. Defaults to `true`; never relaxes final output equality. |
+| `binary_relation_round` | bool | Retry unproved internal relations in binary semantics and share the proved transitions. Defaults to `true`. |
 | `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
 | `btor2_export` | bool | Enable SEC BTOR2 export before solving. Defaults to `false`. |
 | `btor2_export_path` | string | Non-empty BTOR2 output path. Defaults to `miter.btor2` when enabled; requires `btor2_export: true`. |

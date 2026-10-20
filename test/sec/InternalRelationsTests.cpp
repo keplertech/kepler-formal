@@ -1,6 +1,8 @@
 // Copyright 2026 keplertech.io
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <array>
 #include <gtest/gtest.h>
 #include <sstream>
 
@@ -348,6 +350,84 @@ TEST_F(InternalRelationsTests, SameNamesAndMatchingStartupXCannotHideBinaryMisma
         }
       }
     }
+  }
+}
+
+TEST_F(InternalRelationsTests, BinaryRoundSharesTransitionsThatDifferOnlyInShape) {
+  // Both designs hold q <= in, but design 2 writes it as a mux of in by a
+  // register that is never defined; the per-gate lifting makes that X
+  // whenever in is 1, so the rail check refutes the pair.
+  const SignalKey q{{1}, {1}};
+  const SignalKey y{{2}, {2}};
+  const SignalKey sel{{3}, {3}};
+  const SignalKey in{{4}, {4}};
+  const auto design = [&](bool restructured) {
+    SequentialDesignModel model;
+    model.stateBits = {q, sel};
+    model.inputVarByKey[q] = 2;
+    model.inputVarByKey[sel] = 3;
+    model.inputVarByKey[in] = 4;
+    model.environmentInputs = {in};
+    model.displayNameByKey[q] = "q";
+    model.displayNameByKey[sel] = "sel";
+    model.displayNameByKey[in] = "in";
+    model.displayNameByKey[y] = "y";
+    model.nextStateExprByStateKey[sel] = BoolExpr::Var(3);
+    model.nextStateExprByStateKey[q] = restructured
+        ? BoolExpr::Or(BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(4)),
+                       BoolExpr::And(BoolExpr::Not(BoolExpr::Var(3)), BoolExpr::Var(4)))
+        : BoolExpr::Var(4);
+    model.allObservedOutputs = model.observedOutputs = {y};
+    model.observedOutputExprByKey[y] = BoolExpr::Var(2);
+    return model;
+  };
+  const auto model0 = design(false);
+  const auto model1 = design(true);
+  // The lazily remapped dual-rail problem: rails 10..17 for q and sel of each
+  // design, symbol 18 for the shared input.
+  const auto problemFor = [&]() {
+    KInductionProblem problem;
+    problem.usesDualRailStateEncoding = true;
+    problem.state0Symbols = {10, 11, 12, 13};
+    problem.state1Symbols = {14, 15, 16, 17};
+    problem.inputSymbols = {18};
+    problem.allSymbols = {10, 11, 12, 13, 14, 15, 16, 17, 18};
+    problem.dualRailStatePairs = {{10, 11}, {12, 13}, {14, 15}, {16, 17}};
+    for (size_t symbol = 10; symbol < 18; ++symbol) {
+      problem.initialStateAssignments.emplace_back(symbol, true);
+    }
+    problem.observedOutputNames = {"y"};
+    problem.observedOutputExprs0 = {BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(10), BoolExpr::Var(14)))};
+    problem.observedOutputExprs1 = {BoolExpr::createTrue()};
+    problem.property = problem.observedOutputExprs0[0];
+    auto store = std::make_shared<LazyTransitionStore>();
+    const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
+    for (size_t design = 0; design < 2; ++design) {
+      store->localToCombinedByDesign[design] = {{4, 18}};
+      const size_t base = 10 + 4 * design;
+      store->dualRailStateByLocalSymbolByDesign[design] = {
+          {2, {base, base + 1}}, {3, {base + 2, base + 3}}};
+      for (size_t bit = 0; bit < 2; ++bit) {
+        BoolExpr* next = models[design]->nextStateExprByStateKey.at(bit == 0 ? q : sel);
+        store->sourceByStateSymbol[base + 2 * bit] = {design, next, LazyTransitionRail::DualRailOne};
+        store->sourceByStateSymbol[base + 2 * bit + 1] = {design, next, LazyTransitionRail::DualRailZero};
+      }
+    }
+    problem.lazyTransitions = store;
+    return problem;
+  };
+  for (bool binaryRound : {false, true}) {
+    auto problem = problemFor();
+    learnInternalStateRelations(model0, model1, problem, {true, true, binaryRound},
+                                Config::SolverType::KISSAT, false);
+    // sel is X in both designs and holds; the rail check proves it either way.
+    const auto& pairs = problem.sameFrameStateEqualityPairs0;
+    EXPECT_TRUE(std::find(pairs.begin(), pairs.end(), std::make_pair(12ul, 16ul)) != pairs.end());
+    EXPECT_EQ(std::find(pairs.begin(), pairs.end(), std::make_pair(10ul, 14ul)) != pairs.end(),
+              binaryRound) << "binary_relation_round=" << binaryRound;
+    EXPECT_EQ(problem.sharedTransitionPairs.size(), binaryRound ? 2u : 0u);
+    EXPECT_EQ(problem.observedOutputExprs0[0] == BoolExpr::createTrue(), binaryRound);
+    EXPECT_EQ(problem.property == BoolExpr::createTrue(), binaryRound);
   }
 }
 

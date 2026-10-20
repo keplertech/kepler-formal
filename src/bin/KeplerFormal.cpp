@@ -66,19 +66,19 @@ static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
       "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--vhdl_design1_top <name>] [--vhdl_design2_top <name>] "
       "[--python_design1_top <name>] [--python_design2_top <name>] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> --design1 <file...> --design2 "
-      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] [--no-latch-abstraction] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
@@ -488,6 +488,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "learn_internal_relations",
       "learn_ineternal_relations",
       "allow_x_equality_in_internal_relations",
+      "binary_relation_round",
       "sec_reset",
       "btor2_export",
       "btor2_export_path",
@@ -1478,13 +1479,16 @@ static int KeplerFormalMainImpl(
           return EXIT_FAILURE;
         }
         for (const auto* name : {"learn_internal_relations", "learn_ineternal_relations",
-                                 "allow_x_equality_in_internal_relations"}) {
+                                 "allow_x_equality_in_internal_relations",
+                                 "binary_relation_round"}) {
           if (!cfg[name]) {
             continue;
           }
           bool& value = std::string(name) == "allow_x_equality_in_internal_relations"
               ? internalRelationOptions.allowXEqualityInInternalRelations
-              : internalRelationOptions.learnInternalRelations;
+              : std::string(name) == "binary_relation_round"
+                  ? internalRelationOptions.binaryRelationRound
+                  : internalRelationOptions.learnInternalRelations;
           std::string error;
           if (!cfg[name].IsScalar() ||
               !parseBooleanToken(cfg[name].as<std::string>(), name, value, error)) {
@@ -1781,14 +1785,17 @@ static int KeplerFormalMainImpl(
         continue;
       }
       if (arg == "--learn-internal-relations" ||
-          arg == "--allow-x-equality-in-internal-relations") {
+          arg == "--allow-x-equality-in-internal-relations" ||
+          arg == "--binary-relation-round") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
         bool& value = arg == "--learn-internal-relations"
             ? internalRelationOptions.learnInternalRelations
-            : internalRelationOptions.allowXEqualityInInternalRelations;
+            : arg == "--binary-relation-round"
+                ? internalRelationOptions.binaryRelationRound
+                : internalRelationOptions.allowXEqualityInInternalRelations;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -1992,14 +1999,17 @@ static int KeplerFormalMainImpl(
         continue;
       }
       if (arg == "--learn-internal-relations" ||
-          arg == "--allow-x-equality-in-internal-relations") {
+          arg == "--allow-x-equality-in-internal-relations" ||
+          arg == "--binary-relation-round") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
         bool& value = arg == "--learn-internal-relations"
             ? internalRelationOptions.learnInternalRelations
-            : internalRelationOptions.allowXEqualityInInternalRelations;
+            : arg == "--binary-relation-round"
+                ? internalRelationOptions.binaryRelationRound
+                : internalRelationOptions.allowXEqualityInInternalRelations;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2451,9 +2461,10 @@ static int KeplerFormalMainImpl(
     SPDLOG_INFO("SEC max_k: {}", secMaxK);
     SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
     SPDLOG_INFO("SEC encoding: {}", secEncodingName(secEncoding));
-    SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={}",
+    SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={} binary_relation_round={}",
                 internalRelationOptions.learnInternalRelations,
-                internalRelationOptions.allowXEqualityInInternalRelations);
+                internalRelationOptions.allowXEqualityInInternalRelations,
+                internalRelationOptions.binaryRelationRound);
     if (secResetSpec.enabled()) {
       SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
       for (const auto& port : secResetSpec.ports) {
