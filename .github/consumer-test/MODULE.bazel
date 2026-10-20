@@ -5,8 +5,8 @@
 # when this repo is the root module, e.g. labels that only resolve from
 # the root module's repo mapping.
 #
-# kepler-formal's own registry (bazel/registry) supplies the modules that
-# are not on BCR yet; see .bazelrc.
+# Modules that are not on BCR yet come from their BCR pull requests;
+# see .bazelrc.
 #
 # The root module's hermetic-llvm toolchain *registration* is a
 # dev_dependency and does not propagate; the toolchain repo itself does.

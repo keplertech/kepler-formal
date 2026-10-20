@@ -1,7 +1,4 @@
-# Same registries as kepler-formal's .bazelrc. A consumer outside this
-# repository lists kepler-formal's bazel/registry/ by URL instead, see
-# bazel/registry/README.md.
-common --registry=file://%workspace%/../../bazel/registry
+# Same registries as kepler-formal's .bazelrc.
 #   cadical 3.0.0                          bazelbuild/bazel-central-registry#10883
 common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/cf30c24de5255b58a523064f8a624848b4bd1bab/
 common --registry=https://bcr.bazel.build/

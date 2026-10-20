@@ -1,8 +1,0 @@
-{
-    "url": "https://github.com/nanocoh/naja/archive/3da8811de09c15946329e6fc8df6abcac379265c.tar.gz",
-    "integrity": "sha256-AUb+gWEGTFSuPYbIY23V7KKuX+GqenDFfkEBub8Mt+M=",
-    "strip_prefix": "naja-3da8811de09c15946329e6fc8df6abcac379265c",
-    "overlay": {
-        "MODULE.bazel": "sha256-bUS+BI7r/gfPAj8URv24dahHqCpN8XAxGiD9OB4pc08="
-    }
-}

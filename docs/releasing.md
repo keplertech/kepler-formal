@@ -122,7 +122,7 @@ http_archive(
 
 See [Depending on kepler-formal](bcr-roadmap.md#depending-on-kepler-formal):
 until kepler-formal is on the Bazel Central Registry, a consumer also
-lists kepler-formal's registry in its `.bazelrc`.
+lists the BCR pull request registries from kepler-formal's `.bazelrc`.
 
 ## Troubleshooting
 
@@ -134,6 +134,4 @@ Bump the version to a new number and retry.
 
 **"Working tree is dirty" error**: Commit or stash all changes first.
 
-**Release workflow fails**: Check the Actions tab for logs.  A stale
-`source.json` integrity hash in `bazel/registry/` is fixed by rerunning
-`bazel/registry/update_source.py` (see `bazel/registry/README.md`).
+**Release workflow fails**: Check the Actions tab for logs.
