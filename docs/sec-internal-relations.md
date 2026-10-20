@@ -166,6 +166,27 @@ The `SEC summary` diagnostics line reports the candidates by source
 (`name_candidates`, `net_name_candidates`, `driver_candidates`,
 `propagated_candidates`) and the number of propagation rounds.
 
+## 8. Merging the proved relations into the proof
+
+Proved relations used to reach the engines only as frame constraints: two
+copies of the same cone, one per design, plus the facts that their registers
+agree. Proving that both copies agree at the outputs was then a SAT search over
+the whole cone, which is slow exactly when the cone is large and identical.
+
+After learning, every proved same-frame equality merges its two state symbols
+into one representative, and every transition and output formula is rewritten
+under that merge. The expression factory hash-conses, so logic that is
+identical over related registers becomes one node and the output comparison is
+a syntactic equality. Logic that differs structurally but is functionally equal
+is proved once per node, not once per output cone that reads it. Both registers
+remain state; only reads of the merged one change. This is the register merge
+of van Eijk (TCAD 2000) followed by structural hashing, the SAT-sweeping step of
+Kuehlmann et al. (TCAD 2002).
+
+Lazily remapped problems are materialized first, since the merge changes every
+formula's support. Designs above a size limit keep the lazy store and the
+constraint-only behavior.
+
 ## What it does and does not help
 
 - Two designs with the same register names and near-identical logic behind

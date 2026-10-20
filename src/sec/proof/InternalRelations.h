@@ -28,6 +28,13 @@ struct InternalRelationCandidate {
   std::vector<DualRailSymbolPair> values;
 };
 
+// Merges every proved same-frame state equality into one representative symbol
+// and rewrites the eager transitions and output formulas under that merge, so
+// identical logic over related registers becomes one hash-consed node (van
+// Eijk, TCAD 2000; Kuehlmann et al., TCAD 2002). Lazily remapped problems are
+// left unchanged.
+void mergeProvedStateRelations(KInductionProblem& problem, bool diagnostics);
+
 // Returns only a jointly inductive subset whose base case holds at raw boot.
 // No output property or reset-frontier assumption participates in this proof.
 std::vector<std::pair<size_t, size_t>> proveInternalRelations(

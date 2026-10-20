@@ -67,6 +67,33 @@ class InternalRelationsTests : public ::testing::Test {
   }
 };
 
+TEST_F(InternalRelationsTests, MergingProvedRelationsFoldsIdenticalLogicToOneNode) {
+  // Two designs with one register each, proved equal, reading shared input 4.
+  KInductionProblem problem;
+  problem.state0Symbols = {2};
+  problem.state1Symbols = {3};
+  problem.inputSymbols = {4};
+  problem.allSymbols = {2, 3, 4};
+  problem.transitions0 = {{2, BoolExpr::And(BoolExpr::Var(2), BoolExpr::Var(4))}};
+  problem.transitions1 = {{3, BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(4))}};
+  problem.observedOutputExprs0 = {BoolExpr::Or(BoolExpr::Var(2), BoolExpr::Var(4))};
+  problem.observedOutputExprs1 = {BoolExpr::Or(BoolExpr::Var(3), BoolExpr::Var(4))};
+  problem.sameFrameStateEqualityPairs0 = {{2, 3}};
+  ASSERT_NE(problem.observedOutputExprs0[0], problem.observedOutputExprs1[0]);
+
+  mergeProvedStateRelations(problem, /*diagnostics=*/false);
+
+  // Design 2 now reads the representative register, so identical logic is the
+  // same hash-consed node and the output comparison needs no search.
+  EXPECT_EQ(problem.observedOutputExprs0[0], problem.observedOutputExprs1[0]);
+  EXPECT_EQ(problem.transitions0[0].second, problem.transitions1[0].second);
+  const auto support = problem.observedOutputExprs1[0]->getSupportVars();
+  EXPECT_TRUE(support.contains(2));
+  EXPECT_FALSE(support.contains(3));
+  // Both registers stay in the state; only reads of the merged one changed.
+  EXPECT_EQ(problem.transitions1[0].first, 3u);
+}
+
 TEST_F(InternalRelationsTests, JointInductionProvesMutuallySupportingRegisters) {
   const auto problem = binaryRing();
   const InternalRelationCandidate first{{{2, 4}}, {}};

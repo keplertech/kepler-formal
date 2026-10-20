@@ -825,4 +825,116 @@ void learnInternalStateRelations(
   }
 }
 
+void mergeProvedStateRelations(KInductionProblem& problem, bool diagnostics) {
+  if (problem.sameFrameStateEqualityPairs0.empty() &&
+      problem.sameFrameStateEqualityPairs1.empty()) {
+    return;
+  }
+  // The merge changes every formula's support, which lazily remapped problems
+  // derive from design-local sources, so such a problem is materialized first.
+  // Materializing a very large design costs the memory the lazy store exists
+  // to save; those keep their relations as frame constraints only.
+  constexpr size_t kMergeStateSymbolLimit = size_t{1} << 17;
+  const size_t stateCount = problem.state0Symbols.size() +
+                            problem.state1Symbols.size() +
+                            problem.auxiliaryStateSymbols.size();
+  if (problem.lazyTransitions != nullptr && stateCount > kMergeStateSymbolLimit) {
+    if (diagnostics) {
+      printf("SEC diag: merged state symbols skipped: %zu state symbols\n", stateCount);
+      fflush(stdout);
+    }
+    return;
+  }
+  // Union-find over the equality pairs; the smallest symbol represents a class.
+  std::unordered_map<size_t, size_t> parent;
+  const auto find = [&parent](size_t symbol) {
+    size_t root = symbol;
+    for (auto it = parent.find(root); it != parent.end() && it->second != root;
+         it = parent.find(root)) {
+      root = it->second;
+    }
+    while (symbol != root) {
+      const size_t next = parent.at(symbol);
+      parent[symbol] = root;
+      symbol = next;
+    }
+    return root;
+  };
+  for (const auto* pairs : {&problem.sameFrameStateEqualityPairs0,
+                            &problem.sameFrameStateEqualityPairs1}) {
+    for (const auto& [lhs, rhs] : *pairs) {
+      const size_t a = find(lhs);
+      const size_t b = find(rhs);
+      if (a != b) {
+        parent[std::max(a, b)] = std::min(a, b);
+      }
+    }
+  }
+  std::unordered_map<size_t, size_t> merged;
+  for (const auto& [symbol, _] : parent) {
+    if (const size_t representative = find(symbol); representative != symbol) {
+      merged.emplace(symbol, representative);
+    }
+  }
+  if (merged.empty()) {
+    return;
+  }
+  if (problem.lazyTransitions != nullptr) {
+    TransitionExprResolver transitions(problem);
+    auto& store = *problem.lazyTransitions;
+    const auto materialize = [&](const std::vector<size_t>& symbols,
+                                 std::vector<std::pair<size_t, BoolExpr*>>& eager) {
+      for (const size_t symbol : symbols) {
+        if (store.sourceByStateSymbol.find(symbol) != store.sourceByStateSymbol.end()) {
+          eager.emplace_back(symbol, transitions.at(symbol));
+        }
+      }
+    };
+    materialize(problem.state0Symbols, problem.transitions0);
+    materialize(problem.state1Symbols, problem.transitions1);
+    store.sourceByStateSymbol.clear();
+    store.remappedByStateSymbol.clear();
+    store.supportByStateSymbol.clear();
+    store.nodeCountByStateSymbol.clear();
+    for (auto& memo : store.remapMemoByDesign) {
+      memo.clear();
+    }
+    for (auto& memo : store.dualRailRemapMemoByDesign) {
+      memo.clear();
+    }
+  }
+  std::unordered_map<BoolExpr*, BoolExpr*> canonical;
+  const auto rewrite = [&](BoolExpr*& expr) {
+    if (expr != nullptr) {
+      expr = canonicalUnderMerge(expr, merged, canonical);
+    }
+  };
+  for (auto* transitions : {&problem.transitions0, &problem.transitions1,
+                            &problem.auxiliaryTransitions}) {
+    for (auto& [_, expr] : *transitions) {
+      rewrite(expr);
+    }
+  }
+  for (auto* exprs : {&problem.observedOutputExprs0, &problem.observedOutputExprs1,
+                      &problem.dualRailOutputStrictEqualityExprs}) {
+    for (auto& expr : *exprs) {
+      rewrite(expr);
+    }
+  }
+  rewrite(problem.property);
+  rewrite(problem.bad);
+  rewrite(problem.inductionProperty);
+  rewrite(problem.inductionBad);
+  problem.inductionTransitionSupportCache.reset();
+  if (diagnostics) {
+    size_t sharedOutputs = 0;
+    for (size_t i = 0; i < problem.observedOutputExprs0.size() &&
+                       i < problem.observedOutputExprs1.size(); ++i) {
+      sharedOutputs += problem.observedOutputExprs0[i] == problem.observedOutputExprs1[i] ? 1 : 0;
+    }
+    printf("SEC diag: merged state symbols=%zu identical_output_formulas=%zu/%zu\n",
+           merged.size(), sharedOutputs, problem.observedOutputExprs0.size());
+    fflush(stdout);
+  }
+}
 }  // namespace KEPLER_FORMAL::SEC
