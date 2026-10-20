@@ -1,10 +1,3 @@
-# Versions not on BCR yet come from their open BCR pull requests, each
-# pinned to a commit (drop a line once its PR merges); everything else
-# from BCR.
-#   cadical 3.0.0                          bazelbuild/bazel-central-registry#10883
-common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/cf30c24de5255b58a523064f8a624848b4bd1bab/
-common --registry=https://bcr.bazel.build/
-
 common --enable_platform_specific_config
 
 build --cxxopt=-std=c++20

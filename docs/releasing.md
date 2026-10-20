@@ -121,8 +121,8 @@ http_archive(
 ### Bazel (build from source)
 
 See [Depending on kepler-formal](bcr-roadmap.md#depending-on-kepler-formal):
-until kepler-formal is on the Bazel Central Registry, a consumer also
-lists the BCR pull request registries from kepler-formal's `.bazelrc`.
+until kepler-formal is on the Bazel Central Registry, a consumer pins it
+to a commit with `git_override`.
 
 ## Troubleshooting
 
