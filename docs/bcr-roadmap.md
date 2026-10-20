@@ -22,34 +22,22 @@ slang's Python generators) come from Bazel modules.
 
 ## Dependencies
 
-`MODULE.bazel` contains only `bazel_dep`s. Everything on BCR comes from
-BCR: `onetbb`, `spdlog`, `yaml-cpp`, `kissat`, `glucose`, `googletest`,
-and, through naja, `capnp-cpp`, `boost.*`, `fmt`, `bison`, `flex`,
-`sv-lang`, `rules_python`, and others.
+Every dependency is a `bazel_dep` from BCR: `naja`, `onetbb`, `spdlog`,
+`yaml-cpp`, `kissat`, `glucose`, `googletest`, and, through naja,
+`naja-if`, `naja-verilog`, `capnp-cpp`, `boost.*`, `fmt`, `bison`,
+`flex`, `sv-lang`, `rules_python`, and others.
 
-What is not on BCR yet comes from its open bazel-central-registry pull
-request, which `.bazelrc` lists by commit ahead of BCR:
-
-| Module | BCR pull request |
-|---|---|
-| `cadical` 3.0.0 | bazelbuild/bazel-central-registry#10883 |
-
-`naja` itself is served from the in-tree
-[`bazel/registry/`](../bazel/registry/README.md) until it is on BCR,
-together with the `naja-if` and `naja-verilog` versions its sources
-need, which are newer than the ones on BCR.
+The one exception is `cadical` 3.0.0, which `MODULE.bazel` vendors with
+`http_archive` and `bazel/cadical.BUILD.bazel` until
+bazelbuild/bazel-central-registry#10883 merges; then it becomes a
+`bazel_dep` again.
 
 ## Depending on kepler-formal
 
-Until kepler-formal and the modules above are on BCR, a downstream
-module lists the same registries as kepler-formal's `.bazelrc`, with
-kepler-formal's `bazel/registry/` by pinned URL:
+Until kepler-formal is on BCR, a downstream module pins it to a commit:
 
 ```
 # .bazelrc
-common --registry=https://raw.githubusercontent.com/keplertech/kepler-formal/<commit>/bazel/registry/
-# ...the BCR pull request registries from kepler-formal's .bazelrc...
-common --registry=https://bcr.bazel.build/
 build --cxxopt=-std=c++20
 ```
 
@@ -67,13 +55,10 @@ git_override(
 
 ## Publishing to BCR
 
-1. Get the BCR pull requests above merged, dropping each `.bazelrc`
-   line as it lands, then naja (released, via publish-to-bcr), deleting
-   it from `bazel/registry/`.
-2. Ensure the version in `MODULE.bazel` matches
+1. Ensure the version in `MODULE.bazel` matches
    `src/bin/KeplerVersion.h.in`, and tag a release with
    `bazelisk run //:release` (see `docs/releasing.md`).
-3. Submit kepler-formal with the
+2. Submit kepler-formal with the
    [publish-to-bcr](https://github.com/bazel-contrib/publish-to-bcr)
    GitHub App, which uses the templates in `.bcr/`.
 
