@@ -9,6 +9,7 @@
 #include "export/SecBtor2Exporter.h"
 
 #include "BoolExprCache.h"
+#include "common/BoolExprUtils.h"
 #include "model/SequentialDesignModel.h"
 #include "imc/ExactInterpolantSynthesizer.h"
 #include "imc/IMCEngine.h"
@@ -696,6 +697,148 @@ TEST_F(InternalRelationsTests, LongChainsKeepTheirShapeAndStillCompare) {
   }
   EXPECT_EQ(provedPairs(pair, same0, same1), 21u);
   EXPECT_EQ(provedPairs(pair, same0, reversed1), 21u);
+}
+
+// Van Eijk's merge step: the same cone over each design's registers becomes
+// one formula once the proved register pairs are merged, and the output is
+// discharged without an engine.  A cone that differs keeps its obligation.
+TEST_F(InternalRelationsTests, StructuralDischargeMergesProvedRegistersInBinary) {
+  KInductionProblem problem;
+  problem.allSymbols = {2, 3, 4, 5, 6};
+  problem.inputSymbols = {6};
+  problem.state0Symbols = {2, 3};
+  problem.state1Symbols = {4, 5};
+  problem.sameFrameStateEqualityPairs0 = {{2, 4}, {3, 5}};
+  problem.observedOutputExprs0 = {
+      BoolExpr::Xor(BoolExpr::And(BoolExpr::Var(2), BoolExpr::Var(6)), BoolExpr::Var(3)),
+      BoolExpr::Or(BoolExpr::Var(2), BoolExpr::Var(3))};
+  problem.observedOutputExprs1 = {
+      BoolExpr::Xor(BoolExpr::And(BoolExpr::Var(4), BoolExpr::Var(6)), BoolExpr::Var(5)),
+      BoolExpr::And(BoolExpr::Var(4), BoolExpr::Var(5))};
+  BoolExpr* property = BoolExpr::createTrue();
+  for (size_t i = 0; i < 2; ++i) {
+    property = BoolExpr::And(property,
+        makeEqualityExpr(problem.observedOutputExprs0[i], problem.observedOutputExprs1[i]));
+  }
+  problem.property = problem.inductionProperty = property;
+  problem.bad = problem.inductionBad = BoolExpr::Not(property);
+
+  EXPECT_EQ(dischargeStructurallyEquivalentOutputs(problem, false), 1u);
+
+  ASSERT_EQ(problem.structurallyProvedOutputs.size(), 2u);
+  EXPECT_TRUE(problem.structurallyProvedOutputs[0]);
+  EXPECT_FALSE(problem.structurallyProvedOutputs[1]);
+  EXPECT_EQ(problem.observedOutputExprs0[0], BoolExpr::createTrue());
+  EXPECT_EQ(problem.observedOutputExprs1[0], BoolExpr::createTrue());
+  EXPECT_NE(problem.observedOutputExprs0[1], BoolExpr::createTrue());
+  // The rebuilt property is the remaining obligation only: it fails exactly
+  // where the second output pair differs.
+  EXPECT_NE(problem.property, BoolExpr::createTrue());
+  EXPECT_TRUE(problem.property->evaluate(
+      {{2, true}, {3, true}, {4, true}, {5, true}, {6, false}}));
+  EXPECT_FALSE(problem.property->evaluate(
+      {{2, true}, {3, false}, {4, true}, {5, false}, {6, false}}));
+  EXPECT_EQ(problem.inductionProperty, problem.property);
+  EXPECT_EQ(problem.bad, problem.inductionBad);
+}
+
+TEST_F(InternalRelationsTests, StructuralDischargeRequiresTheProvedEqualities) {
+  KInductionProblem problem;
+  problem.allSymbols = {2, 3, 4, 5};
+  problem.state0Symbols = {2, 3};
+  problem.state1Symbols = {4, 5};
+  problem.observedOutputExprs0 = {BoolExpr::Xor(BoolExpr::Var(2), BoolExpr::Var(3))};
+  problem.observedOutputExprs1 = {BoolExpr::Xor(BoolExpr::Var(4), BoolExpr::Var(5))};
+  BoolExpr* const original = problem.observedOutputExprs0[0];
+  problem.property = problem.inductionProperty =
+      makeEqualityExpr(problem.observedOutputExprs0[0], problem.observedOutputExprs1[0]);
+  problem.bad = problem.inductionBad = BoolExpr::Not(problem.property);
+  BoolExpr* const originalProperty = problem.property;
+
+  // Same shape, different registers, nothing proved: no merge, no discharge.
+  EXPECT_EQ(dischargeStructurallyEquivalentOutputs(problem, false), 0u);
+  EXPECT_EQ(problem.observedOutputExprs0[0], original);
+  EXPECT_EQ(problem.property, originalProperty);
+  ASSERT_EQ(problem.structurallyProvedOutputs.size(), 1u);
+  EXPECT_FALSE(problem.structurallyProvedOutputs[0]);
+
+  // Chained equalities merge through their representative.
+  problem.sameFrameStateEqualityPairs0 = {{2, 4}};
+  problem.sameFrameStateEqualityPairs1 = {{5, 3}};
+  EXPECT_EQ(dischargeStructurallyEquivalentOutputs(problem, false), 1u);
+  EXPECT_EQ(problem.property, BoolExpr::createTrue());
+}
+
+TEST_F(InternalRelationsTests, StructuralDischargeComparesBothRailsInDualRail) {
+  KInductionProblem problem;
+  problem.usesDualRailStateEncoding = true;
+  problem.allSymbols = {2, 3, 4, 5};
+  problem.state0Symbols = {2, 3};
+  problem.state1Symbols = {4, 5};
+  problem.sameFrameStateEqualityPairs0 = {{2, 4}, {3, 5}};
+  // Output 0: both rails identical after the merge.  Output 1: the may-be-zero
+  // rail differs, so the ternary values are not the same formula.
+  problem.dualRailObservedOutputs0 = {{BoolExpr::Var(2), BoolExpr::Var(3)},
+                                      {BoolExpr::Var(2), BoolExpr::Var(3)}};
+  problem.dualRailObservedOutputs1 = {{BoolExpr::Var(4), BoolExpr::Var(5)},
+                                      {BoolExpr::Var(4), BoolExpr::Not(BoolExpr::Var(5))}};
+  problem.observedOutputExprs0 = {makeEqualityExpr(BoolExpr::Var(2), BoolExpr::Var(4)),
+                                  makeEqualityExpr(BoolExpr::Var(3), BoolExpr::Var(5))};
+  problem.observedOutputExprs1 = {BoolExpr::createTrue(), BoolExpr::createTrue()};
+  problem.dualRailOutputStrictEqualityExprs = problem.observedOutputExprs0;
+  BoolExpr* const guard1 = problem.observedOutputExprs0[1];
+  problem.property = problem.inductionProperty =
+      BoolExpr::And(problem.observedOutputExprs0[0], problem.observedOutputExprs0[1]);
+  problem.bad = problem.inductionBad = BoolExpr::Not(problem.property);
+
+  EXPECT_EQ(dischargeStructurallyEquivalentOutputs(problem, false), 1u);
+
+  EXPECT_TRUE(problem.structurallyProvedOutputs[0]);
+  EXPECT_FALSE(problem.structurallyProvedOutputs[1]);
+  EXPECT_EQ(problem.observedOutputExprs0[0], BoolExpr::createTrue());
+  EXPECT_EQ(problem.dualRailOutputStrictEqualityExprs[0], BoolExpr::createTrue());
+  EXPECT_EQ(problem.observedOutputExprs0[1], guard1);
+  EXPECT_NE(problem.dualRailOutputStrictEqualityExprs[1], BoolExpr::createTrue());
+  // Only the second guard remains in the property.
+  EXPECT_TRUE(problem.property->evaluate({{2, true}, {3, true}, {4, false}, {5, true}}));
+  EXPECT_FALSE(problem.property->evaluate({{2, true}, {3, true}, {4, true}, {5, false}}));
+}
+
+// End to end: once the learner has certified the register pairs of two
+// identical rings, their identical output cones are discharged and nothing is
+// left for an engine.
+TEST_F(InternalRelationsTests, LearningDischargesIdenticalOutputsAfterProvingRegisters) {
+  auto problem = binaryRing();
+  problem.observedOutputNames = {"y"};
+  problem.observedOutputExprs0 = {BoolExpr::Xor(BoolExpr::Var(2), BoolExpr::Var(3))};
+  problem.observedOutputExprs1 = {BoolExpr::Xor(BoolExpr::Var(4), BoolExpr::Var(5))};
+  problem.property = problem.inductionProperty =
+      makeEqualityExpr(problem.observedOutputExprs0[0], problem.observedOutputExprs1[0]);
+  problem.bad = problem.inductionBad = BoolExpr::Not(problem.property);
+
+  const SignalKey first{{1}, {1}};
+  const SignalKey second{{2}, {2}};
+  auto makeModel = [&](size_t firstSymbol, size_t secondSymbol) {
+    SequentialDesignModel model;
+    model.stateBits = {first, second};
+    model.displayNameByKey[first] = "r0";
+    model.displayNameByKey[second] = "r1";
+    model.inputVarByKey[first] = firstSymbol;
+    model.inputVarByKey[second] = secondSymbol;
+    model.nextStateExprByStateKey[first] = BoolExpr::Var(secondSymbol);
+    model.nextStateExprByStateKey[second] = BoolExpr::Not(BoolExpr::Var(firstSymbol));
+    return model;
+  };
+  const auto model0 = makeModel(2, 3);
+  const auto model1 = makeModel(4, 5);
+
+  learnInternalStateRelations(model0, model1, problem, {}, Config::SolverType::KISSAT, false);
+
+  EXPECT_EQ(problem.sameFrameStateEqualityPairs0.size(), 2u);
+  ASSERT_EQ(problem.structurallyProvedOutputs.size(), 1u);
+  EXPECT_TRUE(problem.structurallyProvedOutputs[0]);
+  EXPECT_EQ(problem.property, BoolExpr::createTrue());
+  EXPECT_EQ(problem.bad, BoolExpr::createFalse());
 }
 
 }  // namespace

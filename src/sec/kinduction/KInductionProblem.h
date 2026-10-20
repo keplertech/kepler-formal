@@ -226,6 +226,15 @@ struct KInductionProblem {
   // Exact rail equality is retained for shared SAT query surfaces. It is not
   // an equivalence criterion because matching 11 rails are still X.
   std::vector<BoolExpr*> dualRailOutputStrictEqualityExprs;
+  // Each design's rail-valued observed output cone, aligned with
+  // observedOutputExprs0.  Dual-rail only: in the binary encoding
+  // observedOutputExprs0/1 already hold each design's cone.
+  std::vector<DualRailBoolExpr> dualRailObservedOutputs0;
+  std::vector<DualRailBoolExpr> dualRailObservedOutputs1;
+  // Outputs discharged structurally after merging the proved register
+  // correspondences (van Eijk, TCAD 2000).  Their obligations are trivially
+  // true for every engine.
+  std::vector<bool> structurallyProvedOutputs;
   std::vector<std::string> dualRailOutputSkipReasons;
   std::vector<std::pair<size_t, BoolExpr*>> transitions0;
   std::vector<std::pair<size_t, BoolExpr*>> transitions1;

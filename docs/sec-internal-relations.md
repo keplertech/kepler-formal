@@ -187,7 +187,38 @@ Lazily remapped problems are materialized first, since the merge changes every
 formula's support. Designs above a size limit keep the lazy store and the
 constraint-only behavior.
 
-## 9. Binary round and shared transitions
+## 9. Structural discharge of outputs
+
+The pairs are a certificate that, in every reachable state, each register of
+design 1 holds the value of its design-0 partner. Van Eijk (TCAD 2000) uses
+such a certificate twice: as hypotheses for the engine, and to merge the
+product machine, reading one register of each pair in place of the other so
+that logic the two designs share collapses into one copy. The first use is
+sections 1 to 6, the merge of the proof problem is section 8. This section
+applies the merge to the observed outputs.
+
+After the survivors are added to the problem, every certified same-frame
+equality (the proved pairs and the definitional complement pairs) is put into
+one equality class with a single representative. The two cones of each
+observed output are then numbered with the table of section 4 under that
+merge, so that they get one number exactly when they are the same formula once
+every merged register is read through its representative. In the dual-rail
+encoding both rails must match. An output whose cones match is proved: its
+obligation becomes the constant true, the property, bad and induction formulas
+are rebuilt from the remaining outputs, and it is flagged in
+`structurallyProvedOutputs`. No engine query is spent on it. An output whose
+cones differ anywhere keeps its obligation unchanged.
+
+This is what makes a design compared with itself, or with a netlist that kept
+the structure of its arithmetic, independent of the engine budget: once the
+registers are paired, the outputs are the same formula and nothing is left to
+search. A cone that synthesis restructured is not caught by the hash; it goes
+to the engine as before.
+
+With `KEPLER_SEC_DIAG` set, the pass prints the number of outputs discharged
+and the number of symbols merged.
+
+## 10. Binary round and shared transitions
 
 The rail check compares the ternary values that the per-gate dual-rail
 lifting computes, and that lifting is a shape-dependent over-approximation of
@@ -213,7 +244,8 @@ so the replacement does not change design 2's exact behavior; it removes the
 shape dependence of the lifting, and the rail equality of the pair is
 inductive by construction. Outputs get the same treatment: an output whose
 two functions agree in binary semantics over the merged registers is
-discharged, since one Boolean function has one exact ternary value. Every
+discharged like a structurally identical one (section 9), since one Boolean
+function has one exact ternary value. Every
 other pair and output stays with the dual-rail engines unchanged.
 
 The round is on by default and switched by `binary_relation_round`
@@ -248,4 +280,7 @@ discharged.
   keeps only a few percent of its rail equalities this way, while another
   proves all of them structurally. Mishchenko et
   al. address the general case with signal correspondence from random
-  simulation, which also relates internal nodes. That is not implemented.
+  simulation, which also relates internal nodes. That is not implemented:
+  sections 8 and 9 merge proved registers and recognize outputs whose cones
+  become identical, and section 10 proves registers and outputs whose
+  functions are equal, but internal nodes whose cones differ are not related.

@@ -28,6 +28,16 @@ void learnInternalStateRelations(
     Config::SolverType solverType,
     bool diagnostics);
 
+// Van Eijk's merge step (Sequential Equivalence Checking Based on Structural
+// Similarities, IEEE TCAD 19(7), 2000): read every register through the
+// representative of its proved equality class, hash both designs' observed
+// output cones under that merge, and discharge each output whose two cones
+// become one formula.  Discharged outputs get a trivially true obligation and
+// are flagged in problem.structurallyProvedOutputs; the property, bad and
+// induction formulas are rebuilt.  Returns the number of outputs discharged.
+size_t dischargeStructurallyEquivalentOutputs(KInductionProblem& problem,
+                                              bool diagnostics);
+
 // A candidate relates complete values, never independently matched X rails.
 struct InternalRelationCandidate {
   std::vector<std::pair<size_t, size_t>> equalities;

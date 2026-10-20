@@ -244,7 +244,11 @@ pass a one-step induction check. A pair whose two next-state expressions are
 the same under the hypotheses is proved by that comparison; the others are
 decided by SAT. A refuted candidate is removed and dependents are rechecked.
 Only the certified equalities are added to the shared problem used by KI, IMC,
-PDR, and BTOR2 export. The SAT part is bounded (about 8 million transition
+PDR, and BTOR2 export. Each design-1 register is then read as its proved
+design-0 partner and the two cones of every observed output are hashed under
+that merge: an output whose cones become one formula is proved there, with no
+engine query (van Eijk, TCAD 2000), and only the remaining outputs reach the
+engine. The SAT part is bounded (about 8 million transition
 expression nodes and bounded queries) and the whole pass runs at most 64
 refinement rounds; an unfinished proof adds no relations. See
 [SEC Internal Relation Learning](sec-internal-relations.md).

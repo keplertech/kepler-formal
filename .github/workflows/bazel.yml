@@ -19,7 +19,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/bazel
-        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'bazel/registry/**') }}
+        key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}
         restore-keys: |
           bazel-${{ runner.os }}-
 
