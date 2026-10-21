@@ -2861,6 +2861,11 @@ bool supportsStructuredMemoryModel(
   if (!interface.isValid()) {
     return false;  // LCOV_EXCL_LINE
   }
+  // A read-only memory (no write ports) holds no state: its read data is
+  // combinational and comes from the primitive truth table.
+  if (interface.writePorts.empty()) {
+    return false;
+  }
   for (const auto& readPort : interface.readPorts) {
     if (readPort.address.size() != interface.abits ||
         readPort.data.size() != interface.width) {

@@ -1220,7 +1220,9 @@ class Tree2BoolExprWordTest : public Tree2BoolExprDivModTest {
   static constexpr size_t kFirstVar = 2;
   static constexpr size_t kSecondVar = 64;
 
-  std::vector<BoolExpr*> buildOutputs(SNLDesign* model, SNLBusTerm* output) {
+  std::vector<BoolExpr*> buildOutputs(
+      SNLDesign* model, SNLBusTerm* output,
+      const std::vector<std::pair<const char*, const char*>>& parameters = {}) {
     auto* universe = NLUniverse::get();
     auto* db = NLDB::create(universe);
     auto* library =
@@ -1228,6 +1230,10 @@ class Tree2BoolExprWordTest : public Tree2BoolExprDivModTest {
     auto* top =
         SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
     auto* instance = SNLInstance::create(top, model, NLName("word0"));
+    for (const auto& [name, value] : parameters) {
+      SNLInstParameter::create(
+          instance, model->getParameter(NLName(name)), value);
+    }
     for (auto* modelTerm : model->getBusTerms()) {
       auto* topTerm = SNLBusTerm::create(
           top, modelTerm->getDirection(), modelTerm->getMSB(),
@@ -1264,8 +1270,8 @@ class Tree2BoolExprWordTest : public Tree2BoolExprDivModTest {
     auto node = std::make_shared<Node>(0u, &tree);
     node->type = Node::Type::Table;
     node->data.termid = output0ID;
-    const auto table =
-        SNLDesignModeling::getTruthTable(model, output->getBit(0)->getOrderID());
+    const auto table = SNLDesignModeling::getTruthTable(
+        instance, output->getBit(0)->getOrderID());
     EXPECT_NE(buildGenericTruthTableExpr(
                   table, table.size(), node.get(), output0.getIsoID()),
               nullptr);
@@ -1274,10 +1280,21 @@ class Tree2BoolExprWordTest : public Tree2BoolExprDivModTest {
     for (size_t bit = 0; bit < outputs.size(); ++bit) {
       const auto termID = findDNLTermIDByInstanceTermAndBit(
           "word0", output->getName().getString().c_str(), bit);
-      const auto it = Tree2BoolExpr::iso2boolExpr_.find(
-          dnl->getDNLTerminalFromID(termID).getIsoID());
-      EXPECT_NE(it, Tree2BoolExpr::iso2boolExpr_.end());
-      outputs[bit] = it == Tree2BoolExpr::iso2boolExpr_.end() ? nullptr : it->second;
+      const auto& term = dnl->getDNLTerminalFromID(termID);
+      const auto it = Tree2BoolExpr::iso2boolExpr_.find(term.getIsoID());
+      if (it != Tree2BoolExpr::iso2boolExpr_.end()) {
+        // Word builders cache every output bit of the instance at once.
+        outputs[bit] = it->second;
+        continue;
+      }
+      // Single-bit builders (ROM) return only the requested bit.
+      auto bitNode = std::make_shared<Node>(0u, &tree);
+      bitNode->type = Node::Type::Table;
+      bitNode->data.termid = termID;
+      const auto bitTable = SNLDesignModeling::getTruthTable(
+          instance, output->getBit(bit)->getOrderID());
+      outputs[bit] = buildGenericTruthTableExpr(
+          bitTable, bitTable.size(), bitNode.get(), term.getIsoID());
     }
     return outputs;
   }
@@ -1341,6 +1358,19 @@ TEST_F(Tree2BoolExprWordTest, AddSubtractMultiplyAndShiftMatchArithmetic) {
             [](unsigned a, unsigned b) {
               const int value = a & 8u ? static_cast<int>(a) - 16 : static_cast<int>(a);
               return static_cast<unsigned>(b >= 4 ? (value < 0 ? -1 : 0) : value >> b);
+            });
+}
+
+TEST_F(Tree2BoolExprWordTest, ReadOnlyMemoryReadsItsContents) {
+  NLUniverse::create();
+  // Five 3-bit rows in a 3-bit address space: 5, 2, 7, 0, 6, packed least
+  // significant row first. Addresses 5..7 are beyond depth and read 0.
+  auto* rom = NLDB0::getOrCreateMemory({3, 5, 3, 1, 0});
+  expectAll(buildOutputs(rom, NLDB0::getMemoryReadData(rom),
+                         {{"INIT_ENABLE", "1"}, {"INIT", "15'h61d5"}}),
+            3, 0, [](unsigned a, unsigned) {
+              static const unsigned rows[] = {5u, 2u, 7u, 0u, 6u};
+              return a < 5 ? rows[a] : 0u;
             });
 }
 

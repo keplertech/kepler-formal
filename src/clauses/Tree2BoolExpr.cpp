@@ -264,6 +264,43 @@ BoolExpr* buildTableSelectTruthTableExpr(const SNLTruthTable& tbl,
       addressSize, depth, 0, 0);
 }  // LCOV_EXCL_LINE
 
+// A read-only memory is a table select whose rows are constants: the
+// dependencies are the address bits, most significant bit first, and the
+// metadata column holds this output bit of every row. Rows at or beyond
+// depth read 0, like TABLE_SELECT.
+BoolExpr* buildRomTruthTableExprRecursive(
+    const SNLTruthTable::RomMetadata& rom,
+    uint32_t addressIndex,
+    uint64_t prefix) {
+  const uint32_t remaining = rom.addressSize - addressIndex;
+  if ((prefix << remaining) >= rom.depth) {
+    return BoolExpr::createFalse();
+  }
+  if (addressIndex == rom.addressSize) {
+    return rom.column[prefix] ? BoolExpr::createTrue()
+                              : BoolExpr::createFalse();
+  }
+  BoolExpr* low = buildRomTruthTableExprRecursive(
+      rom, addressIndex + 1, prefix << 1);
+  BoolExpr* high = buildRomTruthTableExprRecursive(
+      rom, addressIndex + 1, (prefix << 1) | 1);
+  if (low == high) {
+    return low;
+  }
+  BoolExpr* addressBit = getChildFETS(addressIndex);
+  return BoolExpr::Or(
+      BoolExpr::And(BoolExpr::Not(addressBit), low),
+      BoolExpr::And(addressBit, high));
+}
+
+BoolExpr* buildRomTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+  const auto& rom = tbl.getRomMetadata();
+  if (k != rom.addressSize) {
+    throw std::runtime_error("ROM truth table arity mismatch");
+  }
+  return buildRomTruthTableExprRecursive(rom, 0, 0);
+}
+
 namespace {
 
 using BoolExprBits = std::vector<BoolExpr*>;
@@ -640,6 +677,8 @@ BoolExpr* buildGenericTruthTableExpr(
       return expr;
     case SNLTruthTable::GenericType::TABLE_SELECT:
       return buildTableSelectTruthTableExpr(tbl, k);
+    case SNLTruthTable::GenericType::ROM:
+      return buildRomTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::DIVMOD:
       return buildDivModTruthTableExpr(tbl, k, node, isoID);
     case SNLTruthTable::GenericType::ADD_SUB:
