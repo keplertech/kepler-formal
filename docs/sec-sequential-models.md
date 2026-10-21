@@ -56,9 +56,11 @@ clock through the clock carrier:
   input.
 
 The published method assumes alternating phases, so SEC does not reduce a latch
-whose data input reads another latch; such latches, latches with clear or
-preset, gated transparent-low latches, and latches whose enable is not a clock
-phase stay opaque and are reported. SEC does not infer latch behavior from cell
+whose data input reads another latch; such latches, latches with a clear or
+preset that can fire, gated transparent-low latches, and latches whose enable
+is not a clock phase stay opaque and are reported. A clear or preset whose cone
+folds to constant false, for example a pin tied to its inactive level, never
+fires and does not disqualify the latch. SEC does not infer latch behavior from cell
 or pin names. The abstraction is on by default and `--no-latch-abstraction`
 (`latch_abstraction: false`) restores the previous behavior where every latch
 output is opaque.

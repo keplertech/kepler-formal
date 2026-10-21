@@ -3311,7 +3311,8 @@ void setSingleStateSequentialModel(
 // Transparent latch primitive with pins G (enable), D and Q. `transparentLow`
 // gives it the inverted enable of an integrated clock-gate latch.
 SNLDesign* createLatchModel(
-    NLLibrary* library, const std::string& name, bool transparentLow) {
+    NLLibrary* library, const std::string& name, bool transparentLow,
+    bool withClear = false) {
   using Operator = SNLDesignModeling::BooleanExpression::Operator;
   auto* model =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(name));
@@ -3321,7 +3322,15 @@ SNLDesign* createLatchModel(
       SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("D"));
   auto* output =
       SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
-  SNLDesignModeling::addInputsToClockArcs({data}, enable);
+  // Optional active-high clear pin `R`.
+  SNLScalarTerm* clear = withClear
+      ? SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("R"))
+      : nullptr;
+  if (clear != nullptr) {
+    SNLDesignModeling::addInputsToClockArcs({data, clear}, enable);
+  } else {
+    SNLDesignModeling::addInputsToClockArcs({data}, enable);
+  }
   SNLDesignModeling::addClockToOutputsArcs(enable, {output});
   SNLDesignModeling::SequentialModel sequentialModel;
   sequentialModel.kind = SNLDesignModeling::SequentialModel::Kind::Latch;
@@ -3334,6 +3343,9 @@ SNLDesign* createLatchModel(
   sequentialModel.clockedOn = enableExpression;
   SNLDesignModeling::SequentialState state;
   state.nextState = makeSequentialTermExpression(data);
+  if (clear != nullptr) {
+    state.clear = makeSequentialTermExpression(clear);
+  }
   sequentialModel.states.push_back(std::move(state));
   sequentialModel.outputs.push_back({output, makeSequentialStateExpression(0)});
   SNLDesignModeling::setSequentialModel(model, sequentialModel);
@@ -3348,7 +3360,8 @@ SNLDesign* createClockGateTop(
     const std::string& name,
     SNLDesign* latchModel,
     SNLDesign* and2Model,
-    bool cascade = false) {
+    bool cascade = false,
+    bool clearFromInput = false) {
   auto* top =
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topClock =
@@ -3376,6 +3389,17 @@ SNLDesign* createClockGateTop(
   auto* latch = SNLInstance::create(top, latchModel, NLName("clock_gate_latch"));
   latch->getInstTerm(g)->setNet(netClock);
   latch->getInstTerm(d)->setNet(netEnable);
+  // A latch clear pin is either driven by a top input or tied inactive.
+  if (auto* r = latchModel->getScalarTerm(NLName("R"))) {
+    auto* netClear = SNLScalarNet::create(top, NLName("net_rst"));
+    if (clearFromInput) {
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("rst"))
+          ->setNet(netClear);
+    } else {
+      netClear->setType(SNLNet::Type::Assign0);
+    }
+    latch->getInstTerm(r)->setNet(netClear);
+  }
   SNLScalarNet* gateInput = netLatch;
   if (cascade) {
     auto* netFirst = SNLScalarNet::create(top, NLName("net_lq0"));
@@ -4966,6 +4990,56 @@ TEST_F(SequentialEquivalenceStrategyTests,
       createClockGateTop(library, "top0", latchModel, and2Model, /*cascade=*/true);
   auto* top1 =
       createClockGateTop(library, "top1", latchModel, and2Model, /*cascade=*/true);
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LatchAbstractionIgnoresClearTiedInactive) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel =
+      createLatchModel(primitives, "DLATCH_LOW_R", true, /*withClear=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createClockGateTop(library, "top0", latchModel, and2Model);
+  auto* top1 = createClockGateTop(library, "top1", latchModel, and2Model);
+
+  // The clear is tied to its inactive level, so it can never fire and the
+  // latch reduces to its data input exactly like a latch without clear.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 1u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LatchAbstractionKeepsLatchWithLiveClearOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel =
+      createLatchModel(primitives, "DLATCH_LOW_R", true, /*withClear=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createClockGateTop(library, "top0", latchModel, and2Model,
+                                  /*cascade=*/false, /*clearFromInput=*/true);
+  auto* top1 = createClockGateTop(library, "top1", latchModel, and2Model,
+                                  /*cascade=*/false, /*clearFromInput=*/true);
 
   SequentialEquivalenceStrategy strategy(
       top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,

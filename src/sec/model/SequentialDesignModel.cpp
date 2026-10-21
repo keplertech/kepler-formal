@@ -4042,15 +4042,26 @@ std::optional<std::string> getLatchAbstractionUnsupportedReason(
     const std::optional<ClockEvent>& clockEvent,
     BoolExpr* nextStateExpr,
     const std::unordered_set<size_t>& latchStateVarIDs,
-    const SequentialDesignModel& model) {
+    const SequentialDesignModel& model,
+    const std::vector<size_t>& termDNLID2varID,
+    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
   if (!clockEvent.has_value()) {
     return "latch enable does not resolve to one phase of a clock";
   }
   if (clockEvent->phase == ClockPhase::Neg && clockEvent->enable != nullptr) {
     return "latch open while the state samples has a gated enable";
   }
-  if (pending.sequentialState->clear.has_value() ||
-      pending.sequentialState->preset.has_value()) {
+  // A clear or preset whose cone folds to constant false, for example a pin
+  // tied to its inactive level, can never fire: the latch is then a plain
+  // latch and the abstraction applies unchanged.
+  const auto mayFire = [&](const auto& control) {
+    return control.has_value() &&
+           buildSequentialModelExpr(
+               *control, pending, termDNLID2varID, outputExprByTerm) !=
+               BoolExpr::createFalse();
+  };
+  if (mayFire(pending.sequentialState->clear) ||
+      mayFire(pending.sequentialState->preset)) {
     return "latch with clear or preset is not supported";
   }
   const auto ownVarIt = model.inputVarByKey.find(pending.stateKey);
@@ -4514,7 +4525,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
           pending, termDNLID2varID, outputExprByTerm, clockEventByCarrierVarID);
       if (pending.isLatch) {
         if (const auto reason = getLatchAbstractionUnsupportedReason(
-                pending, clockEvent, nextStateExpr, latchStateVarIDs, model)) {
+                pending, clockEvent, nextStateExpr, latchStateVarIDs, model,
+                termDNLID2varID, outputExprByTerm)) {
           markOpaqueState(pending, *reason);
           continue;
         }
