@@ -627,7 +627,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
   // A large design is split rather than skipped (Mishchenko et al., ICCAD
   // 2008, section 3.3): every hypothesis is merged in every partition and each
   // candidate is proved in exactly one, so splitting loses no relation.
-  constexpr int kPartitionVariables = 1 << 21;
+  constexpr int kPartitionVariables = 1 << 17;
   const auto dropRefuted = [&active](const std::vector<char>& refuted) {
     size_t kept = 0;
     for (size_t i = 0; i < active.size(); ++i) {
@@ -790,15 +790,16 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       if (status == SATSolverWrapper::SolveStatus::Unknown) {
         // Each pair is then its own obligation with its own budget, and only
         // the undecided ones are given up (Mony et al., sections 2 and 4.1).
+        // The retries share the unscaled partition budget: the scaled one
+        // pays for a single large monolithic query, and a partition can hold
+        // tens of thousands of pairs (register files kept as flops), so
+        // retries charged to the scaled budget would run for hours.
+        SATSolverWrapper::CadicalWorkBudget retryBudget(
+            100000, 10000000, 100000000);
+        SATSolverWrapper::ScopedCadicalWorkBudget retryScope(retryBudget);
         for (size_t i = begin; i < end; ++i) {
-          // A lone binary obligation is a plain combinational check; give it
-          // the full budget rather than the quick retry.
-          const auto pairStatus =
-              commonStartBinary
-                  ? solver.solveWithAssumptionsStatus(
-                        {-conclusions[i - begin]}, 10000, 1000000, 10000000)
-                  : solver.solveWithAssumptionsStatus(
-                        {-conclusions[i - begin]}, 1000, 100000, 1000000);
+          const auto pairStatus = solver.solveWithAssumptionsStatus(
+              {-conclusions[i - begin]}, 1000, 100000, 1000000);
           refuted[pending[i]] = pairStatus != SATSolverWrapper::SolveStatus::Unsat;
           if (refuted[pending[i]] && isSecDiagEnabled() && i - begin < 3) {
             printf("SEC diag: internal relation given up (%s): %s\n",
