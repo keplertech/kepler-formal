@@ -57,13 +57,28 @@ clock through the clock carrier:
 
 The published method assumes alternating phases, so SEC does not reduce a latch
 whose data input reads another latch; such latches, latches with a clear or
-preset that can fire, gated transparent-low latches, and latches whose enable
-is not a clock phase stay opaque and are reported. A clear or preset whose cone
-folds to constant false, for example a pin tied to its inactive level, never
-fires and does not disqualify the latch. SEC does not infer latch behavior from cell
-or pin names. The abstraction is on by default and `--no-latch-abstraction`
+preset that can fire, and gated transparent-low latches stay opaque and are
+reported. A latch whose enable is not a clock phase takes the data-enabled
+latch model below. A clear or preset whose cone folds to constant false, for
+example a pin tied to its inactive level, never fires and does not disqualify
+the latch. SEC does not infer latch behavior from cell or pin names. The
+abstraction is on by default and `--no-latch-abstraction`
 (`latch_abstraction: false`) restores the previous behavior where every latch
 output is opaque.
+
+### Data-enabled latches
+
+A latch whose enable is data logic rather than a clock phase, typically
+inferred from an incomplete assignment in RTL, is modeled as state on the
+global step with next value `enable ? data_in : q`, and its readers see that
+value, so the latch is transparent within the step. This is the synchronous
+latch model, the same lowering open-source formal flows apply to latches
+before a proof. A latch reading another data-enabled latch takes that latch's
+current-step value, so cascades ripple through within the step. Such a latch
+stays opaque when its output reaches a clock, when a clear or preset can fire,
+or when it sits in a loop of latches that can be open together. The model is on
+by default and `--no-data-latch-model` (`data_latch_model: false`) leaves these
+latches opaque.
 
 ## X Constant Literals
 

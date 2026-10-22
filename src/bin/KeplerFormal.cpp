@@ -76,13 +76,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] | "
+      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] "
+      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -512,6 +512,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "compact_mode",
       "report_skipped_pos",
       "latch_abstraction",
+      "data_latch_model",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1347,6 +1348,7 @@ static int KeplerFormalMainImpl(
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
   bool latchAbstraction = true;
+  bool dataLatchModel = true;
   bool verilogPreprocessing = false;
   bool svSingleUnit = false;
   std::string dumpCnfPath;
@@ -1615,6 +1617,11 @@ static int KeplerFormalMainImpl(
         // latch_abstraction (SEC, default true)
         if (cfg["latch_abstraction"] && cfg["latch_abstraction"].IsScalar()) {
           latchAbstraction = cfg["latch_abstraction"].as<bool>();
+        }
+
+        // data_latch_model (SEC, default true)
+        if (cfg["data_latch_model"] && cfg["data_latch_model"].IsScalar()) {
+          dataLatchModel = cfg["data_latch_model"].as<bool>();
         }
 
         // verilog_preprocessing (optional)
@@ -2117,6 +2124,10 @@ static int KeplerFormalMainImpl(
         latchAbstraction = false;
         continue;
       }
+      if (arg == "--no-data-latch-model") {
+        dataLatchModel = false;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
@@ -2447,6 +2458,7 @@ static int KeplerFormalMainImpl(
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
   KEPLER_FORMAL::Config::setSecLatchAbstraction(latchAbstraction);
+  KEPLER_FORMAL::Config::setSecDataLatchModel(dataLatchModel);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -2478,6 +2490,7 @@ static int KeplerFormalMainImpl(
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
   SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC data-enabled latch model: {}", dataLatchModel ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -3580,6 +3593,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   const auto previousSolver = Config::getSolverType();
   const bool previousReportSkippedPOs = Config::getReportSkippedPOs();
   const bool previousLatchAbstraction = Config::getSecLatchAbstraction();
+  const bool previousDataLatchModel = Config::getSecDataLatchModel();
   const auto previousDefaultLogger = spdlog::default_logger();
   const auto previousNamedLogger = spdlog::get("kepler_formal_main_logger");
   const auto previousMiterLogger = spdlog::get("miter_logger");
@@ -3589,6 +3603,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
     Config::SolverType solver;
     bool reportSkippedPOs;
     bool latchAbstraction;
+    bool dataLatchModel;
     std::shared_ptr<spdlog::logger> defaultLogger;
     std::shared_ptr<spdlog::logger> namedLogger;
     std::shared_ptr<spdlog::logger> miterLogger;
@@ -3598,6 +3613,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       Config::setSolverType(solver);
       Config::setReportSkippedPOs(reportSkippedPOs);
       Config::setSecLatchAbstraction(latchAbstraction);
+      Config::setSecDataLatchModel(dataLatchModel);
       const auto restoreNamedLogger = [](
                                           const char* name,
                                           const std::shared_ptr<spdlog::logger>&
@@ -3618,6 +3634,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       previousSolver,
       previousReportSkippedPOs,
       previousLatchAbstraction,
+      previousDataLatchModel,
       previousDefaultLogger,
       previousNamedLogger,
       previousMiterLogger,
@@ -3626,6 +3643,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   Config::setSolverType(Config::SolverType::KISSAT);
   Config::setReportSkippedPOs(false);
   Config::setSecLatchAbstraction(true);
+  Config::setSecDataLatchModel(true);
   const int rc = runKeplerFormalWorkflow(argc, argv, result, primitiveLoader);
   result.exitCode = rc;
   if (rc != EXIT_SUCCESS && result.status == RunStatus::Error &&

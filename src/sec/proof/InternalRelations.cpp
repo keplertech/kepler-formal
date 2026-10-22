@@ -1053,7 +1053,14 @@ void learnInternalStateRelations(
     }
     // Every candidate is a hypothesis again: a rail-equal pair is binary
     // equal, and the others need it in the current frame.
-    binaryRoundCandidates = candidates.size() - proved.size();
+    for (const auto& candidate : candidates) {
+      for (const auto& [lhs, rhs] : candidate.equalities) {
+        if (!provedSymbols.contains(lhs) || !provedSymbols.contains(rhs)) {
+          ++binaryRoundCandidates;
+          break;
+        }
+      }
+    }
     const auto provedBinary =
         proveInternalRelations(problem, candidates, options, solverType, true);
     for (const auto& [lhs, rhs] : provedBinary) {

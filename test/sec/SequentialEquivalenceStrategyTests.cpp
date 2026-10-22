@@ -3451,6 +3451,86 @@ SNLDesign* createLatchPipelineTop(
   return top;
 }
 
+// A latch whose enable is a registered data signal, not a clock. The data is
+// a flop on `clk`. `Cascade` feeds a second such latch from the first;
+// `Loop` feeds the first latch's data from the second through an AND.
+enum class DataLatchShape { Single, Cascade, Loop };
+
+SNLDesign* createDataLatchTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* latchModel,
+    SNLDesign* and2Model,
+    DataLatchShape shape) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topEnable =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"));
+  auto* topData =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("d"));
+  auto* topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("q"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netEnable = SNLScalarNet::create(top, NLName("net_en"));
+  auto* netData = SNLScalarNet::create(top, NLName("net_d"));
+  auto* netFlopEnable = SNLScalarNet::create(top, NLName("net_fen"));
+  auto* netFlopData = SNLScalarNet::create(top, NLName("net_fd"));
+  auto* netFirst = SNLScalarNet::create(top, NLName("net_l1"));
+  auto* netSecond = SNLScalarNet::create(top, NLName("net_l2"));
+  auto* netLoop = SNLScalarNet::create(top, NLName("net_loop"));
+  topClock->setNet(netClock);
+  topEnable->setNet(netEnable);
+  topData->setNet(netData);
+  topOut->setNet(shape == DataLatchShape::Cascade ? netSecond : netFirst);
+
+  auto* enableFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_en"));
+  enableFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  enableFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
+  enableFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopEnable);
+  auto* dataFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_d"));
+  dataFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  dataFlop->getInstTerm(NLDB0::getDFFData())->setNet(netData);
+  dataFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopData);
+
+  auto* g = latchModel->getScalarTerm(NLName("G"));
+  auto* d = latchModel->getScalarTerm(NLName("D"));
+  auto* q = latchModel->getScalarTerm(NLName("Q"));
+  auto* first = SNLInstance::create(top, latchModel, NLName("data_latch"));
+  first->getInstTerm(g)->setNet(netFlopEnable);
+  first->getInstTerm(d)->setNet(
+      shape == DataLatchShape::Loop ? netLoop : netFlopData);
+  first->getInstTerm(q)->setNet(netFirst);
+  if (shape != DataLatchShape::Single) {
+    auto* second = SNLInstance::create(top, latchModel, NLName("data_latch1"));
+    second->getInstTerm(g)->setNet(netFlopEnable);
+    second->getInstTerm(d)->setNet(netFirst);
+    second->getInstTerm(q)->setNet(netSecond);
+  }
+  if (shape == DataLatchShape::Loop) {
+    auto* gate = SNLInstance::create(top, and2Model, NLName("loop_and"));
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("A")))->setNet(netSecond);
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("B")))->setNet(netFlopData);
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("Y")))->setNet(netLoop);
+  }
+  return top;
+}
+
+class ScopedDataLatchModel {
+ public:
+  explicit ScopedDataLatchModel(bool enabled)
+      : previous_(KEPLER_FORMAL::Config::getSecDataLatchModel()) {
+    KEPLER_FORMAL::Config::setSecDataLatchModel(enabled);
+  }
+  ~ScopedDataLatchModel() {
+    KEPLER_FORMAL::Config::setSecDataLatchModel(previous_);
+  }
+
+ private:
+  bool previous_;
+};
+
 class ScopedLatchAbstraction {
  public:
   explicit ScopedLatchAbstraction(bool enabled)
@@ -5040,6 +5120,105 @@ TEST_F(SequentialEquivalenceStrategyTests,
                                   /*cascade=*/false, /*clearFromInput=*/true);
   auto* top1 = createClockGateTop(library, "top1", latchModel, and2Model,
                                   /*cascade=*/false, /*clearFromInput=*/true);
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelKeepsLatchWithDataEnableAsTransparentState) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Single);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Single);
+
+  // The enable is a flop output, not a clock phase: the latch stays as state
+  // next to the two flops and nothing is opaque.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 3u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelOffKeepsLatchWithDataEnableOpaque) {
+  const ScopedDataLatchModel disabled(false);
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Single);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Single);
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelResolvesCascadedLatchesInDependencyOrder) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Cascade);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Cascade);
+
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 4u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelLeavesLatchesOpenTogetherInALoopOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Loop);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Loop);
 
   SequentialEquivalenceStrategy strategy(
       top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,

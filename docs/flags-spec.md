@@ -62,6 +62,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 | `--no-latch-abstraction` | Disable the SEC latch abstraction (phase abstraction of clock-driven latches); latch outputs become opaque as before. |
+| `--no-data-latch-model` | Disable the SEC model of data-enabled latches (enable is data logic, not a clock phase); such latches become opaque. |
 
 ## YAML config flags
 
@@ -96,6 +97,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `latch_abstraction` | bool | Defaults to `true`. `false` has the same effect as `--no-latch-abstraction`. |
+| `data_latch_model` | bool | Defaults to `true`. `false` has the same effect as `--no-data-latch-model`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |
