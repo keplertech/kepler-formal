@@ -4032,6 +4032,10 @@ struct RebuiltTransitionArtifacts {
   // next value `enable ? data : q`, and readers see that value, so the latch
   // is transparent within the step (the synchronous latch model).
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> dataLatchExprByKey;
+  // Those of them open only while the clock is low, with a gated enable
+  // `!clk & g`: they hold through the high phase, so negative-phase readers
+  // see their next value, supplied by the phase composition, instead.
+  std::unordered_set<SignalKey, SignalKeyHash> lowPhaseLatchKeys;
 };
 
 // A clear or preset whose cone folds to constant false, for example a pin
@@ -4067,9 +4071,6 @@ std::optional<std::string> getLatchAbstractionUnsupportedReason(
     const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
   if (!clockEvent.has_value()) {
     return "latch enable does not resolve to one phase of a clock";
-  }
-  if (clockEvent->phase == ClockPhase::Neg && clockEvent->enable != nullptr) {
-    return "latch open while the state samples has a gated enable";
   }
   // A dead clear or preset leaves a plain latch and the abstraction applies
   // unchanged.
@@ -4134,22 +4135,39 @@ void substituteDataEnabledLatches(
     return;
   }
   std::unordered_map<size_t, BoolExpr*> replacements;
+  // Negative-phase readers see a latch open only while the clock is low as it
+  // was held through the high phase: its next value, which the phase
+  // composition supplies, so it is not rewritten for them.
+  std::unordered_map<size_t, BoolExpr*> negativePhaseReplacements;
   for (const auto& [key, expr] : latches) {
     if (const auto varIt = model.inputVarByKey.find(key);
         varIt != model.inputVarByKey.end()) {
       replacements.emplace(varIt->second, expr);
+      if (!artifacts.lowPhaseLatchKeys.contains(key)) {
+        negativePhaseReplacements.emplace(varIt->second, expr);
+      }
     }
   }
   if (replacements.empty()) {
     return;
   }
-  // One memo for every expression: the readers share most of their logic.
+  // One memo per replacement set: the readers share most of their logic.
   std::unordered_map<BoolExpr*, BoolExpr*> memo;
+  std::unordered_map<BoolExpr*, BoolExpr*> negativePhaseMemo;
   size_t rewritten = 0;
   for (auto& [key, expr] : model.nextStateExprByStateKey) {
     if (latches.find(key) == latches.end()) {
-      BoolExpr* substituted =
-          substituteBoolExprVariableExpressions(expr, replacements, memo);
+      const auto eventIt = model.clockEventByStateKey.find(key);
+      const bool negativePhase = eventIt != model.clockEventByStateKey.end() &&
+                                 eventIt->second.phase == ClockPhase::Neg;
+      BoolExpr* substituted = expr;
+      if (!negativePhase) {
+        substituted =
+            substituteBoolExprVariableExpressions(expr, replacements, memo);
+      } else if (!negativePhaseReplacements.empty()) {
+        substituted = substituteBoolExprVariableExpressions(
+            expr, negativePhaseReplacements, negativePhaseMemo);
+      }
       rewritten += substituted != expr ? 1 : 0;
       expr = substituted;
     }
@@ -4580,8 +4598,18 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
                              outputExprByTerm, transitionClockStripMemo);
       auto clockEvent = classifyPendingClockEvent(
           pending, termDNLID2varID, outputExprByTerm, clockEventByCarrierVarID);
-      if (pending.isLatch && !clockEvent.has_value() &&
-          KEPLER_FORMAL::Config::getSecDataLatchModel()) {
+      // Open only while the clock is low and gated, `!clk & g`, as in a
+      // latch-based memory: when the positive-edge state samples the latch
+      // holds `g ? data : q`, the step-transparent form of a data-enabled
+      // latch, so it takes that model as positive-phase state.
+      // `buildNextStateExpr` already folded the gate as a clock enable.
+      const bool lowPhaseGatedLatch =
+          pending.isLatch && clockEvent.has_value() &&
+          clockEvent->phase == ClockPhase::Neg && clockEvent->enable != nullptr;
+      if (pending.isLatch &&
+          (lowPhaseGatedLatch ||
+           (!clockEvent.has_value() &&
+            KEPLER_FORMAL::Config::getSecDataLatchModel()))) {
         // The enable is data logic, not a clock phase: the latch is state on
         // the global step with next value `enable ? data : q`, and readers
         // see that value (the synchronous latch model). It stays opaque when
@@ -4599,22 +4627,33 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         feedsClock = feedsClock || stateVarIt == model.inputVarByKey.end() ||
             topClockCarrierVarIDs.contains(stateVarIt->second) ||
             clockEventByCarrierVarID.contains(stateVarIt->second);
-        BoolExpr* enable = feedsClock
-            ? nullptr
-            : buildPendingClockExpr(pending, termDNLID2varID, outputExprByTerm);
+        BoolExpr* enable = feedsClock ? nullptr
+            : lowPhaseGatedLatch
+                ? clockEvent->enable
+                : buildPendingClockExpr(pending, termDNLID2varID, outputExprByTerm);
         if (enable == nullptr) {
           markOpaqueState(pending,
-                          feedsClock ? "data-enabled latch drives a clock"
-                                     : "latch enable does not resolve to one "
-                                       "phase of a clock");
+                          !feedsClock ? "latch enable does not resolve to one "
+                                        "phase of a clock"
+                          : lowPhaseGatedLatch
+                              ? "latch drives a clock"
+                              : "data-enabled latch drives a clock");
           continue;
         }
         if (latchControlMayFire(pending, termDNLID2varID, outputExprByTerm)) {
           markOpaqueState(pending, "latch with clear or preset is not supported");
           continue;
         }
-        nextStateExpr = makeIte(enable, nextStateExpr,
-                                BoolExpr::Var(stateVarIt->second));
+        if (lowPhaseGatedLatch) {
+          clockEvent->phase = ClockPhase::Pos;
+          artifacts.lowPhaseLatchKeys.insert(pending.stateKey);
+          artifacts.lowPhaseLatchKeys.insert(
+              pending.complementedStateKeys.begin(),
+              pending.complementedStateKeys.end());
+        } else {
+          nextStateExpr = makeIte(enable, nextStateExpr,
+                                  BoolExpr::Var(stateVarIt->second));
+        }
         artifacts.dataLatchExprByKey.emplace(pending.stateKey, nextStateExpr);
         for (const auto& complementedKey : pending.complementedStateKeys) {
           artifacts.dataLatchExprByKey.emplace(complementedKey,

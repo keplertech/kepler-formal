@@ -53,16 +53,21 @@ clock through the clock carrier:
   positive-edge state samples, so it is a wire. Its state variable is replaced
   by its `data_in` formula everywhere and removed from the state. This is the
   integrated clock-gate case: the gated clock's enable becomes the latch data
-  input.
+  input. A gated enable, `!clk & g`, as in a latch-based memory with a
+  registered write enable, keeps the latch closed while `g` is zero: it is
+  kept as positive-phase state with `next = g ? data_in : q`, and its
+  positive-edge readers see that value, the data-enabled latch form below.
+  Negative-phase readers see the value it held through the high phase, which
+  is its next value.
 
 The published method assumes alternating phases, so SEC does not reduce a latch
-whose data input reads another latch; such latches, latches with a clear or
-preset that can fire, and gated transparent-low latches stay opaque and are
-reported. A latch whose enable is not a clock phase takes the data-enabled
-latch model below. A clear or preset whose cone folds to constant false, for
-example a pin tied to its inactive level, never fires and does not disqualify
-the latch. SEC does not infer latch behavior from cell or pin names. The
-abstraction is on by default and `--no-latch-abstraction`
+whose data input reads another latch; such latches and latches with a clear or
+preset that can fire stay opaque and are reported. A latch whose enable is not
+a clock phase takes the data-enabled latch model below. A clear or preset whose
+cone folds to constant false, for example a pin tied to its inactive level,
+never fires and does not disqualify the latch. SEC does not infer latch
+behavior from cell or pin names. The abstraction is on by default and
+`--no-latch-abstraction`
 (`latch_abstraction: false`) restores the previous behavior where every latch
 output is opaque.
 

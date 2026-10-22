@@ -3517,6 +3517,106 @@ SNLDesign* createDataLatchTop(
   return top;
 }
 
+// A latch open only while the clock is low and a registered write enable is
+// one, `!clk & en`, as in a latch-based memory: a transparent-high latch whose
+// gate is the inverted clock AND the enable, its data a flop output, and a flop
+// on the rising edge reads it. With `flopReference` the storage is a flop
+// updated under `en` and the reader sees the mux `en ? data : q` directly, the
+// synchronous form of the latch.
+SNLDesign* createLowPhaseGatedLatchTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* latchModel,
+    SNLDesign* invModel,
+    SNLDesign* and2Model,
+    bool flopReference) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topEnable =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"));
+  auto* topData =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("d"));
+  auto* topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("q"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netEnable = SNLScalarNet::create(top, NLName("net_en"));
+  auto* netData = SNLScalarNet::create(top, NLName("net_d"));
+  auto* netFlopEnable = SNLScalarNet::create(top, NLName("net_fen"));
+  auto* netFlopData = SNLScalarNet::create(top, NLName("net_fd"));
+  auto* netRead = SNLScalarNet::create(top, NLName("net_read"));
+  auto* netQ = SNLScalarNet::create(top, NLName("net_q"));
+  topClock->setNet(netClock);
+  topEnable->setNet(netEnable);
+  topData->setNet(netData);
+  topOut->setNet(netQ);
+
+  auto* enableFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_en"));
+  enableFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  enableFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
+  enableFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopEnable);
+  auto* dataFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_d"));
+  dataFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  dataFlop->getInstTerm(NLDB0::getDFFData())->setNet(netData);
+  dataFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopData);
+
+  auto* invA = invModel->getScalarTerm(NLName("A"));
+  auto* invY = invModel->getScalarTerm(NLName("Y"));
+  auto* andA = and2Model->getScalarTerm(NLName("A"));
+  auto* andB = and2Model->getScalarTerm(NLName("B"));
+  auto* andY = and2Model->getScalarTerm(NLName("Y"));
+  const auto addInv = [&](const std::string& instName, SNLScalarNet* in,
+                          SNLScalarNet* out) {
+    auto* inv = SNLInstance::create(top, invModel, NLName(instName));
+    inv->getInstTerm(invA)->setNet(in);
+    inv->getInstTerm(invY)->setNet(out);
+  };
+  const auto addAnd = [&](const std::string& instName, SNLScalarNet* a,
+                          SNLScalarNet* b, SNLScalarNet* out) {
+    auto* gate = SNLInstance::create(top, and2Model, NLName(instName));
+    gate->getInstTerm(andA)->setNet(a);
+    gate->getInstTerm(andB)->setNet(b);
+    gate->getInstTerm(andY)->setNet(out);
+  };
+  if (flopReference) {
+    // `en ? d : stored` from AND and INV gates, kept by a flop.
+    auto* netEnableLow = SNLScalarNet::create(top, NLName("net_nen"));
+    auto* netStored = SNLScalarNet::create(top, NLName("net_stored"));
+    auto* netWrite = SNLScalarNet::create(top, NLName("net_write"));
+    auto* netHold = SNLScalarNet::create(top, NLName("net_hold"));
+    auto* netNoWrite = SNLScalarNet::create(top, NLName("net_nwrite"));
+    auto* netNoHold = SNLScalarNet::create(top, NLName("net_nhold"));
+    auto* netNeither = SNLScalarNet::create(top, NLName("net_neither"));
+    addInv("en_inv", netFlopEnable, netEnableLow);
+    addAnd("write_and", netFlopEnable, netFlopData, netWrite);
+    addAnd("hold_and", netEnableLow, netStored, netHold);
+    addInv("write_inv", netWrite, netNoWrite);
+    addInv("hold_inv", netHold, netNoHold);
+    addAnd("neither_and", netNoWrite, netNoHold, netNeither);
+    addInv("mux_inv", netNeither, netRead);
+    auto* store = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_store"));
+    store->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+    store->getInstTerm(NLDB0::getDFFData())->setNet(netRead);
+    store->getInstTerm(NLDB0::getDFFOutput())->setNet(netStored);
+  } else {
+    auto* netClockLow = SNLScalarNet::create(top, NLName("net_nclk"));
+    auto* netGate = SNLScalarNet::create(top, NLName("net_g"));
+    addInv("clk_inv", netClock, netClockLow);
+    addAnd("gate_and", netClockLow, netFlopEnable, netGate);
+    auto* latch = SNLInstance::create(top, latchModel, NLName("mem_latch"));
+    latch->getInstTerm(latchModel->getScalarTerm(NLName("G")))->setNet(netGate);
+    latch->getInstTerm(latchModel->getScalarTerm(NLName("D")))
+        ->setNet(netFlopData);
+    latch->getInstTerm(latchModel->getScalarTerm(NLName("Q")))->setNet(netRead);
+  }
+  auto* readFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_q"));
+  readFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  readFlop->getInstTerm(NLDB0::getDFFData())->setNet(netRead);
+  readFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ);
+  return top;
+}
+
 class ScopedDataLatchModel {
  public:
   explicit ScopedDataLatchModel(bool enabled)
@@ -5127,6 +5227,41 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto result = strategy.run(4);
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
   EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LatchAbstractionKeepsGatedTransparentLowLatchAsTransparentState) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* invModel = createInvModel(primitives);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createLowPhaseGatedLatchTop(
+      library, "top0", latchModel, invModel, and2Model, false);
+  auto* top1 = createLowPhaseGatedLatchTop(
+      library, "top1", latchModel, invModel, and2Model, true);
+
+  // Open while the clock is low and the registered enable is one: the latch
+  // is positive-phase state next to the three flops and nothing is opaque.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 4u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+  EXPECT_EQ(model0.clockEventByStateKey.size(), 4u);
+  for (const auto& [key, event] : model0.clockEventByStateKey) {
+    EXPECT_TRUE(event.phase == ClockPhase::Pos);
+  }
+
+  // The latch-based storage matches a flop updated under the enable whose
+  // reader sees `en ? data : q` directly.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 1u);
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
