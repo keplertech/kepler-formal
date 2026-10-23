@@ -43,4 +43,11 @@ BoolExpr* substituteBoolExprVariableExpressions(
     BoolExpr* root,
     const std::unordered_map<size_t, BoolExpr*>& replacements);
 
+// Same substitution with a memo the caller shares across roots, so logic
+// shared by many expressions is rewritten once.
+BoolExpr* substituteBoolExprVariableExpressions(
+    BoolExpr* root,
+    const std::unordered_map<size_t, BoolExpr*>& replacements,
+    std::unordered_map<BoolExpr*, BoolExpr*>& memo);
+
 }  // namespace KEPLER_FORMAL::SEC

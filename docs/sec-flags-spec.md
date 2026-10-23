@@ -111,6 +111,7 @@ liberty_files:
 | `--sec-encoding <mode>` | `sec_encoding: <mode>` | `dual_rail_steady` | `binary`, `dual_rail_steady` | Selects how SEC models unknown or reset-unanchored state values. Omit the key/flag to use the dual-rail default. |
 | `--learn-internal-relations <bool>` | `learn_internal_relations: <bool>` | `true` | `true`, `false`, `1`, `0` | Discover and prove internal register equalities before the output proof. |
 | `--allow-x-equality-in-internal-relations <bool>` | `allow_x_equality_in_internal_relations: <bool>` | `true` | `true`, `false`, `1`, `0` | Allow X/X in proved internal ternary relations only. Has no effect when learning is disabled or encoding is binary. |
+| `--binary-relation-round <bool>` | `binary_relation_round: <bool>` | `true` | `true`, `false`, `1`, `0` | Retry unproved internal relations on the binary next-state functions, share the proved transitions and discharge outputs equal in binary semantics; see [sec-internal-relations.md](sec-internal-relations.md). Has no effect when learning is disabled, the encoding is binary or the engine is IMC. |
 | `--sec-reset-cycles <n>` | `sec_reset.cycles: <n>` | omitted | Positive integer | Holds user-listed reset ports active for the first `n` SEC cycles. |
 | `--sec-reset-port <name=0\|1>` | `sec_reset.ports` | omitted | Repeatable reset port assignment | Adds a top-level reset input and asserted value. Repeat for multiple reset ports. |
 | `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
@@ -118,6 +119,8 @@ liberty_files:
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
+| `--no-latch-abstraction` | `latch_abstraction: false` | `true` | boolean | Disables the SEC latch abstraction described in [sec-sequential-models.md](sec-sequential-models.md); every latch output is opaque again, as before. |
+| `--no-data-latch-model` | `data_latch_model: false` | `true` | boolean | Disables the data-enabled latch model described in [sec-sequential-models.md](sec-sequential-models.md); latches whose enable is not a clock phase are opaque. |
 
 Accepted values for `sec_engine`:
 
@@ -178,7 +181,9 @@ output pins are shared environment inputs. SEC therefore proves
 that the surrounding designs drive the block identically and remain equivalent
 for every possible value returned by the abstracted block. Interface names,
 directions, widths, and bit ranges are validated across the paired paths before
-proof. Verification treats the selected leaf pins as boundaries without
+proof. An input pin unconnected on both sides has no driving cone and is
+skipped; one unconnected on a single side is rejected. Verification treats the
+selected leaf pins as boundaries without
 cloning or rewiring the netlists. The behavior is the same in normal and compact
 SEC, for `v`, `sv`, and `sv2v` inputs. Compact self-model reuse is
 disabled when any paired left/right instance paths differ.
@@ -194,6 +199,13 @@ kepler-formal -v sec -verilog rtl.v gate.v \
 set_as_boundary:
   - [u_subsystem/u_sram, u_subsystem/u_sram_macro]
 ```
+
+`/` separates hierarchy levels. A literal slash inside an instance name is
+written `\/` (the SDC escaping convention used by OpenSTA), so a flattened
+netlist leaf written `\u_block/u_leaf ` in Verilog is selected by
+`u_block\/u_leaf`, while `u_block/u_leaf` always names instance `u_leaf`
+inside instance `u_block`. Paths are never
+reinterpreted.
 
 User-defined boundaries cannot currently be combined with scope extraction or
 scope cleaning.
@@ -258,6 +270,10 @@ The YAML spelling `learn_ineternal_relations` is accepted as an alias for
 
 The algorithm follows the candidate/refinement and inductive correspondence
 approach in [Mishchenko et al., ICCAD 2008](https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_seq.pdf).
+Candidates come from pin names, output-net names and shared drivers, and are
+propagated to a fixed point by merging proved pairs and rehashing the
+transitions (van Eijk, IEEE TCAD 19(7), 2000; Kuehlmann, Paruthi, Krohm and
+Ganai, IEEE TCAD 21(12), 2002). See `docs/sec-internal-relations.md`.
 The ternary representation follows [Khasidashvili and Hanna, 2003](https://people.eecs.berkeley.edu/~alanmi/courses/2007_290N/papers/sec_intel_bmc03.pdf).
 The X option applies only to the internal candidate check; the existing output
 property and selected engine are unchanged. Turning off both switches retains

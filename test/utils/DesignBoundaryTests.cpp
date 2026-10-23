@@ -271,12 +271,14 @@ TEST_F(DesignBoundaryTests, RejectsInvalidDuplicateAndNestedPaths) {
       std::invalid_argument);
 }
 
-TEST_F(DesignBoundaryTests, RejectsUnconnectedInputAndPinlessInstance) {
+TEST_F(DesignBoundaryTests, AcceptsUnconnectedInputAndRejectsPinlessInstance) {
   auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
   auto* top = SNLDesign::create(designs_, NLName("top"));
   SNLInstance::create(top, block, NLName("u"));
-  EXPECT_THROW(
-      BoundarySelection(top, {{"u", "u"}}, 0), std::invalid_argument);
+  // An unconnected input is kept in the interface but marked unconnected.
+  BoundarySelection unconnected(top, {{"u", "u"}}, 0);
+  ASSERT_NE(nullptr, findPort(unconnected, 0, "A"));
+  EXPECT_FALSE(findPort(unconnected, 0, "A")->connected);
 
   auto* empty = createScalarBlock("EMPTY", {}, {});
   auto* emptyTop = SNLDesign::create(designs_, NLName("empty_top"));
@@ -404,6 +406,104 @@ TEST_F(DesignBoundaryTests, RejectsMalformedPathsAndReportsMissingAncestor) {
       top, {{"wrap/leaf", "wrap/leaf"}, {"wrap", "wrap"}}, 0,
       "nested boundary instance paths");
   EXPECT_NE(nullptr, wrapper->getInstance(NLName("leaf")));
+}
+
+TEST_F(DesignBoundaryTests, EscapedSlashSelectsFlattenedLeafNames) {
+  // Flattened netlists keep the hierarchical origin inside the leaf instance
+  // name (Verilog `\u0/r0 `).  A literal slash is written `\/`; a plain `/`
+  // always separates hierarchy levels and is never reinterpreted.
+  auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
+  auto* a = block->getScalarTerm(NLName("A"));
+  auto* y = block->getScalarTerm(NLName("Y"));
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  auto* flat = SNLInstance::create(top, block, NLName("u0/r0"));
+  flat->getInstTerm(a)->setNet(addPort(top, "a", SNLTerm::Direction::Input));
+  flat->getInstTerm(y)->setNet(addPort(top, "y", SNLTerm::Direction::Output));
+  auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
+  auto* nested = SNLInstance::create(wrapper, block, NLName("u1/r1"));
+  nested->getInstTerm(a)->setNet(
+      addPort(wrapper, "a", SNLTerm::Direction::Input));
+  nested->getInstTerm(y)->setNet(
+      addPort(wrapper, "y", SNLTerm::Direction::Output));
+  auto* wrap = SNLInstance::create(top, wrapper, NLName("wrap"));
+  wrap->getInstTerm(wrapper->getScalarTerm(NLName("a")))->setNet(
+      addPort(top, "wa", SNLTerm::Direction::Input));
+  wrap->getInstTerm(wrapper->getScalarTerm(NLName("y")))->setNet(
+      addPort(top, "wy", SNLTerm::Direction::Output));
+  universe_->setTopDesign(top);
+
+  const BoundaryPairs pairs{{"u0\\/r0", "u0\\/r0"},
+                            {"wrap/u1\\/r1", "wrap/u1\\/r1"}};
+  BoundarySelection selection(top, pairs, 0);
+  ASSERT_EQ(4u, selection.getPorts().size());
+  EXPECT_NE(nullptr, findPort(selection, 0, "A"));
+  EXPECT_NE(nullptr, findPort(selection, 0, "Y"));
+  EXPECT_NE(nullptr, findPort(selection, 1, "A"));
+  EXPECT_NE(nullptr, findPort(selection, 1, "Y"));
+  const auto* dnl = naja::DNL::get();
+  LeafBoundary boundary(*dnl, pairs, 0);
+  EXPECT_EQ(2u, boundary.getInputs().size());
+  EXPECT_EQ(2u, boundary.getOutputs().size());
+  EXPECT_TRUE(boundary.containsInstance(
+      dnl->getTop().getChildInstance(flat).getID()));
+  EXPECT_TRUE(boundary.containsInstance(
+      dnl->getTop().getChildInstance(wrap).getChildInstance(nested).getID()));
+  // No guessing: an unescaped slash is hierarchy even when a literal name
+  // would match, and an escaped slash is never split.
+  expectInvalidBoundary(
+      top, {{"u0/r0", "u0/r0"}}, 0, "does not resolve at `u0`");
+  expectInvalidBoundary(
+      top, {{"wrap\\/u1/r1", "wrap\\/u1/r1"}}, 0,
+      "does not resolve at `wrap/u1`");
+  expectInvalidBoundary(
+      top, {{"u0\\/r0\\", "u0\\/r0\\"}}, 0, "unterminated escape");
+}
+
+TEST_F(DesignBoundaryTests, SkipsInputPinsUnconnectedOnBothSides) {
+  // Abstracts can model non-logic pins (VDD) as inputs that no netlist
+  // connects.  Such a pin has no driving cone: it stays in the interface,
+  // takes no terminal, and must be unconnected on both sides.
+  auto* block = createScalarBlock("BLOCK", {"A", "VDD"}, {"Y"});
+  auto* a = block->getScalarTerm(NLName("A"));
+  auto* vdd = block->getScalarTerm(NLName("VDD"));
+  auto* y = block->getScalarTerm(NLName("Y"));
+  auto makeTop = [&](const char* name, bool connectVdd) {
+    auto* top = SNLDesign::create(designs_, NLName(name));
+    auto* instance = SNLInstance::create(top, block, NLName("u"));
+    instance->getInstTerm(a)->setNet(addPort(top, "a", SNLTerm::Direction::Input));
+    instance->getInstTerm(y)->setNet(addPort(top, "y", SNLTerm::Direction::Output));
+    if (connectVdd) {
+      instance->getInstTerm(vdd)->setNet(
+          addPort(top, "vdd", SNLTerm::Direction::Input));
+    }
+    return top;
+  };
+  auto* top = makeTop("top", false);
+  universe_->setTopDesign(top);
+  BoundarySelection selection(top, {{"u", "u"}}, 0);
+  ASSERT_EQ(3u, selection.getPorts().size());
+  EXPECT_TRUE(findPort(selection, 0, "A")->connected);
+  EXPECT_FALSE(findPort(selection, 0, "VDD")->connected);
+  const auto* dnl = naja::DNL::get();
+  LeafBoundary boundary(*dnl, {{"u", "u"}}, 0);
+  EXPECT_EQ(1u, boundary.getInputs().size());
+  EXPECT_EQ(1u, boundary.getOutputs().size());
+  EXPECT_EQ(3u, boundary.getPorts().size());
+  validateBoundaryInterfaces(selection.getPorts(), selection.getPorts());
+
+  naja::DNL::destroy();
+  auto* connected = makeTop("top_connected", true);
+  universe_->setTopDesign(connected);
+  BoundarySelection connectedSelection(connected, {{"u", "u"}}, 1);
+  EXPECT_TRUE(findPort(connectedSelection, 0, "VDD")->connected);
+  try {
+    validateBoundaryInterfaces(selection.getPorts(), connectedSelection.getPorts());
+    FAIL() << "one-sided unconnected input accepted";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string::npos,
+              std::string(error.what()).find("unconnected on the left side only"))
+        << error.what();
+  }
 }
 
 TEST_F(DesignBoundaryTests, RejectsConstantDrivenBoundaryOutput) {

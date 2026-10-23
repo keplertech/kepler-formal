@@ -69,12 +69,37 @@ public:
     return reportSkippedPOs_;
   }
 
+  // SEC latch abstraction: clock-driven latches are reduced by phase
+  // abstraction instead of staying opaque. On by default; off restores the
+  // previous behavior where every latch output is opaque.
+  static void setSecLatchAbstraction(bool enabled) {
+    secLatchAbstraction_ = enabled;
+  }
+
+  static bool getSecLatchAbstraction() {
+    return secLatchAbstraction_;
+  }
+
+  // SEC data-enabled latch model: a latch whose enable is data logic rather
+  // than a clock phase is state with next value `enable ? data : q`, and its
+  // readers see that value, so it is transparent within the step. On by
+  // default; off leaves such latches opaque.
+  static void setSecDataLatchModel(bool enabled) {
+    secDataLatchModel_ = enabled;
+  }
+
+  static bool getSecDataLatchModel() {
+    return secDataLatchModel_;
+  }
+
 private:
   Config() = default;
   ~Config() = default;
 
   inline static SolverType solverType_ = KISSAT;
   inline static bool reportSkippedPOs_ = false;
+  inline static bool secLatchAbstraction_ = true;
+  inline static bool secDataLatchModel_ = true;
   inline static std::atomic<uint64_t> nextVerificationGeneration_{1};
   inline static std::atomic<uint64_t> verificationGeneration_{0};
 };

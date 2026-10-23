@@ -3877,6 +3877,9 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   copyResetBootstrapSpec(symbolSpace.problem, proofProblem);
   learnInternalStateRelations(model0, model1, proofProblem,
       internalRelationOptions_, solverType_, secDiagEnabled || secSummaryStatsEnabled());
+  if (internalRelationOptions_.learnInternalRelations) {
+    mergeProvedStateRelations(proofProblem, secDiagEnabled);
+  }
 
   if (exportOptions_.enabled()) {
     exportSecBtor2File(proofProblem, exportOptions_.path,
