@@ -3361,7 +3361,8 @@ SNLDesign* createClockGateTop(
     SNLDesign* latchModel,
     SNLDesign* and2Model,
     bool cascade = false,
-    bool clearFromInput = false) {
+    bool clearFromInput = false,
+    bool clearUnconnected = false) {
   auto* top =
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topClock =
@@ -3389,8 +3390,9 @@ SNLDesign* createClockGateTop(
   auto* latch = SNLInstance::create(top, latchModel, NLName("clock_gate_latch"));
   latch->getInstTerm(g)->setNet(netClock);
   latch->getInstTerm(d)->setNet(netEnable);
-  // A latch clear pin is either driven by a top input or tied inactive.
-  if (auto* r = latchModel->getScalarTerm(NLName("R"))) {
+  // A latch clear pin is driven by a top input, tied inactive, or left
+  // without a net as a netlist writer leaves an unconnected pin.
+  if (auto* r = latchModel->getScalarTerm(NLName("R")); r && !clearUnconnected) {
     auto* netClear = SNLScalarNet::create(top, NLName("net_rst"));
     if (clearFromInput) {
       SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("rst"))
@@ -5220,6 +5222,41 @@ TEST_F(SequentialEquivalenceStrategyTests,
                                   /*cascade=*/false, /*clearFromInput=*/true);
   auto* top1 = createClockGateTop(library, "top1", latchModel, and2Model,
                                   /*cascade=*/false, /*clearFromInput=*/true);
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LatchWithUnconnectedClearIsSkippedAsNotConnected) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel =
+      createLatchModel(primitives, "DLATCH_LOW_R", true, /*withClear=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createClockGateTop(library, "top0", latchModel, and2Model,
+                                  /*cascade=*/false, /*clearFromInput=*/false,
+                                  /*clearUnconnected=*/true);
+  auto* top1 = createClockGateTop(library, "top1", latchModel, and2Model,
+                                  /*cascade=*/false, /*clearFromInput=*/false,
+                                  /*clearUnconnected=*/true);
+
+  // The clear pin has no net: the latch is a connectivity skip reported as
+  // not connected, like an undriven pin, and extraction completes.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_TRUE(std::any_of(
+      model0.connectivitySkipInfoByKey.begin(),
+      model0.connectivitySkipInfoByKey.end(), [](const auto& entry) {
+        return entry.second.origin == ConnectivitySkipOrigin::NoDriver &&
+               entry.second.detail.find("not connected") != std::string::npos;
+      }));
 
   SequentialEquivalenceStrategy strategy(
       top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
