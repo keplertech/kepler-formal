@@ -82,13 +82,18 @@ uint64_t relationWord(const InternalRelationCandidate& candidate, const Words& s
 // that are the same formula after the rewrite come back as one node.
 //
 // A gate with three or more inputs is a chain of two-input nodes, and swapping
-// its pins, as physical optimization does, re-brackets that chain.  Short
-// AND/OR chains are therefore rebuilt from their sorted operands, which makes
-// the result independent of the pin order.  Longer chains keep their shape.
+// its pins, as physical optimization does, re-brackets that chain.  AND/OR
+// chains are therefore rebuilt from their sorted operands, which makes the
+// result independent of the pin order: the usual canonical form of structural
+// hashing (Kuehlmann, Krohm, DAC 1997).  Wide reduction trees, a 64-bit
+// compare for example, are chains of a few hundred operands and pin swaps
+// inside them are common, so the bound below only stops pathological chains
+// from making the rebuild quadratic.
+constexpr size_t kChainOperandLimit = size_t{1} << 16;
+
 BoolExpr* canonicalUnderMerge(BoolExpr* root,
                               const std::unordered_map<size_t, size_t>& merged,
                               std::unordered_map<BoolExpr*, BoolExpr*>& canonical) {
-  constexpr size_t kChainOperandLimit = 16;
   std::vector<BoolExpr*> chain;
   std::vector<BoolExpr*> operands;
   std::vector<BoolExpr*> stack{root};
@@ -251,7 +256,6 @@ class RewriteTable {
 
   // See canonicalUnderMerge for the chain rule.
   uint32_t chain(Op op, uint32_t a, uint32_t b) {
-    constexpr size_t kChainOperandLimit = 16;
     operands_.clear();
     chain_.assign({a, b});
     while (!chain_.empty() && operands_.size() <= kChainOperandLimit) {

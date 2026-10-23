@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <sstream>
 
@@ -107,6 +108,40 @@ TEST_F(InternalRelationsTests, JointInductionProvesMutuallySupportingRegisters) 
     EXPECT_EQ(proveInternalRelations(problem, {first, second}, {}, solver).size(), 2u);
     EXPECT_TRUE(proveInternalRelations(problem, {first, second}, {false, true}, solver).empty());
   }
+}
+
+TEST_F(InternalRelationsTests, WideChainWithSwappedPinsIsProvedStructurally) {
+  // A 32-input AND reduction feeds one register in each design; the second
+  // design has the pins swapped, as physical optimization does. The pair is
+  // proved by hashing the sorted chain, with no solver call.
+  KInductionProblem problem;
+  problem.state0Symbols = {2};
+  problem.state1Symbols = {3};
+  problem.allSymbols = {2, 3};
+  for (size_t input = 4; input < 36; ++input) {
+    problem.inputSymbols.push_back(input);
+    problem.allSymbols.push_back(input);
+  }
+  problem.initialStateAssignments = {{2, false}, {3, false}};
+  BoolExpr* ascending = BoolExpr::Var(4);
+  BoolExpr* descending = BoolExpr::Var(35);
+  for (size_t i = 1; i < 32; ++i) {
+    ascending = BoolExpr::And(ascending, BoolExpr::Var(4 + i));
+    descending = BoolExpr::And(descending, BoolExpr::Var(35 - i));
+  }
+  problem.transitions0 = {{2, ascending}};
+  problem.transitions1 = {{3, descending}};
+
+  setenv("KEPLER_SEC_DIAG", "1", 1);
+  testing::internal::CaptureStdout();
+  const auto proved = proveInternalRelations(problem, {{{{2, 3}}, {}}}, {},
+                                             Config::SolverType::KISSAT);
+  const std::string diag = testing::internal::GetCapturedStdout();
+  unsetenv("KEPLER_SEC_DIAG");
+
+  EXPECT_EQ(proved.size(), 1u);
+  EXPECT_NE(diag.find("round=0 active=1 structural=1 refuted=0"), std::string::npos)
+      << diag;
 }
 
 TEST_F(InternalRelationsTests, RefutedHypothesesAreRemovedBeforeRecheckingDependents) {

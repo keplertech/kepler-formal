@@ -64,16 +64,17 @@ one transition.
   candidate is proved without the solver. The table is freed when the round
   ends. Expressions themselves are never freed, so building the rewrite of a
   whole design would keep a second copy of its logic for the rest of the run
-  (several gigabytes on a large design). Short AND/OR
-  chains are rebuilt from their sorted operands, because physical optimization
-  swaps the pins of symmetric gates and that re-brackets the chain. Sorting the
-  operands of an AND or an OR cannot change the function, so a pin swap on a
-  gate that is not symmetric, a mux for example, still compares as different.
-  The step is skipped when X equality is disallowed, since definedness is not
-  structural. On a large design with several hundred thousand candidates, all
-  of them are proved this way in one round. This is an implementation choice,
-  not a technique from the
-  papers.
+  (several gigabytes on a large design). AND/OR chains are rebuilt from their
+  sorted operands, the canonical form of structural hashing (Kuehlmann and
+  Krohm, "Equivalence checking using cuts and heaps", DAC 1997), because
+  physical optimization swaps the pins of symmetric gates and that re-brackets
+  the chain. Wide reduction trees are chains of hundreds of operands, so the
+  rebuild applies to chains of any practical width. Sorting the operands of an
+  AND or an OR cannot change the function, so a pin swap on a gate that is not
+  symmetric, a mux for example, still compares as different. The step is
+  skipped when X equality is disallowed, since definedness is not structural.
+  On a large design with several hundred thousand candidates, all of them are
+  proved this way in one round.
 - **Speculative reduction.** The candidates that remain go to the solver. The
   hypotheses are applied by literal substitution: both registers of a pair
   share one current-frame literal. For these candidates only, the rewritten
