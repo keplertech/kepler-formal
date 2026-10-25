@@ -120,6 +120,17 @@ bazelisk build //src/bin:kepler-formal
 bazelisk test //...
 ```
 
+To install, run the `install` target with a prefix; the binary lands in
+`<prefix>/bin/kepler-formal` and finds its libraries and Python runtime
+next to it, so the prefix can be moved or copied:
+
+```bash
+bazelisk run -c opt //:install -- <prefix>
+```
+
+From another Bazel module, the same target is
+`@kepler-formal//:install`.
+
 Dependencies, where modules not yet on the Bazel Central Registry come
 from, and how to depend on kepler-formal from another Bazel
 module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).

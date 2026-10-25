@@ -1,0 +1,41 @@
+# Copyright 2024-2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+# bazelisk run -c opt //:install -- <prefix>
+sh_binary(
+    name = "install",
+    srcs = ["install.sh"],
+    data = [":tarfile"],
+    visibility = ["//visibility:public"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+# bin/kepler-formal with its runfiles (the naja runtime and the embedded
+# Python), and naja.so next to it, where the binary puts it on PYTHONPATH.
+pkg_tar(
+    name = "bin",
+    srcs = [
+        "//src/bin:kepler-formal",
+        "//src/bin:naja_python_module",
+    ],
+    include_runfiles = True,
+    package_dir = "bin",
+)
+
+pkg_files(
+    name = "licenses",
+    srcs = ["//:licenses"],
+    prefix = "share/kepler-formal",
+    strip_prefix = "",
+)
+
+pkg_tar(
+    name = "tarfile",
+    srcs = [":licenses"],
+    package_file_name = "kepler-formal.tar",
+    deps = [":bin"],
+)
