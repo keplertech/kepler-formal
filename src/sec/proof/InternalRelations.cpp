@@ -875,7 +875,7 @@ void learnInternalStateRelations(
   // The binary encoding has no such pair; complements are not proposed there.
   auto append = [&](Location lhs, Location rhs, bool swapped) {
     if (swapped && width != 2) {
-      return false;
+      return false;  // LCOV_EXCL_LINE: swapped entries exist in dual rail only
     }
     InternalRelationCandidate candidate;
     for (size_t rail = 0; rail < width; ++rail) {
@@ -1024,7 +1024,7 @@ void learnInternalStateRelations(
           // Both rails equal means value and complement coincide (X held):
           // there is nothing to orient, propose the plain equality only.
           if (swapped && (key >> 32) == (key & 0xffffffffu)) {
-            continue;
+            continue;  // LCOV_EXCL_LINE: equal rails never bucket as swapped
           }
           added += append(first.location, other.location, swapped);
         }

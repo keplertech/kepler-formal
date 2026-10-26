@@ -7549,3 +7549,31 @@ TEST_F(KeplerFormalCliTests, InternalRelationOptionsReachBothCliParsersAndYaml) 
   }
   std::filesystem::remove_all(directory);
 }
+
+TEST_F(KeplerFormalCliTests, LatchOptionsReachTheCliParserAndYaml) {
+  const auto directory = makeUniqueTempDir("kf_latch_options");
+  const auto source = directory / "design.v";
+  std::ofstream(source) << "module top(input a, output y); assign y = a; endmodule\n";
+  // The latch switches are options of the parser that follows the input
+  // format.
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "-verilog", source.string(),
+                         source.string(), "--no-latch-abstraction",
+                         "--no-data-latch-model"}),
+            kSecProvedExitCode);
+  for (const auto* value : {"true", "false"}) {
+    const auto log = directory / (std::string("latch_") + value + ".log");
+    const auto config = writeTempConfig(
+        "format: verilog\nverification: sec\ninput_paths:\n  - " + source.string() +
+        "\n  - " + source.string() + "\nlatch_abstraction: " + value +
+        "\ndata_latch_model: " + value + "\nlog_file: " + log.string() + "\n");
+    EXPECT_EQ(runWithConfigFile(config), kSecProvedExitCode);
+    const std::string contents = readFileContents(log);
+    const std::string state = std::string(value) == "true" ? "enabled" : "disabled";
+    EXPECT_NE(contents.find("SEC latch abstraction: " + state), std::string::npos)
+        << contents;
+    EXPECT_NE(contents.find("SEC data-enabled latch model: " + state),
+              std::string::npos)
+        << contents;
+  }
+  std::filesystem::remove_all(directory);
+}

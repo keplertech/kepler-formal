@@ -45,6 +45,7 @@ BoolExpr* buildGenericTruthTableExpr(
     uint32_t k,
     const SNLTruthTableTree::Node* node,
     naja::DNL::DNLID isoID);
+BoolExpr* buildRomTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
 void clearChildFETS();
 void reserveChildFETS(size_t n);
 void setChildFETS(size_t i, BoolExpr* expr);
@@ -1035,6 +1036,23 @@ TEST(Tree2BoolExprGenericCoverageTest, NoneGenericTypeThrows) {
   BoolExprCache::destroy();
 }
 
+TEST(Tree2BoolExprGenericCoverageTest, RomArityMismatchThrows) {
+  setChildExpressions({BoolExpr::Var(10), BoolExpr::Var(20)});
+
+  // Four rows of one bit each: 1, 0, 1, 1, read by two address bits.
+  const auto table = SNLTruthTable::Rom(
+      {2, 4, {true, false, true, true}}, SNLTruthTable::fullDependencies(2));
+  EXPECT_THROW(buildRomTruthTableExpr(table, 3), std::runtime_error);
+
+  BoolExpr* expr = buildRomTruthTableExpr(table, 2);
+  ASSERT_NE(expr, nullptr);
+  EXPECT_FALSE(expr->evaluate({{10, false}, {20, true}}));
+  EXPECT_TRUE(expr->evaluate({{10, true}, {20, true}}));
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
 class Tree2BoolExprDivModTest : public ::testing::Test {
  protected:
   void TearDown() override {
@@ -1359,6 +1377,34 @@ TEST_F(Tree2BoolExprWordTest, AddSubtractMultiplyAndShiftMatchArithmetic) {
               const int value = a & 8u ? static_cast<int>(a) - 16 : static_cast<int>(a);
               return static_cast<unsigned>(b >= 4 ? (value < 0 ? -1 : 0) : value >> b);
             });
+}
+
+TEST_F(Tree2BoolExprWordTest, WordBuilderReusesTheCachedExpressionOfAnIsomorphicNode) {
+  NLUniverse::create();
+  auto* add = NLDB0::getOrCreateAddSub(4, false);
+  auto* output = NLDB0::getAddSubOutput(add);
+  const auto outputs = buildOutputs(add, output);
+  ASSERT_EQ(outputs.size(), static_cast<size_t>(output->getWidth()));
+
+  // The first build cached every output bit under the instance's iso IDs; a
+  // second request for a cached node is served from that cache unchanged.
+  auto* instance =
+      NLUniverse::get()->getTopDesign()->getInstance(NLName("word0"));
+  ASSERT_NE(instance, nullptr);
+  const auto output0ID = findDNLTermIDByInstanceTermAndBit(
+      "word0", output->getName().getString().c_str(), 0);
+  const auto& output0 = naja::DNL::get()->getDNLTerminalFromID(output0ID);
+  ASSERT_NE(output0.getIsoID(), naja::DNL::DNLID_MAX);
+  SNLTruthTableTree tree;
+  auto node = std::make_shared<Node>(0u, &tree);
+  node->type = Node::Type::Table;
+  node->data.termid = output0ID;
+  const auto table = SNLDesignModeling::getTruthTable(
+      instance, output->getBit(0)->getOrderID());
+  BoolExpr* cached = Tree2BoolExpr::iso2boolExpr_.at(output0.getIsoID());
+  EXPECT_EQ(buildGenericTruthTableExpr(table, table.size(), node.get(),
+                                       output0.getIsoID()),
+            cached);
 }
 
 TEST_F(Tree2BoolExprWordTest, ReadOnlyMemoryReadsItsContents) {

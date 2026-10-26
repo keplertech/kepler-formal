@@ -3312,7 +3312,7 @@ void setSingleStateSequentialModel(
 // gives it the inverted enable of an integrated clock-gate latch.
 SNLDesign* createLatchModel(
     NLLibrary* library, const std::string& name, bool transparentLow,
-    bool withClear = false) {
+    bool withClear = false, bool withComplement = false) {
   using Operator = SNLDesignModeling::BooleanExpression::Operator;
   auto* model =
       SNLDesign::create(library, SNLDesign::Type::Primitive, NLName(name));
@@ -3322,6 +3322,10 @@ SNLDesign* createLatchModel(
       SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("D"));
   auto* output =
       SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Q"));
+  // Optional complement output `QN`: the state inverted.
+  SNLScalarTerm* complement = withComplement
+      ? SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("QN"))
+      : nullptr;
   // Optional active-high clear pin `R`.
   SNLScalarTerm* clear = withClear
       ? SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("R"))
@@ -3331,7 +3335,11 @@ SNLDesign* createLatchModel(
   } else {
     SNLDesignModeling::addInputsToClockArcs({data}, enable);
   }
-  SNLDesignModeling::addClockToOutputsArcs(enable, {output});
+  if (complement != nullptr) {
+    SNLDesignModeling::addClockToOutputsArcs(enable, {output, complement});
+  } else {
+    SNLDesignModeling::addClockToOutputsArcs(enable, {output});
+  }
   SNLDesignModeling::SequentialModel sequentialModel;
   sequentialModel.kind = SNLDesignModeling::SequentialModel::Kind::Latch;
   SNLDesignModeling::BooleanExpression enableExpression;
@@ -3348,6 +3356,10 @@ SNLDesign* createLatchModel(
   }
   sequentialModel.states.push_back(std::move(state));
   sequentialModel.outputs.push_back({output, makeSequentialStateExpression(0)});
+  if (complement != nullptr) {
+    sequentialModel.outputs.push_back(
+        {complement, makeSequentialStateExpression(0, /*complemented=*/true)});
+  }
   SNLDesignModeling::setSequentialModel(model, sequentialModel);
   return model;
 }
@@ -3413,6 +3425,12 @@ SNLDesign* createClockGateTop(
   } else {
     latch->getInstTerm(q)->setNet(netLatch);
   }
+  if (auto* qn = latchModel->getScalarTerm(NLName("QN")); qn != nullptr) {
+    auto* netLatchN = SNLScalarNet::create(top, NLName("net_lqn"));
+    SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("lqn"))
+        ->setNet(netLatchN);
+    latch->getInstTerm(qn)->setNet(netLatchN);
+  }
   auto* gate = SNLInstance::create(top, and2Model, NLName("clock_gate_and"));
   gate->getInstTerm(and2Model->getScalarTerm(NLName("A")))->setNet(netClock);
   gate->getInstTerm(and2Model->getScalarTerm(NLName("B")))->setNet(gateInput);
@@ -3463,7 +3481,11 @@ SNLDesign* createDataLatchTop(
     const std::string& name,
     SNLDesign* latchModel,
     SNLDesign* and2Model,
-    DataLatchShape shape) {
+    DataLatchShape shape,
+    bool clearFromInput = false,
+    SNLDesign* invModel = nullptr,
+    bool negedgeReader = false,
+    SNLDesign* enableFlopModel = nullptr) {
   auto* top =
       SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
   auto* topClock =
@@ -3487,10 +3509,28 @@ SNLDesign* createDataLatchTop(
   topData->setNet(netData);
   topOut->setNet(shape == DataLatchShape::Cascade ? netSecond : netFirst);
 
-  auto* enableFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_en"));
-  enableFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
-  enableFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
-  enableFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopEnable);
+  if (enableFlopModel != nullptr) {
+    // A flop with pins D, CK, Q and QN; QN reaches the top as `fenn`.
+    auto* enableFlop =
+        SNLInstance::create(top, enableFlopModel, NLName("ff_en"));
+    enableFlop->getInstTerm(enableFlopModel->getScalarTerm(NLName("CK")))
+        ->setNet(netClock);
+    enableFlop->getInstTerm(enableFlopModel->getScalarTerm(NLName("D")))
+        ->setNet(netEnable);
+    enableFlop->getInstTerm(enableFlopModel->getScalarTerm(NLName("Q")))
+        ->setNet(netFlopEnable);
+    auto* netFlopEnableN = SNLScalarNet::create(top, NLName("net_fenn"));
+    SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("fenn"))
+        ->setNet(netFlopEnableN);
+    enableFlop->getInstTerm(enableFlopModel->getScalarTerm(NLName("QN")))
+        ->setNet(netFlopEnableN);
+  } else {
+    auto* enableFlop =
+        SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_en"));
+    enableFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+    enableFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
+    enableFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopEnable);
+  }
   auto* dataFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_d"));
   dataFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
   dataFlop->getInstTerm(NLDB0::getDFFData())->setNet(netData);
@@ -3499,16 +3539,45 @@ SNLDesign* createDataLatchTop(
   auto* g = latchModel->getScalarTerm(NLName("G"));
   auto* d = latchModel->getScalarTerm(NLName("D"));
   auto* q = latchModel->getScalarTerm(NLName("Q"));
+  auto* qn = latchModel->getScalarTerm(NLName("QN"));
+  auto* r = latchModel->getScalarTerm(NLName("R"));
+  // A live clear comes from a top input; otherwise the pin is tied inactive.
+  SNLScalarNet* netClear = nullptr;
+  if (r != nullptr) {
+    netClear = SNLScalarNet::create(top, NLName("net_rst"));
+    if (clearFromInput) {
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("rst"))
+          ->setNet(netClear);
+    } else {
+      netClear->setType(SNLNet::Type::Assign0);
+    }
+  }
+  // Every latch exposes its complement output, when it has one, at the top.
+  const auto connectExtraPins = [&](SNLInstance* latch,
+                                    const std::string& suffix) {
+    if (qn != nullptr) {
+      auto* netN = SNLScalarNet::create(top, NLName("net_qn" + suffix));
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output,
+                            NLName("qn" + suffix))
+          ->setNet(netN);
+      latch->getInstTerm(qn)->setNet(netN);
+    }
+    if (r != nullptr) {
+      latch->getInstTerm(r)->setNet(netClear);
+    }
+  };
   auto* first = SNLInstance::create(top, latchModel, NLName("data_latch"));
   first->getInstTerm(g)->setNet(netFlopEnable);
   first->getInstTerm(d)->setNet(
       shape == DataLatchShape::Loop ? netLoop : netFlopData);
   first->getInstTerm(q)->setNet(netFirst);
+  connectExtraPins(first, "");
   if (shape != DataLatchShape::Single) {
     auto* second = SNLInstance::create(top, latchModel, NLName("data_latch1"));
     second->getInstTerm(g)->setNet(netFlopEnable);
     second->getInstTerm(d)->setNet(netFirst);
     second->getInstTerm(q)->setNet(netSecond);
+    connectExtraPins(second, "1");
   }
   if (shape == DataLatchShape::Loop) {
     auto* gate = SNLInstance::create(top, and2Model, NLName("loop_and"));
@@ -3516,7 +3585,96 @@ SNLDesign* createDataLatchTop(
     gate->getInstTerm(and2Model->getScalarTerm(NLName("B")))->setNet(netFlopData);
     gate->getInstTerm(and2Model->getScalarTerm(NLName("Y")))->setNet(netLoop);
   }
+  if (negedgeReader) {
+    // A flop on the falling edge reads the first latch directly.
+    auto* netClockLow = SNLScalarNet::create(top, NLName("net_nclk"));
+    auto* netNegQ = SNLScalarNet::create(top, NLName("net_qneg"));
+    auto* inv = SNLInstance::create(top, invModel, NLName("clk_inv"));
+    inv->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netClock);
+    inv->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(netClockLow);
+    auto* negFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_neg"));
+    negFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClockLow);
+    negFlop->getInstTerm(NLDB0::getDFFData())->setNet(netFirst);
+    negFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netNegQ);
+    SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("qneg"))
+        ->setNet(netNegQ);
+  }
   return top;
+}
+
+// A latch whose output drives the clock of a flop. The latch enable is a
+// registered data signal, or with `lowPhaseGated` the gate `!clk & en` of a
+// latch-based memory. Either way the latch cannot become state: clock events
+// must resolve to a top clock.
+SNLDesign* createLatchClockDriverTop(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* latchModel,
+    SNLDesign* invModel,
+    SNLDesign* and2Model,
+    bool lowPhaseGated) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topEnable =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"));
+  auto* topData =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("d"));
+  auto* topOut =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName("q"));
+  auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+  auto* netEnable = SNLScalarNet::create(top, NLName("net_en"));
+  auto* netData = SNLScalarNet::create(top, NLName("net_d"));
+  auto* netFlopEnable = SNLScalarNet::create(top, NLName("net_fen"));
+  auto* netLatch = SNLScalarNet::create(top, NLName("net_lq"));
+  auto* netQ = SNLScalarNet::create(top, NLName("net_q"));
+  topClock->setNet(netClock);
+  topEnable->setNet(netEnable);
+  topData->setNet(netData);
+  topOut->setNet(netQ);
+
+  auto* enableFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_en"));
+  enableFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  enableFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
+  enableFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netFlopEnable);
+
+  SNLScalarNet* netGate = netFlopEnable;
+  if (lowPhaseGated) {
+    auto* netClockLow = SNLScalarNet::create(top, NLName("net_nclk"));
+    netGate = SNLScalarNet::create(top, NLName("net_g"));
+    auto* inv = SNLInstance::create(top, invModel, NLName("clk_inv"));
+    inv->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netClock);
+    inv->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(netClockLow);
+    auto* gate = SNLInstance::create(top, and2Model, NLName("gate_and"));
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("A")))->setNet(netClockLow);
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("B")))->setNet(netFlopEnable);
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("Y")))->setNet(netGate);
+  }
+  // The instance name marks the latch output as clock tree, as a routed
+  // clock net is named, so the output is a clock carrier.
+  auto* latch = SNLInstance::create(top, latchModel, NLName("clknet_latch"));
+  latch->getInstTerm(latchModel->getScalarTerm(NLName("G")))->setNet(netGate);
+  latch->getInstTerm(latchModel->getScalarTerm(NLName("D")))->setNet(netData);
+  latch->getInstTerm(latchModel->getScalarTerm(NLName("Q")))->setNet(netLatch);
+  // The latch output is the clock of the output flop.
+  auto* readFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_q"));
+  readFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netLatch);
+  readFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
+  readFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ);
+  return top;
+}
+
+// True when some connectivity skip of `model` is an opaque internal state
+// whose detail mentions `text`.
+bool hasOpaqueSkipWithDetail(const SequentialDesignModel& model,
+                             const std::string& text) {
+  return std::any_of(
+      model.connectivitySkipInfoByKey.begin(),
+      model.connectivitySkipInfoByKey.end(), [&](const auto& entry) {
+        return entry.second.origin == ConnectivitySkipOrigin::OpaqueInternal &&
+               entry.second.detail.find(text) != std::string::npos;
+      });
 }
 
 // A latch open only while the clock is low and a registered write enable is
@@ -5398,6 +5556,358 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto result = strategy.run(4);
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
   EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LatchAbstractionReducesClockGateLatchWithComplementOutput) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_LOW_QN", true,
+                                      /*withClear=*/false,
+                                      /*withComplement=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createClockGateTop(library, "top0", latchModel, and2Model);
+  auto* top1 = createClockGateTop(library, "top1", latchModel, and2Model);
+
+  // Both outputs of the transparent-low latch are wires when the state
+  // samples: Q is the data input and QN its complement.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 1u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 2u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelKeepsComplementOutputOfDataLatch) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH_QN", false,
+                                      /*withClear=*/false,
+                                      /*withComplement=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Single);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Single);
+
+  // Q and QN of the data-enabled latch are both state next to the two flops,
+  // and QN is the complement of the resolved next value.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 4u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 2u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelResolvesCascadedLatchesWithComplementOutputs) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH_QN", false,
+                                      /*withClear=*/false,
+                                      /*withComplement=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Cascade);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Cascade);
+
+  // The second latch reads the first: its value is resolved through the
+  // first latch's Q and QN alike.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 6u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 3u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelLeavesLoopedLatchesWithComplementOutputsOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH_QN", false,
+                                      /*withClear=*/false,
+                                      /*withComplement=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Loop);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Loop);
+
+  // Both latches and their complements leave the state together.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_TRUE(hasOpaqueSkipWithDetail(
+      model0, "data-enabled latch in a loop of latches open together"));
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Unsupported);
+  EXPECT_EQ(result.coveredOutputs, 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelKeepsDataLatchDrivingAClockOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* invModel = createInvModel(primitives);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createLatchClockDriverTop(library, "top0", latchModel, invModel,
+                                         and2Model, /*lowPhaseGated=*/false);
+
+  // The latch output reaches a flop clock: it stays opaque rather than
+  // becoming state on the global step.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_TRUE(hasOpaqueSkipWithDetail(model0,
+                                      "data-enabled latch drives a clock"));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LatchAbstractionKeepsGatedLatchDrivingAClockOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* invModel = createInvModel(primitives);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createLatchClockDriverTop(library, "top0", latchModel, invModel,
+                                         and2Model, /*lowPhaseGated=*/true);
+
+  // Open while `!clk & en` and driving a flop clock: the gated latch stays
+  // opaque too, with its own reason.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_TRUE(hasOpaqueSkipWithDetail(model0, "latch drives a clock"));
+  EXPECT_FALSE(hasOpaqueSkipWithDetail(model0, "data-enabled latch"));
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelKeepsDataLatchWithLiveClearOpaque) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel =
+      createLatchModel(primitives, "DLATCH_HIGH_R", false, /*withClear=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* live = createDataLatchTop(library, "top_live", latchModel, and2Model,
+                                  DataLatchShape::Single,
+                                  /*clearFromInput=*/true);
+  auto* tied = createDataLatchTop(library, "top_tied", latchModel, and2Model,
+                                  DataLatchShape::Single,
+                                  /*clearFromInput=*/false);
+
+  // A clear that can fire keeps the data-enabled latch opaque; tied inactive
+  // it is state like a latch without clear.
+  const auto liveModel = SequentialDesignModel::extract(live, {}, 0);
+  EXPECT_TRUE(hasOpaqueSkipWithDetail(
+      liveModel, "latch with clear or preset is not supported"));
+  const auto tiedModel = SequentialDesignModel::extract(tied, {}, 0);
+  EXPECT_EQ(tiedModel.stateBits.size(), 3u);
+  EXPECT_TRUE(tiedModel.connectivitySkipInfoByKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelRewritesNegedgeReadersOfDataLatch) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH", false);
+  auto* invModel = createInvModel(primitives);
+  auto* and2Model = createAnd2Model(primitives);
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Single,
+                                  /*clearFromInput=*/false, invModel,
+                                  /*negedgeReader=*/true);
+  auto* top1 = createDataLatchTop(library, "top1", latchModel, and2Model,
+                                  DataLatchShape::Single,
+                                  /*clearFromInput=*/false, invModel,
+                                  /*negedgeReader=*/true);
+
+  // The falling-edge flop reads the latch's step value like any other
+  // reader: the latch is not open only while the clock is low.
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  EXPECT_EQ(model0.stateBits.size(), 4u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+  size_t negedgeStates = 0;
+  for (const auto& [key, event] : model0.clockEventByStateKey) {
+    negedgeStates += event.phase == ClockPhase::Neg ? 1 : 0;
+  }
+  EXPECT_EQ(negedgeStates, 1u);
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  const auto result = strategy.run(4);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+  EXPECT_EQ(result.coveredOutputs, 2u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       DataLatchModelReportsDiagnosticsWhenEnabled) {
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("PRIMS"));
+  auto* latchModel = createLatchModel(primitives, "DLATCH_HIGH_QN", false,
+                                      /*withClear=*/false,
+                                      /*withComplement=*/true);
+  auto* and2Model = createAnd2Model(primitives);
+  // The enable flop has a complement output too: its relation is kept while
+  // the latch's own is dropped with the latch's substitution.
+  auto* flopModel =
+      createNamedComplementSequentialModel(primitives, "DFF_QN", "Q", "QN");
+  auto* top0 = createDataLatchTop(library, "top0", latchModel, and2Model,
+                                  DataLatchShape::Single,
+                                  /*clearFromInput=*/false, nullptr,
+                                  /*negedgeReader=*/false, flopModel);
+
+  testing::internal::CaptureStderr();
+  const auto model0 = SequentialDesignModel::extract(top0, {}, 0);
+  const std::string diag = testing::internal::GetCapturedStderr();
+
+  EXPECT_EQ(model0.stateBits.size(), 5u);
+  EXPECT_TRUE(model0.connectivitySkipInfoByKey.empty());
+  EXPECT_EQ(model0.complementedStateRelations.size(), 1u);
+  // Q and QN of the latch are two data-enabled latch values and two wires.
+  EXPECT_NE(diag.find("SEC diag: data-enabled latches=2 rewritten_readers="),
+            std::string::npos)
+      << diag;
+  EXPECT_NE(diag.find("SEC diag: latch abstraction wires=2 stale_references="),
+            std::string::npos)
+      << diag;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractTreatsReadOnlyMemoryAsCombinational) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  // Five 3-bit rows in a 3-bit address space, one read port, no write port.
+  auto* rom = NLDB0::getOrCreateMemory({3, 5, 3, 1, 0});
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+  auto* instance = SNLInstance::create(top, rom, NLName("rom0"));
+  SNLInstParameter::create(instance, rom->getParameter(NLName("INIT_ENABLE")),
+                           "1");
+  SNLInstParameter::create(instance, rom->getParameter(NLName("INIT")),
+                           "15'h61d5");
+  for (auto* modelTerm : rom->getBusTerms()) {
+    auto* topTerm = SNLBusTerm::create(
+        top, modelTerm->getDirection(), modelTerm->getMSB(),
+        modelTerm->getLSB(), modelTerm->getName());
+    auto* net = SNLBusNet::create(
+        top, modelTerm->getMSB(), modelTerm->getLSB(),
+        NLName(modelTerm->getName().getString() + "_net"));
+    for (int bit = modelTerm->getLSB(); bit <= modelTerm->getMSB(); ++bit) {
+      topTerm->getBit(bit)->setNet(net->getBit(bit));
+      instance->getInstTerm(modelTerm->getBit(bit))->setNet(net->getBit(bit));
+    }
+  }
+
+  // A read-only memory holds no state: its read data is combinational.
+  const auto model = SequentialDesignModel::extract(top, {}, 0);
+  EXPECT_TRUE(model.stateBits.empty());
+  EXPECT_EQ(model.observedOutputs.size(), 3u);
+  EXPECT_TRUE(model.connectivitySkipInfoByKey.empty());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractRecordsOutputNetNamesOnlyForNamedNets) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library = NLLibrary::create(db, NLName("LIB"));
+  auto* named = createDffTop(library, "named", nullptr, false, false, "in",
+                             "out", "ff0");
+  auto* anonymous =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName("anonymous"));
+  auto* topIn =
+      SNLScalarTerm::create(anonymous, SNLTerm::Direction::Input, NLName("in"));
+  auto* topClock =
+      SNLScalarTerm::create(anonymous, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topOut =
+      SNLScalarTerm::create(anonymous, SNLTerm::Direction::Output, NLName("out"));
+  auto* netIn = SNLScalarNet::create(anonymous, NLName("net_in"));
+  auto* netClock = SNLScalarNet::create(anonymous, NLName("net_clk"));
+  // The state output net has no name.
+  auto* netQ = SNLScalarNet::create(anonymous);
+  topIn->setNet(netIn);
+  topClock->setNet(netClock);
+  topOut->setNet(netQ);
+  auto* ff = SNLInstance::create(anonymous, NLDB0::getDFF(), NLName("ff0"));
+  ff->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+  ff->getInstTerm(NLDB0::getDFFData())->setNet(netIn);
+  ff->getInstTerm(NLDB0::getDFFOutput())->setNet(netQ);
+
+  const auto namedModel = SequentialDesignModel::extract(named, {}, 0);
+  ASSERT_EQ(namedModel.stateBits.size(), 1u);
+  EXPECT_EQ(namedModel.outputNetNameByKey.at(namedModel.stateBits.front()),
+            "net_q");
+
+  const auto anonymousModel = SequentialDesignModel::extract(anonymous, {}, 0);
+  ASSERT_EQ(anonymousModel.stateBits.size(), 1u);
+  EXPECT_EQ(anonymousModel.outputNetNameByKey.find(
+                anonymousModel.stateBits.front()),
+            anonymousModel.outputNetNameByKey.end());
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SecClockModelMemoSubstitutionReturnsRootWithoutReplacements) {
+  BoolExpr* root = BoolExpr::And(BoolExpr::Var(2), BoolExpr::Var(3));
+  std::unordered_map<BoolExpr*, BoolExpr*> memo;
+
+  EXPECT_EQ(substituteBoolExprVariableExpressions(root, {}, memo), root);
+  EXPECT_EQ(substituteBoolExprVariableExpressions(
+                nullptr, {{2, BoolExpr::Var(9)}}, memo),
+            nullptr);
+  EXPECT_TRUE(memo.empty());
+
+  BoolExpr* substituted =
+      substituteBoolExprVariableExpressions(root, {{2, BoolExpr::Var(9)}}, memo);
+  ASSERT_NE(substituted, nullptr);
+  EXPECT_NE(substituted, root);
+  EXPECT_FALSE(memo.empty());
+  EXPECT_EQ(substituted->evaluate({{3, true}, {9, true}}),
+            root->evaluate({{2, true}, {3, true}}));
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,

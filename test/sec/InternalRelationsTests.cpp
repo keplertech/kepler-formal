@@ -467,6 +467,220 @@ TEST_F(InternalRelationsTests, BinaryRoundSharesTransitionsThatDifferOnlyInShape
   }
 }
 
+TEST_F(InternalRelationsTests, BinaryDischargeSkipsOutputsWithoutAFunctionOnBothSides) {
+  // Same designs as BinaryRoundSharesTransitionsThatDifferOnlyInShape, plus
+  // two observed output names that have no function to compare: "w" is a
+  // name design 1 knows without an expression, "z" is unknown to both.
+  const SignalKey q{{1}, {1}};
+  const SignalKey y{{2}, {2}};
+  const SignalKey sel{{3}, {3}};
+  const SignalKey in{{4}, {4}};
+  const SignalKey w{{5}, {5}};
+  const auto design = [&](bool restructured) {
+    SequentialDesignModel model;
+    model.stateBits = {q, sel};
+    model.inputVarByKey[q] = 2;
+    model.inputVarByKey[sel] = 3;
+    model.inputVarByKey[in] = 4;
+    model.environmentInputs = {in};
+    model.displayNameByKey[q] = "q";
+    model.displayNameByKey[sel] = "sel";
+    model.displayNameByKey[in] = "in";
+    model.displayNameByKey[y] = "y";
+    model.nextStateExprByStateKey[sel] = BoolExpr::Var(3);
+    model.nextStateExprByStateKey[q] = restructured
+        ? BoolExpr::Or(BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(4)),
+                       BoolExpr::And(BoolExpr::Not(BoolExpr::Var(3)), BoolExpr::Var(4)))
+        : BoolExpr::Var(4);
+    model.allObservedOutputs = model.observedOutputs = {y};
+    model.observedOutputExprByKey[y] = BoolExpr::Var(2);
+    if (!restructured) {
+      model.allObservedOutputs.push_back(w);
+      model.displayNameByKey[w] = "w";
+    }
+    return model;
+  };
+  const auto model0 = design(false);
+  const auto model1 = design(true);
+  KInductionProblem problem;
+  problem.usesDualRailStateEncoding = true;
+  problem.state0Symbols = {10, 11, 12, 13};
+  problem.state1Symbols = {14, 15, 16, 17};
+  problem.inputSymbols = {18};
+  problem.allSymbols = {10, 11, 12, 13, 14, 15, 16, 17, 18};
+  problem.dualRailStatePairs = {{10, 11}, {12, 13}, {14, 15}, {16, 17}};
+  for (size_t symbol = 10; symbol < 18; ++symbol) {
+    problem.initialStateAssignments.emplace_back(symbol, true);
+  }
+  problem.observedOutputNames = {"y", "w", "z"};
+  BoolExpr* yEquality = BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(10), BoolExpr::Var(14)));
+  BoolExpr* wEquality = BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(12), BoolExpr::Var(16)));
+  problem.observedOutputExprs0 = {yEquality, wEquality, wEquality};
+  problem.observedOutputExprs1 = {BoolExpr::createTrue(), BoolExpr::createTrue(),
+                                  BoolExpr::createTrue()};
+  problem.property = BoolExpr::And(yEquality, wEquality);
+  auto store = std::make_shared<LazyTransitionStore>();
+  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
+  for (size_t designIndex = 0; designIndex < 2; ++designIndex) {
+    store->localToCombinedByDesign[designIndex] = {{4, 18}};
+    const size_t base = 10 + 4 * designIndex;
+    store->dualRailStateByLocalSymbolByDesign[designIndex] = {
+        {2, {base, base + 1}}, {3, {base + 2, base + 3}}};
+    for (size_t bit = 0; bit < 2; ++bit) {
+      BoolExpr* next = models[designIndex]->nextStateExprByStateKey.at(bit == 0 ? q : sel);
+      store->sourceByStateSymbol[base + 2 * bit] = {designIndex, next, LazyTransitionRail::DualRailOne};
+      store->sourceByStateSymbol[base + 2 * bit + 1] = {designIndex, next, LazyTransitionRail::DualRailZero};
+    }
+  }
+  problem.lazyTransitions = store;
+
+  learnInternalStateRelations(model0, model1, problem, {true, true, true},
+                              Config::SolverType::KISSAT, false);
+
+  // "y" is one function on both sides under the proved merge; the other two
+  // outputs keep their obligations.
+  EXPECT_EQ(problem.observedOutputExprs0[0], BoolExpr::createTrue());
+  EXPECT_EQ(problem.observedOutputExprs0[1], wEquality);
+  EXPECT_EQ(problem.observedOutputExprs0[2], wEquality);
+}
+
+TEST_F(InternalRelationsTests, BinaryRetryWithoutLazyTransitionsProvesNothing) {
+  const auto problem = binaryRing();
+  EXPECT_EQ(problem.lazyTransitions, nullptr);
+  EXPECT_TRUE(proveInternalRelations(problem, {{{{2, 4}}, {}}}, {},
+                                    Config::SolverType::KISSAT,
+                                    /*commonStartBinary=*/true)
+                  .empty());
+}
+
+// The most significant bit of the product of two `a.size()`-bit operands,
+// as an array multiplier of AND, XOR and OR nodes.
+BoolExpr* productMsb(const std::vector<BoolExpr*>& a,
+                     const std::vector<BoolExpr*>& b) {
+  const size_t n = a.size();
+  std::vector<BoolExpr*> acc(2 * n, BoolExpr::createFalse());
+  for (size_t i = 0; i < n; ++i) {
+    BoolExpr* carry = BoolExpr::createFalse();
+    for (size_t j = 0; j < n; ++j) {
+      BoolExpr* partial = BoolExpr::And(a[j], b[i]);
+      BoolExpr* half = BoolExpr::Xor(acc[i + j], partial);
+      BoolExpr* sum = BoolExpr::Xor(half, carry);
+      carry = BoolExpr::Or(BoolExpr::And(acc[i + j], partial),
+                           BoolExpr::And(carry, half));
+      acc[i + j] = sum;
+    }
+    for (size_t k = i + n; k < 2 * n; ++k) {
+      BoolExpr* sum = BoolExpr::Xor(acc[k], carry);
+      carry = BoolExpr::And(acc[k], carry);
+      acc[k] = sum;
+    }
+  }
+  return acc[2 * n - 1];
+}
+
+TEST_F(InternalRelationsTests, UndecidedPartitionGivesUpEachPairUnderItsOwnBudget) {
+  // Two registers holding the top bit of a*b and of b*a: equal, but the
+  // commutativity of a 14-bit multiplier is far beyond the partition's
+  // conflict budget, so the pair is retried alone and then given up.
+  constexpr size_t kWidth = 14;
+  KInductionProblem problem;
+  problem.state0Symbols = {2};
+  problem.state1Symbols = {3};
+  problem.allSymbols = {2, 3};
+  std::vector<BoolExpr*> a;
+  std::vector<BoolExpr*> b;
+  for (size_t bit = 0; bit < kWidth; ++bit) {
+    for (auto* operand : {&a, &b}) {
+      const size_t symbol = problem.allSymbols.size() + 10;
+      problem.inputSymbols.push_back(symbol);
+      problem.allSymbols.push_back(symbol);
+      operand->push_back(BoolExpr::Var(symbol));
+    }
+  }
+  problem.initialStateAssignments = {{2, false}, {3, false}};
+  problem.transitions0 = {{2, productMsb(a, b)}};
+  problem.transitions1 = {{3, productMsb(b, a)}};
+
+  setenv("KEPLER_SEC_DIAG", "1", 1);
+  testing::internal::CaptureStdout();
+  const auto proved = proveInternalRelations(problem, {{{{2, 3}}, {}}}, {},
+                                             Config::SolverType::KISSAT);
+  const std::string diag = testing::internal::GetCapturedStdout();
+  unsetenv("KEPLER_SEC_DIAG");
+
+  EXPECT_TRUE(proved.empty());
+  EXPECT_NE(diag.find("status=unknown"), std::string::npos) << diag;
+  EXPECT_NE(diag.find("SEC diag: internal relation given up"), std::string::npos)
+      << diag;
+}
+
+TEST_F(InternalRelationsTests, RefutedRelationsAreReportedWithDiagnostics) {
+  auto problem = binaryRing();
+  problem.transitions1[1].second = BoolExpr::Var(4);
+
+  setenv("KEPLER_SEC_DIAG", "1", 1);
+  testing::internal::CaptureStdout();
+  const auto proved = proveInternalRelations(
+      problem, {{{{2, 4}}, {}}, {{{3, 5}}, {}}}, {}, Config::SolverType::KISSAT);
+  const std::string diag = testing::internal::GetCapturedStdout();
+  unsetenv("KEPLER_SEC_DIAG");
+
+  EXPECT_TRUE(proved.empty());
+  EXPECT_NE(diag.find("SEC diag: internal relation refuted:"), std::string::npos)
+      << diag;
+}
+
+TEST_F(InternalRelationsTests, HashingGuessSkipsRegistersWithoutATransition) {
+  // The second register of the model has no transition in the problem, as
+  // an opaque state has: the rehashing guess leaves it out without proposing
+  // anything for it.
+  auto model = heldModel(true, false);
+  const SignalKey second{{5}, {5}};
+  model.stateBits.push_back(second);
+  model.inputVarByKey[second] = 3;
+  model.displayNameByKey[second] = "other_name";
+  model.nextStateExprByStateKey[second] = BoolExpr::Var(3);
+  auto problem = binaryRing();
+  problem.transitions0 = {{2, BoolExpr::Var(2)}};
+  problem.state1Symbols.clear();
+  problem.transitions1.clear();
+  problem.allSymbols = {2, 3};
+  problem.initialStateAssignments = {{2, false}, {3, false}};
+
+  learnInternalStateRelations(model, {}, problem, {}, Config::SolverType::KISSAT, false);
+
+  EXPECT_TRUE(problem.sameFrameStateEqualityPairs0.empty());
+}
+
+TEST_F(InternalRelationsTests, MergeSkipsVeryLargeLazilyRemappedProblems) {
+  KInductionProblem problem;
+  problem.lazyTransitions = std::make_shared<LazyTransitionStore>();
+  problem.state0Symbols.assign((size_t{1} << 17) + 1, 2);
+  problem.sameFrameStateEqualityPairs0 = {{2, 3}};
+
+  testing::internal::CaptureStdout();
+  mergeProvedStateRelations(problem, /*diagnostics=*/true);
+  const std::string diag = testing::internal::GetCapturedStdout();
+
+  EXPECT_NE(diag.find("SEC diag: merged state symbols skipped: 131073 state symbols"),
+            std::string::npos)
+      << diag;
+  EXPECT_EQ(problem.sameFrameStateEqualityPairs0.size(), 1u);
+}
+
+TEST_F(InternalRelationsTests, MergeWithOnlySelfPairsLeavesTheProblemUnchanged) {
+  auto problem = binaryRing();
+  problem.sameFrameStateEqualityPairs0 = {{2, 2}};
+  problem.sameFrameStateEqualityPairs1 = {{4, 4}};
+  const auto transitions0 = problem.transitions0;
+  const auto transitions1 = problem.transitions1;
+
+  mergeProvedStateRelations(problem, /*diagnostics=*/false);
+
+  EXPECT_EQ(problem.transitions0, transitions0);
+  EXPECT_EQ(problem.transitions1, transitions1);
+}
+
 TEST_F(InternalRelationsTests, ResetProofBehaviorIsPreservedWithLearning) {
   auto model = heldModel(false, false);
   const SignalKey reset{{4}, {4}};

@@ -1110,7 +1110,7 @@ std::string getTerminalDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
 std::string getTerminalNetDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
   const auto* instTerm = terminal.getSnlTerm();
   if (instTerm == nullptr) {
-    return {};
+    return {};  // LCOV_EXCL_LINE: a state output is always an instance pin
   }
   const auto* net = instTerm->getNet();
   if (net == nullptr || net->getName().getString().empty()) {
@@ -4105,7 +4105,7 @@ void substituteTransparentLatches(
     }
   }
   if (replacements.empty()) {
-    return;
+    return;  // LCOV_EXCL_LINE: every abstracted latch has a state variable
   }
   for (auto& [key, expr] : model.nextStateExprByStateKey) {
     if (latches.find(key) == latches.end()) {
@@ -4149,7 +4149,7 @@ void substituteDataEnabledLatches(
     }
   }
   if (replacements.empty()) {
-    return;
+    return;  // LCOV_EXCL_LINE: every data-enabled latch has a state variable
   }
   // One memo per replacement set: the readers share most of their logic.
   std::unordered_map<BoolExpr*, BoolExpr*> memo;
@@ -4191,7 +4191,7 @@ void substituteDataEnabledLatches(
     size_t staleReferences = 0;
     const auto count = [&](BoolExpr* expr) {
       if (expr == nullptr) {
-        return;
+        return;  // LCOV_EXCL_LINE
       }
       for (const auto varID : expr->getSupportVars()) {
         staleReferences += replacements.find(varID) != replacements.end() ? 1 : 0;
