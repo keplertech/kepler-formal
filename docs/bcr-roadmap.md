@@ -23,14 +23,9 @@ slang's Python generators) come from Bazel modules.
 ## Dependencies
 
 Every dependency is a `bazel_dep` from BCR: `naja`, `onetbb`, `spdlog`,
-`yaml-cpp`, `kissat`, `glucose`, `googletest`, and, through naja,
+`yaml-cpp`, `cadical`, `kissat`, `glucose`, `googletest`, and, through naja,
 `naja-if`, `naja-verilog`, `capnp-cpp`, `boost.*`, `fmt`, `bison`,
 `flex`, `sv-lang`, `rules_python`, and others.
-
-The one exception is `cadical` 3.0.0, which `MODULE.bazel` vendors with
-`http_archive` and `bazel/cadical.BUILD.bazel` until
-bazelbuild/bazel-central-registry#10883 merges; then it becomes a
-`bazel_dep` again.
 
 ## Depending on kepler-formal
 
