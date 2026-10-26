@@ -3978,6 +3978,42 @@ void buildStructuredMemoryTransitions(
       model.nextStateExprByStateKey.emplace(readOutput.key, next);
     // LCOV_EXCL_START
     }
+    // LCOV_EXCL_STOP
+
+    StructuredMemoryModel memoryModel;
+    memoryModel.width = pendingMemory.width;
+    memoryModel.depth = pendingMemory.depth;
+    memoryModel.abits = pendingMemory.abits;
+    memoryModel.resetAssertedExpr = resetAssertedExpr;
+    memoryModel.cellKeys.assign(
+        pendingMemory.depth, std::vector<SignalKey>(pendingMemory.width));
+    for (const auto& cellState : pendingMemory.cellStates) {
+      memoryModel.cellKeys[cellState.cellIndex][cellState.bitIndex] = cellState.key;
+    }
+    for (size_t portIndex = 0; portIndex < pendingMemory.readPorts.size(); ++portIndex) {
+      if (portIndex < readPortSkips.size() && readPortSkips[portIndex].has_value()) {
+        continue;
+      }
+      StructuredMemoryReadPortModel readPortModel;
+      readPortModel.addressExprs = readAddressExprs[portIndex];
+      readPortModel.outputKeys.assign(pendingMemory.width, SignalKey{});
+      for (const auto& readOutput : pendingMemory.readOutputs) {
+        if (readOutput.portIndex == portIndex &&
+            readOutput.bitIndex < readPortModel.outputKeys.size()) {
+          readPortModel.outputKeys[readOutput.bitIndex] = readOutput.key;
+        }
+      }
+      memoryModel.readPorts.push_back(std::move(readPortModel));
+    }
+    for (const auto& exprs : writePortExprs) {
+      if (exprs.disabled) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      memoryModel.writePorts.push_back(
+          {exprs.addressExprs, exprs.dataExprs, exprs.maskExprs, exprs.enableExprs});
+    }
+    model.structuredMemories.push_back(std::move(memoryModel));
+    // LCOV_EXCL_START
   }
 }
 

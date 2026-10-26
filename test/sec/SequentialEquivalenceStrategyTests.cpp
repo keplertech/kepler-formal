@@ -60,6 +60,7 @@
 #include "BuildPrimaryOutputClauses.h"
 #include "Tree2BoolExpr.h"
 #include "clocks/SecClockModel.h"
+#include "search/SimulationSeededSearch.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
 using namespace naja::NL;
@@ -20509,4 +20510,237 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_THROW(
       substituteBoolExprVariableExpressions(&invalid, {{2, BoolExpr::Var(9)}}),
       std::runtime_error);
+}
+
+namespace {
+
+SignalKey findKeyByBaseDisplayName(const SequentialDesignModel& model,
+                                   const std::string& baseName) {
+  for (const auto& [key, currentName] : model.displayNameByKey) {
+    if (currentName == baseName || currentName == baseName + "[0]") {
+      return key;
+    }
+  }
+  throw std::runtime_error("Missing display name in extracted model: " + baseName);
+}
+
+// The memory top with read data bits 0 and 1 crossed on the way to the
+// outputs: it differs from createSinglePortMemoryTop only once a written word
+// with different bit 0 and bit 1 values is read back.
+SNLDesign* createSinglePortMemoryTopWithCrossedReadBits(
+    NLLibrary* library,
+    const std::string& name,
+    SNLDesign* memoryModel) {
+  auto* top =
+      SNLDesign::create(library, SNLDesign::Type::Standard, NLName(name));
+  auto* topClock =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"));
+  auto* topChipEnable =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("ce"));
+  auto* topWriteEnable =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("we"));
+  auto* topAddress =
+      SNLBusTerm::create(top, SNLTerm::Direction::Input, 1, 0, NLName("addr"));
+  auto* topWriteData =
+      SNLBusTerm::create(top, SNLTerm::Direction::Input, 3, 0, NLName("wdata"));
+  auto* topWriteMask =
+      SNLBusTerm::create(top, SNLTerm::Direction::Input, 3, 0, NLName("wmask"));
+  auto* topOut =
+      SNLBusTerm::create(top, SNLTerm::Direction::Output, 3, 0, NLName("out"));
+
+  auto* memory = SNLInstance::create(top, memoryModel, NLName("mem0"));
+  auto* clockNet = SNLScalarNet::create(top, NLName("clk_net"));
+  auto* chipEnableNet = SNLScalarNet::create(top, NLName("ce_net"));
+  auto* writeEnableNet = SNLScalarNet::create(top, NLName("we_net"));
+  auto* addressNet = SNLBusNet::create(top, 1, 0, NLName("addr_net"));
+  auto* writeDataNet = SNLBusNet::create(top, 3, 0, NLName("wdata_net"));
+  auto* writeMaskNet = SNLBusNet::create(top, 3, 0, NLName("wmask_net"));
+  auto* outNet = SNLBusNet::create(top, 3, 0, NLName("out_net"));
+
+  topClock->setNet(clockNet);
+  topChipEnable->setNet(chipEnableNet);
+  topWriteEnable->setNet(writeEnableNet);
+  memory->getInstTerm(memoryModel->getScalarTerm(NLName("CLK")))->setNet(clockNet);
+  memory->getInstTerm(memoryModel->getScalarTerm(NLName("CE")))->setNet(chipEnableNet);
+  memory->getInstTerm(memoryModel->getScalarTerm(NLName("WE")))->setNet(writeEnableNet);
+
+  auto* modelAddress = memoryModel->getBusTerm(NLName("ADDR"));
+  auto* modelWriteData = memoryModel->getBusTerm(NLName("WDATA"));
+  auto* modelWriteMask = memoryModel->getBusTerm(NLName("WMASK"));
+  auto* modelReadData = memoryModel->getBusTerm(NLName("RDATA"));
+  for (int bit = 0; bit <= 1; ++bit) {
+    topAddress->getBit(bit)->setNet(addressNet->getBit(bit));
+    memory->getInstTerm(modelAddress->getBit(bit))->setNet(addressNet->getBit(bit));
+  }
+  for (int bit = 0; bit <= 3; ++bit) {
+    topWriteData->getBit(bit)->setNet(writeDataNet->getBit(bit));
+    memory->getInstTerm(modelWriteData->getBit(bit))->setNet(writeDataNet->getBit(bit));
+    topWriteMask->getBit(bit)->setNet(writeMaskNet->getBit(bit));
+    memory->getInstTerm(modelWriteMask->getBit(bit))->setNet(writeMaskNet->getBit(bit));
+    topOut->getBit(bit)->setNet(outNet->getBit(bit));
+    const int readBit = bit == 0 ? 1 : bit == 1 ? 0 : bit;
+    memory->getInstTerm(modelReadData->getBit(readBit))->setNet(outNet->getBit(bit));
+  }
+  return top;
+}
+
+constexpr const char* kSeededCounterPortsSv = R"((
+  input  logic clk,
+  input  logic rst_n,
+  input  logic d,
+  output logic q
+);
+  logic [7:0] cnt;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      cnt <= 8'd0;
+    end else if (cnt != 8'd200) begin
+      cnt <= cnt + 8'd1;
+    end
+  end
+  logic r;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      r <= 1'b0;
+    end else begin
+      r <= d;
+    end
+  end
+)";
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       TernaryModelSimulatorLiftsGatesLikeTheDualRailEncoding) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* top = loadSystemVerilogTopFromSource(
+      library,
+      "seed_sim_probe",
+      R"(module seed_sim_probe(
+  input  logic clk,
+  input  logic d,
+  output logic q,
+  output logic n
+);
+  logic r = 1'b0;
+  logic u;
+  always_ff @(posedge clk) begin
+    r <= d;
+    u <= d;
+  end
+  assign q = r & u;
+  assign n = ~r;
+endmodule
+)");
+  const auto model = SequentialDesignModel::extract(top);
+  ASSERT_FALSE(model.hasUnsupportedFeatures());
+  ASSERT_EQ(model.stateBits.size(), 2u);
+  const auto dVar = model.inputVarByKey.at(findKeyByBaseDisplayName(model, "d"));
+  const auto qKey = findKeyByBaseDisplayName(model, "q");
+  const auto nKey = findKeyByBaseDisplayName(model, "n");
+
+  TernaryModelSimulator simulator(model);
+  // r starts at its declared 0, u is unknown: q = 0 & X = 0, n = 1.
+  EXPECT_EQ(simulator.knownStateBitCount(), 1u);
+  EXPECT_EQ(simulator.evaluateOutput(qKey), TernaryValue::Zero);
+  EXPECT_EQ(simulator.evaluateOutput(nKey), TernaryValue::One);
+
+  simulator.setInput(dVar, TernaryValue::One);
+  EXPECT_TRUE(simulator.step());
+  EXPECT_EQ(simulator.knownStateBitCount(), 2u);
+  EXPECT_EQ(simulator.evaluateOutput(qKey), TernaryValue::One);
+  EXPECT_EQ(simulator.evaluateOutput(nKey), TernaryValue::Zero);
+  // Same inputs again: nothing changes.
+  EXPECT_FALSE(simulator.step());
+
+  simulator.clearInputs();
+  EXPECT_TRUE(simulator.step());
+  EXPECT_EQ(simulator.knownStateBitCount(), 0u);
+  EXPECT_EQ(simulator.evaluateOutput(qKey), TernaryValue::Unknown);
+  EXPECT_EQ(simulator.evaluateOutput(nKey), TernaryValue::Unknown);
+
+  const auto saved = simulator.state();
+  simulator.resetToInitialState();
+  EXPECT_EQ(simulator.knownStateBitCount(), 1u);
+  simulator.setState(saved);
+  EXPECT_EQ(simulator.knownStateBitCount(), 0u);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchFindsDifferenceBehindLongCounterPrefix) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0,
+      "seed_counter_before",
+      std::string("module seed_counter_before") + kSeededCounterPortsSv +
+          "  assign q = r;\nendmodule\n");
+  // The difference is only visible once the counter has reached 200, which no
+  // bounded search from the initial state reaches at a small depth.
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1,
+      "seed_counter_after",
+      std::string("module seed_counter_after") + kSeededCounterPortsSv +
+          "  assign q = r & ~(cnt == 8'd200);\nendmodule\n");
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 210;
+  options.trials = 64;
+  options.searchDepth = 4;
+  strategy.setSimulationSeededSearchOptions(options);
+  const auto result = strategy.run(4);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 200u);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+  EXPECT_NE(result.reason.find("q"), std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchModelsMemoryReadsThroughWritePorts) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* memoryModel = createSinglePortMemoryModel(primitives, "MEM1P");
+  auto* top0 = createSinglePortMemoryTop(library, "top0", memoryModel);
+  auto* top1 = createSinglePortMemoryTopWithCrossedReadBits(
+      library, "top1", memoryModel);
+
+  const auto model0 = SequentialDesignModel::extract(top0);
+  ASSERT_EQ(model0.structuredMemories.size(), 1u);
+  EXPECT_EQ(model0.structuredMemories.front().depth, 4u);
+  EXPECT_EQ(model0.structuredMemories.front().width, 4u);
+  ASSERT_EQ(model0.structuredMemories.front().readPorts.size(), 1u);
+  ASSERT_EQ(model0.structuredMemories.front().writePorts.size(), 1u);
+  EXPECT_EQ(model0.structuredMemories.front().writePorts.front().enableExprs.size(), 2u);
+  EXPECT_EQ(model0.structuredMemories.front().writePorts.front().maskExprs.size(), 4u);
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 1;
+  options.trials = 4;
+  options.searchDepth = 4;
+  strategy.setSimulationSeededSearchOptions(options);
+  const auto result = strategy.run(4);
+
+  // Unwritten cells are unknown and never a difference; the search has to
+  // write a word whose bits 0 and 1 differ and read it back.
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_LE(result.bound, 5u);
+  EXPECT_NE(result.reason.find("out["), std::string::npos);
 }

@@ -76,13 +76,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] | "
+      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] "
+      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -490,6 +490,9 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "allow_x_equality_in_internal_relations",
       "binary_relation_round",
       "sec_reset",
+      "sec_seed_cycles",
+      "sec_seed_trials",
+      "sec_seed_depth",
       "btor2_export",
       "btor2_export_path",
       "dump_only",
@@ -1322,6 +1325,8 @@ static int KeplerFormalMainImpl(
   KEPLER_FORMAL::SEC::InternalRelationOptions internalRelationOptions;
   bool internalRelationOptionsExplicit = false;
   bool secResetExplicit = false;
+  KEPLER_FORMAL::SEC::SimulationSeededSearchOptions seededSearchOptions;
+  bool seededSearchExplicit = false;
   size_t secMaxK = kDefaultSecMaxK;
   bool secMaxKExplicit = false;
   // Basic argument sanity
@@ -1508,6 +1513,29 @@ static int KeplerFormalMainImpl(
             return EXIT_FAILURE;
           }
           secResetExplicit = true;
+        }
+
+        const auto parseSeededSearchKey = [&](const char* key, size_t& target) {
+          if (!cfg[key]) {
+            return true;
+          }
+          if (!cfg[key].IsScalar()) {
+            SPDLOG_CRITICAL("{} must be a scalar", key);
+            return false;
+          }
+          std::string seedError;
+          if (!parseNonNegativeSizeToken(
+                  cfg[key].as<std::string>(), key, target, seedError)) {
+            SPDLOG_CRITICAL("Invalid {} in config: {}", key, seedError);
+            return false;
+          }
+          seededSearchExplicit = true;
+          return true;
+        };
+        if (!parseSeededSearchKey("sec_seed_cycles", seededSearchOptions.prefixCycles) ||
+            !parseSeededSearchKey("sec_seed_trials", seededSearchOptions.trials) ||
+            !parseSeededSearchKey("sec_seed_depth", seededSearchOptions.searchDepth)) {
+          return EXIT_FAILURE;
         }
 
         std::string btor2ExportError;
@@ -1845,6 +1873,26 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
+      if (arg == "--sec-seed-cycles" || arg == "--sec-seed-trials" ||
+          arg == "--sec-seed-depth") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        size_t& target = arg == "--sec-seed-cycles"
+            ? seededSearchOptions.prefixCycles
+            : arg == "--sec-seed-trials" ? seededSearchOptions.trials
+                                         : seededSearchOptions.searchDepth;
+        std::string seedError;
+        if (!parseNonNegativeSizeToken(
+                argv[parseStart + 1], arg.c_str(), target, seedError)) {
+          SPDLOG_CRITICAL("Invalid SEC seeded search option: {}", seedError);
+          return EXIT_FAILURE;
+        }
+        seededSearchExplicit = true;
+        parseStart += 2;
+        continue;
+      }
       if (arg == "--allow-boundary-mismatch") {
         allowBoundaryMismatch = true;
         ++parseStart;
@@ -2054,6 +2102,24 @@ static int KeplerFormalMainImpl(
           return EXIT_FAILURE;
         }
         secResetExplicit = true;
+        continue;
+      }
+      if (arg == "--sec-seed-cycles" || arg == "--sec-seed-trials" ||
+          arg == "--sec-seed-depth") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        size_t& target = arg == "--sec-seed-cycles"
+            ? seededSearchOptions.prefixCycles
+            : arg == "--sec-seed-trials" ? seededSearchOptions.trials
+                                         : seededSearchOptions.searchDepth;
+        std::string seedError;
+        if (!parseNonNegativeSizeToken(argv[++i], arg.c_str(), target, seedError)) {
+          SPDLOG_CRITICAL("Invalid SEC seeded search option: {}", seedError);
+          return EXIT_FAILURE;
+        }
+        seededSearchExplicit = true;
         continue;
       }
       if (arg == "--allow-boundary-mismatch") {
@@ -2359,6 +2425,10 @@ static int KeplerFormalMainImpl(
   }
   if (verificationMode == VerificationMode::LEC && secResetExplicit) {
     SPDLOG_CRITICAL("sec_reset/--sec-reset-* is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
+  if (verificationMode == VerificationMode::LEC && seededSearchExplicit) {
+    SPDLOG_CRITICAL("sec_seed_*/--sec-seed-* is only supported with SEC verification");
     return EXIT_FAILURE;
   }
   if (!boundaryPairs.empty() && (useScopes || cleanScopes)) {
@@ -3091,6 +3161,7 @@ static int KeplerFormalMainImpl(
               secResetSpec,
               btor2ExportConfig.options());
           strategy.setInternalRelationOptions(internalRelationOptions);
+          strategy.setSimulationSeededSearchOptions(seededSearchOptions);
           return emitSecResult(
               strategy.runExtractedModels(model0, model0, secMaxK));
               // LCOV_EXCL_STOP
@@ -3120,6 +3191,7 @@ static int KeplerFormalMainImpl(
             secResetSpec,
             btor2ExportConfig.options());
         strategy.setInternalRelationOptions(internalRelationOptions);
+        strategy.setSimulationSeededSearchOptions(seededSearchOptions);
         return emitSecResult(
             strategy.runExtractedModels(model0, model1, secMaxK));
       // LCOV_EXCL_START
@@ -3413,6 +3485,7 @@ static int KeplerFormalMainImpl(
           secResetSpec,
           btor2ExportConfig.options());
       strategy.setInternalRelationOptions(internalRelationOptions);
+      strategy.setSimulationSeededSearchOptions(seededSearchOptions);
       strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP

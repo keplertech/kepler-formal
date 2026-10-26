@@ -40,6 +40,34 @@ struct ConnectivitySkipInfo {  // LCOV_EXCL_LINE
 // Normalized view of a sequential design after extracting the interface we
 // need for SEC: environment inputs, current-state bits, observed outputs, and
 // the Boolean formulas that describe outputs and next-state updates.
+// Word-level view of one structured memory instance, kept next to the
+// bit-level cell transitions. Engines that search bounded traces can model
+// the array through its ports (a read returns the latest earlier write to the
+// same address, read-over-write after Burch and Dill, CAV 1994) instead of
+// carrying every cell through every frame.
+struct StructuredMemoryReadPortModel {  // LCOV_EXCL_LINE
+  std::vector<BoolExpr*> addressExprs;  // least significant bit first
+  std::vector<SignalKey> outputKeys;    // registered read data, per bit
+};
+
+struct StructuredMemoryWritePortModel {  // LCOV_EXCL_LINE
+  std::vector<BoolExpr*> addressExprs;
+  std::vector<BoolExpr*> dataExprs;
+  std::vector<BoolExpr*> maskExprs;    // empty: every bit is written
+  std::vector<BoolExpr*> enableExprs;  // all must hold for a write
+};
+
+struct StructuredMemoryModel {  // LCOV_EXCL_LINE
+  size_t width = 0;
+  size_t depth = 0;
+  size_t abits = 0;
+  std::vector<std::vector<SignalKey>> cellKeys;  // [cell][bit]
+  std::vector<StructuredMemoryReadPortModel> readPorts;
+  std::vector<StructuredMemoryWritePortModel> writePorts;
+  // Asserted reset clears every cell and read output after the writes.
+  BoolExpr* resetAssertedExpr = nullptr;
+};
+
 struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::vector<SignalKey> environmentInputs;
   std::vector<SignalKey> stateBits;
@@ -69,6 +97,9 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
       connectivitySkipInfoByKey;
   std::vector<ComplementedStateRelation> complementedStateRelations;
   std::vector<std::string> unsupportedReasons;
+  // Port-level descriptions of the structured memories whose cells are in
+  // stateBits; skipped ports and disabled write ports are left out.
+  std::vector<StructuredMemoryModel> structuredMemories;
 
   // Extract the model from the given top design. Opaque per-output cones are
   // skipped; globally unsupported structures are recorded in unsupportedReasons.

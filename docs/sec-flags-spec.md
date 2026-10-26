@@ -121,6 +121,9 @@ liberty_files:
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 | `--no-latch-abstraction` | `latch_abstraction: false` | `true` | boolean | Disables the SEC latch abstraction described in [sec-sequential-models.md](sec-sequential-models.md); every latch output is opaque again, as before. |
 | `--no-data-latch-model` | `data_latch_model: false` | `true` | boolean | Disables the data-enabled latch model described in [sec-sequential-models.md](sec-sequential-models.md); latches whose enable is not a clock phase are opaque. |
+| `--sec-seed-cycles <n>` | `sec_seed_cycles: <n>` | `0` | Non-negative integer | Enables the simulation-seeded counterexample search with a simulated prefix of `n` cycles; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-trials <n>` | `sec_seed_trials: <n>` | `32` | Non-negative integer | Number of held-input simulation prefixes tried by the seeded search. |
+| `--sec-seed-depth <n>` | `sec_seed_depth: <n>` | `40` | Non-negative integer | Bounded search depth after the simulated prefix. |
 
 Accepted values for `sec_engine`:
 

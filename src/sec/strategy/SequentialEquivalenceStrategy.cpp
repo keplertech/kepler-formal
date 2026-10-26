@@ -43,6 +43,7 @@
 #include "pdr/PDREngine.h"
 #include "proof/DualRailEncoding.h"
 #include "proof/TransitionExprResolver.h"
+#include "search/SimulationSeededSearch.h"
 #include "../../sat/SATSolverWrapper.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -897,6 +898,19 @@ std::string formatCounterexampleWitness(const KInductionResult& result,
   std::ostringstream oss;
   oss << "Counterexample reaches the first bad frame at cycle "
       << witness.badFrame << ".\n";
+
+  for (const auto& segment : witness.heldInputSegments) {
+    oss << "Held inputs for cycles " << segment.firstFrame << ".."
+        << segment.lastFrame << ": ";
+    for (size_t i = 0; i < segment.assignments.size(); ++i) {
+      if (i) {
+        oss << ", ";
+      }
+      oss << segment.assignments[i].signal << "="
+          << formatBoolValue(segment.assignments[i].value);
+    }
+    oss << "\n";
+  }
 
   if (witness.inputTrace.empty()) {
     oss << "Input trace: <none>\n";  // LCOV_EXCL_LINE
@@ -2848,6 +2862,71 @@ void buildSecPropertiesAndTransitions(
   }
 }
 
+// Lifts each extracted memory's port expressions into the rail symbol space
+// so bounded engines can model the array by its ports. A memory whose cells
+// are not all proof state keeps the plain cell model.
+void appendProofMemoryDescriptions(
+    const SequentialDesignModel& model,
+    const std::unordered_map<SignalKey, DualRailSymbolPair, SignalKeyHash>& railsByKey,
+    DualRailVariableMapper& mapper,
+    std::unordered_map<BoolExpr*, DualRailBoolExpr>& memo,
+    std::vector<ProofMemoryDescription>& descriptions) {
+  const auto lift = [&](const std::vector<BoolExpr*>& exprs) {
+    std::vector<DualRailBoolExpr> lifted;
+    lifted.reserve(exprs.size());
+    for (auto* expr : exprs) {
+      lifted.push_back(buildDualRailBoolExpr(expr, mapper, memo));
+    }
+    return lifted;
+  };
+  for (const auto& memory : model.structuredMemories) {
+    ProofMemoryDescription description;
+    description.width = memory.width;
+    description.depth = memory.depth;
+    description.abits = memory.abits;
+    bool complete = true;
+    for (const auto& cellKeys : memory.cellKeys) {
+      std::vector<DualRailSymbolPair> cellRails;
+      cellRails.reserve(cellKeys.size());
+      for (const auto& key : cellKeys) {
+        const auto railsIt = railsByKey.find(key);
+        if (railsIt == railsByKey.end()) {
+          complete = false;  // LCOV_EXCL_LINE
+          break;  // LCOV_EXCL_LINE
+        }
+        cellRails.push_back(railsIt->second);
+      }
+      description.cellRails.push_back(std::move(cellRails));
+    }
+    if (!complete) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    for (const auto& port : memory.readPorts) {
+      ProofMemoryReadPort readPort;
+      readPort.address = lift(port.addressExprs);
+      readPort.outputRails.reserve(port.outputKeys.size());
+      for (const auto& key : port.outputKeys) {
+        const auto railsIt = railsByKey.find(key);
+        readPort.outputRails.push_back(
+            railsIt == railsByKey.end()
+                ? std::nullopt
+                : std::optional<DualRailSymbolPair>(railsIt->second));
+      }
+      description.readPorts.push_back(std::move(readPort));
+    }
+    for (const auto& port : memory.writePorts) {
+      description.writePorts.push_back(
+          {lift(port.addressExprs), lift(port.dataExprs),
+           lift(port.maskExprs), lift(port.enableExprs)});
+    }
+    if (memory.resetAssertedExpr != nullptr) {
+      description.resetAsserted =
+          buildDualRailBoolExpr(memory.resetAssertedExpr, mapper, memo);
+    }
+    descriptions.push_back(std::move(description));
+  }
+}
+
 KInductionProblem buildDualRailSecProblem(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
@@ -2857,7 +2936,8 @@ KInductionProblem buildDualRailSecProblem(
     SharedSecSymbolSpace& symbolSpace,
     // LCOV_DISABLED_STOP
     bool useLazyTransitionRemapping,
-    bool secDiagEnabled) {
+    bool secDiagEnabled,
+    DualRailStateSymbolMaps* railMapsOut = nullptr) {
   KInductionProblem problem;
   problem.environmentInputs = alignedInputs.keys0;
   problem.environmentInputNames = symbolSpace.problem.environmentInputNames;
@@ -2896,6 +2976,20 @@ KInductionProblem buildDualRailSecProblem(
       symbolSpace.localToCombined1);
   std::unordered_map<BoolExpr*, DualRailBoolExpr> memo0;
   std::unordered_map<BoolExpr*, DualRailBoolExpr> memo1;
+
+  {
+    auto memories = std::make_shared<std::vector<ProofMemoryDescription>>();
+    appendProofMemoryDescriptions(
+        model0, railMaps.state0ByKey, mapper0, memo0, *memories);
+    appendProofMemoryDescriptions(
+        model1, railMaps.state1ByKey, mapper1, memo1, *memories);
+    if (!memories->empty()) {
+      problem.structuredMemories = std::move(memories);
+    }
+  }
+  if (railMapsOut != nullptr) {
+    *railMapsOut = railMaps;
+  }
 
   BoolExpr* inductionCore = BoolExpr::createTrue();
 
@@ -3835,6 +3929,7 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   const bool useLazyTransitionRemapping =
       secEngine_ == SecEngine::KInduction || secEngine_ == SecEngine::Pdr;
   KInductionProblem proofProblem;
+  DualRailStateSymbolMaps dualRailMaps;
   if (encoding_ == SecEncoding::DualRailSteady) {
     proofProblem = buildDualRailSecProblem(
         model0,
@@ -3843,7 +3938,8 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         aligned.outputs,
         symbolSpace,
         useLazyTransitionRemapping,
-        secDiagEnabled);
+        secDiagEnabled,
+        &dualRailMaps);
   } else {
     const auto remapped = remapSecExpressions(
         model0,
@@ -3875,6 +3971,37 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     proofProblem = symbolSpace.problem;
   }
   copyResetBootstrapSpec(symbolSpace.problem, proofProblem);
+  // The seeded search is a bug hunt on the freshly built problem. It runs
+  // before relation learning, which on a differing pair can spend the whole
+  // budget refuting candidates, and it never needs the learned relations.
+  if (seededSearchOptions_.enabled() && !exportOptions_.dumpOnly) {
+    if (encoding_ != SecEncoding::DualRailSteady) {
+      logSecDiagLine(
+          secDiagEnabled,
+          "SEC diag: simulation-seeded search needs the dual-rail encoding; skipped");
+    } else if (auto witness = runSimulationSeededSearch(
+                   model0,
+                   model1,
+                   aligned.inputs,
+                   aligned.outputs,
+                   dualRailMaps.state0ByKey,
+                   dualRailMaps.state1ByKey,
+                   proofProblem,
+                   seededSearchOptions_,
+                   solverType_,
+                   secDiagEnabled || secSummaryStatsEnabled())) {
+      const size_t bound = witness->badFrame;
+      const KInductionResult mismatch{
+          KInductionStatus::Different, bound, std::move(witness)};
+      return makeSecResult(
+          SequentialEquivalenceStatus::Different,
+          bound,
+          formatCounterexampleWitness(mismatch, model0, model1, top0_, top1_),
+          aligned.outputCoverage,
+          extractedBoundaryReports);
+    }
+  }
+
   learnInternalStateRelations(model0, model1, proofProblem,
       internalRelationOptions_, solverType_, secDiagEnabled || secSummaryStatsEnabled());
   if (internalRelationOptions_.learnInternalRelations) {
