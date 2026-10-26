@@ -5,12 +5,10 @@
 # when this repo is the root module, e.g. labels that only resolve from
 # the root module's repo mapping.
 #
-# The root module's hermetic-llvm toolchain *registration* is a
-# dev_dependency and does not propagate; the toolchain repo itself does.
-# A consumer that wants the same hermetic build just registers it, as
-# here — which also keeps this smoke test independent of the CI runner's
-# host compiler. (Declaring exec/target tags again would duplicate the
-# generated toolchain rules.)
+# kepler-formal's hermetic-llvm toolchain is a dev_dependency and does
+# not propagate. A consumer that wants the same hermetic build sets it up
+# itself, as here, which also keeps this smoke test independent of the
+# CI runner's host compiler.
 module(name = "kepler-formal-consumer-test")
 
 bazel_dep(name = "kepler-formal")
@@ -41,9 +39,17 @@ single_version_override(
     version = "0.0.0-20261014-4459520a",
 )
 
-bazel_dep(name = "llvm", version = "0.8.11")
+bazel_dep(name = "llvm", version = "0.8.26")
 
 llvm_toolchains = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+llvm_toolchains.exec(
+    arch = "x86_64",
+    os = "linux",
+)
+llvm_toolchains.target(
+    arch = "x86_64",
+    os = "linux",
+)
 use_repo(llvm_toolchains, "llvm_toolchains")
 
 register_toolchains("@llvm_toolchains//:all")
