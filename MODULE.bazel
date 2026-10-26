@@ -14,7 +14,7 @@ module(
 
 bazel_dep(name = "glucose", version = "4.2.1-20251230-674dbba")
 bazel_dep(name = "kissat", version = "4.0.4")
-bazel_dep(name = "naja", version = "0.7.26-20261014-3da8811d")
+bazel_dep(name = "naja", version = "0.7.26-20261023-4e324572")
 bazel_dep(name = "onetbb", version = "2023.1.0")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.25")
@@ -24,6 +24,30 @@ bazel_dep(name = "spdlog", version = "1.17.0")
 bazel_dep(name = "yaml-cpp", version = "0.9.0.bcr.1")
 
 bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True)
+
+# TODO(bazelbuild/bazel-central-registry#11359): delete these three overrides
+# once naja-if@0.0.0-20261020-e1ce72c5 and naja@0.7.26-20261023-4e324572 are
+# on the Bazel Central Registry. The naja bazel_dep above already names the
+# registry version that is being published. Until then naja and naja-if come
+# straight from git at the commits naja pins, and naja-verilog is held at the
+# registered version naja's submodule points to, because naja's own
+# MODULE.bazel still names older naja-if and naja-verilog versions.
+git_override(
+    module_name = "naja",
+    remote = "https://github.com/najaeda/naja.git",
+    commit = "4e324572976662742e4faa034c92cd74bdbe86a3",
+)
+
+git_override(
+    module_name = "naja-if",
+    remote = "https://github.com/najaeda/naja-if.git",
+    commit = "e1ce72c5e8eeb7803fae0bd96a267d5e3e91146d",
+)
+
+single_version_override(
+    module_name = "naja-verilog",
+    version = "0.0.0-20261014-4459520a",
+)
 
 # TODO(bazelbuild/bazel-central-registry#10883): replace with
 # bazel_dep(name = "cadical", version = "3.0.0") once it merges, and

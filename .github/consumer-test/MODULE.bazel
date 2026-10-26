@@ -19,6 +19,28 @@ local_path_override(
     path = "../..",
 )
 
+# Same temporary overrides as the root MODULE.bazel, which do not propagate:
+# overrides only apply in the root module, and here that is this consumer.
+# Delete together with the root ones once naja-if@0.0.0-20261020-e1ce72c5 and
+# naja@0.7.26-20261023-4e324572 are on the Bazel Central Registry
+# (bazelbuild/bazel-central-registry#11359 is the naja-if one).
+git_override(
+    module_name = "naja",
+    remote = "https://github.com/najaeda/naja.git",
+    commit = "4e324572976662742e4faa034c92cd74bdbe86a3",
+)
+
+git_override(
+    module_name = "naja-if",
+    remote = "https://github.com/najaeda/naja-if.git",
+    commit = "e1ce72c5e8eeb7803fae0bd96a267d5e3e91146d",
+)
+
+single_version_override(
+    module_name = "naja-verilog",
+    version = "0.0.0-20261014-4459520a",
+)
+
 bazel_dep(name = "llvm", version = "0.8.11")
 
 llvm_toolchains = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
