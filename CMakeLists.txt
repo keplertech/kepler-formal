@@ -114,6 +114,19 @@ string(JOIN " " CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS
     ${CADICAL_KITTEN_SYMBOL_PREFIX_DEFINES}
 )
 
+# The solvers are built by their own configure scripts, so they take the
+# sanitizer flags explicitly. Code compiled with AddressSanitizer marks the
+# unused tail of every std::vector, code compiled without it does not keep
+# those marks, and a solver built without the sanitizer next to sanitized
+# callers yields false container-overflow reports from inside the solver.
+set(KEPLER_EXTERNAL_SANITIZER_FLAGS "")
+if(ENABLE_SANITIZERS)
+  set(KEPLER_EXTERNAL_SANITIZER_FLAGS -fsanitize=address -fno-omit-frame-pointer)
+endif()
+string(JOIN " " KEPLER_EXTERNAL_SANITIZER_FLAGS_STRING
+    ${KEPLER_EXTERNAL_SANITIZER_FLAGS}
+)
+
 if(WIN32)
   include(src/windows/KeplerWindowsSolvers.cmake)
 else()
@@ -128,6 +141,7 @@ ExternalProject_Add(kissat_external
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
         ./configure --compact --quiet --no-proofs ${KEPLER_EXTERNAL_PIC_ARG}
+            ${KEPLER_EXTERNAL_SANITIZER_FLAGS}
     BUILD_COMMAND make
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
@@ -159,8 +173,8 @@ ExternalProject_Add(cadical_external
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
         "CXX=${CMAKE_CXX_COMPILER}"
-        "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
-        "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
+        "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS} ${KEPLER_EXTERNAL_SANITIZER_FLAGS_STRING}"
+        "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS} ${KEPLER_EXTERNAL_SANITIZER_FLAGS_STRING}"
         ./configure -q --no-tracing --no-contrib ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make -C build libcadical.a
     INSTALL_COMMAND ""
