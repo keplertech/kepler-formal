@@ -61,8 +61,8 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--python_design1_top <top>`, `--python_design2_top <top>` | Per-design top modules of Python-built designs. Only valid in `python` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
-| `--no-latch-abstraction` | Disable the SEC latch abstraction (phase abstraction of clock-driven latches); latch outputs become opaque as before. |
-| `--no-data-latch-model` | Disable the SEC model of data-enabled latches (enable is data logic, not a clock phase); such latches become opaque. |
+| `--no-latch-abstraction` | Disable the SEC latch abstraction (phase abstraction of clock-driven latches); every latch output becomes opaque as before, data-enabled latches included. See [sec-latch-support.md](sec-latch-support.md). |
+| `--no-data-latch-model` | Disable the SEC model of data-enabled latches (enable is data logic, not a clock phase); such latches become opaque. See [sec-latch-support.md](sec-latch-support.md). |
 
 ## YAML config flags
 

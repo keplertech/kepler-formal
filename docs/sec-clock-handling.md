@@ -106,7 +106,7 @@ next_state = enable ? data_next : current_state
 This means clock gating is modeled as state enable behavior rather than as a
 new independent clock when the gate is combinational and fully modelable.
 A clock-gate latch in the gating cone is reduced by the latch abstraction in
-[sec-sequential-models.md](sec-sequential-models.md): open while the clock is
+[sec-latch-support.md](sec-latch-support.md): open while the clock is
 low, it is a wire when the state samples, so the gate's enable becomes the latch
 data input. Latches the abstraction does not cover stay opaque.
 

@@ -17,6 +17,10 @@ explicit Python primitive descriptions, or Liberty construction. A cell can
 still lack a usable model when its sequential behavior is absent, incomplete,
 or not representable by the current constructor.
 
+Combinational primitives, including the word-level arithmetic and read-only
+memories the SystemVerilog frontend produces, are expanded by the cone builder
+as described in [sec-primitive-expansion.md](sec-primitive-expansion.md).
+
 ## Flip-Flops
 
 SEC consumes flip-flop models when their state expressions and physical output
@@ -29,6 +33,10 @@ granularity. Other independently modeled outputs of the same instance remain
 eligible unless their own dependency cones reach an opaque terminal.
 
 ## Latches
+
+The full description of latch handling, with the decision rules, reporting
+and limits, is [sec-latch-support.md](sec-latch-support.md). This section is
+the short form.
 
 A latch is level-sensitive. For an active-high latch, its behavior is:
 
@@ -84,6 +92,14 @@ stays opaque when its output reaches a clock, when a clear or preset can fire,
 or when it sits in a loop of latches that can be open together. The model is on
 by default and `--no-data-latch-model` (`data_latch_model: false`) leaves these
 latches opaque.
+
+## Read-Only Memories
+
+A memory primitive with read ports but no write port holds no state. SEC keeps
+it out of the structured-memory model and expands each read-data bit as a
+constant table lookup over the address bits, as described in
+[sec-primitive-expansion.md](sec-primitive-expansion.md). Memories with write
+ports keep the structured-memory model.
 
 ## X Constant Literals
 
