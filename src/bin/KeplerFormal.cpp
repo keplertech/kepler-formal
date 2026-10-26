@@ -76,13 +76,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] | "
+      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] "
+      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -493,6 +493,12 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "sec_seed_cycles",
       "sec_seed_trials",
       "sec_seed_depth",
+      "sec_seed_enlarge",
+      "sec_seed_enlarge_cubes",
+      "sec_seed_waypoint_hops",
+      "sec_seed_waypoint_depth",
+      "sec_seed_waypoint_layers",
+      "sec_seed_waypoint_conflicts",
       "btor2_export",
       "btor2_export_path",
       "dump_only",
@@ -1534,7 +1540,13 @@ static int KeplerFormalMainImpl(
         };
         if (!parseSeededSearchKey("sec_seed_cycles", seededSearchOptions.prefixCycles) ||
             !parseSeededSearchKey("sec_seed_trials", seededSearchOptions.trials) ||
-            !parseSeededSearchKey("sec_seed_depth", seededSearchOptions.searchDepth)) {
+            !parseSeededSearchKey("sec_seed_depth", seededSearchOptions.searchDepth) ||
+            !parseSeededSearchKey("sec_seed_enlarge", seededSearchOptions.enlargeSteps) ||
+            !parseSeededSearchKey("sec_seed_enlarge_cubes", seededSearchOptions.enlargeCubes) ||
+            !parseSeededSearchKey("sec_seed_waypoint_hops", seededSearchOptions.waypointHops) ||
+            !parseSeededSearchKey("sec_seed_waypoint_depth", seededSearchOptions.waypointDepth) ||
+            !parseSeededSearchKey("sec_seed_waypoint_layers", seededSearchOptions.waypointLayers) ||
+            !parseSeededSearchKey("sec_seed_waypoint_conflicts", seededSearchOptions.waypointConflicts)) {
           return EXIT_FAILURE;
         }
 
@@ -1874,7 +1886,10 @@ static int KeplerFormalMainImpl(
         continue;
       }
       if (arg == "--sec-seed-cycles" || arg == "--sec-seed-trials" ||
-          arg == "--sec-seed-depth") {
+          arg == "--sec-seed-depth" || arg == "--sec-seed-enlarge" ||
+          arg == "--sec-seed-enlarge-cubes" || arg == "--sec-seed-waypoint-hops" ||
+          arg == "--sec-seed-waypoint-depth" || arg == "--sec-seed-waypoint-layers" ||
+          arg == "--sec-seed-waypoint-conflicts") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
           return EXIT_FAILURE;
@@ -1882,7 +1897,13 @@ static int KeplerFormalMainImpl(
         size_t& target = arg == "--sec-seed-cycles"
             ? seededSearchOptions.prefixCycles
             : arg == "--sec-seed-trials" ? seededSearchOptions.trials
-                                         : seededSearchOptions.searchDepth;
+            : arg == "--sec-seed-depth" ? seededSearchOptions.searchDepth
+            : arg == "--sec-seed-enlarge" ? seededSearchOptions.enlargeSteps
+            : arg == "--sec-seed-enlarge-cubes" ? seededSearchOptions.enlargeCubes
+            : arg == "--sec-seed-waypoint-hops" ? seededSearchOptions.waypointHops
+            : arg == "--sec-seed-waypoint-depth" ? seededSearchOptions.waypointDepth
+            : arg == "--sec-seed-waypoint-layers" ? seededSearchOptions.waypointLayers
+                                                  : seededSearchOptions.waypointConflicts;
         std::string seedError;
         if (!parseNonNegativeSizeToken(
                 argv[parseStart + 1], arg.c_str(), target, seedError)) {
@@ -2105,7 +2126,10 @@ static int KeplerFormalMainImpl(
         continue;
       }
       if (arg == "--sec-seed-cycles" || arg == "--sec-seed-trials" ||
-          arg == "--sec-seed-depth") {
+          arg == "--sec-seed-depth" || arg == "--sec-seed-enlarge" ||
+          arg == "--sec-seed-enlarge-cubes" || arg == "--sec-seed-waypoint-hops" ||
+          arg == "--sec-seed-waypoint-depth" || arg == "--sec-seed-waypoint-layers" ||
+          arg == "--sec-seed-waypoint-conflicts") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
           return EXIT_FAILURE;
@@ -2113,7 +2137,13 @@ static int KeplerFormalMainImpl(
         size_t& target = arg == "--sec-seed-cycles"
             ? seededSearchOptions.prefixCycles
             : arg == "--sec-seed-trials" ? seededSearchOptions.trials
-                                         : seededSearchOptions.searchDepth;
+            : arg == "--sec-seed-depth" ? seededSearchOptions.searchDepth
+            : arg == "--sec-seed-enlarge" ? seededSearchOptions.enlargeSteps
+            : arg == "--sec-seed-enlarge-cubes" ? seededSearchOptions.enlargeCubes
+            : arg == "--sec-seed-waypoint-hops" ? seededSearchOptions.waypointHops
+            : arg == "--sec-seed-waypoint-depth" ? seededSearchOptions.waypointDepth
+            : arg == "--sec-seed-waypoint-layers" ? seededSearchOptions.waypointLayers
+                                                  : seededSearchOptions.waypointConflicts;
         std::string seedError;
         if (!parseNonNegativeSizeToken(argv[++i], arg.c_str(), target, seedError)) {
           SPDLOG_CRITICAL("Invalid SEC seeded search option: {}", seedError);

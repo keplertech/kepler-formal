@@ -56,6 +56,10 @@ class TernaryModelSimulator {
   }
   const std::vector<TernaryValue>& state() const { return state_; }
   void setState(const std::vector<TernaryValue>& state);
+  // State bits that changed between two known values in any step since the
+  // last clearToggles().
+  const std::vector<bool>& toggled() const { return toggled_; }
+  void clearToggles();
   size_t knownStateBitCount() const;
   // Observed output value for the current state and inputs.
   TernaryValue evaluateOutput(const SignalKey& outputKey);
@@ -81,6 +85,7 @@ class TernaryModelSimulator {
   std::vector<uint32_t> nextRootByState_;
   std::unordered_map<SignalKey, uint32_t, SignalKeyHash> outputRootByKey_;
   std::vector<TernaryValue> state_;
+  std::vector<bool> toggled_;
   bool combinationalValid_ = false;
 };
 

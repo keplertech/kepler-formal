@@ -124,6 +124,12 @@ liberty_files:
 | `--sec-seed-cycles <n>` | `sec_seed_cycles: <n>` | `0` | Non-negative integer | Enables the simulation-seeded counterexample search with a simulated prefix of `n` cycles; see [sec-seeded-search.md](sec-seeded-search.md). |
 | `--sec-seed-trials <n>` | `sec_seed_trials: <n>` | `32` | Non-negative integer | Number of held-input simulation prefixes tried by the seeded search. |
 | `--sec-seed-depth <n>` | `sec_seed_depth: <n>` | `40` | Non-negative integer | Bounded search depth after the simulated prefix. |
+| `--sec-seed-enlarge <n>` | `sec_seed_enlarge: <n>` | `0` | Non-negative integer | Target enlargement by `n` cycles in the seeded search; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-enlarge-cubes <n>` | `sec_seed_enlarge_cubes: <n>` | `0` | Non-negative integer | With enlargement, also enumerate up to `n` generalized preimage cubes per step (designs without structured memories). |
+| `--sec-seed-waypoint-hops <n>` | `sec_seed_waypoint_hops: <n>` | `0` | Non-negative integer | Waypoint chaining in the seeded search: up to `n` short searches chained from reached states; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-waypoint-depth <n>` | `sec_seed_waypoint_depth: <n>` | `8` | Non-negative integer | Frames per waypoint hop. |
+| `--sec-seed-waypoint-layers <n>` | `sec_seed_waypoint_layers: <n>` | `1` | Non-negative integer | Register distance from the target within which waypoints are taken first. |
+| `--sec-seed-waypoint-conflicts <n>` | `sec_seed_waypoint_conflicts: <n>` | `300000` | Non-negative integer | Solver conflict budget per waypoint hop; `0` removes the budget. |
 
 Accepted values for `sec_engine`:
 

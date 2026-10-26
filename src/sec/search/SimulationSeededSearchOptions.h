@@ -38,6 +38,28 @@ struct SimulationSeededSearchOptions {
   // check is an unsatisfiability proof the search does not need, so the
   // default is the single final check.
   size_t checkEvery = 0;
+  // Target enlargement (Baumgartner, Kuehlmann and Abraham, CAV 2002): widen
+  // the target by this many cycles before the forward search. Structurally,
+  // the last enlargeSteps frames unroll only the target's cone; with
+  // enlargeCubes > 0 and no structured memories, up to that many generalized
+  // preimage cubes per step are enumerated and added to the target. Zero
+  // disables enlargement.
+  size_t enlargeSteps = 0;
+  size_t enlargeCubes = 0;
+  // Waypoint chaining (lighthouses: Ganai, Aziz and Kuehlmann, DAC 1999;
+  // Ho et al., ICCAD 2000): instead of one deep search, up to waypointHops
+  // short searches of waypointDepth frames, each toward the real target or a
+  // waypoint, chained from the concrete state the previous one reached. A
+  // waypoint is a register in the target's backward cone, within
+  // waypointLayers register steps of it at first, that has not changed value
+  // so far; the goal is that it changes (or becomes known). Zero hops
+  // disables chaining.
+  size_t waypointHops = 0;
+  size_t waypointDepth = 8;
+  size_t waypointLayers = 1;
+  // Solver conflict budget of one hop; a hop that exceeds it counts as
+  // unreachable and the chain tries the next mode. Zero means no budget.
+  size_t waypointConflicts = 300000;
 
   bool enabled() const {
     return prefixCycles != 0 && trials != 0 && searchDepth != 0;

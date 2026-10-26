@@ -72,6 +72,12 @@ runs unchanged.
 | `--sec-seed-cycles <n>` | `sec_seed_cycles: <n>` | `0` (off) | Simulated prefix length. Enables the search when positive. |
 | `--sec-seed-trials <n>` | `sec_seed_trials: <n>` | `32` | Number of held-input prefixes to simulate. |
 | `--sec-seed-depth <n>` | `sec_seed_depth: <n>` | `40` | Bounded search depth after the prefix. |
+| `--sec-seed-enlarge <n>` | `sec_seed_enlarge: <n>` | `0` (off) | Target enlargement by `n` cycles (see below). |
+| `--sec-seed-enlarge-cubes <n>` | `sec_seed_enlarge_cubes: <n>` | `0` (off) | With enlargement, up to `n` generalized preimage cubes per step. |
+| `--sec-seed-waypoint-hops <n>` | `sec_seed_waypoint_hops: <n>` | `0` (off) | Waypoint chaining: up to `n` short searches (see below). |
+| `--sec-seed-waypoint-depth <n>` | `sec_seed_waypoint_depth: <n>` | `8` | Frames per hop. |
+| `--sec-seed-waypoint-layers <n>` | `sec_seed_waypoint_layers: <n>` | `1` | Register distance from the target within which waypoints are taken first. |
+| `--sec-seed-waypoint-conflicts <n>` | `sec_seed_waypoint_conflicts: <n>` | `300000` | Solver conflict budget per hop (`0`: none). |
 
 The search needs the default `dual_rail_steady` encoding. It is skipped under
 the binary encoding and whenever a formula reads memory cells outside a read
@@ -87,6 +93,69 @@ kepler-formal -sv -v sec \
 The reported trace lists the held input vectors once per stretch of cycles,
 followed by the per-cycle inputs of the bounded suffix and the differing
 outputs.
+
+## Held inputs
+
+Inputs that feed the next-state function of at least half of the registers
+(memory cells and read outputs not counted) are global controls such as
+resets and scan or test enables. A bounded search
+that may drive them turns every step into a reset, so during the suffix
+searches they keep the value the selected prefix ran with. Reset ports named
+by the reset bootstrap spec are governed by that spec instead.
+
+## Target enlargement
+
+Target enlargement (Baumgartner, Kuehlmann and Abraham, CAV 2002) widens the
+target before the forward search so that fewer frames have to be searched.
+`--sec-seed-enlarge n` enables two forms:
+
+- **Structural.** The forward search unrolls `depth` full frames and then `n`
+  more frames in which only the backward cone of the target is encoded (the
+  registers the target depends on at that distance, and the memories they
+  read). A check at the last frame therefore covers every state within `n`
+  cycles of the target while the remainder of the design is unrolled only
+  `depth` times.
+- **State sets.** With `--sec-seed-enlarge-cubes m`, up to `m` preimage cubes
+  per step are enumerated by SAT: each is a conjunction of register literals
+  from which the target is reached in one step under some input, generalized
+  by assumption-based lifting, then blocked and the next one found. Cubes of a
+  step are the targets of the next. The cubes are added to the target at every
+  frame. Memory cells are not search variables, so a problem with structured
+  memories keeps the structural form only, and a step whose cube budget runs
+  out is kept (its cubes are real preimage states) but not expanded further.
+
+A hit on an enlarged target is completed by an exact search of `n` frames
+from the state reached, so the reported trace always ends in the original
+target, and it is replayed like any other trace.
+
+## Waypoint chaining
+
+A long input sequence is hard to find in one query because the solver has no
+sense of progress toward the target. Waypoint chaining (lighthouses: Ganai,
+Aziz and Kuehlmann, DAC 1999; Ho et al., ICCAD 2000; distance guidance:
+Kuehlmann, McMillan and Brayton, ICCAD 1999; Shyam and Bertacco, DATE 2006)
+replaces the one deep search on the single-copy divergence problem by up to
+`hops` short searches of `depth` frames each, chained from the concrete state
+the previous one reached.
+
+A target state is sampled as the start of a short free-start bounded search
+(the selected state's memory contents, free registers) that ends in the
+divergence predicate, so the sampled registers are consistent with reaching
+it; registers the sample leaves unknown carry no goal. The guide is the
+backward cone of the predicate's register part (output terms are left out,
+because output cones span the whole design), and distance is disagreement
+with the sample. Each hop's goal is the divergence predicate itself or one
+more cone register, within `layers` register steps at first, taking its
+target value while the registers the chain itself aligned keep theirs; if
+that is unreachable within the hop's conflict budget the hop is retried
+without the second condition, then as a plain
+change of any cone register that has not changed yet, then with a wider
+layer, then with a new sample (up to four). When a hop reaches a
+waypoint, its inputs are replayed on both exact models and the next hop
+starts from the state reached. When a hop reaches the divergence predicate,
+the chained inputs form the suffix, which is replayed to the outputs as
+usual. When the chain stops short, the plain bounded search continues from
+the chain's last state, and the chain's inputs are prepended to its trace.
 
 ## Diagnostics
 

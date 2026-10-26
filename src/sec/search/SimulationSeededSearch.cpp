@@ -137,6 +137,7 @@ TernaryModelSimulator::TernaryModelSimulator(const SequentialDesignModel& model)
   }
   ensureVarCapacity(maxVar);
   state_.assign(model.stateBits.size(), TernaryValue::Unknown);
+  toggled_.assign(model.stateBits.size(), false);
   nextRootByState_.assign(model.stateBits.size(), kNoNode);
   for (size_t index = 0; index < model.stateBits.size(); ++index) {
     const auto& key = model.stateBits[index];
@@ -331,11 +332,22 @@ bool TernaryModelSimulator::step() {
     const TernaryValue next = root == kNoNode
                                   ? TernaryValue::Unknown
                                   : static_cast<TernaryValue>(values_[root]);
-    changed = changed || next != state_[index];
+    if (next != state_[index]) {
+      changed = true;
+      // A toggle is a change between two known values; becoming known (reset,
+      // first write) or unknown is initialization, not activity.
+      if (isKnownTernaryValue(next) && isKnownTernaryValue(state_[index])) {
+        toggled_[index] = true;
+      }
+    }
     state_[index] = next;
   }
   combinationalValid_ = false;
   return changed;
+}
+
+void TernaryModelSimulator::clearToggles() {
+  std::fill(toggled_.begin(), toggled_.end(), false);
 }
 
 size_t TernaryModelSimulator::knownStateBitCount() const {
@@ -476,7 +488,26 @@ struct FrontierBoundedSearchResult {
   size_t badFrame = 0;
   // inputsByFrame[frame][alignedIndex]
   std::vector<std::vector<bool>> inputsByFrame;
+  // The hit was not on the target itself but on an enlargement cube or an
+  // intermediate target supplied by the caller.
+  bool viaIntermediateTarget = false;
 };
+
+// Target enlargement (Baumgartner, Kuehlmann and Abraham, CAV 2002) for the
+// bounded search. Structural form: `structuralSteps` extra frames in which
+// only the target's backward cone is unrolled, so the check at the last full
+// frame covers every state within that many cycles of the target. State-set
+// form: up to `cubeBudget` generalized preimage cubes per step, each a
+// conjunction of rail literals from which the target is reached under some
+// input, enumerated by SAT (McMillan, CAV 2002 style model enumeration with
+// assumption-based lifting) and added to the target at every frame.
+struct TargetEnlargement {
+  size_t structuralSteps = 0;
+  size_t cubeSteps = 0;
+  size_t cubeBudget = 0;
+};
+
+using StateCube = std::vector<std::pair<size_t, bool>>;  // (rail symbol, value)
 
 void logSeeded(bool diagnostics, const char* format, ...)
     __attribute__((format(printf, 2, 3)));
@@ -560,6 +591,21 @@ struct DivergenceProblem {
   bool frontierDiffers = false;                // a paired register already differs
   std::vector<std::string> unpairedNames;      // design-2 registers without a partner
   std::vector<std::string> incomparableNames;  // design-1 side of incomparable pairs
+  std::vector<DualRailSymbolPair> railsByStateIndex;  // design-1 state index -> rails
+  // The register part of the divergence predicate (no output terms): its cone
+  // stays local to the changed logic, which makes it the guide for waypoints.
+  BoolExpr* registerDivergence = nullptr;
+
+  std::unordered_map<size_t, bool> frontierFor(const std::vector<TernaryValue>& state0) const {
+    std::unordered_map<size_t, bool> result;
+    result.reserve(2 * railsByStateIndex.size());
+    for (size_t index = 0; index < railsByStateIndex.size() && index < state0.size(); ++index) {
+      const auto bits = static_cast<uint8_t>(state0[index]);
+      result[railsByStateIndex[index].mayBeOne] = (bits & 1u) != 0;
+      result[railsByStateIndex[index].mayBeZero] = (bits & 2u) != 0;
+    }
+    return result;
+  }
 };
 
 DivergenceProblem buildDivergenceProblem(
@@ -621,31 +667,123 @@ DivergenceProblem buildDivergenceProblem(
     const auto it = byName.find(name);
     return it == byName.end() ? kNoState : it->second;
   };
+  // Candidate partners of every design-1 register.
+  std::vector<size_t> netPartner(model0.stateBits.size(), kNoState);
+  std::vector<size_t> displayPartner(model0.stateBits.size(), kNoState);
+  for (size_t index0 = 0; index0 < model0.stateBits.size(); ++index0) {
+    const auto& key0 = model0.stateBits[index0];
+    if (const auto it = model0.outputNetNameByKey.find(key0);
+        it != model0.outputNetNameByKey.end() && !it->second.empty()) {
+      netPartner[index0] = lookup(indexByNetName1, it->second);
+    }
+    if (const auto it = model0.displayNameByKey.find(key0);
+        it != model0.displayNameByKey.end()) {
+      displayPartner[index0] = lookup(indexByDisplayName1, it->second);
+    }
+  }
+  std::vector<size_t> partnerOf0(model0.stateBits.size(), kNoState);
+  std::vector<size_t> partnerOf1(model1.stateBits.size(), kNoState);
+  const auto assign = [&](size_t index0, size_t index1) {
+    partnerOf0[index0] = index1;
+    partnerOf1[index1] = index0;
+  };
+  const auto release = [&](size_t index0) {
+    if (partnerOf0[index0] != kNoState) {
+      partnerOf1[partnerOf0[index0]] = kNoState;
+      partnerOf0[index0] = kNoState;
+    }
+  };
+  for (const auto* candidates : {&netPartner, &displayPartner}) {
+    for (size_t index0 = 0; index0 < model0.stateBits.size(); ++index0) {
+      const size_t index1 = (*candidates)[index0];
+      if (partnerOf0[index0] == kNoState && index1 != kNoState &&
+          partnerOf1[index1] == kNoState) {
+        assign(index0, index1);
+      }
+    }
+  }
+  const auto localVar1 = [&](size_t index1) {
+    return model1.inputVarByKey.at(model1.stateBits[index1]);
+  };
+  const auto localVar0 = [&](size_t index0) {
+    return model0.inputVarByKey.at(model0.stateBits[index0]);
+  };
+  const auto nextExpr = [](const SequentialDesignModel& model, size_t index) -> BoolExpr* {
+    const auto it = model.nextStateExprByStateKey.find(model.stateBits[index]);
+    return it == model.nextStateExprByStateKey.end() ? nullptr : it->second;
+  };
+  const auto renamingFromPairs = [&]() {
+    std::unordered_map<size_t, size_t> map = rename;
+    for (size_t index0 = 0; index0 < partnerOf0.size(); ++index0) {
+      if (partnerOf0[index0] != kNoState) {
+        map[localVar1(partnerOf0[index0])] = localVar0(index0);
+      }
+    }
+    return map;
+  };
+  // A net name follows the wire a register drives, a display name follows the
+  // instance; a local edit can change either. Where the net-name partner's
+  // formula differs but the display-name partner's is identical, the latter
+  // is the register that did not change.
+  for (size_t pass = 0; pass < 3; ++pass) {
+    const auto currentRename = renamingFromPairs();
+    std::unordered_map<BoolExpr*, BoolExpr*> passMemo;
+    bool changed = false;
+    for (size_t index0 = 0; index0 < model0.stateBits.size(); ++index0) {
+      const size_t index1 = partnerOf0[index0];
+      const size_t alternative = displayPartner[index0];
+      if (index1 == kNoState || alternative == kNoState || alternative == index1) {
+        continue;
+      }
+      BoolExpr* next0 = nextExpr(model0, index0);
+      BoolExpr* next1 = nextExpr(model1, index1);
+      BoolExpr* nextAlternative = nextExpr(model1, alternative);
+      if (next0 == nullptr || next1 == nullptr || nextAlternative == nullptr ||
+          renameVariables(next1, currentRename, passMemo) == next0) {
+        continue;
+      }
+      const size_t displaced0 = partnerOf1[alternative];
+      if (displaced0 != kNoState) {
+        BoolExpr* displacedNext0 = nextExpr(model0, displaced0);
+        if (displacedNext0 != nullptr &&
+            renameVariables(nextAlternative, currentRename, passMemo) == displacedNext0) {
+          continue;  // the alternative already has an identical partner
+        }
+      }
+      auto trial = currentRename;
+      trial[localVar1(alternative)] = localVar0(index0);
+      trial[localVar1(index1)] = localVar1(index1) + offset;
+      std::unordered_map<BoolExpr*, BoolExpr*> trialMemo;
+      if (renameVariables(nextAlternative, trial, trialMemo) != next0) {
+        continue;
+      }
+      if (displaced0 != kNoState) {
+        release(displaced0);
+      }
+      release(index0);
+      assign(index0, alternative);
+      changed = true;
+    }
+    if (!changed) {
+      break;
+    }
+    // Registers displaced by a re-pairing take any free candidate.
+    for (const auto* candidates : {&netPartner, &displayPartner}) {
+      for (size_t index0 = 0; index0 < model0.stateBits.size(); ++index0) {
+        const size_t index1 = (*candidates)[index0];
+        if (partnerOf0[index0] == kNoState && index1 != kNoState &&
+            partnerOf1[index1] == kNoState) {
+          assign(index0, index1);
+        }
+      }
+    }
+  }
   std::vector<std::pair<size_t, size_t>> pairs;
   std::vector<bool> used1(model1.stateBits.size(), false);
-  std::vector<bool> used0(model0.stateBits.size(), false);
-  for (const bool byNetName : {true, false}) {
-    for (size_t index0 = 0; index0 < model0.stateBits.size(); ++index0) {
-      if (used0[index0]) {
-        continue;
-      }
-      const auto& key0 = model0.stateBits[index0];
-      size_t index1 = kNoState;
-      if (byNetName) {
-        if (const auto it = model0.outputNetNameByKey.find(key0);
-            it != model0.outputNetNameByKey.end() && !it->second.empty()) {
-          index1 = lookup(indexByNetName1, it->second);
-        }
-      } else if (const auto it = model0.displayNameByKey.find(key0);
-                 it != model0.displayNameByKey.end()) {
-        index1 = lookup(indexByDisplayName1, it->second);
-      }
-      if (index1 == kNoState || used1[index1]) {
-        continue;
-      }
-      used1[index1] = true;
-      used0[index0] = true;
-      pairs.emplace_back(index0, index1);
+  for (size_t index0 = 0; index0 < model0.stateBits.size(); ++index0) {
+    if (partnerOf0[index0] != kNoState) {
+      pairs.emplace_back(index0, partnerOf0[index0]);
+      used1[partnerOf0[index0]] = true;
     }
   }
   for (const auto& [index0, index1] : pairs) {
@@ -701,6 +839,7 @@ DivergenceProblem buildDivergenceProblem(
     const DualRailSymbolPair rails{nextSymbol, nextSymbol + 1};
     nextSymbol += 2;
     railsByLocalVar[model0.inputVarByKey.at(key)] = rails;
+    out.railsByStateIndex.push_back(rails);
     problem.state0Symbols.push_back(rails.mayBeOne);
     problem.state0Symbols.push_back(rails.mayBeZero);
     problem.allSymbols.push_back(rails.mayBeOne);
@@ -821,6 +960,7 @@ DivergenceProblem buildDivergenceProblem(
     ++out.differingRegisters;
     diverge = BoolExpr::Or(diverge, binaryDifferent(lift(next0It->second), lift(renamed)));
   }
+  out.registerDivergence = BoolExpr::simplify(diverge);
   for (size_t index = 0; index < alignedOutputs.names.size(); ++index) {
     const auto out0It = model0.observedOutputExprByKey.find(alignedOutputs.keys0[index]);
     const auto out1It = model1.observedOutputExprByKey.find(alignedOutputs.keys1[index]);
@@ -842,6 +982,153 @@ DivergenceProblem buildDivergenceProblem(
   return out;
 }
 
+// Per-frame state-domain constraints shared by every unrolling here: valid
+// dual-rail values, same-frame equalities and complements, released reset
+// controls (the simulated prefix is at least as long as the reset bootstrap).
+void addFrameDomainConstraints(
+    SATSolverWrapper& solver,
+    const FrameVariableStore& variables,
+    const KInductionProblem& problem,
+    size_t frame) {
+  for (const auto& pair : problem.dualRailStatePairs) {
+    if (variables.hasSymbol(pair.mayBeOne) && variables.hasSymbol(pair.mayBeZero)) {
+      solver.addClause({variables.getLiteral(pair.mayBeOne, frame),
+                        variables.getLiteral(pair.mayBeZero, frame)});
+    }
+  }
+  for (const auto* pairs : {&problem.sameFrameStateEqualityPairs0,
+                            &problem.sameFrameStateEqualityPairs1}) {
+    for (const auto& [lhs, rhs] : *pairs) {
+      if (variables.hasSymbol(lhs) && variables.hasSymbol(rhs)) {
+        addLiteralEquivalence(
+            solver, variables.getLiteral(lhs, frame), variables.getLiteral(rhs, frame));
+      }
+    }
+  }
+  for (const auto* pairs : {&problem.complementedStatePairs0,
+                            &problem.complementedStatePairs1}) {
+    for (const auto& [primary, complemented] : *pairs) {
+      if (variables.hasSymbol(primary) && variables.hasSymbol(complemented)) {
+        addLiteralEquivalence(
+            solver, variables.getLiteral(primary, frame),
+            -variables.getLiteral(complemented, frame));
+      }
+    }
+  }
+  for (const auto& [symbol, activeValue] : problem.resetBootstrapInputs) {
+    if (variables.hasSymbol(symbol)) {
+      const int literal = variables.getLiteral(symbol, frame);
+      solver.addClause({activeValue ? -literal : literal});
+    }
+  }
+}
+
+int cubeLiteralAtFrame(
+    RailCnfBuilder& rails,
+    const FrameVariableStore& variables,
+    const StateCube& cube,
+    size_t frame) {
+  int literal = rails.trueLit();
+  for (const auto& [symbol, value] : cube) {
+    if (!variables.hasSymbol(symbol)) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    const int railLiteral = variables.getLiteral(symbol, frame);
+    literal = rails.andLit(literal, value ? railLiteral : -railLiteral);
+  }
+  return literal;
+}
+
+// Backward cone of a target over the problem's state symbols: layer 0 is the
+// target's own state support, layer j+1 adds every register a layer-j
+// register's next-state function reads; a memory read output pulls in the
+// registers its memory's ports read. Memory cells are not state here.
+std::vector<std::unordered_set<size_t>> targetConeLayers(
+    const KInductionProblem& problem,
+    BoolExpr* target,
+    size_t maxLayers) {
+  const std::vector<ProofMemoryDescription> noMemories;
+  const auto& memories = problem.structuredMemories != nullptr
+                             ? *problem.structuredMemories
+                             : noMemories;
+  std::unordered_set<size_t> cellRailSymbols;
+  std::unordered_map<size_t, size_t> memoryByReadOutput;
+  for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+    for (const auto& cell : memories[memoryIndex].cellRails) {
+      for (const auto& rails : cell) {
+        cellRailSymbols.insert(rails.mayBeOne);
+        cellRailSymbols.insert(rails.mayBeZero);
+      }
+    }
+    for (const auto& port : memories[memoryIndex].readPorts) {
+      for (const auto& rails : port.outputRails) {
+        if (rails.has_value()) {
+          memoryByReadOutput.emplace(rails->mayBeOne, memoryIndex);
+          memoryByReadOutput.emplace(rails->mayBeZero, memoryIndex);
+        }
+      }
+    }
+  }
+  std::unordered_set<size_t> stateSymbols;
+  for (const auto symbol : problem.combinedStateSymbols()) {
+    if (cellRailSymbols.find(symbol) == cellRailSymbols.end()) {
+      stateSymbols.insert(symbol);
+    }
+  }
+  const auto addStateSupport = [&](const std::set<size_t>& support,
+                                   std::unordered_set<size_t>& out) {
+    for (const auto symbol : support) {
+      if (stateSymbols.find(symbol) != stateSymbols.end()) {
+        out.insert(symbol);
+      }
+    }
+  };
+  std::vector<std::unordered_set<size_t>> memoryPortSupport(memories.size());
+  for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+    const auto& memory = memories[memoryIndex];
+    const auto addRails = [&](const DualRailBoolExpr& expr) {
+      addStateSupport(expr.mayBeOne->getSupportVars(), memoryPortSupport[memoryIndex]);
+      addStateSupport(expr.mayBeZero->getSupportVars(), memoryPortSupport[memoryIndex]);
+    };
+    for (const auto& port : memory.readPorts) {
+      for (const auto& bit : port.address) {
+        addRails(bit);
+      }
+    }
+    for (const auto& port : memory.writePorts) {
+      for (const auto* word : {&port.address, &port.data, &port.mask, &port.enable}) {
+        for (const auto& bit : *word) {
+          addRails(bit);
+        }
+      }
+    }
+    if (memory.resetAsserted.has_value()) {
+      addRails(*memory.resetAsserted);
+    }
+  }
+  const TransitionExprResolver transitions(problem);
+  std::vector<std::unordered_set<size_t>> layers(1);
+  addStateSupport(target->getSupportVars(), layers[0]);
+  for (size_t layer = 0; layer < maxLayers; ++layer) {
+    std::unordered_set<size_t> next = layers[layer];
+    for (const auto symbol : layers[layer]) {
+      if (const auto readIt = memoryByReadOutput.find(symbol);
+          readIt != memoryByReadOutput.end()) {
+        const auto& support = memoryPortSupport[readIt->second];
+        next.insert(support.begin(), support.end());
+      } else if (transitions.contains(symbol)) {
+        addStateSupport(transitions.support(symbol), next);
+      }
+    }
+    const bool grew = next.size() > layers[layer].size();
+    layers.push_back(std::move(next));
+    if (!grew) {
+      break;
+    }
+  }
+  return layers;
+}
+
 // Bounded search from one concrete rail-valued state. Memory arrays are not
 // unrolled cell by cell: a read returns the data of the latest earlier write
 // to the same address and otherwise the frontier contents (read-over-write,
@@ -853,10 +1140,16 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     const std::unordered_map<size_t, size_t>& mergedRails,
     size_t depth,
     size_t checkEvery,
+    const TargetEnlargement& enlargement,
+    BoolExpr* intermediateTarget,
     KEPLER_FORMAL::Config::SolverType solverType,
-    bool diagnostics) {
+    bool diagnostics,
+    std::vector<std::pair<size_t, bool>>* frameZeroStateOut = nullptr,
+    bool targetAtLastFrameOnly = false,
+    size_t conflictLimit = 0,
+    const std::vector<std::pair<size_t, bool>>& heldInputs = {}) {
   const auto start = std::chrono::steady_clock::now();
-  const bool finalCheckOnly = checkEvery == 0;
+  const bool finalCheckOnly = checkEvery == 0 || targetAtLastFrameOnly;
   std::unordered_map<BoolExpr*, BoolExpr*> mergeMemo;
   const auto mergeExpr = [&](BoolExpr* expr) {
     return mergedRails.empty() ? expr : renameVariables(expr, mergedRails, mergeMemo);
@@ -902,6 +1195,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       stateSymbols.push_back(symbol);
     }
   }
+  const std::unordered_set<size_t> stateSymbolSet(stateSymbols.begin(), stateSymbols.end());
   const TransitionExprResolver transitions(problem);
   std::vector<size_t> transitionStates;
   for (const auto symbol : stateSymbols) {
@@ -935,6 +1229,202 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     return std::nullopt;
   }
 
+  std::vector<size_t> symbols = problem.inputSymbols;
+  symbols.insert(symbols.end(), stateSymbols.begin(), stateSymbols.end());
+
+  // State-set target enlargement: generalized preimage cubes of the target.
+  // Memory cells are not search variables, so a problem with structured
+  // memories keeps the structural form only.
+  std::vector<StateCube> cubes;
+  if (enlargement.cubeSteps > 0 && enlargement.cubeBudget > 0) {
+    if (!memories.empty()) {
+      logSeeded(diagnostics,
+                "state-set enlargement skipped: structured memories keep the structural form");
+    } else {
+      const auto enlargeStart = std::chrono::steady_clock::now();
+      std::vector<StateCube> levelTargets;  // cubes of the previous level
+      for (size_t level = 1; level <= enlargement.cubeSteps; ++level) {
+        const auto levelStart = std::chrono::steady_clock::now();
+        const auto enumSolverType = SATSolverWrapper::assumptionSolverTypeFor(solverType);
+        SATSolverWrapper enumSolver(enumSolverType);
+        SATSolverWrapper liftSolver(enumSolverType);
+        enumSolver.configureForSecIncrementalBoundedSearch();
+        liftSolver.configureForSecIncrementalBoundedSearch();
+        FrameVariableStore enumVariables(enumSolver, symbols, 2);
+        FrameVariableStore liftVariables(liftSolver, symbols, 2);
+        RailCnfBuilder enumRails(enumSolver);
+        RailCnfBuilder liftRails(liftSolver);
+        // Both instances: one free step; the target at frame 1 is the original
+        // target or one of the previous level's cubes.
+        const auto build = [&](SATSolverWrapper& instance,
+                               const FrameVariableStore& instanceVariables,
+                               RailCnfBuilder& instanceRails) {
+          addFrameDomainConstraints(instance, instanceVariables, problem, 0);
+          addFrameDomainConstraints(instance, instanceVariables, problem, 1);
+          FrameFormulaEncoder stepEncoder(instance, instanceVariables.makeLeafLits(0));
+          for (const auto symbol : transitionStates) {
+            addLiteralEquivalence(
+                instance,
+                instanceVariables.getLiteral(symbol, 1),
+                stepEncoder.encode(mergeExpr(transitions.at(symbol))));
+          }
+          FrameFormulaEncoder targetEncoder(instance, instanceVariables.makeLeafLits(1));
+          int target = targetEncoder.encode(bad);
+          for (const auto& cube : levelTargets) {
+            target = instanceRails.orLit(
+                target, cubeLiteralAtFrame(instanceRails, instanceVariables, cube, 1));
+          }
+          return target;
+        };
+        const int enumTarget = build(enumSolver, enumVariables, enumRails);
+        const int liftTarget = build(liftSolver, liftVariables, liftRails);
+        liftSolver.addClause({-liftTarget});
+        for (const auto& cube : cubes) {
+          std::vector<int> blocking;
+          for (const auto& [symbol, value] : cube) {
+            const int literal = enumVariables.getLiteral(symbol, 0);
+            blocking.push_back(value ? -literal : literal);
+          }
+          enumSolver.addClause(blocking);
+        }
+        std::vector<StateCube> levelCubes;
+        bool complete = false;
+        size_t literalTotal = 0;
+        while (cubes.size() + levelCubes.size() < enlargement.cubeBudget) {
+          const auto status = enumSolver.solveWithAssumptionsStatus({enumTarget});
+          if (status == SATSolverWrapper::SolveStatus::Unsat) {
+            complete = true;
+            break;
+          }
+          if (status != SATSolverWrapper::SolveStatus::Sat) {
+            break;  // LCOV_EXCL_LINE
+          }
+          // The model's state is one preimage point; its inputs are fixed and
+          // the state literals not needed to force the target are dropped.
+          StateCube cube;
+          std::vector<int> assumptions;
+          cube.reserve(stateSymbols.size());
+          for (const auto symbol : stateSymbols) {
+            const bool value = enumSolver.getLiteralValue(enumVariables.getLiteral(symbol, 0));
+            cube.emplace_back(symbol, value);
+            const int literal = liftVariables.getLiteral(symbol, 0);
+            assumptions.push_back(value ? literal : -literal);
+          }
+          for (size_t frame = 0; frame < 2; ++frame) {
+            for (const auto symbol : problem.inputSymbols) {
+              const bool value =
+                  enumSolver.getLiteralValue(enumVariables.getLiteral(symbol, frame));
+              const int literal = liftVariables.getLiteral(symbol, frame);
+              assumptions.push_back(value ? literal : -literal);
+            }
+          }
+          StateCube generalized = cube;
+          if (liftSolver.solveWithAssumptionsStatus(assumptions) ==
+              SATSolverWrapper::SolveStatus::Unsat) {
+            const auto failedList = liftSolver.failedAssumptions();
+            const std::unordered_set<int> failed(failedList.begin(), failedList.end());
+            generalized.clear();
+            for (const auto& [symbol, value] : cube) {
+              const int literal = liftVariables.getLiteral(symbol, 0);
+              if (failed.count(value ? literal : -literal) != 0) {
+                generalized.emplace_back(symbol, value);
+              }
+            }
+          }
+          literalTotal += generalized.size();
+          std::vector<int> blocking;
+          for (const auto& [symbol, value] : generalized) {
+            const int literal = enumVariables.getLiteral(symbol, 0);
+            blocking.push_back(value ? -literal : literal);
+          }
+          enumSolver.addClause(blocking);
+          levelCubes.push_back(std::move(generalized));
+        }
+        logSeeded(diagnostics,
+                  "enlargement level=%zu cubes=%zu complete=%d avg_literals=%.1f seconds=%.1f",
+                  level, levelCubes.size(), complete ? 1 : 0,
+                  levelCubes.empty() ? 0.0
+                                     : static_cast<double>(literalTotal) /
+                                           static_cast<double>(levelCubes.size()),
+                  elapsedSeconds(levelStart));
+        if (levelCubes.empty()) {
+          break;
+        }
+        cubes.insert(cubes.end(), levelCubes.begin(), levelCubes.end());
+        levelTargets = std::move(levelCubes);
+        if (!complete) {
+          break;  // a partial level is still sound, but its preimage would be too
+        }
+      }
+      logSeeded(diagnostics, "enlargement cubes=%zu (%.1f s)", cubes.size(),
+                elapsedSeconds(enlargeStart));
+    }
+  }
+
+  // Structural enlargement: backward cone layers of the (enlarged) target
+  // over the state symbols; tail frames unroll only what the target needs.
+  const size_t tailFrames = enlargement.structuralSteps;
+  const size_t totalFrames = depth + tailFrames;
+  std::vector<std::unordered_set<size_t>> layers(tailFrames + 1);
+  if (tailFrames > 0) {
+    const auto addMergedStateSupport = [&](const std::set<size_t>& support,
+                                           std::unordered_set<size_t>& out) {
+      for (const auto raw : support) {
+        const auto mergedIt = mergedRails.find(raw);
+        const size_t symbol = mergedIt == mergedRails.end() ? raw : mergedIt->second;
+        if (stateSymbolSet.find(symbol) != stateSymbolSet.end()) {
+          out.insert(symbol);
+        }
+      }
+    };
+    std::vector<std::unordered_set<size_t>> memoryPortSupport(memories.size());
+    for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+      const auto& memory = memories[memoryIndex];
+      const auto addRails = [&](const DualRailBoolExpr& expr) {
+        addMergedStateSupport(expr.mayBeOne->getSupportVars(), memoryPortSupport[memoryIndex]);
+        addMergedStateSupport(expr.mayBeZero->getSupportVars(), memoryPortSupport[memoryIndex]);
+      };
+      for (const auto& port : memory.readPorts) {
+        for (const auto& bit : port.address) {
+          addRails(bit);
+        }
+      }
+      for (const auto& port : memory.writePorts) {
+        for (const auto* word : {&port.address, &port.data, &port.mask, &port.enable}) {
+          for (const auto& bit : *word) {
+            addRails(bit);
+          }
+        }
+      }
+      if (memory.resetAsserted.has_value()) {
+        addRails(*memory.resetAsserted);
+      }
+    }
+    addMergedStateSupport(bad->getSupportVars(), layers[0]);
+    if (intermediateTarget != nullptr) {
+      addMergedStateSupport(intermediateTarget->getSupportVars(), layers[0]);
+    }
+    for (const auto& cube : cubes) {
+      for (const auto& [symbol, value] : cube) {
+        layers[0].insert(symbol);
+      }
+    }
+    for (size_t layer = 0; layer < tailFrames; ++layer) {
+      layers[layer + 1] = layers[layer];
+      for (const auto symbol : layers[layer]) {
+        if (const auto readIt = readOutputBySymbol.find(symbol);
+            readIt != readOutputBySymbol.end()) {
+          const auto& support = memoryPortSupport[readIt->second.memory];
+          layers[layer + 1].insert(support.begin(), support.end());
+        } else if (transitions.contains(symbol)) {
+          addMergedStateSupport(transitions.support(symbol), layers[layer + 1]);
+        }
+      }
+    }
+    logSeeded(diagnostics, "structural enlargement tail_frames=%zu cone_states=%zu of %zu",
+              tailFrames, layers[tailFrames].size(), stateSymbols.size());
+  }
+
   // One final check is a single query, so the configured solver serves it;
   // intermediate checks need assumptions and an incremental solver.
   const auto searchSolverType = finalCheckOnly
@@ -944,9 +1434,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       searchSolverType != KEPLER_FORMAL::Config::SolverType::KISSAT;
   SATSolverWrapper solver(searchSolverType);
   solver.configureForSecIncrementalBoundedSearch();
-  std::vector<size_t> symbols = problem.inputSymbols;
-  symbols.insert(symbols.end(), stateSymbols.begin(), stateSymbols.end());
-  FrameVariableStore variables(solver, symbols, depth + 1);
+  FrameVariableStore variables(solver, symbols, totalFrames + 1);
   RailCnfBuilder rails(solver);
 
   // Frame 0 is the simulated frontier.
@@ -958,47 +1446,29 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       ++frontierUnits;
     }
   }
-
-  const auto addFrameDomain = [&](size_t frame) {
-    for (const auto& pair : problem.dualRailStatePairs) {
-      if (variables.hasSymbol(pair.mayBeOne) && variables.hasSymbol(pair.mayBeZero)) {
-        solver.addClause({variables.getLiteral(pair.mayBeOne, frame),
-                          variables.getLiteral(pair.mayBeZero, frame)});
-      }
-    }
-    for (const auto* pairs : {&problem.sameFrameStateEqualityPairs0,
-                              &problem.sameFrameStateEqualityPairs1}) {
-      for (const auto& [lhs, rhs] : *pairs) {
-        if (variables.hasSymbol(lhs) && variables.hasSymbol(rhs)) {
-          addLiteralEquivalence(
-              solver, variables.getLiteral(lhs, frame), variables.getLiteral(rhs, frame));
-        }
-      }
-    }
-    for (const auto* pairs : {&problem.complementedStatePairs0,
-                              &problem.complementedStatePairs1}) {
-      for (const auto& [primary, complemented] : *pairs) {
-        if (variables.hasSymbol(primary) && variables.hasSymbol(complemented)) {
-          addLiteralEquivalence(
-              solver, variables.getLiteral(primary, frame),
-              -variables.getLiteral(complemented, frame));
-        }
-      }
-    }
-    // The simulated prefix is at least as long as the reset bootstrap, so
-    // reset controls stay released, as in every post-bootstrap frame.
-    for (const auto& [symbol, activeValue] : problem.resetBootstrapInputs) {
+  const auto holdInputs = [&](size_t frame) {
+    for (const auto& [symbol, value] : heldInputs) {
       if (variables.hasSymbol(symbol)) {
         const int literal = variables.getLiteral(symbol, frame);
-        solver.addClause({activeValue ? -literal : literal});
+        solver.addClause({value ? literal : -literal});
       }
     }
   };
-  addFrameDomain(0);
+  addFrameDomainConstraints(solver, variables, problem, 0);
+  holdInputs(0);
 
-  const auto extractInputs = [&](size_t badFrame) {
+  const auto extractInputs = [&](size_t badFrame, bool viaIntermediateTarget) {
     FrontierBoundedSearchResult result;
     result.badFrame = badFrame;
+    result.viaIntermediateTarget = viaIntermediateTarget;
+    if (frameZeroStateOut != nullptr) {
+      frameZeroStateOut->clear();
+      frameZeroStateOut->reserve(stateSymbols.size());
+      for (const auto symbol : stateSymbols) {
+        frameZeroStateOut->emplace_back(
+            symbol, solver.getLiteralValue(variables.getLiteral(symbol, 0)));
+      }
+    }
     result.inputsByFrame.resize(badFrame + 1);
     for (size_t traceFrame = 0; traceFrame <= badFrame; ++traceFrame) {
       auto& inputs = result.inputsByFrame[traceFrame];
@@ -1009,25 +1479,41 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     }
     return result;
   };
+  const auto encodeTarget = [&](size_t frame, int& badLit, int& targetLit) {
+    FrameFormulaEncoder targetEncoder(solver, variables.makeLeafLits(frame));
+    badLit = targetEncoder.encode(bad);
+    targetLit = badLit;
+    if (intermediateTarget != nullptr) {
+      targetLit = rails.orLit(targetLit, targetEncoder.encode(mergeExpr(intermediateTarget)));
+    }
+    for (const auto& cube : cubes) {
+      targetLit = rails.orLit(targetLit, cubeLiteralAtFrame(rails, variables, cube, frame));
+    }
+  };
 
   std::vector<int> pendingBadLits;
+  std::vector<int> pendingTargetLits;
   size_t firstPendingFrame = 0;
   // The selected state itself may already show the difference.
   {
-    FrameFormulaEncoder badEncoder(solver, variables.makeLeafLits(0));
-    const int badLit = badEncoder.encode(bad);
-    if (finalCheckOnly) {
+    int badLit = 0;
+    int targetLit = 0;
+    encodeTarget(0, badLit, targetLit);
+    if (targetAtLastFrameOnly) {
+      firstPendingFrame = totalFrames;  // only the last frame's target counts
+    } else if (finalCheckOnly) {
       pendingBadLits.push_back(badLit);
+      pendingTargetLits.push_back(targetLit);
     } else {
-      const auto status = solver.solveWithAssumptionsStatus({badLit});
+      const auto status = solver.solveWithAssumptionsStatus({targetLit});
       if (status == SATSolverWrapper::SolveStatus::Sat) {
         logSeeded(diagnostics, "difference at the selected state itself");
-        return extractInputs(0);
+        return extractInputs(0, !solver.getLiteralValue(badLit));
       }
       if (status != SATSolverWrapper::SolveStatus::Unsat) {
         return std::nullopt;  // LCOV_EXCL_LINE
       }
-      solver.addClause({-badLit});
+      solver.addClause({-targetLit});
       firstPendingFrame = 1;
     }
   }
@@ -1044,7 +1530,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
 
   std::vector<std::vector<MemoryFrameEvents>> eventsByMemory(memories.size());
   for (auto& events : eventsByMemory) {
-    events.reserve(depth);
+    events.reserve(totalFrames);
   }
   const auto mergeRailWord = [&](const std::vector<DualRailBoolExpr>& word) {
     std::vector<DualRailBoolExpr> merged;
@@ -1071,51 +1557,68 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     sharedMemory[memoryIndex] = anyOutput && allMerged;
   }
 
-  const auto checkPendingBad = [&](size_t frame) -> std::optional<FrontierBoundedSearchResult> {
-    int anyBad = rails.falseLit();
-    for (const int lit : pendingBadLits) {
-      anyBad = rails.orLit(anyBad, lit);
+  const auto checkPendingTarget = [&](size_t frame) -> std::optional<FrontierBoundedSearchResult> {
+    int anyTarget = rails.falseLit();
+    for (const int lit : pendingTargetLits) {
+      anyTarget = rails.orLit(anyTarget, lit);
     }
     const auto solveStart = std::chrono::steady_clock::now();
     SATSolverWrapper::SolveStatus status = SATSolverWrapper::SolveStatus::Unknown;
     if (usesAssumptions) {
-      status = solver.solveWithAssumptionsStatus({anyBad});
+      status = solver.solveWithAssumptionsStatus(
+          {anyTarget}, conflictLimit == 0 ? -1 : static_cast<int64_t>(conflictLimit));
     } else {
-      solver.addClause({anyBad});
-      status = solver.solveStatus();
+      solver.addClause({anyTarget});
+      status = conflictLimit == 0
+          ? solver.solveStatus()
+          : solver.solveWithKissatResourceLimits(static_cast<unsigned>(conflictLimit));
     }
     logSeeded(diagnostics,
               "frame=%zu checked_frames=%zu status=%s solve_seconds=%.1f total_seconds=%.1f",
               frame,
-              pendingBadLits.size(),
+              pendingTargetLits.size(),
               status == SATSolverWrapper::SolveStatus::Sat
                   ? "sat"
                   : status == SATSolverWrapper::SolveStatus::Unsat ? "unsat" : "unknown",
               elapsedSeconds(solveStart),
               elapsedSeconds(start));
     if (status == SATSolverWrapper::SolveStatus::Sat) {
-      // The earliest checked frame whose property fails.
-      for (size_t i = 0; i < pendingBadLits.size(); ++i) {
-        if (solver.getLiteralValue(pendingBadLits[i])) {
-          return extractInputs(firstPendingFrame + i);
+      // The earliest checked frame whose target holds.
+      for (size_t i = 0; i < pendingTargetLits.size(); ++i) {
+        if (solver.getLiteralValue(pendingTargetLits[i])) {
+          return extractInputs(firstPendingFrame + i,
+                               !solver.getLiteralValue(pendingBadLits[i]));
         }
       }
-      return extractInputs(frame);  // LCOV_EXCL_LINE
+      return extractInputs(frame, false);  // LCOV_EXCL_LINE
     }
     if (status == SATSolverWrapper::SolveStatus::Unsat && usesAssumptions) {
-      for (const int lit : pendingBadLits) {
+      for (const int lit : pendingTargetLits) {
         solver.addClause({-lit});
       }
     }
     pendingBadLits.clear();
+    pendingTargetLits.clear();
     firstPendingFrame = frame + 1;
     return std::nullopt;
   };
 
-  for (size_t frame = 0; frame < depth; ++frame) {
+  for (size_t frame = 0; frame < totalFrames; ++frame) {
     const auto frameStart = std::chrono::steady_clock::now();
+    // Tail frames of the structural enlargement unroll only the states the
+    // target still depends on at that distance from the last frame.
+    const std::unordered_set<size_t>* needed =
+        frame >= depth ? &layers[totalFrames - frame - 1] : nullptr;
+    const auto isNeeded = [&](size_t symbol) {
+      return needed == nullptr || needed->find(symbol) != needed->end();
+    };
     FrameFormulaEncoder encoder(solver, variables.makeLeafLits(frame));
+    size_t encodedStates = 0;
     for (const auto symbol : transitionStates) {
+      if (!isNeeded(symbol)) {
+        continue;
+      }
+      ++encodedStates;
       addLiteralEquivalence(
           solver,
           variables.getLiteral(symbol, frame + 1),
@@ -1125,6 +1628,16 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
       const auto& memory = memories[memoryIndex];
       if (sharedMemory[memoryIndex]) {
+        continue;
+      }
+      bool memoryNeeded = needed == nullptr;
+      for (const auto& port : memory.readPorts) {
+        for (const auto& outputRails : port.outputRails) {
+          memoryNeeded = memoryNeeded ||
+                         (outputRails.has_value() && isNeeded(outputRails->mayBeOne));
+        }
+      }
+      if (!memoryNeeded) {
         continue;
       }
       auto& events = eventsByMemory[memoryIndex];
@@ -1146,6 +1659,14 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       events.push_back(std::move(frameEvents));
 
       for (const auto& port : memory.readPorts) {
+        bool portNeeded = false;
+        for (const auto& outputRails : port.outputRails) {
+          portNeeded = portNeeded ||
+                       (outputRails.has_value() && isNeeded(outputRails->mayBeOne));
+        }
+        if (!portNeeded) {
+          continue;
+        }
         const auto address = encodeRailWord(encoder, mergeRailWord(port.address));
         // Address decode against the frontier contents, built on demand.
         std::vector<int> mayEqualCell;
@@ -1168,7 +1689,8 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
         for (size_t bit = 0; bit < port.outputRails.size(); ++bit) {
           if (!port.outputRails[bit].has_value() ||
               isMerged(port.outputRails[bit]->mayBeOne) ||
-              !variables.hasSymbol(port.outputRails[bit]->mayBeOne)) {
+              !variables.hasSymbol(port.outputRails[bit]->mayBeOne) ||
+              !isNeeded(port.outputRails[bit]->mayBeOne)) {
             continue;
           }
           // Frontier contents at the read address.
@@ -1236,18 +1758,25 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       }
     }
 
-    addFrameDomain(frame + 1);
-    FrameFormulaEncoder badEncoder(solver, variables.makeLeafLits(frame + 1));
-    pendingBadLits.push_back(badEncoder.encode(bad));
-    logSeeded(diagnostics, "frame=%zu encoded encode_seconds=%.1f frontier_units=%zu",
-              frame + 1, elapsedSeconds(frameStart), frontierUnits);
+    addFrameDomainConstraints(solver, variables, problem, frame + 1);
+    holdInputs(frame + 1);
+    int badLit = 0;
+    int targetLit = 0;
+    if (!targetAtLastFrameOnly || frame + 1 == totalFrames) {
+      encodeTarget(frame + 1, badLit, targetLit);
+      pendingBadLits.push_back(badLit);
+      pendingTargetLits.push_back(targetLit);
+    }
+    logSeeded(diagnostics,
+              "frame=%zu encoded states=%zu%s encode_seconds=%.1f frontier_units=%zu",
+              frame + 1, encodedStates, needed == nullptr ? "" : " (target cone)",
+              elapsedSeconds(frameStart), frontierUnits);
     // Every intermediate check is an unsatisfiability proof the search does
-    // not need, so the property is checked for the first frames, then every
-    // few frames, and at the last frame.
+    // not need, so by default the target is checked once, at the last frame.
     const size_t checked = frame + 1;
-    if (checked == depth ||
+    if (checked == totalFrames ||
         (!finalCheckOnly && (checked <= 2 || checked % checkEvery == 0))) {
-      if (auto result = checkPendingBad(checked)) {
+      if (auto result = checkPendingTarget(checked)) {
         return result;
       }
     }
@@ -1489,13 +2018,138 @@ runSimulationSeededSearch(
     add(model1, state1, rails1ByKey);
     return frontier;
   };
+  TargetEnlargement enlargement;
+  enlargement.structuralSteps = options.enlargeSteps;
+  enlargement.cubeSteps = options.enlargeCubes > 0 ? options.enlargeSteps : 0;
+  enlargement.cubeBudget = options.enlargeCubes;
+  const TargetEnlargement noEnlargement;
+
+  // Inputs that feed the next state of most registers are global controls
+  // (resets, scan and test enables). Letting a bounded search drive them
+  // turns every hop into a reset; they keep the value the selected prefix ran
+  // with (held inputs as in simulation-seeded formal search).
+  std::vector<std::pair<size_t, bool>> heldInputIndices;  // (aligned index, value)
+  {
+    std::vector<size_t> registersFedByInput(inputCount, 0);
+    const auto lastVector = inputVectorAtCycle(*best, prefixCycles - 1);
+    std::unordered_map<size_t, size_t> indexByLocalInput0;
+    for (size_t index = 0; index < inputCount; ++index) {
+      if (localInput0[index] != kNoState) {
+        indexByLocalInput0.emplace(localInput0[index], index);
+      }
+    }
+    // Memory cells and read outputs all depend on the write controls of their
+    // memory; they say nothing about global controls and are left out.
+    std::unordered_set<SignalKey, SignalKeyHash> memoryKeys;
+    for (const auto& memory : model0.structuredMemories) {
+      for (const auto& cellKeys : memory.cellKeys) {
+        memoryKeys.insert(cellKeys.begin(), cellKeys.end());
+      }
+      for (const auto& port : memory.readPorts) {
+        memoryKeys.insert(port.outputKeys.begin(), port.outputKeys.end());
+      }
+    }
+    size_t registers = 0;
+    for (const auto& key : model0.stateBits) {
+      const auto nextIt = model0.nextStateExprByStateKey.find(key);
+      if (nextIt == model0.nextStateExprByStateKey.end() || nextIt->second == nullptr ||
+          memoryKeys.count(key) != 0) {
+        continue;
+      }
+      ++registers;
+      for (const auto var : nextIt->second->getSupportVars()) {
+        if (const auto it = indexByLocalInput0.find(var); it != indexByLocalInput0.end()) {
+          ++registersFedByInput[it->second];
+        }
+      }
+    }
+    for (size_t index = 0; index < inputCount; ++index) {
+      if (registers > 0 && registersFedByInput[index] * 2 >= registers &&
+          !resetActiveValue[index].has_value()) {
+        heldInputIndices.emplace_back(index, lastVector[index]);
+        logSeeded(diagnostics, "held input %s=%d (feeds %zu of %zu registers)",
+                  alignedInputs.names[index].c_str(), lastVector[index] ? 1 : 0,
+                  registersFedByInput[index], registers);
+      }
+    }
+  }
+  const auto heldFor = [&](const KInductionProblem& target) {
+    std::vector<std::pair<size_t, bool>> held;
+    for (const auto& [index, value] : heldInputIndices) {
+      if (index < target.inputSymbols.size()) {
+        held.emplace_back(target.inputSymbols[index], value);
+      }
+    }
+    return held;
+  };
+  const auto heldProblemInputs = heldFor(problem);
+
+  // Replays `frames` input vectors from the two states; returns the states
+  // reached.
+  const auto statesAfter = [&](const std::vector<TernaryValue>& from0,
+                               const std::vector<TernaryValue>& from1,
+                               const std::vector<std::vector<bool>>& inputs,
+                               size_t frames,
+                               std::vector<TernaryValue>& after0,
+                               std::vector<TernaryValue>& after1) {
+    simulator0.setState(from0);
+    simulator1.setState(from1);
+    for (size_t frame = 0; frame < frames && frame < inputs.size(); ++frame) {
+      applyInputs(inputs[frame]);
+      simulator0.step();
+      simulator1.step();
+    }
+    after0 = simulator0.state();
+    after1 = simulator1.state();
+  };
+  // A hit on an enlarged target lies within the enlargement's step count of
+  // the real target: finish the trace with an exact search from the state
+  // reached, replacing the arbitrary inputs of the hit frame.
+  const auto finishEnlarged =
+      [&](FrontierBoundedSearchResult result,
+          const std::vector<TernaryValue>& from0,
+          const std::vector<TernaryValue>& from1,
+          const auto& exactSearchFrom) -> std::optional<FrontierBoundedSearchResult> {
+    if (!result.viaIntermediateTarget) {
+      return result;
+    }
+    std::vector<TernaryValue> reached0;
+    std::vector<TernaryValue> reached1;
+    statesAfter(from0, from1, result.inputsByFrame, result.badFrame, reached0, reached1);
+    logSeeded(diagnostics,
+              "enlarged target hit at suffix frame %zu; exact search of %zu frames from there",
+              result.badFrame, enlargement.cubeSteps);
+    const auto rest = exactSearchFrom(reached0, reached1, enlargement.cubeSteps);
+    if (!rest.has_value()) {
+      logSeeded(diagnostics, "enlarged target hit could not be completed; discarded");  // LCOV_EXCL_LINE
+      return std::nullopt;  // LCOV_EXCL_LINE
+    }
+    FrontierBoundedSearchResult combined;
+    combined.inputsByFrame.assign(result.inputsByFrame.begin(),
+                                  result.inputsByFrame.begin() + result.badFrame);
+    combined.inputsByFrame.insert(combined.inputsByFrame.end(),
+                                  rest->inputsByFrame.begin(), rest->inputsByFrame.end());
+    combined.badFrame = result.badFrame + rest->badFrame;
+    return combined;
+  };
+
   // Two-copy bounded search from a pair of states, confirmed by replay.
+  const auto twoCopyExact = [&](const std::vector<TernaryValue>& from0,
+                                const std::vector<TernaryValue>& from1,
+                                size_t depth) {
+    return runFrontierBoundedSearch(
+        problem, frontierOf(from0, from1), {}, depth, options.checkEvery, noEnlargement,
+        nullptr, solverType, diagnostics, nullptr, false, 0, heldProblemInputs);
+  };
   const auto twoCopySearch = [&](const std::vector<TernaryValue>& from0,
                                  const std::vector<TernaryValue>& from1,
                                  size_t depth) -> std::optional<SuffixTrace> {
-    const auto search = runFrontierBoundedSearch(
-        problem, frontierOf(from0, from1), {}, depth, options.checkEvery, solverType,
-        diagnostics);
+    auto search = runFrontierBoundedSearch(
+        problem, frontierOf(from0, from1), {}, depth, options.checkEvery, enlargement,
+        nullptr, solverType, diagnostics, nullptr, false, 0, heldProblemInputs);
+    if (search.has_value()) {
+      search = finishEnlarged(*search, from0, from1, twoCopyExact);
+    }
     if (!search.has_value()) {
       return std::nullopt;
     }
@@ -1506,6 +2160,310 @@ runSimulationSeededSearch(
       logSeeded(diagnostics, "candidate trace not confirmed by simulation; discarded");  // LCOV_EXCL_LINE
     }
     return trace;
+  };
+
+  // Waypoint chaining on the single-copy divergence problem (lighthouses:
+  // Ganai, Aziz and Kuehlmann, DAC 1999; Ho et al., ICCAD 2000; distance
+  // guidance: Kuehlmann, McMillan and Brayton, ICCAD 1999; Shyam and Bertacco,
+  // DATE 2006). A target state is sampled as the start of a short free-start
+  // search that ends in the divergence, so its registers are consistent with
+  // reaching it; each hop is a short search that brings one more register of
+  // the predicate's cone to its target value without losing an aligned one.
+  // When the sample gives no reachable direction, a hop may instead change
+  // any cone register that has not changed yet. Hops are chained from the
+  // concrete state each one reaches; the real target is part of every goal.
+  struct WaypointChainOutcome {
+    std::optional<FrontierBoundedSearchResult> divergence;  // the real target was reached
+    std::vector<std::vector<bool>> inputs;                   // chain inputs so far
+    std::vector<TernaryValue> state0;
+    std::vector<TernaryValue> state1;
+  };
+  const auto runWaypointChain = [&](const DivergenceProblem& divergence) -> WaypointChainOutcome {
+    WaypointChainOutcome outcome;
+    outcome.state0 = best->state0;
+    outcome.state1 = best->state1;
+    const auto chainStart = std::chrono::steady_clock::now();
+    constexpr size_t kMaxConeLayers = 32;
+    constexpr size_t kMaxTargetSamples = 4;
+    BoolExpr* guide = divergence.registerDivergence != nullptr &&
+                              divergence.registerDivergence != BoolExpr::createFalse()
+                          ? divergence.registerDivergence
+                          : divergence.problem.bad;
+    const auto layers = targetConeLayers(divergence.problem, guide, kMaxConeLayers);
+    std::unordered_map<size_t, size_t> indexByRail;
+    indexByRail.reserve(2 * divergence.railsByStateIndex.size());
+    for (size_t index = 0; index < divergence.railsByStateIndex.size(); ++index) {
+      indexByRail.emplace(divergence.railsByStateIndex[index].mayBeOne, index);
+      indexByRail.emplace(divergence.railsByStateIndex[index].mayBeZero, index);
+    }
+    // layerIndices[L]: registers within L steps of the predicate (cumulative).
+    std::vector<std::vector<size_t>> layerIndices(layers.size());
+    for (size_t layer = 0; layer < layers.size(); ++layer) {
+      std::unordered_set<size_t> seen;
+      for (const auto symbol : layers[layer]) {
+        if (const auto it = indexByRail.find(symbol);
+            it != indexByRail.end() && seen.insert(it->second).second) {
+          layerIndices[layer].push_back(it->second);
+        }
+      }
+    }
+    const std::vector<size_t>& coneIndices = layerIndices.back();
+    logSeeded(diagnostics, "waypoints: cone layers=%zu registers=%zu",
+              layers.size(), coneIndices.size());
+
+    // Registers that changed during the prefix are not flip waypoints.
+    simulator0.resetToInitialState();
+    simulator1.resetToInitialState();
+    simulator0.clearToggles();
+    for (size_t cycle = 0; cycle < prefixCycles; ++cycle) {
+      applyInputs(inputVectorAtCycle(*best, cycle));
+      simulator0.step();
+      simulator1.step();
+    }
+    std::vector<bool> retired = simulator0.toggled();
+
+    // Memory contents of the selected state: a sampled start state keeps them,
+    // every register is free.
+    std::unordered_map<size_t, bool> cellFrontier;
+    if (divergence.problem.structuredMemories != nullptr) {
+      for (const auto& memory : *divergence.problem.structuredMemories) {
+        for (const auto& cell : memory.cellRails) {
+          for (const auto& rails : cell) {
+            for (const auto symbol : {rails.mayBeOne, rails.mayBeZero}) {
+              if (const auto it = divergence.frontier.find(symbol); it != divergence.frontier.end()) {
+                cellFrontier.emplace(symbol, it->second);
+              }
+            }
+          }
+        }
+      }
+    }
+    std::vector<TernaryValue> target(outcome.state0.size(), TernaryValue::Unknown);
+    size_t samples = 0;
+    const auto nameOf = [&](size_t index) {
+      const auto& key = model0.stateBits[index];
+      const auto it = model0.displayNameByKey.find(key);
+      std::string name = it == model0.displayNameByKey.end() ? std::string("?") : it->second;
+      if (const auto netIt = model0.outputNetNameByKey.find(key);
+          netIt != model0.outputNetNameByKey.end() && !netIt->second.empty()) {
+        name += " (" + netIt->second + ")";
+      }
+      return name;
+    };
+    const auto sampleTarget = [&]() {
+      const size_t depth = options.waypointDepth + 2 * samples;
+      std::vector<std::pair<size_t, bool>> startState;
+      const auto sample = runFrontierBoundedSearch(
+          divergence.problem, cellFrontier, {}, depth, options.checkEvery, noEnlargement,
+          nullptr, solverType, false, &startState, /*targetAtLastFrameOnly=*/true, 0,
+          heldFor(divergence.problem));
+      ++samples;
+      if (!sample.has_value()) {
+        logSeeded(diagnostics, "waypoints: no state reaches the target within %zu frames", depth);
+        return false;
+      }
+      std::fill(target.begin(), target.end(), TernaryValue::Unknown);
+      std::unordered_map<size_t, bool> value(startState.begin(), startState.end());
+      size_t known = 0;
+      for (const auto index : coneIndices) {
+        const auto& rails = divergence.railsByStateIndex[index];
+        const auto oneIt = value.find(rails.mayBeOne);
+        const auto zeroIt = value.find(rails.mayBeZero);
+        if (oneIt == value.end() || zeroIt == value.end()) {
+          continue;  // LCOV_EXCL_LINE
+        }
+        if (oneIt->second && !zeroIt->second) {
+          target[index] = TernaryValue::One;
+          ++known;
+        } else if (zeroIt->second && !oneIt->second) {
+          target[index] = TernaryValue::Zero;
+          ++known;
+        }
+      }
+      logSeeded(diagnostics,
+                "waypoints: target sample %zu (a state %zu frames before the divergence) fixes %zu of %zu cone registers",
+                samples, sample->badFrame, known, coneIndices.size());
+      return true;
+    };
+    if (!sampleTarget()) {
+      return outcome;
+    }
+    const auto equalsTarget = [&](size_t index) {
+      const auto& rails = divergence.railsByStateIndex[index];
+      BoolExpr* one = BoolExpr::Var(rails.mayBeOne);
+      BoolExpr* zero = BoolExpr::Var(rails.mayBeZero);
+      return target[index] == TernaryValue::One ? BoolExpr::And(one, BoolExpr::Not(zero))
+                                                : BoolExpr::And(zero, BoolExpr::Not(one));
+    };
+    const auto flipExpr = [&](size_t index) {
+      const auto& rails = divergence.railsByStateIndex[index];
+      BoolExpr* one = BoolExpr::Var(rails.mayBeOne);
+      BoolExpr* zero = BoolExpr::Var(rails.mayBeZero);
+      BoolExpr* binaryOne = BoolExpr::And(one, BoolExpr::Not(zero));
+      BoolExpr* binaryZero = BoolExpr::And(zero, BoolExpr::Not(one));
+      return outcome.state0[index] == TernaryValue::One ? binaryZero
+             : outcome.state0[index] == TernaryValue::Zero ? binaryOne
+                                                           : BoolExpr::Or(binaryOne, binaryZero);
+    };
+    const auto alignedCount = [&]() {
+      size_t count = 0;
+      for (const auto index : coneIndices) {
+        count += (target[index] != TernaryValue::Unknown &&
+                  outcome.state0[index] == target[index]) ? 1 : 0;
+      }
+      return count;
+    };
+
+    enum class HopMode { Directed, DirectedRelaxed, Flip };
+    size_t layer = std::min(options.waypointLayers, layers.size() - 1);
+    HopMode mode = HopMode::Directed;
+    size_t hop = 0;
+    // Registers the chain itself brought to their target value: a directed
+    // hop must not undo them. Registers aligned from the start are left free,
+    // since holding thousands of them makes hops hard to refute.
+    std::unordered_set<size_t> gained;
+    while (hop < options.waypointHops) {
+      std::vector<size_t> candidates;
+      std::vector<size_t> aligned;
+      for (const auto index : layerIndices[layer]) {
+        if (mode == HopMode::Flip) {
+          if (!retired[index]) {
+            candidates.push_back(index);
+          }
+        } else if (target[index] != TernaryValue::Unknown) {
+          if (outcome.state0[index] == target[index]) {
+            if (gained.count(index) != 0) {
+              aligned.push_back(index);
+            }
+          } else {
+            candidates.push_back(index);
+          }
+        }
+      }
+      const auto nextAttempt = [&]() {
+        // Directed, directed without holding aligned registers, flips; then a
+        // wider layer; then another sample.
+        if (mode == HopMode::Directed) {
+          mode = HopMode::DirectedRelaxed;
+          return true;
+        }
+        if (mode == HopMode::DirectedRelaxed) {
+          mode = HopMode::Flip;
+          return true;
+        }
+        mode = HopMode::Directed;
+        if (layer + 1 < layers.size()) {
+          ++layer;
+          return true;
+        }
+        if (samples < kMaxTargetSamples && sampleTarget()) {
+          layer = std::min(options.waypointLayers, layers.size() - 1);
+          return true;
+        }
+        return false;
+      };
+      if (candidates.empty()) {
+        if (nextAttempt()) {
+          continue;
+        }
+        logSeeded(diagnostics, "waypoints: no waypoint left; stopping");
+        break;
+      }
+      BoolExpr* waypoint = BoolExpr::createFalse();
+      for (const auto index : candidates) {
+        waypoint = BoolExpr::Or(waypoint, mode == HopMode::Flip ? flipExpr(index) : equalsTarget(index));
+      }
+      if (mode == HopMode::Directed) {
+        for (const auto index : aligned) {
+          waypoint = BoolExpr::And(waypoint, equalsTarget(index));
+        }
+      }
+      if (diagnostics && candidates.size() <= 8) {
+        for (const auto index : candidates) {
+          logSeeded(diagnostics, "waypoints:   candidate %s now=%d target=%d",
+                    nameOf(index).c_str(), static_cast<int>(outcome.state0[index]),
+                    static_cast<int>(target[index]));
+        }
+      }
+      logSeeded(diagnostics,
+                "waypoints: hop=%zu layer=%zu mode=%s candidates=%zu aligned=%zu depth=%zu e.g. %s (%.1f s)",
+                hop, layer,
+                mode == HopMode::Directed ? "directed"
+                : mode == HopMode::DirectedRelaxed ? "directed-relaxed" : "flip",
+                candidates.size(), aligned.size(), options.waypointDepth,
+                nameOf(candidates.front()).c_str(), elapsedSeconds(chainStart));
+      const auto result = runFrontierBoundedSearch(
+          divergence.problem, divergence.frontierFor(outcome.state0), {},
+          options.waypointDepth, options.checkEvery, noEnlargement, waypoint, solverType,
+          diagnostics, nullptr, false, options.waypointConflicts, heldFor(divergence.problem));
+      ++hop;
+      if (!result.has_value()) {
+        if (nextAttempt()) {
+          continue;
+        }
+        logSeeded(diagnostics, "waypoints: nothing reachable within %zu frames; stopping",
+                  options.waypointDepth);
+        break;
+      }
+      if (!result->viaIntermediateTarget) {
+        outcome.inputs.insert(outcome.inputs.end(), result->inputsByFrame.begin(),
+                              result->inputsByFrame.end());
+        FrontierBoundedSearchResult total;
+        total.badFrame = outcome.inputs.size() - 1;
+        total.inputsByFrame = outcome.inputs;
+        outcome.divergence = std::move(total);
+        logSeeded(diagnostics,
+                  "waypoints: target reached after %zu hops at suffix frame %zu (%.1f s)",
+                  hop, outcome.inputs.size() - 1, elapsedSeconds(chainStart));
+        return outcome;
+      }
+      const size_t alignedBefore = alignedCount();
+      simulator0.setState(outcome.state0);
+      simulator1.setState(outcome.state1);
+      std::vector<bool> changed(outcome.state0.size(), false);
+      for (size_t frame = 0; frame < result->badFrame; ++frame) {
+        applyInputs(result->inputsByFrame[frame]);
+        const auto before = simulator0.state();
+        simulator0.step();
+        simulator1.step();
+        const auto& after = simulator0.state();
+        for (size_t index = 0; index < changed.size(); ++index) {
+          changed[index] = changed[index] || before[index] != after[index];
+        }
+        outcome.inputs.push_back(result->inputsByFrame[frame]);
+      }
+      size_t newlyRetired = 0;
+      for (size_t index = 0; index < retired.size(); ++index) {
+        if (changed[index] && !retired[index]) {
+          retired[index] = true;
+          ++newlyRetired;
+        }
+      }
+      outcome.state0 = simulator0.state();
+      outcome.state1 = simulator1.state();
+      for (const auto index : coneIndices) {
+        if (changed[index] && target[index] != TernaryValue::Unknown &&
+            outcome.state0[index] == target[index]) {
+          gained.insert(index);
+        }
+      }
+      const size_t alignedAfter = alignedCount();
+      logSeeded(diagnostics,
+                "waypoints: hop %zu reached a waypoint at frame %zu; aligned %zu -> %zu of %zu, newly changed=%zu",
+                hop, result->badFrame, alignedBefore, alignedAfter, coneIndices.size(), newlyRetired);
+      const bool progressed = mode == HopMode::Flip ? newlyRetired > 0 : alignedAfter > alignedBefore;
+      if (progressed) {
+        mode = HopMode::Directed;
+        layer = std::min(options.waypointLayers, layers.size() - 1);
+      } else if (!nextAttempt()) {
+        logSeeded(diagnostics, "waypoints: no progress; stopping");
+        break;
+      }
+    }
+    if (hop >= options.waypointHops) {
+      logSeeded(diagnostics, "waypoints: hop budget of %zu exhausted", options.waypointHops);
+    }
+    return outcome;
   };
 
   std::optional<SuffixTrace> trace;
@@ -1535,9 +2493,47 @@ runSimulationSeededSearch(
     logSeeded(diagnostics, "no comparable differing next-state logic; search skipped");
     return std::nullopt;
   } else {
-    const auto search = runFrontierBoundedSearch(
-        divergence.problem, divergence.frontier, {}, options.searchDepth,
-        options.checkEvery, solverType, diagnostics);
+    const auto divergenceExact = [&](const std::vector<TernaryValue>& from0,
+                                     const std::vector<TernaryValue>& from1,
+                                     size_t depth) {
+      (void)from1;
+      return runFrontierBoundedSearch(
+          divergence.problem, divergence.frontierFor(from0), {}, depth,
+          options.checkEvery, noEnlargement, nullptr, solverType, diagnostics, nullptr,
+          false, 0, heldFor(divergence.problem));
+    };
+    std::optional<FrontierBoundedSearchResult> search;
+    std::vector<std::vector<bool>> chainInputs;
+    std::vector<TernaryValue> from0 = best->state0;
+    std::vector<TernaryValue> from1 = best->state1;
+    if (options.waypointHops > 0) {
+      auto outcome = runWaypointChain(divergence);
+      if (outcome.divergence.has_value()) {
+        search = std::move(outcome.divergence);
+      } else {
+        // The chain prepared a state closer to the target; the plain search
+        // continues from there.
+        chainInputs = std::move(outcome.inputs);
+        from0 = std::move(outcome.state0);
+        from1 = std::move(outcome.state1);
+        logSeeded(diagnostics, "waypoints: direct search of %zu frames from the chain's state after %zu frames",
+                  options.searchDepth, chainInputs.size());
+      }
+    }
+    if (!search.has_value()) {
+      search = runFrontierBoundedSearch(
+          divergence.problem, divergence.frontierFor(from0), {}, options.searchDepth,
+          options.checkEvery, enlargement, nullptr, solverType, diagnostics, nullptr, false,
+          0, heldFor(divergence.problem));
+      if (search.has_value()) {
+        search = finishEnlarged(*search, from0, from1, divergenceExact);
+      }
+      if (search.has_value() && !chainInputs.empty()) {
+        search->inputsByFrame.insert(search->inputsByFrame.begin(), chainInputs.begin(),
+                                     chainInputs.end());
+        search->badFrame += chainInputs.size();
+      }
+    }
     if (!search.has_value()) {
       logSeeded(diagnostics, "no divergence within depth %zu after the prefix (%.1f s)",
                 options.searchDepth, elapsedSeconds(start));

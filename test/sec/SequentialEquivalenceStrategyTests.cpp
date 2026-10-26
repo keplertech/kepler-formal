@@ -20739,8 +20739,158 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto result = strategy.run(4);
 
   // Unwritten cells are unknown and never a difference; the search has to
-  // write a word whose bits 0 and 1 differ and read it back.
+  // write a word whose bits 0 and 1 differ and read it back. The held-input
+  // prefix in the reason shows the seeded search itself found the trace.
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
   EXPECT_LE(result.bound, 5u);
   EXPECT_NE(result.reason.find("out["), std::string::npos);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchStructuralEnlargementReachesBeyondDepth) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0,
+      "seed_enlarge_before",
+      std::string("module seed_enlarge_before") + kSeededCounterPortsSv +
+          "  assign q = r;\nendmodule\n");
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1,
+      "seed_enlarge_after",
+      std::string("module seed_enlarge_after") + kSeededCounterPortsSv +
+          "  assign q = r & ~(cnt == 8'd200);\nendmodule\n");
+
+  // The prefix stops several cycles before the counter reaches 200; the
+  // search depth alone is too short, the enlargement tail covers the rest.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 194;
+  options.trials = 64;
+  options.searchDepth = 2;
+  options.enlargeSteps = 10;
+  strategy.setSimulationSeededSearchOptions(options);
+  const auto result = strategy.run(4);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 200u);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchPreimageCubesCompleteTheTrace) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0,
+      "seed_cubes_before",
+      std::string("module seed_cubes_before") + kSeededCounterPortsSv +
+          "  assign q = r;\nendmodule\n");
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1,
+      "seed_cubes_after",
+      std::string("module seed_cubes_after") + kSeededCounterPortsSv +
+          "  assign q = r & ~(cnt == 8'd200);\nendmodule\n");
+
+  // With the structural tail disabled by a short depth, the preimage cubes
+  // alone must bridge the gap, and the hit must be completed by the exact
+  // search from the reached state.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 196;
+  options.trials = 64;
+  options.searchDepth = 2;
+  options.enlargeSteps = 4;
+  options.enlargeCubes = 32;
+  strategy.setSimulationSeededSearchOptions(options);
+  const auto result = strategy.run(4);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 200u);
+  EXPECT_NE(result.reason.find("q"), std::string::npos);
+}
+
+namespace {
+
+// Three gated stages, each armed by one specific input value and then a
+// six-cycle count. The last stage sets `fire`; only `q` differs between the
+// versions, so the difference needs about sixteen well-chosen cycles.
+constexpr const char* kSeededStagesPortsSv = R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  output logic       q
+);
+  logic enabled, armed, fire;
+  logic [2:0] c0, c1;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      enabled <= 1'b0;
+      armed   <= 1'b0;
+      fire    <= 1'b0;
+      c0      <= 3'd0;
+      c1      <= 3'd0;
+    end else begin
+      if (k == 4'hA) enabled <= 1'b1;
+      if (enabled && c0 != 3'd6) c0 <= c0 + 3'd1;
+      if (c0 == 3'd6 && k == 4'h5) armed <= 1'b1;
+      if (armed && c1 != 3'd6) c1 <= c1 + 3'd1;
+      if (c1 == 3'd6 && k == 4'h3) fire <= 1'b1;
+    end
+  end
+)";
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchWaypointChainReachesStagedTarget) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0,
+      "seed_stages_before",
+      std::string("module seed_stages_before") + kSeededStagesPortsSv +
+          "  assign q = fire;\nendmodule\n");
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1,
+      "seed_stages_after",
+      std::string("module seed_stages_after") + kSeededStagesPortsSv +
+          "  assign q = 1'b0;\nendmodule\n");
+
+  // Four frames of direct search cannot reach the third stage; the chain of
+  // short hops toward not-yet-changed registers of the target's cone can.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 20;
+  options.trials = 64;
+  options.searchDepth = 4;
+  options.waypointHops = 24;
+  options.waypointDepth = 6;
+  options.waypointLayers = 2;
+  strategy.setSimulationSeededSearchOptions(options);
+  const auto result = strategy.run(4);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 20u + 14u);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+  EXPECT_NE(result.reason.find("q"), std::string::npos);
 }
