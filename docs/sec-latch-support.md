@@ -24,8 +24,8 @@ The first three forms are the *latch abstraction*; the fourth is the
 
 | CLI | YAML | Default | Effect when off |
 | --- | --- | --- | --- |
-| `--no-latch-abstraction` | `latch_abstraction: false` | `true` | Every latch output is opaque, the behavior before latch support. This also disables the data-enabled model, because latches never reach transition construction. |
-| `--no-data-latch-model` | `data_latch_model: false` | `true` | Latches whose enable is not a clock phase are opaque; the abstraction still applies to the others. |
+| `--latch-abstraction <bool>` | `latch_abstraction: <bool>` | `true` | Every latch output is opaque, the behavior before latch support. This also disables the data-enabled model, because latches never reach transition construction. |
+| `--data-latch-model <bool>` | `data_latch_model: <bool>` | `true` | Latches whose enable is not a clock phase are opaque; the abstraction still applies to the others. |
 
 The run log states both settings at startup
 (`SEC latch abstraction: enabled` and `SEC data-enabled latch model: enabled`).
@@ -151,7 +151,7 @@ An opaque latch is handled like any opaque cell: each of its physical outputs
 is marked opaque with the reason above, top-level outputs whose cones reach it
 are skipped, and `--report-skipped-pos` lists them in
 `skipped_opaque_cells_pos.txt` with the output, cell, pin and reason. The run
-log summarizes the skipped outputs. With `--no-latch-abstraction` the reason
+log summarizes the skipped outputs. With `--latch-abstraction false` the reason
 is `Naja latch sequential models are not supported by SEC`.
 
 With `KEPLER_SEC_DIAG=1` two lines report the rewrites:

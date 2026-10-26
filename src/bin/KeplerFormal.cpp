@@ -76,13 +76,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] | "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--no-latch-abstraction] [--no-data-latch-model] "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -1812,6 +1812,21 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        bool& value =
+            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        std::string error;
+        if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        parseStart += 2;
+        continue;
+      }
       if (arg == "--sec-reset-cycles") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing SEC reset cycle count after {}", arg);
@@ -2026,6 +2041,21 @@ static int KeplerFormalMainImpl(
         ++i;
         continue;
       }
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        bool& value =
+            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        std::string error;
+        if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        ++i;
+        continue;
+      }
       if (arg == "--sec-reset-cycles") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing SEC reset cycle count after {}", arg);
@@ -2119,14 +2149,6 @@ static int KeplerFormalMainImpl(
         reportSkippedPOs = true;
         continue;
         // LCOV_EXCL_STOP
-      }
-      if (arg == "--no-latch-abstraction") {
-        latchAbstraction = false;
-        continue;
-      }
-      if (arg == "--no-data-latch-model") {
-        dataLatchModel = false;
-        continue;
       }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||

@@ -75,7 +75,7 @@ a clock phase takes the data-enabled latch model below. A clear or preset whose
 cone folds to constant false, for example a pin tied to its inactive level,
 never fires and does not disqualify the latch. SEC does not infer latch
 behavior from cell or pin names. The abstraction is on by default and
-`--no-latch-abstraction`
+`--latch-abstraction false`
 (`latch_abstraction: false`) restores the previous behavior where every latch
 output is opaque.
 
@@ -90,7 +90,7 @@ before a proof. A latch reading another data-enabled latch takes that latch's
 current-step value, so cascades ripple through within the step. Such a latch
 stays opaque when its output reaches a clock, when a clear or preset can fire,
 or when it sits in a loop of latches that can be open together. The model is on
-by default and `--no-data-latch-model` (`data_latch_model: false`) leaves these
+by default and `--data-latch-model false` (`data_latch_model: false`) leaves these
 latches opaque.
 
 ## Read-Only Memories

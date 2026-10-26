@@ -7554,12 +7554,22 @@ TEST_F(KeplerFormalCliTests, LatchOptionsReachTheCliParserAndYaml) {
   const auto directory = makeUniqueTempDir("kf_latch_options");
   const auto source = directory / "design.v";
   std::ofstream(source) << "module top(input a, output y); assign y = a; endmodule\n";
-  // The latch switches are options of the parser that follows the input
-  // format.
-  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "-verilog", source.string(),
-                         source.string(), "--no-latch-abstraction",
-                         "--no-data-latch-model"}),
+  // Boolean options with a value, accepted before and after the input format.
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "--latch-abstraction",
+                         "false", "-verilog", source.string(), source.string(),
+                         "--data-latch-model", "false"}),
             kSecProvedExitCode);
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "--data-latch-model", "1",
+                         "-verilog", source.string(), source.string(),
+                         "--latch-abstraction", "true"}),
+            kSecProvedExitCode);
+  // A missing or malformed value is rejected.
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "-verilog", source.string(),
+                         source.string(), "--latch-abstraction"}),
+            EXIT_FAILURE);
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "--data-latch-model",
+                         "maybe", "-verilog", source.string(), source.string()}),
+            EXIT_FAILURE);
   for (const auto* value : {"true", "false"}) {
     const auto log = directory / (std::string("latch_") + value + ".log");
     const auto config = writeTempConfig(
