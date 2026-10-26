@@ -31,17 +31,19 @@ bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True)
 # compiler, headers or /usr/lib involved. Scoped to Linux for now; macOS
 # keeps the host Xcode toolchain.
 #
-# The toolchain is *registered* as a dev_dependency so it applies only when
-# kepler-formal is the root module (its own builds and CI). register_toolchains
-# from a dependency is global: a module that depends on kepler-formal would
-# otherwise inherit this toolchain and have its own C++ toolchain selection
-# silently replaced. A consumer that wants the same toolchain registers it
-# itself, as .github/consumer-test does. The extension usage itself stays
-# non-dev: its extension_metadata reports non-dev root deps, which Bazel
-# rejects if the only usage is dev.
-bazel_dep(name = "llvm", version = "0.8.24")
+# Everything below is a dev_dependency, so it applies only when
+# kepler-formal is the root module (its own builds and CI).
+# register_toolchains from a dependency is global: a module that depends
+# on kepler-formal would otherwise have its own C++ toolchain selection
+# silently replaced. A consumer that wants the same toolchain sets it up
+# itself, as .github/consumer-test does.
+bazel_dep(name = "llvm", version = "0.8.26", dev_dependency = True)
 
-llvm_toolchains = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+llvm_toolchains = use_extension(
+    "@llvm//extensions:toolchain.bzl",
+    "toolchain",
+    dev_dependency = True,
+)
 llvm_toolchains.exec(
     arch = "x86_64",
     os = "linux",
