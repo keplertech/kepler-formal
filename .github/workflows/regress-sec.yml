@@ -555,6 +555,10 @@ jobs:
           case_dir: kepler-formal-examples/nangate45_black_parrot_sec_final
           config_prefix: sv2v
           expectation: positive
+          # The pickled RTL leaves mux data inputs undriven, so every observed
+          # output cone is skipped and no strict proof is possible until the
+          # example is fixed. Match the measurement-only IMC and KI flows.
+          pdr_dual_rail_expectation: allow-inconclusive
         - name: sv2v_nangate45_bp_be
           case_dir: kepler-formal-examples/nangate45_bp_be
           config_prefix: sv2v
