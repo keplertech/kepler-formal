@@ -11,6 +11,12 @@ namespace KEPLER_FORMAL::SEC {
 struct InternalRelationOptions {
   bool learnInternalRelations = true;
   bool allowXEqualityInInternalRelations = true;
+  // Dual-rail candidates the rail check refutes are retried on the binary
+  // next-state functions: a pair equal in the common initial state (the same
+  // value, or unknown on both sides) and inductive there is equal from every
+  // common start (van Eijk, TCAD 2000; Savoj et al., FMCAD 2010). Design 2's
+  // register then takes design 1's transition in the proof problem.
+  bool binaryRelationRound = true;
 };
 
 struct SequentialDesignModel;
@@ -36,7 +42,16 @@ size_t dischargeStructurallyEquivalentOutputs(KInductionProblem& problem,
 struct InternalRelationCandidate {
   std::vector<std::pair<size_t, size_t>> equalities;
   std::vector<DualRailSymbolPair> values;
+  // Display names of the two related registers, for diagnostics only.
+  std::string label;
 };
+
+// Merges every proved same-frame state equality into one representative symbol
+// and rewrites the eager transitions and output formulas under that merge, so
+// identical logic over related registers becomes one hash-consed node (van
+// Eijk, TCAD 2000; Kuehlmann et al., TCAD 2002). Lazily remapped problems are
+// left unchanged.
+void mergeProvedStateRelations(KInductionProblem& problem, bool diagnostics);
 
 // Returns only a jointly inductive subset whose base case holds at raw boot.
 // No output property or reset-frontier assumption participates in this proof.
@@ -44,6 +59,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
     const KInductionProblem& problem,
     const std::vector<InternalRelationCandidate>& candidates,
     const InternalRelationOptions& options,
-    Config::SolverType solverType);
+    Config::SolverType solverType,
+    bool commonStartBinary = false);
 
 }  // namespace KEPLER_FORMAL::SEC

@@ -33,6 +33,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
 | `--learn-internal-relations <bool>` | Learn certified internal register relations. Defaults to `true`; SEC only. |
 | `--allow-x-equality-in-internal-relations <bool>` | Permit X/X in internal relations only. Defaults to `true`; SEC only. |
+| `--binary-relation-round <bool>` | Retry unproved internal relations in binary semantics and share the proved transitions. Defaults to `true`; SEC only. |
 | `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
 | `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
 | `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
@@ -60,6 +61,8 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--python_design1_top <top>`, `--python_design2_top <top>` | Per-design top modules of Python-built designs. Only valid in `python` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
+| `--latch-abstraction <bool>` | Phase-abstract clock-driven latches. Defaults to `true`; `false` makes every latch output opaque as before, data-enabled latches included. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
+| `--data-latch-model <bool>` | Model data-enabled latches (enable is data logic, not a clock phase) as step-transparent state. Defaults to `true`; `false` leaves such latches opaque. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
 
 ## YAML config flags
 
@@ -72,6 +75,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
 | `learn_internal_relations` | bool | Learn certified internal register relations. Defaults to `true`. Alias: `learn_ineternal_relations`. |
 | `allow_x_equality_in_internal_relations` | bool | Permit X/X in internal relations only. Defaults to `true`; never relaxes final output equality. |
+| `binary_relation_round` | bool | Retry unproved internal relations in binary semantics and share the proved transitions. Defaults to `true`. |
 | `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
 | `btor2_export` | bool | Enable SEC BTOR2 export before solving. Defaults to `false`. |
 | `btor2_export_path` | string | Non-empty BTOR2 output path. Defaults to `miter.btor2` when enabled; requires `btor2_export: true`. |
@@ -92,6 +96,8 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
+| `latch_abstraction` | bool | Defaults to `true`. Same as `--latch-abstraction`. |
+| `data_latch_model` | bool | Defaults to `true`. Same as `--data-latch-model`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |
@@ -168,7 +174,9 @@ instances remain part of the normal equivalence result. These are logical
 verification boundaries: no netlist instances, ports, or connections are changed.
 
 The two sides must expose matching pin names, bit ranges, and directions at
-each paired boundary. Instance input pins must be connected, and nonconstant
+each paired boundary. An instance input pin left unconnected on both sides has
+no driving cone and is skipped (abstracts that model power pins as logic inputs
+are the common case); one unconnected on a single side is rejected. Nonconstant
 input nets must have exactly one driver; unused output pins are allowed.
 Inout pins, aliased, constant-connected or multiply driven output nets,
 duplicate paths, and selections where one path is an ancestor of another are
@@ -178,6 +186,12 @@ Kepler Formal validates these conditions before starting the proof. Boundary
 selection supports both LEC and SEC, including compact mode, and all input
 formats (`v`, `sv`, and `sv2v`; SV formats require SEC). Paths use elaborated
 instance names, which can differ from source names for generated SV scopes.
+`/` separates hierarchy levels. A literal slash inside an instance name is
+written `\/` (the SDC escaping convention used by OpenSTA), so a flattened
+netlist leaf written `\u_block/u_leaf ` in Verilog is selected by
+`u_block\/u_leaf`, while `u_block/u_leaf` always names instance `u_leaf`
+inside instance `u_block`. Paths are never
+reinterpreted.
 Boundary selection cannot currently be combined with `use_scopes` or `clean_scopes`.
 
 The equivalent YAML form is:

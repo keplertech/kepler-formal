@@ -699,10 +699,16 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
   outputs.clear();
-  // keep only terminals who are connected to nets
+  // Keep only terminals that are connected to a driven net; the others are
+  // recorded as skipped so dependent state is reported rather than failing
+  // expression construction later.
   for (const auto& out : outputsSet) {
     const DNLTerminalFull& term = dnl->getDNLTerminalFromID(out);
     if (term.getIsoID() == DNLID_MAX) {
+      const auto skip = describeUnmappedTerm(out, "its pin is not connected");
+      skippedOutputs_[out] = skip;
+      reportSkippedPO(
+          dnl, term, skip.detail.c_str(), kSkippedNoDriverPOReport);
       DEBUG_LOG("Skipping output %s of model %s as it is not connected to any net\n",
                 term.getSnlBitTerm()->getName().getString().c_str(),
                 term.getSnlBitTerm()

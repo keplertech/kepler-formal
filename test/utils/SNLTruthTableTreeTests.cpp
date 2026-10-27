@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "SNLTruthTableTree.h"
+#include "DnlLifetime.h"
 #include "SNLTruthTable.h"
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
@@ -45,6 +46,7 @@ BoolExpr* buildGenericTruthTableExpr(
     uint32_t k,
     const SNLTruthTableTree::Node* node,
     naja::DNL::DNLID isoID);
+BoolExpr* buildRomTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
 void clearChildFETS();
 void reserveChildFETS(size_t n);
 void setChildFETS(size_t i, BoolExpr* expr);
@@ -395,6 +397,62 @@ TEST(SNLTruthTableTreeApiTest,
     }
     EXPECT_EQ(Config::getVerificationGeneration(), initialGeneration);
   }
+}
+
+TEST(SNLTruthTableTreeApiTest, RefreshesTablesAcrossDnlLifetimes) {
+  // Standalone runs stay in verification generation zero, so the shared table
+  // caches can only rely on the DNL epoch to notice that an unchanged key
+  // (design, instance, name, term) now denotes different logic. Rebuilding the
+  // DNL through the lifetime helper must retire the cached table.
+  ASSERT_EQ(NLUniverse::get(), nullptr);
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("LUT1"));
+  auto* input =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("A"));
+  auto* output =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Y"));
+  auto* init = SNLParameter::create(
+      model, NLName("INIT"), SNLParameter::Type::Binary, "2'h2");
+  SNLDesignModeling::setTruthTableFromParameter(model, output, {input}, init);
+  auto* top = SNLDesign::create(library, NLName("top"));
+  auto* instance = SNLInstance::create(top, model, NLName("lut"));
+  auto* parameter = SNLInstParameter::create(instance, init, "2'h2");
+  universe->setTopDesign(top);
+
+  const auto epochBefore = KEPLER_FORMAL::dnlEpoch();
+  KEPLER_FORMAL::destroyDnl();
+  EXPECT_GT(KEPLER_FORMAL::dnlEpoch(), epochBefore);
+  auto* dnl = naja::DNL::get();
+  auto termID = findDNLTermIDByInstanceAndTerm("lut", "Y");
+  ASSERT_NE(termID, naja::DNL::DNLID_MAX);
+  auto instanceID = dnl->getDNLTerminalFromID(termID).getDNLInstance().getID();
+  {
+    Node node(nullptr, instanceID, termID, Node::Type::Table);
+    EXPECT_EQ(node.getTruthTable(), makeMaskTable(1, 0b10));  // buffer
+  }
+
+  // Same objects, new logic: a stale cache would still answer the buffer.
+  parameter->setValue("2'h1");
+  KEPLER_FORMAL::destroyDnl();
+  dnl = naja::DNL::get();
+  termID = findDNLTermIDByInstanceAndTerm("lut", "Y");
+  ASSERT_NE(termID, naja::DNL::DNLID_MAX);
+  instanceID = dnl->getDNLTerminalFromID(termID).getDNLInstance().getID();
+  EXPECT_EQ(dnl->getDNLTerminalFromID(termID).getDNLInstance().getSNLInstance(),
+            instance);
+  {
+    Node node(nullptr, instanceID, termID, Node::Type::Table);
+    EXPECT_EQ(node.getTruthTable(), makeMaskTable(1, 0b01));  // inverter
+  }
+
+  KEPLER_FORMAL::destroyDnl();
+  universe->destroy();
 }
 
 TEST(SNLTruthTableTreeApiTest, ConstantRootHasNoBorderLeavesAndEvaluates) {
@@ -1035,6 +1093,23 @@ TEST(Tree2BoolExprGenericCoverageTest, NoneGenericTypeThrows) {
   BoolExprCache::destroy();
 }
 
+TEST(Tree2BoolExprGenericCoverageTest, RomArityMismatchThrows) {
+  setChildExpressions({BoolExpr::Var(10), BoolExpr::Var(20)});
+
+  // Four rows of one bit each: 1, 0, 1, 1, read by two address bits.
+  const auto table = SNLTruthTable::Rom(
+      {2, 4, {true, false, true, true}}, SNLTruthTable::fullDependencies(2));
+  EXPECT_THROW(buildRomTruthTableExpr(table, 3), std::runtime_error);
+
+  BoolExpr* expr = buildRomTruthTableExpr(table, 2);
+  ASSERT_NE(expr, nullptr);
+  EXPECT_FALSE(expr->evaluate({{10, false}, {20, true}}));
+  EXPECT_TRUE(expr->evaluate({{10, true}, {20, true}}));
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
 class Tree2BoolExprDivModTest : public ::testing::Test {
  protected:
   void TearDown() override {
@@ -1210,6 +1285,196 @@ TEST_F(Tree2BoolExprDivModTest, SignedFourBitExpressionsMatchArithmetic) {
           (expectedRemainder & 1u) != 0);
     }
   }
+}
+
+class Tree2BoolExprWordTest : public Tree2BoolExprDivModTest {
+ protected:
+  // Instantiates model under a top whose ports mirror the model's, feeds
+  // the operand bits as variables (first operand from kFirstVar, second
+  // from kSecondVar) and returns every output bit's expression.
+  static constexpr size_t kFirstVar = 2;
+  static constexpr size_t kSecondVar = 64;
+
+  std::vector<BoolExpr*> buildOutputs(
+      SNLDesign* model, SNLBusTerm* output,
+      const std::vector<std::pair<const char*, const char*>>& parameters = {}) {
+    auto* universe = NLUniverse::get();
+    auto* db = NLDB::create(universe);
+    auto* library =
+        NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+    auto* top =
+        SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+    auto* instance = SNLInstance::create(top, model, NLName("word0"));
+    for (const auto& [name, value] : parameters) {
+      SNLInstParameter::create(
+          instance, model->getParameter(NLName(name)), value);
+    }
+    for (auto* modelTerm : model->getBusTerms()) {
+      auto* topTerm = SNLBusTerm::create(
+          top, modelTerm->getDirection(), modelTerm->getMSB(),
+          modelTerm->getLSB(), modelTerm->getName());
+      auto* net = SNLBusNet::create(
+          top, modelTerm->getMSB(), modelTerm->getLSB(),
+          NLName(modelTerm->getName().getString() + "_net"));
+      for (int bit = modelTerm->getLSB(); bit <= modelTerm->getMSB(); ++bit) {
+        topTerm->getBit(bit)->setNet(net->getBit(bit));
+        instance->getInstTerm(modelTerm->getBit(bit))->setNet(net->getBit(bit));
+      }
+    }
+    universe->setTopDesign(top);
+    naja::DNL::destroy();
+    auto* dnl = naja::DNL::get();
+
+    std::vector<BoolExpr*> children;
+    size_t variable = kFirstVar;
+    for (auto* term : model->getBusTerms()) {
+      if (term->getDirection() != SNLTerm::Direction::Input) {
+        continue;
+      }
+      for (int bit = term->getMSB(); bit >= term->getLSB(); --bit) {
+        children.push_back(BoolExpr::Var(variable + bit));
+      }
+      variable = kSecondVar;
+    }
+    setChildExpressions(children);
+
+    const auto output0ID = findDNLTermIDByInstanceTermAndBit(
+        "word0", output->getName().getString().c_str(), 0);
+    const auto& output0 = dnl->getDNLTerminalFromID(output0ID);
+    SNLTruthTableTree tree;
+    auto node = std::make_shared<Node>(0u, &tree);
+    node->type = Node::Type::Table;
+    node->data.termid = output0ID;
+    const auto table = SNLDesignModeling::getTruthTable(
+        instance, output->getBit(0)->getOrderID());
+    EXPECT_NE(buildGenericTruthTableExpr(
+                  table, table.size(), node.get(), output0.getIsoID()),
+              nullptr);
+
+    std::vector<BoolExpr*> outputs(output->getWidth());
+    for (size_t bit = 0; bit < outputs.size(); ++bit) {
+      const auto termID = findDNLTermIDByInstanceTermAndBit(
+          "word0", output->getName().getString().c_str(), bit);
+      const auto& term = dnl->getDNLTerminalFromID(termID);
+      const auto it = Tree2BoolExpr::iso2boolExpr_.find(term.getIsoID());
+      if (it != Tree2BoolExpr::iso2boolExpr_.end()) {
+        // Word builders cache every output bit of the instance at once.
+        outputs[bit] = it->second;
+        continue;
+      }
+      // Single-bit builders (ROM) return only the requested bit.
+      auto bitNode = std::make_shared<Node>(0u, &tree);
+      bitNode->type = Node::Type::Table;
+      bitNode->data.termid = termID;
+      const auto bitTable = SNLDesignModeling::getTruthTable(
+          instance, output->getBit(bit)->getOrderID());
+      outputs[bit] = buildGenericTruthTableExpr(
+          bitTable, bitTable.size(), bitNode.get(), term.getIsoID());
+    }
+    return outputs;
+  }
+
+  static void expectAll(
+      const std::vector<BoolExpr*>& outputs,
+      unsigned firstWidth,
+      unsigned secondWidth,
+      unsigned (*expected)(unsigned, unsigned)) {
+    const unsigned mask = (1u << outputs.size()) - 1;
+    for (unsigned a = 0; a < (1u << firstWidth); ++a) {
+      for (unsigned b = 0; b < (1u << secondWidth); ++b) {
+        std::unordered_map<size_t, bool> values;
+        for (unsigned bit = 0; bit < firstWidth; ++bit) {
+          values.emplace(kFirstVar + bit, (a >> bit) & 1u);
+        }
+        for (unsigned bit = 0; bit < secondWidth; ++bit) {
+          values.emplace(kSecondVar + bit, (b >> bit) & 1u);
+        }
+        const unsigned want = expected(a, b) & mask;
+        for (size_t bit = 0; bit < outputs.size(); ++bit) {
+          ASSERT_NE(outputs[bit], nullptr);
+          EXPECT_EQ(outputs[bit]->evaluate(values), ((want >> bit) & 1u) != 0)
+              << "a=" << a << " b=" << b << " bit=" << bit;
+        }
+      }
+    }
+  }
+};
+
+TEST_F(Tree2BoolExprWordTest, AddSubtractMultiplyAndShiftMatchArithmetic) {
+  NLUniverse::create();
+  auto* add = NLDB0::getOrCreateAddSub(4, false);
+  expectAll(buildOutputs(add, NLDB0::getAddSubOutput(add)), 4, 4,
+            [](unsigned a, unsigned b) { return a + b; });
+  TearDown();
+  NLUniverse::create();
+  auto* sub = NLDB0::getOrCreateAddSub(4, true);
+  expectAll(buildOutputs(sub, NLDB0::getAddSubOutput(sub)), 4, 4,
+            [](unsigned a, unsigned b) { return a - b; });
+  TearDown();
+  NLUniverse::create();
+  auto* mul = NLDB0::getOrCreateMultiply(4);
+  expectAll(buildOutputs(mul, NLDB0::getMultiplyOutput(mul)), 4, 4,
+            [](unsigned a, unsigned b) { return a * b; });
+  TearDown();
+  NLUniverse::create();
+  // Counts up to 7 exercise shifts past the width.
+  auto* left = NLDB0::getOrCreateShift({4, 3, false, false});
+  expectAll(buildOutputs(left, NLDB0::getShiftOutput(left)), 4, 3,
+            [](unsigned a, unsigned b) { return b < 32 ? a << b : 0u; });
+  TearDown();
+  NLUniverse::create();
+  auto* logical = NLDB0::getOrCreateShift({4, 3, true, false});
+  expectAll(buildOutputs(logical, NLDB0::getShiftOutput(logical)), 4, 3,
+            [](unsigned a, unsigned b) { return a >> b; });
+  TearDown();
+  NLUniverse::create();
+  auto* arithmetic = NLDB0::getOrCreateShift({4, 3, true, true});
+  expectAll(buildOutputs(arithmetic, NLDB0::getShiftOutput(arithmetic)), 4, 3,
+            [](unsigned a, unsigned b) {
+              const int value = a & 8u ? static_cast<int>(a) - 16 : static_cast<int>(a);
+              return static_cast<unsigned>(b >= 4 ? (value < 0 ? -1 : 0) : value >> b);
+            });
+}
+
+TEST_F(Tree2BoolExprWordTest, WordBuilderReusesTheCachedExpressionOfAnIsomorphicNode) {
+  NLUniverse::create();
+  auto* add = NLDB0::getOrCreateAddSub(4, false);
+  auto* output = NLDB0::getAddSubOutput(add);
+  const auto outputs = buildOutputs(add, output);
+  ASSERT_EQ(outputs.size(), static_cast<size_t>(output->getWidth()));
+
+  // The first build cached every output bit under the instance's iso IDs; a
+  // second request for a cached node is served from that cache unchanged.
+  auto* instance =
+      NLUniverse::get()->getTopDesign()->getInstance(NLName("word0"));
+  ASSERT_NE(instance, nullptr);
+  const auto output0ID = findDNLTermIDByInstanceTermAndBit(
+      "word0", output->getName().getString().c_str(), 0);
+  const auto& output0 = naja::DNL::get()->getDNLTerminalFromID(output0ID);
+  ASSERT_NE(output0.getIsoID(), naja::DNL::DNLID_MAX);
+  SNLTruthTableTree tree;
+  auto node = std::make_shared<Node>(0u, &tree);
+  node->type = Node::Type::Table;
+  node->data.termid = output0ID;
+  const auto table = SNLDesignModeling::getTruthTable(
+      instance, output->getBit(0)->getOrderID());
+  BoolExpr* cached = Tree2BoolExpr::iso2boolExpr_.at(output0.getIsoID());
+  EXPECT_EQ(buildGenericTruthTableExpr(table, table.size(), node.get(),
+                                       output0.getIsoID()),
+            cached);
+}
+
+TEST_F(Tree2BoolExprWordTest, ReadOnlyMemoryReadsItsContents) {
+  NLUniverse::create();
+  // Five 3-bit rows in a 3-bit address space: 5, 2, 7, 0, 6, packed least
+  // significant row first. Addresses 5..7 are beyond depth and read 0.
+  auto* rom = NLDB0::getOrCreateMemory({3, 5, 3, 1, 0});
+  expectAll(buildOutputs(rom, NLDB0::getMemoryReadData(rom),
+                         {{"INIT_ENABLE", "1"}, {"INIT", "15'h61d5"}}),
+            3, 0, [](unsigned a, unsigned) {
+              static const unsigned rows[] = {5u, 2u, 7u, 0u, 6u};
+              return a < 5 ? rows[a] : 0u;
+            });
 }
 
 TEST(SNLTruthTableTreeAddChild_Additions, AddChildIdRejectsInvalidId) {

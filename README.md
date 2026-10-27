@@ -109,6 +109,20 @@ cmake .. \
   -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
+For a sanitizer build, which also compiles the bundled CaDiCaL and Kissat
+solvers with AddressSanitizer so that instrumented and uninstrumented code are
+not mixed:
+
+```bash
+cmake .. -DENABLE_SANITIZERS=ON
+```
+
+For a coverage build:
+
+```bash
+cmake .. -DCODE_COVERAGE=ON
+```
+
 ### Bazel
 
 The Bazel build needs no host packages on Linux (hermetic clang
@@ -137,7 +151,7 @@ module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 
-The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
+The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md). Latch handling is described in [docs/sec-latch-support.md](docs/sec-latch-support.md) and the expansion of word-level primitives and read-only memories in [docs/sec-primitive-expansion.md](docs/sec-primitive-expansion.md).
 
 ## Custom Python Primitives
 
