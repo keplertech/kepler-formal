@@ -21199,3 +21199,57 @@ endmodule
   EXPECT_NE(stdoutOutput.find("abstraction: concrete trace found"), std::string::npos)
       << stdoutOutput;
 }
+
+// Seed screening: a short, budgeted search from every simulated end state in
+// rank order supplies the suffix when the best-ranked state is good enough.
+TEST_F(SequentialEquivalenceStrategyTests, SimulationSeededSearchProbesRankedEndStates) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  const auto source = [](const std::string& suffix, const std::string& condition) {
+    return "module seed_probe_" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  output logic       q
+);
+  logic [2:0] c1;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      c1 <= 3'd0;
+      q  <= 1'b0;
+    end else begin
+      c1 <= c1 + 3'd1;
+      q  <= q | ()" + condition + R"();
+    end
+  end
+endmodule
+)";
+  };
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0, "seed_probe_before", source("before", "c1 == 3'd6 && k == 4'h3"));
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1, "seed_probe_after", source("after", "k == 4'h3 && (c1 == 3'd6 || c1 == 3'd5)"));
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 10;
+  options.trials = 4;
+  options.searchDepth = 20;
+  options.probeDepth = 8;
+  strategy.setSimulationSeededSearchOptions(options);
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStdout();
+  const auto result = strategy.run(4);
+  const std::string stdoutOutput = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_NE(stdoutOutput.find("probe: trial "), std::string::npos) << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("depth 8: diverges"), std::string::npos) << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("probe: start state is trial"), std::string::npos) << stdoutOutput;
+}

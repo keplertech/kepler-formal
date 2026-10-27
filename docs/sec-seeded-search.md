@@ -24,11 +24,19 @@ runs unchanged.
    the common reset-then-run pattern. Reset ports named by the reset bootstrap
    spec follow the spec instead: active for its cycles, then released.
 2. **End-state selection.** Each of `trials` prefixes ends in one state. The
-   search keeps the state that determines the most state bits; among equals it
-   prefers the run in which the state kept changing. A design held in reset or
-   stuck before its initialization leaves memories and data paths unknown, so
-   the run that completed its start-up sequence wins without any name-based
-   knowledge of the design.
+   search keeps the run with the highest toggle coverage, the number of
+   registers that took two different known values during the prefix; among
+   equals it prefers the state that determines the most state bits, then the
+   run in which the state kept changing. A design held in reset toggles
+   nothing, one that a held input keeps restarting its initialization toggles
+   only that loop's counters, and one that completed its start-up and went on
+   to work toggles the most, so that run wins without any name-based knowledge
+   of the design. The ranking is a heuristic: a control input held at an
+   unlucky value can leave the best-ranked run in an initialization loop. With
+   `--sec-seed-probe-depth n`, every end state is first probed in rank order
+   with a bounded search of `n` frames under a conflict budget, and the first
+   state that diverges becomes the start state, its probe trace the suffix
+   (short searches from several simulated seeds: Ho et al., ICCAD 2000).
 3. **Divergence predicate.** Registers of the two designs are paired by name
    (output net name first, because RTL signal names survive a local edit, then
    display name, whose instance numbering shifts where a module changed);
@@ -81,6 +89,8 @@ runs unchanged.
 | `--sec-seed-abstraction-layers <n>` | `sec_seed_abstraction_layers: <n>` | `0` (off) | Abstraction-guided search from the registers within `n` steps of the predicate (see below). |
 | `--sec-seed-abstraction-iterations <n>` | `sec_seed_abstraction_iterations: <n>` | `16` | Refinement rounds. |
 | `--sec-seed-abstraction-conflicts <n>` | `sec_seed_abstraction_conflicts: <n>` | `1000000` | Conflict budget of one concretization check (`0`: none). |
+| `--sec-seed-probe-depth <n>` | `sec_seed_probe_depth: <n>` | `0` (off) | Seed screening: bounded search of `n` frames from every simulated end state, in rank order, before the deep search (see below). |
+| `--sec-seed-probe-conflicts <n>` | `sec_seed_probe_conflicts: <n>` | `200000` | Solver conflict budget of one probe (`0`: none). |
 
 The search needs the default `dual_rail_steady` encoding. It is skipped under
 the binary encoding and whenever a formula reads memory cells outside a read
@@ -99,12 +109,14 @@ outputs.
 
 ## Held inputs
 
-Inputs that feed the next-state function of at least half of the registers
-(memory cells and read outputs not counted) are global controls such as
-resets and scan or test enables. A bounded search
+Single-bit inputs that feed the next-state function of at least half of the
+registers (memory cells and read outputs not counted) are global controls such
+as resets and scan or test enables. A bounded search
 that may drive them turns every step into a reset, so during the suffix
-searches they keep the value the selected prefix ran with. Reset ports named
-by the reset bootstrap spec are governed by that spec instead.
+searches they keep the value the selected prefix ran with. Bits of a bus are
+never held: at module scope a memory response bus reaches most registers, and
+holding it would fix the very values the search has to choose. Reset ports
+named by the reset bootstrap spec are governed by that spec instead.
 
 ## Target enlargement
 

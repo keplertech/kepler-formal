@@ -135,6 +135,8 @@ liberty_files:
 | `--sec-seed-abstraction-iterations <n>` | `sec_seed_abstraction_iterations: <n>` | `16` | Non-negative integer | Refinement rounds of the abstraction-guided search. |
 | `--sec-seed-abstraction-conflicts <n>` | `sec_seed_abstraction_conflicts: <n>` | `1000000` | Non-negative integer | Solver conflict budget of one concretization check; `0` removes the budget. |
 | `--sec-seed-abstraction-instance <true\|false>` | `sec_seed_abstraction_instance: <true\|false>` | `false` | boolean | Starts the abstract model from the smallest design instance enclosing the differing registers, with its environment free, instead of the predicate's register support. |
+| `--sec-seed-probe-depth <n>` | `sec_seed_probe_depth: <n>` | `0` | Non-negative integer | Seed screening: a bounded search of `n` frames from every simulated end state in rank order before the deep search; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-probe-conflicts <n>` | `sec_seed_probe_conflicts: <n>` | `200000` | Non-negative integer | Solver conflict budget of one seed probe (`0`: none). |
 
 Accepted values for `sec_engine`:
 
@@ -224,8 +226,6 @@ reinterpreted.
 User-defined boundaries cannot currently be combined with scope extraction or
 scope cleaning.
 
-## Bounds And Results
-
 ## Scoped SEC
 
 With `--use-scopes` (YAML `use_scopes: true`) SEC does not compare the two
@@ -264,6 +264,8 @@ never a wrong verdict.
 
 Flattened netlists have no hierarchy, so the top is the only scope and the run
 behaves as without the flag.
+
+## Bounds And Results
 
 `max_k` is parsed as a non-negative integer.
 

@@ -1963,9 +1963,14 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
 }
 
 struct PrefixTrial {
+  size_t index = 0;
+  // Registers that took two different known values during the prefix (toggle
+  // coverage). A design held in reset toggles nothing, one stuck in an
+  // initialization loop toggles only that loop's counters, and a design that
+  // completed its start-up and went on to work toggles the most.
+  size_t toggledRegisters = 0;
   size_t knownBits = 0;
-  // Cycles in which some state bit changed: a tie-breaker that prefers a
-  // design that kept running over one held in reset.
+  // Cycles in which some state bit changed.
   size_t activeCycles = 0;
   std::vector<bool> firstVector;
   std::vector<bool> secondVector;
@@ -2092,6 +2097,7 @@ runSimulationSeededSearch(
   };
 
   std::optional<PrefixTrial> best;
+  std::vector<PrefixTrial> trials;
   for (size_t trialIndex = 0; trialIndex < options.trials; ++trialIndex) {
     PrefixTrial trial;
     trial.firstVector.resize(inputCount);
@@ -2102,31 +2108,118 @@ runSimulationSeededSearch(
     }
     simulator0.resetToInitialState();
     simulator1.resetToInitialState();
+    std::vector<bool> toggled0(simulator0.stateCount(), false);
+    std::vector<bool> toggled1(simulator1.stateCount(), false);
+    std::vector<TernaryValue> previous0 = simulator0.state();
+    std::vector<TernaryValue> previous1 = simulator1.state();
+    const auto noteToggles = [](const std::vector<TernaryValue>& previous,
+                                const std::vector<TernaryValue>& current,
+                                std::vector<bool>& toggled) {
+      for (size_t index = 0; index < current.size(); ++index) {
+        if (!toggled[index] && isKnownTernaryValue(previous[index]) &&
+            isKnownTernaryValue(current[index]) && previous[index] != current[index]) {
+          toggled[index] = true;
+        }
+      }
+    };
     for (size_t cycle = 0; cycle < prefixCycles; ++cycle) {
       applyInputs(inputVectorAtCycle(trial, cycle));
       const bool changed0 = simulator0.step();
       const bool changed1 = simulator1.step();
       trial.activeCycles += (changed0 || changed1) ? 1 : 0;
+      if (changed0) {
+        noteToggles(previous0, simulator0.state(), toggled0);
+        previous0 = simulator0.state();
+      }
+      if (changed1) {
+        noteToggles(previous1, simulator1.state(), toggled1);
+        previous1 = simulator1.state();
+      }
     }
+    trial.toggledRegisters = static_cast<size_t>(std::count(toggled0.begin(), toggled0.end(), true)) +
+                             static_cast<size_t>(std::count(toggled1.begin(), toggled1.end(), true));
     trial.knownBits = simulator0.knownStateBitCount() + simulator1.knownStateBitCount();
-    logSeeded(diagnostics, "trial=%zu known_state_bits=%zu active_cycles=%zu seconds=%.1f",
-              trialIndex, trial.knownBits, trial.activeCycles, elapsedSeconds(start));
-    const bool better = !best.has_value() || trial.knownBits > best->knownBits ||
-                        (trial.knownBits == best->knownBits &&
-                         trial.activeCycles > best->activeCycles);
-    if (better) {
-      trial.state0 = simulator0.state();
-      trial.state1 = simulator1.state();
-      best = std::move(trial);
-    }
+    logSeeded(diagnostics,
+              "trial=%zu toggled_registers=%zu known_state_bits=%zu active_cycles=%zu seconds=%.1f",
+              trialIndex, trial.toggledRegisters, trial.knownBits, trial.activeCycles,
+              elapsedSeconds(start));
+    trial.index = trialIndex;
+    trial.state0 = simulator0.state();
+    trial.state1 = simulator1.state();
+    trials.push_back(std::move(trial));
   }
-  if (!best.has_value()) {
+  if (trials.empty()) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
+  // Toggle coverage first: it separates a design that completed its start-up
+  // from one stuck in reset or in an initialization loop, which a count of
+  // known bits or of active cycles does not. Known bits then prefer the state
+  // with the fewest unknowns, and active cycles break the last ties.
+  const auto trialKey = [](const PrefixTrial& t) {
+    return std::make_tuple(t.toggledRegisters, t.knownBits, t.activeCycles);
+  };
+  std::vector<size_t> ranking(trials.size());
+  std::iota(ranking.begin(), ranking.end(), 0);
+  std::stable_sort(ranking.begin(), ranking.end(), [&](size_t a, size_t b) {
+    return trialKey(trials[a]) > trialKey(trials[b]);
+  });
+  best = trials[ranking.front()];
   logSeeded(diagnostics,
-            "prefix_cycles=%zu best_known_state_bits=%zu of %zu active_cycles=%zu",
-            prefixCycles, best->knownBits,
+            "prefix_cycles=%zu best_toggled_registers=%zu known_state_bits=%zu of %zu "
+            "active_cycles=%zu",
+            prefixCycles, best->toggledRegisters, best->knownBits,
             simulator0.stateCount() + simulator1.stateCount(), best->activeCycles);
+  if (diagnostics) {
+    // The single-bit inputs of the selected prefix, first and second held
+    // vector: these are the controls (enables, requests, invalidations) that
+    // decide whether the prefix reached a useful state.
+    std::unordered_map<std::string, size_t> bitsPerPortName;
+    const auto portName = [](const std::string& name) {
+      const auto bracket = name.rfind('[');
+      return bracket == std::string::npos ? name : name.substr(0, bracket);
+    };
+    for (const auto& name : alignedInputs.names) {
+      ++bitsPerPortName[portName(name)];
+    }
+    std::string held;
+    for (size_t index = 0; index < inputCount; ++index) {
+      if (bitsPerPortName[portName(alignedInputs.names[index])] != 1) {
+        continue;
+      }
+      held += (held.empty() ? "" : " ") + portName(alignedInputs.names[index]) + "=" +
+              (best->firstVector[index] ? "1" : "0") + "/" +
+              (best->secondVector[index] ? "1" : "0");
+    }
+    logSeeded(diagnostics, "selected prefix single-bit inputs (first/second vector): %s",
+              held.c_str());
+    // Registers the selected state leaves unknown, by RTL net name: data that
+    // was never written, or control that a held input never resolved.
+    const auto nameOfState = [&](const SequentialDesignModel& model, size_t index) {
+      const auto& key = model.stateBits[index];
+      if (const auto it = model.outputNetNameByKey.find(key);
+          it != model.outputNetNameByKey.end() && !it->second.empty()) {
+        return it->second;
+      }
+      if (const auto it = model.displayNameByKey.find(key); it != model.displayNameByKey.end()) {
+        return it->second;
+      }
+      return std::string("?");
+    };
+    std::string unknown;
+    size_t unknownCount = 0;
+    for (size_t index = 0; index < best->state0.size() && index < model0.stateBits.size();
+         ++index) {
+      if (isKnownTernaryValue(best->state0[index])) {
+        continue;
+      }
+      ++unknownCount;
+      if (unknownCount <= 48) {
+        unknown += (unknown.empty() ? "" : " ") + nameOfState(model0, index);
+      }
+    }
+    logSeeded(diagnostics, "selected prefix unknown registers in design 1: %zu%s%s",
+              unknownCount, unknown.empty() ? "" : ": ", unknown.c_str());
+  }
 
   // Replays `given` input frames from the two states, then tries random
   // continuations, and returns the first trace with an output mismatch. The
@@ -2202,14 +2295,25 @@ runSimulationSeededSearch(
   enlargement.cubeBudget = options.enlargeCubes;
   const TargetEnlargement noEnlargement;
 
-  // Inputs that feed the next state of most registers are global controls
-  // (resets, scan and test enables). Letting a bounded search drive them
-  // turns every hop into a reset; they keep the value the selected prefix ran
-  // with (held inputs as in simulation-seeded formal search).
+  // Single-bit inputs that feed the next state of most registers are global
+  // controls (resets, scan and test enables). Letting a bounded search drive
+  // them turns every hop into a reset; they keep the value the selected prefix
+  // ran with (held inputs as in simulation-seeded formal search). Bits of a
+  // bus are data however many registers they feed: at module scope a memory
+  // response bus reaches most of the registers, and holding it would freeze
+  // the very values the search has to choose.
   std::vector<std::pair<size_t, bool>> heldInputIndices;  // (aligned index, value)
   {
     std::vector<size_t> registersFedByInput(inputCount, 0);
     const auto lastVector = inputVectorAtCycle(*best, prefixCycles - 1);
+    std::unordered_map<std::string, size_t> bitsPerPort;
+    const auto portOf = [](const std::string& name) {
+      const auto bracket = name.rfind('[');
+      return bracket == std::string::npos ? name : name.substr(0, bracket);
+    };
+    for (size_t index = 0; index < inputCount; ++index) {
+      ++bitsPerPort[portOf(alignedInputs.names[index])];
+    }
     std::unordered_map<size_t, size_t> indexByLocalInput0;
     for (size_t index = 0; index < inputCount; ++index) {
       if (localInput0[index] != kNoState) {
@@ -2243,6 +2347,7 @@ runSimulationSeededSearch(
     }
     for (size_t index = 0; index < inputCount; ++index) {
       if (registers > 0 && registersFedByInput[index] * 2 >= registers &&
+          bitsPerPort[portOf(alignedInputs.names[index])] == 1 &&
           !resetActiveValue[index].has_value()) {
         heldInputIndices.emplace_back(index, lastVector[index]);
         logSeeded(diagnostics, "held input %s=%d (feeds %zu of %zu registers)",
@@ -3021,6 +3126,73 @@ runSimulationSeededSearch(
     return std::nullopt;
   };
 
+  // Seed screening: a short, budgeted bounded search from every end state in
+  // rank order. The ranking is a heuristic; a held control input can leave the
+  // best-ranked state in an initialization loop from which the target is
+  // deep, while another trial ended a few cycles from it. The first state that
+  // diverges within the probe depth becomes the start state and its trace the
+  // suffix (short searches from several simulated seeds: Ho et al., ICCAD
+  // 2000).
+  std::optional<FrontierBoundedSearchResult> probedSearch;
+  if (options.probeDepth > 0 && trials.size() > 1) {
+    const auto probeStart = std::chrono::steady_clock::now();
+    const auto heldForTrial = [&](const KInductionProblem& target, const PrefixTrial& trial) {
+      const auto lastVector = inputVectorAtCycle(trial, prefixCycles - 1);
+      std::vector<std::pair<size_t, bool>> held;
+      for (const auto& [index, value] : heldInputIndices) {
+        (void)value;
+        if (index < target.inputSymbols.size()) {
+          held.emplace_back(target.inputSymbols[index], lastVector[index]);
+        }
+      }
+      return held;
+    };
+    for (size_t rank = 0; rank < ranking.size(); ++rank) {
+      const PrefixTrial& trial = trials[ranking[rank]];
+      const auto candidate = buildDivergenceProblem(
+          model0, model1, alignedInputs, alignedOutputs, trial.state0, trial.state1,
+          resetActiveValue);
+      if (candidate.frontierDiffers) {
+        logSeeded(diagnostics, "probe: trial %zu (rank %zu) already differs in its end state",
+                  trial.index, rank);
+        best = trial;
+        break;
+      }
+      if (candidate.problem.bad == BoolExpr::createFalse()) {
+        continue;
+      }
+      bool unsat = false;
+      BoundedSearchExtras probeExtras;
+      probeExtras.unsatOut = &unsat;
+      const auto probe = runFrontierBoundedSearch(
+          candidate.problem, candidate.frontierFor(trial.state0), {}, options.probeDepth,
+          options.checkEvery, noEnlargement, nullptr, solverType, false, nullptr, false,
+          options.probeConflicts, heldForTrial(candidate.problem, trial), probeExtras);
+      logSeeded(diagnostics,
+                "probe: trial %zu (rank %zu, toggled=%zu known=%zu) depth %zu: %s (%.1f s)",
+                trial.index, rank, trial.toggledRegisters, trial.knownBits, options.probeDepth,
+                probe.has_value() ? "diverges" : unsat ? "unsat" : "budget exhausted",
+                elapsedSeconds(probeStart));
+      if (probe.has_value()) {
+        best = trial;
+        probedSearch = probe;
+        break;
+      }
+    }
+    if (!probedSearch.has_value()) {
+      logSeeded(diagnostics,
+                "probe: no end state diverges within %zu frames; deep search from the best-ranked state",
+                options.probeDepth);
+    }
+    // The held controls keep the values of the chosen trial.
+    const auto lastVector = inputVectorAtCycle(*best, prefixCycles - 1);
+    for (auto& [index, value] : heldInputIndices) {
+      value = lastVector[index];
+    }
+    logSeeded(diagnostics, "probe: start state is trial %zu (%.1f s)", best->index,
+              elapsedSeconds(probeStart));
+  }
+
   std::optional<SuffixTrace> trace;
   const auto divergence = buildDivergenceProblem(
       model0, model1, alignedInputs, alignedOutputs, best->state0, best->state1,
@@ -3063,7 +3235,10 @@ runSimulationSeededSearch(
     std::vector<std::vector<bool>> chainInputs;
     std::vector<TernaryValue> from0 = best->state0;
     std::vector<TernaryValue> from1 = best->state1;
-    if (options.abstractionLayers > 0) {
+    if (probedSearch.has_value()) {
+      search = probedSearch;
+    }
+    if (!search.has_value() && options.abstractionLayers > 0) {
       search = runAbstractionGuided(divergence);
     }
     if (!search.has_value() && options.waypointHops > 0) {

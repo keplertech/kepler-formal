@@ -504,6 +504,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "sec_seed_abstraction_iterations",
       "sec_seed_abstraction_conflicts",
       "sec_seed_abstraction_instance",
+      "sec_seed_probe_depth",
+      "sec_seed_probe_conflicts",
       "btor2_export",
       "btor2_export_path",
       "dump_only",
@@ -1554,7 +1556,9 @@ static int KeplerFormalMainImpl(
             !parseSeededSearchKey("sec_seed_waypoint_conflicts", seededSearchOptions.waypointConflicts) ||
             !parseSeededSearchKey("sec_seed_abstraction_layers", seededSearchOptions.abstractionLayers) ||
             !parseSeededSearchKey("sec_seed_abstraction_iterations", seededSearchOptions.abstractionIterations) ||
-            !parseSeededSearchKey("sec_seed_abstraction_conflicts", seededSearchOptions.abstractionConflicts)) {
+            !parseSeededSearchKey("sec_seed_abstraction_conflicts", seededSearchOptions.abstractionConflicts) ||
+            !parseSeededSearchKey("sec_seed_probe_depth", seededSearchOptions.probeDepth) ||
+            !parseSeededSearchKey("sec_seed_probe_conflicts", seededSearchOptions.probeConflicts)) {
           return EXIT_FAILURE;
         }
         if (cfg["sec_seed_abstraction_instance"]) {
@@ -1925,7 +1929,8 @@ static int KeplerFormalMainImpl(
           arg == "--sec-seed-enlarge-cubes" || arg == "--sec-seed-waypoint-hops" ||
           arg == "--sec-seed-waypoint-depth" || arg == "--sec-seed-waypoint-layers" ||
           arg == "--sec-seed-waypoint-conflicts" || arg == "--sec-seed-abstraction-layers" ||
-          arg == "--sec-seed-abstraction-iterations" || arg == "--sec-seed-abstraction-conflicts") {
+          arg == "--sec-seed-abstraction-iterations" || arg == "--sec-seed-abstraction-conflicts" ||
+          arg == "--sec-seed-probe-depth" || arg == "--sec-seed-probe-conflicts") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
           return EXIT_FAILURE;
@@ -1942,7 +1947,9 @@ static int KeplerFormalMainImpl(
             : arg == "--sec-seed-waypoint-conflicts" ? seededSearchOptions.waypointConflicts
             : arg == "--sec-seed-abstraction-layers" ? seededSearchOptions.abstractionLayers
             : arg == "--sec-seed-abstraction-iterations" ? seededSearchOptions.abstractionIterations
-                                                        : seededSearchOptions.abstractionConflicts;
+            : arg == "--sec-seed-abstraction-conflicts" ? seededSearchOptions.abstractionConflicts
+            : arg == "--sec-seed-probe-depth" ? seededSearchOptions.probeDepth
+                                              : seededSearchOptions.probeConflicts;
         std::string seedError;
         if (!parseNonNegativeSizeToken(
                 argv[parseStart + 1], arg.c_str(), target, seedError)) {
@@ -2183,7 +2190,8 @@ static int KeplerFormalMainImpl(
           arg == "--sec-seed-enlarge-cubes" || arg == "--sec-seed-waypoint-hops" ||
           arg == "--sec-seed-waypoint-depth" || arg == "--sec-seed-waypoint-layers" ||
           arg == "--sec-seed-waypoint-conflicts" || arg == "--sec-seed-abstraction-layers" ||
-          arg == "--sec-seed-abstraction-iterations" || arg == "--sec-seed-abstraction-conflicts") {
+          arg == "--sec-seed-abstraction-iterations" || arg == "--sec-seed-abstraction-conflicts" ||
+          arg == "--sec-seed-probe-depth" || arg == "--sec-seed-probe-conflicts") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing value after {}", arg);
           return EXIT_FAILURE;
@@ -2200,7 +2208,9 @@ static int KeplerFormalMainImpl(
             : arg == "--sec-seed-waypoint-conflicts" ? seededSearchOptions.waypointConflicts
             : arg == "--sec-seed-abstraction-layers" ? seededSearchOptions.abstractionLayers
             : arg == "--sec-seed-abstraction-iterations" ? seededSearchOptions.abstractionIterations
-                                                        : seededSearchOptions.abstractionConflicts;
+            : arg == "--sec-seed-abstraction-conflicts" ? seededSearchOptions.abstractionConflicts
+            : arg == "--sec-seed-probe-depth" ? seededSearchOptions.probeDepth
+                                              : seededSearchOptions.probeConflicts;
         std::string seedError;
         if (!parseNonNegativeSizeToken(argv[++i], arg.c_str(), target, seedError)) {
           SPDLOG_CRITICAL("Invalid SEC seeded search option: {}", seedError);
@@ -2273,6 +2283,10 @@ static int KeplerFormalMainImpl(
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--use-scopes") {
+        useScopes = true;
+        continue;
+      }
       if (arg == "--no-latch-abstraction") {
         latchAbstraction = false;
         continue;
@@ -2283,10 +2297,6 @@ static int KeplerFormalMainImpl(
       }
       // LCOV_EXCL_START
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
-      if (arg == "--use-scopes") {
-        useScopes = true;
-        continue;
-      }
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
           arg == "--vhdl_design1_top" || arg == "--vhdl_design2_top" ||
           arg == "--python_design1_top" || arg == "--python_design2_top" ||
@@ -2541,16 +2551,6 @@ static int KeplerFormalMainImpl(
       return EXIT_FAILURE;
       // LCOV_EXCL_STOP
     }
-    if (dumpCnf) {
-      // LCOV_EXCL_START
-      SPDLOG_CRITICAL("SEC verification does not support CNF export");
-      return EXIT_FAILURE;
-      // LCOV_EXCL_STOP
-    }
-  }
-  for (const auto& libraryFile : libertyFiles) {
-    if (isPythonLoaderPath(libraryFile)) {
-      // LCOV_EXCL_START
     if (useScopes && compactMode) {
       SPDLOG_CRITICAL(
           "use_scopes/--use-scopes needs both designs loaded at once and cannot "
@@ -2561,6 +2561,16 @@ static int KeplerFormalMainImpl(
       SPDLOG_CRITICAL("use_scopes/--use-scopes cannot be combined with BTOR2 export");
       return EXIT_FAILURE;
     }
+    if (dumpCnf) {
+      // LCOV_EXCL_START
+      SPDLOG_CRITICAL("SEC verification does not support CNF export");
+      return EXIT_FAILURE;
+      // LCOV_EXCL_STOP
+    }
+  }
+  for (const auto& libraryFile : libertyFiles) {
+    if (isPythonLoaderPath(libraryFile)) {
+      // LCOV_EXCL_START
       SPDLOG_CRITICAL(
       // LCOV_EXCL_STOP
           "Python primitive loader {} must be provided through YAML config key "
@@ -3577,16 +3587,6 @@ static int KeplerFormalMainImpl(
   // LCOV_EXCL_STOP
     try {
       // LCOV_EXCL_START
-      KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-          top0,
-          top1,
-          solverType,
-          secEngine,
-          secEncoding,
-          secResetSpec,
-          btor2ExportConfig.options());
-      strategy.setInternalRelationOptions(internalRelationOptions);
-      strategy.setSimulationSeededSearchOptions(seededSearchOptions);
       if (useScopes) {
         // Scoped SEC: compare the hierarchies bottom-up and prove only the
         // module pairs whose own implementation differs, each with its ports
@@ -3679,6 +3679,16 @@ static int KeplerFormalMainImpl(
         }
         return emitSecResult(*worst);
       }
+      KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
+          top0,
+          top1,
+          solverType,
+          secEngine,
+          secEncoding,
+          secResetSpec,
+          btor2ExportConfig.options());
+      strategy.setInternalRelationOptions(internalRelationOptions);
+      strategy.setSimulationSeededSearchOptions(seededSearchOptions);
       strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP

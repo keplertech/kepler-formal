@@ -73,6 +73,12 @@ struct SimulationSeededSearchOptions {
   // the differing registers (and more than them) instead of the predicate's
   // register support.
   bool abstractionByInstance = false;
+  // Seed screening: a bounded search of probeDepth frames, under
+  // probeConflicts solver conflicts, from every simulated end state in rank
+  // order before the deep search; the first that diverges becomes the start
+  // state. 0 disables it.
+  size_t probeDepth = 0;
+  size_t probeConflicts = 200000;
 
   bool enabled() const {
     return prefixCycles != 0 && trials != 0 && searchDepth != 0;
