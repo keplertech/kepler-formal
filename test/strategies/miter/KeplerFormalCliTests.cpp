@@ -5943,8 +5943,9 @@ TEST_F(KeplerFormalCliTests, ConfigSecCompactIdenticalInputReusesExtractedModel)
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigSecRejectsScopeExtraction) {
+TEST_F(KeplerFormalCliTests, ConfigSecAcceptsScopeExtraction) {
   const auto fixture = createEquivalentSequentialNajaIfFixture();
+  const auto logPath = fixture.tmpDir / "sec_scopes.log";
   const auto cfgPath = writeTempConfig(
       "format: naja_if\n"
       "verification: sec\n"
@@ -5953,8 +5954,94 @@ TEST_F(KeplerFormalCliTests, ConfigSecRejectsScopeExtraction) {
       "use_scopes: true\n"
       "input_paths:\n"
       "  - " + fixture.design0IfPath.string() + "\n"
+      "  - " + fixture.design1IfPath.string() + "\n"
+      "log_file: " + logPath.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+  ASSERT_TRUE(std::filesystem::exists(logPath));
+  EXPECT_NE(readFileContents(logPath).find("SEC scope extraction:"),
+            std::string::npos);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecRejectsScopeCleaning) {
+  const auto fixture = createEquivalentSequentialNajaIfFixture();
+  const auto cfgPath = writeTempConfig(
+      "format: naja_if\n"
+      "verification: sec\n"
+      "sec_encoding: binary\n"
+      "max_k: 4\n"
+      "use_scopes: true\n"
+      "clean_scopes: true\n"
+      "input_paths:\n"
+      "  - " + fixture.design0IfPath.string() + "\n"
       "  - " + fixture.design1IfPath.string() + "\n");
   EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSecRejectsScopesWithCompactMode) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "max_k: 4\n"
+      "compact_mode: true\n"
+      "use_scopes: true\n"
+      "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
+      "sv_design2_flist: " + fixture.design1FlistPath.string() + "\n"
+      "sv_design1_top: cva6\n"
+      "sv_design2_top: cva6\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+// Scoped SEC on hierarchical SystemVerilog: only the child module whose body
+// changed is verified, and its difference is reported with the scope named.
+TEST_F(KeplerFormalCliTests, ConfigSecScopedSystemVerilogVerifiesChangedModuleOnly) {
+  const auto fixture = createSystemVerilogFlistFixture();
+  const auto writeChild = [](const std::filesystem::path& path, const char* body) {
+    std::ofstream child(path);
+    child << "module leaf(input logic clk, input logic a, output logic y);\n";
+    child << "  logic q;\n";
+    child << "  always_ff @(posedge clk) q <= a;\n";
+    child << "  assign y = " << body << ";\n";
+    child << "endmodule\n";
+  };
+  const auto writeTop = [](const std::filesystem::path& path) {
+    std::ofstream top(path);
+    top << "module cva6(input logic clk, input logic a, output logic y0, output logic y1);\n";
+    top << "  leaf u_leaf0(.clk(clk), .a(a), .y(y0));\n";
+    top << "  leaf u_leaf1(.clk(clk), .a(~a), .y(y1));\n";
+    top << "endmodule\n";
+  };
+  writeChild(fixture.design0ChildPath, "q");
+  writeChild(fixture.design1ChildPath, "~q");
+  writeTop(fixture.design0TopPath);
+  writeTop(fixture.design1TopPath);
+  const auto logPath = fixture.tmpDir / "sec_scoped_sv.log";
+  const auto cfgPath = writeTempConfig(
+      "format: systemverilog\n"
+      "verification: sec\n"
+      "max_k: 4\n"
+      "use_scopes: true\n"
+      "sv_design1_flist: " + fixture.design0FlistPath.string() + "\n"
+      "sv_design2_flist: " + fixture.design1FlistPath.string() + "\n"
+      "sv_design1_top: cva6\n"
+      "sv_design2_top: cva6\n"
+      "log_file: " + logPath.string() + "\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecCounterexampleExitCode);
+  ASSERT_TRUE(std::filesystem::exists(logPath));
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("2 model pair(s) compared, 1 identical in their own "
+                          "implementation, 1 scope(s) to verify"),
+            std::string::npos)
+      << contents;
+  EXPECT_NE(contents.find("SEC scope 1/1: leaf vs leaf"), std::string::npos) << contents;
+  EXPECT_NE(contents.find("finished with status Different"), std::string::npos)
+      << contents;
   std::filesystem::remove(cfgPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }

@@ -9,6 +9,7 @@ cc_test(
         "//src/scope:scope_extraction",
         "//src/strategies:formal_strategies",
         "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
         "@googletest//:gtest",
     ],
 )

@@ -117,6 +117,7 @@ liberty_files:
 | `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
 | `--dump-only` | `dump_only: true` | `false` | boolean | Stops after BTOR2 export. Requires export to be enabled. Success is an export result, not a proof verdict. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
+| `--use-scopes` | `use_scopes: true` | `false` | boolean | Scoped SEC: compares the two hierarchies bottom-up and proves only the module pairs whose own implementation differs, each with its ports as the environment; see [Scoped SEC](#scoped-sec). Needs both designs loaded, so it cannot be combined with `--compact`, `--set-as-boundary`, `clean_scopes` or BTOR2 export. |
 | `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 | `--no-latch-abstraction` | `latch_abstraction: false` | `true` | boolean | Disables the SEC latch abstraction described in [sec-sequential-models.md](sec-sequential-models.md); every latch output is opaque again, as before. |
@@ -224,6 +225,45 @@ User-defined boundaries cannot currently be combined with scope extraction or
 scope cleaning.
 
 ## Bounds And Results
+
+## Scoped SEC
+
+With `--use-scopes` (YAML `use_scopes: true`) SEC does not compare the two
+tops as a whole. It first pairs the two hierarchies bottom-up:
+
+- Child instances pair by instance name; the anonymous gates, flops and nets
+  the RTL lowering creates pair in creation order, which the lowering fixes
+  per module. Terms and named nets pair by name and bit.
+- A module pair is *identical in its own implementation* when its interface,
+  parameters, instance parameters, leaf models (compared by name, type,
+  interface and parameters, never by model ID) and net connectivity all
+  match. It is *identical* when, in addition, every paired child is identical.
+- Each model pair is compared once, however many instances share it.
+
+The scopes are the topmost pairs whose own implementation differs. A pair whose
+own wiring is identical but holds a differing child is not a scope; the child
+is. A child whose interface changed makes its parent the scope, because the
+parent's connections to it differ. When no pair differs, the run reports
+`Equivalent` without a proof: the hierarchies are structurally identical.
+
+Each scope is then verified as its own SEC problem: the scope's ports are the
+aligned environment inputs and observed outputs, its registers, memories,
+clocks and resets are modeled as for a top, and the usual engines, internal
+relation learning and seeded search apply. Reset ports named by the reset
+bootstrap spec are matched by name inside the scope.
+
+The verdict is composed from the scope verdicts. All scopes `Equivalent` gives
+`Equivalent`, which is sound because the environments of the scopes are
+identical on both sides. A scope `Different` stops the run and is reported as
+`Different` with the scope named in the reason: the trace holds under free
+scope ports and may need the surrounding logic to be reached from the top.
+Otherwise the least conclusive scope status is reported. Identity detection is
+only a shortcut for the proof: a renamed instance or a resynthesized module
+compares as different and is proved by SAT, so names can cost proof time but
+never a wrong verdict.
+
+Flattened netlists have no hierarchy, so the top is the only scope and the run
+behaves as without the flag.
 
 `max_k` is parsed as a non-negative integer.
 

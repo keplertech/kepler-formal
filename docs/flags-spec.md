@@ -88,8 +88,8 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
 | `log_level` | string | `debug` and `info` are handled explicitly. Other values currently fall back to `info`. |
 | `log_file` | string | Output path for the miter log file. If omitted, the tool writes `miter_log_<n>.txt` in the current working directory. |
-| `use_scopes` | bool | Enable scoped verification for `naja_if` inputs. |
-| `clean_scopes` | bool | Clean extracted scopes before scoped verification. Used with `use_scopes`. |
+| `use_scopes` | bool | Enable scoped verification: the hierarchies are paired bottom-up and only the module pairs whose own implementation differs are verified. LEC supports it for `naja_if` inputs; SEC supports it for every hierarchical input (CLI `--use-scopes`), see [sec-flags-spec.md](sec-flags-spec.md#scoped-sec). |
+| `clean_scopes` | bool | Clean extracted scopes before scoped verification. Used with `use_scopes`; LEC only. |
 | `cnf_export` | bool | Enable CNF export. |
 | `cnf_export_path` | string | Output path for CNF export. Defaults to `miter.cnf`, or `miter_<scope>.cnf` in scoped `naja_if` mode. |
 | `po_cnf_export` | bool | Enable per-primary-output CNF export for each compared top. |
