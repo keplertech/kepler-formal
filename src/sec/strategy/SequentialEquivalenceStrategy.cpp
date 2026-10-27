@@ -3,6 +3,8 @@
 
 #include "strategy/SequentialEquivalenceStrategy.h"
 
+#include "DnlLifetime.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -559,7 +561,7 @@ struct ScopedDnlContext {
       throw std::runtime_error("NLUniverse not created for SEC cone tracing");  // LCOV_EXCL_LINE
     }
 
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     universe_->setTopDesign(top);
     dnl_ = naja::DNL::get();
   // LCOV_EXCL_START
@@ -567,7 +569,7 @@ struct ScopedDnlContext {
   // LCOV_EXCL_STOP
 
   ~ScopedDnlContext() {
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     if (universe_ != nullptr && previousTop_ != nullptr) {
       universe_->setTopDesign(previousTop_);
     // LCOV_EXCL_START

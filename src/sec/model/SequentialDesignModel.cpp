@@ -3,6 +3,8 @@
 
 #include "model/SequentialDesignModel.h"
 
+#include "DnlLifetime.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -2447,7 +2449,7 @@ void logUnpublishedTransitionSupport(
 }
 
 void collectInitialBuilderBoundary(ExtractContext& ctx) {
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   ctx.universe->setTopDesign(ctx.top);
 
   // Reuse the existing miter frontend to discover the relevant boundary
@@ -5439,7 +5441,7 @@ SequentialDesignModel SequentialDesignModel::extract(
     // immediately so large designs fail fast before the expensive cone builder
     // tries to derive BoolExprs for a transition system we already know is
     // unsupported.
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     if (ctx.previousTop != nullptr) {
       universe->setTopDesign(ctx.previousTop);  // LCOV_EXCL_LINE
     }  // LCOV_EXCL_LINE
@@ -5572,7 +5574,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   validateExtractedModel(model);
 
   // Restore the original top design for callers that keep using the universe.
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   if (ctx.previousTop != nullptr) {
     universe->setTopDesign(ctx.previousTop);
   }

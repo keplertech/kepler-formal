@@ -3,11 +3,13 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 cc_library(
     name = "kepler_clauses",
     srcs = [
+        "DnlLifetime.cpp",
         "SNLLogicCloud.cpp",
         "SNLTruthTableTree.cpp",
         "Tree2BoolExpr.cpp",
     ],
     hdrs = [
+        "DnlLifetime.h",
         "SNLLogicCloud.h",
         "SNLTruthTableTree.h",
         "Tree2BoolExpr.h",
