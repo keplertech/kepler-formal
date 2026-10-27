@@ -8,9 +8,11 @@
 #include <cstdarg>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <random>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -525,6 +527,47 @@ void logSeeded(bool diagnostics, const char* format, ...) {
   va_end(args);
 }
 
+// Diagnostics: how a set of design-1 registers spreads over the hierarchy.
+// Prints the most populated instance prefixes (first `depth` path elements).
+void logRegisterHistogram(bool diagnostics, const char* what, const SequentialDesignModel& model,
+                          const std::vector<size_t>& indices, size_t depth = 3,
+                          size_t maxRows = 12, size_t maxNames = 16) {
+  if (!diagnostics || indices.empty()) {
+    return;
+  }
+  std::map<std::string, size_t> counts;
+  for (const auto index : indices) {
+    if (index >= model.stateBits.size()) {
+      continue;
+    }
+    const auto it = model.displayNameByKey.find(model.stateBits[index]);
+    std::string name = it == model.displayNameByKey.end() ? std::string("?") : it->second;
+    size_t pos = 0;
+    for (size_t element = 0; element < depth; ++element) {
+      const auto dot = name.find('.', pos);
+      if (dot == std::string::npos) {
+        pos = name.size();
+        break;
+      }
+      pos = dot + 1;
+    }
+    counts[name.substr(0, pos == name.size() ? pos : pos - 1)] += 1;
+  }
+  std::vector<std::pair<std::string, size_t>> rows(counts.begin(), counts.end());
+  std::stable_sort(rows.begin(), rows.end(),
+                   [](const auto& a, const auto& b) { return a.second > b.second; });
+  for (size_t i = 0; i < rows.size() && i < maxRows; ++i) {
+    logSeeded(diagnostics, "%s by instance: %s = %zu", what, rows[i].first.c_str(), rows[i].second);
+  }
+  if (indices.size() <= maxNames) {
+    for (const auto index : indices) {
+      const auto it = model.displayNameByKey.find(model.stateBits[index]);
+      logSeeded(diagnostics, "%s register: %s", what,
+                it == model.displayNameByKey.end() ? "?" : it->second.c_str());
+    }
+  }
+}
+
 bool supportTouches(const std::set<size_t>& support, const std::unordered_set<size_t>& symbols) {
   for (const auto symbol : support) {
     if (symbols.find(symbol) != symbols.end()) {
@@ -591,10 +634,17 @@ struct DivergenceProblem {
   bool frontierDiffers = false;                // a paired register already differs
   std::vector<std::string> unpairedNames;      // design-2 registers without a partner
   std::vector<std::string> incomparableNames;  // design-1 side of incomparable pairs
+  std::vector<size_t> differingIndices;        // design-1 state indices of differing pairs
   std::vector<DualRailSymbolPair> railsByStateIndex;  // design-1 state index -> rails
   // The register part of the divergence predicate (no output terms): its cone
   // stays local to the changed logic, which makes it the guide for waypoints.
   BoolExpr* registerDivergence = nullptr;
+  // The origins of the register differences: the deepest subformulas where
+  // design 1's and the renamed design 2's next-state functions stop matching
+  // (the changed logic itself), as "binary and different" terms. Its support
+  // is the changed logic's fan-in only, which makes it the preferred guide.
+  BoolExpr* originDivergence = nullptr;
+  size_t originPairs = 0;
 
   std::unordered_map<size_t, bool> frontierFor(const std::vector<TernaryValue>& state0) const {
     std::unordered_map<size_t, bool> result;
@@ -936,6 +986,65 @@ DivergenceProblem buildDivergenceProblem(
     return false;
   };
   BoolExpr* diverge = BoolExpr::createFalse();
+  // Lockstep descent of two hash-consed formulas: matching nodes are skipped,
+  // matching operators recurse, and the first mismatch is an origin pair.
+  BoolExpr* origin = BoolExpr::createFalse();
+  std::unordered_set<BoolExpr*> originSeen;
+  struct PairHash {
+    size_t operator()(const std::pair<BoolExpr*, BoolExpr*>& pair) const noexcept {
+      return std::hash<BoolExpr*>()(pair.first) * 31u ^ std::hash<BoolExpr*>()(pair.second);
+    }
+  };
+  std::unordered_set<std::pair<BoolExpr*, BoolExpr*>, PairHash> visitedPairs;
+  constexpr size_t kMaxOriginPairs = 4096;
+  const auto collectOrigins = [&](BoolExpr* left, BoolExpr* right) {
+    std::vector<std::pair<BoolExpr*, BoolExpr*>> stack{{left, right}};
+    while (!stack.empty()) {
+      const auto [u, v] = stack.back();
+      stack.pop_back();
+      if (u == v || u == nullptr || v == nullptr || !visitedPairs.insert({u, v}).second) {
+        continue;
+      }
+      const bool sameShape = u->getOp() == v->getOp() && u->getOp() != Op::VAR &&
+                             (u->getLeft() == nullptr) == (v->getLeft() == nullptr) &&
+                             (u->getRight() == nullptr) == (v->getRight() == nullptr);
+      if (sameShape) {
+        // Descend only where the operand correspondence is unambiguous: one
+        // operand identical on both sides (either order, every binary
+        // operator here is commutative), the other pair carries the
+        // difference. When both operands differ the pairing could be wrong,
+        // so this node pair is the origin.
+        BoolExpr* const ul = u->getLeft();
+        BoolExpr* const ur = u->getRight();
+        BoolExpr* const vl = v->getLeft();
+        BoolExpr* const vr = v->getRight();
+        if (u->getOp() == Op::NOT || ur == nullptr) {
+          stack.emplace_back(ul, vl);
+          continue;
+        }
+        if (ul == vl) {
+          stack.emplace_back(ur, vr);
+          continue;
+        }
+        if (ur == vr) {
+          stack.emplace_back(ul, vl);
+          continue;
+        }
+        if (ul == vr) {
+          stack.emplace_back(ur, vl);
+          continue;
+        }
+        if (ur == vl) {
+          stack.emplace_back(ul, vr);
+          continue;
+        }
+      }
+      if (out.originPairs < kMaxOriginPairs && originSeen.insert(u).second) {
+        ++out.originPairs;
+        origin = BoolExpr::Or(origin, binaryDifferent(lift(u), lift(v)));
+      }
+    }
+  };
   for (const auto& [index0, index1] : pairs) {
     const auto next0It = model0.nextStateExprByStateKey.find(model0.stateBits[index0]);
     const auto next1It = model1.nextStateExprByStateKey.find(model1.stateBits[index1]);
@@ -958,9 +1067,12 @@ DivergenceProblem buildDivergenceProblem(
       continue;
     }
     ++out.differingRegisters;
+    out.differingIndices.push_back(index0);
     diverge = BoolExpr::Or(diverge, binaryDifferent(lift(next0It->second), lift(renamed)));
+    collectOrigins(next0It->second, renamed);
   }
   out.registerDivergence = BoolExpr::simplify(diverge);
+  out.originDivergence = BoolExpr::simplify(origin);
   for (size_t index = 0; index < alignedOutputs.names.size(); ++index) {
     const auto out0It = model0.observedOutputExprByKey.find(alignedOutputs.keys0[index]);
     const auto out1It = model1.observedOutputExprByKey.find(alignedOutputs.keys1[index]);
@@ -1129,6 +1241,20 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
   return layers;
 }
 
+// Optional controls of the bounded search used by the abstraction-guided
+// search: a localized model (only kept states have transitions; the others are
+// free after frame 0), pinned rail values as solver assumptions with the
+// failed subset returned on UNSAT, and per-frame values of chosen symbols.
+struct BoundedSearchExtras {
+  const std::unordered_set<size_t>* keptStates = nullptr;
+  const std::vector<std::tuple<size_t, size_t, bool>>* pins = nullptr;  // (symbol, frame, value)
+  std::vector<std::tuple<size_t, size_t, bool>>* failedPinsOut = nullptr;
+  const std::vector<size_t>* traceSymbols = nullptr;
+  std::vector<std::vector<std::pair<size_t, bool>>>* traceValuesOut = nullptr;  // [frame][(symbol, value)]
+  bool forceAssumptionSolver = false;
+  bool* unsatOut = nullptr;
+};
+
 // Bounded search from one concrete rail-valued state. Memory arrays are not
 // unrolled cell by cell: a read returns the data of the latest earlier write
 // to the same address and otherwise the frontier contents (read-over-write,
@@ -1147,9 +1273,13 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     std::vector<std::pair<size_t, bool>>* frameZeroStateOut = nullptr,
     bool targetAtLastFrameOnly = false,
     size_t conflictLimit = 0,
-    const std::vector<std::pair<size_t, bool>>& heldInputs = {}) {
+    const std::vector<std::pair<size_t, bool>>& heldInputs = {},
+    const BoundedSearchExtras& extras = {}) {
   const auto start = std::chrono::steady_clock::now();
   const bool finalCheckOnly = checkEvery == 0 || targetAtLastFrameOnly;
+  if (extras.unsatOut != nullptr) {
+    *extras.unsatOut = false;
+  }
   std::unordered_map<BoolExpr*, BoolExpr*> mergeMemo;
   const auto mergeExpr = [&](BoolExpr* expr) {
     return mergedRails.empty() ? expr : renameVariables(expr, mergedRails, mergeMemo);
@@ -1427,7 +1557,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
 
   // One final check is a single query, so the configured solver serves it;
   // intermediate checks need assumptions and an incremental solver.
-  const auto searchSolverType = finalCheckOnly
+  const auto searchSolverType = finalCheckOnly && !extras.forceAssumptionSolver
       ? solverType
       : SATSolverWrapper::assumptionSolverTypeFor(solverType);
   const bool usesAssumptions =
@@ -1467,6 +1597,19 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       for (const auto symbol : stateSymbols) {
         frameZeroStateOut->emplace_back(
             symbol, solver.getLiteralValue(variables.getLiteral(symbol, 0)));
+      }
+    }
+    if (extras.traceSymbols != nullptr && extras.traceValuesOut != nullptr) {
+      extras.traceValuesOut->assign(badFrame + 1, {});
+      for (size_t traceFrame = 0; traceFrame <= badFrame; ++traceFrame) {
+        auto& values = (*extras.traceValuesOut)[traceFrame];
+        values.reserve(extras.traceSymbols->size());
+        for (const auto symbol : *extras.traceSymbols) {
+          if (variables.hasSymbol(symbol)) {
+            values.emplace_back(
+                symbol, solver.getLiteralValue(variables.getLiteral(symbol, traceFrame)));
+          }
+        }
       }
     }
     result.inputsByFrame.resize(badFrame + 1);
@@ -1557,6 +1700,26 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     sharedMemory[memoryIndex] = anyOutput && allMerged;
   }
 
+  // Pinned rail values: assumptions when the solver supports them (so the
+  // failed subset can be read back), otherwise unit clauses.
+  std::vector<int> pinLiterals;
+  std::unordered_map<int, std::tuple<size_t, size_t, bool>> pinByLiteral;
+  if (extras.pins != nullptr) {
+    for (const auto& pin : *extras.pins) {
+      const auto [symbol, frame, value] = pin;
+      if (frame > totalFrames || !variables.hasSymbol(symbol)) {
+        continue;
+      }
+      const int literal = variables.getLiteral(symbol, frame);
+      const int signedLiteral = value ? literal : -literal;
+      if (usesAssumptions) {
+        pinLiterals.push_back(signedLiteral);
+        pinByLiteral.emplace(signedLiteral, pin);
+      } else {
+        solver.addClause({signedLiteral});
+      }
+    }
+  }
   const auto checkPendingTarget = [&](size_t frame) -> std::optional<FrontierBoundedSearchResult> {
     int anyTarget = rails.falseLit();
     for (const int lit : pendingTargetLits) {
@@ -1565,13 +1728,26 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     const auto solveStart = std::chrono::steady_clock::now();
     SATSolverWrapper::SolveStatus status = SATSolverWrapper::SolveStatus::Unknown;
     if (usesAssumptions) {
+      std::vector<int> assumptions = pinLiterals;
+      assumptions.push_back(anyTarget);
       status = solver.solveWithAssumptionsStatus(
-          {anyTarget}, conflictLimit == 0 ? -1 : static_cast<int64_t>(conflictLimit));
+          assumptions, conflictLimit == 0 ? -1 : static_cast<int64_t>(conflictLimit));
+      if (status == SATSolverWrapper::SolveStatus::Unsat && extras.failedPinsOut != nullptr) {
+        extras.failedPinsOut->clear();
+        for (const int failed : solver.failedAssumptions()) {
+          if (const auto it = pinByLiteral.find(failed); it != pinByLiteral.end()) {
+            extras.failedPinsOut->push_back(it->second);
+          }
+        }
+      }
     } else {
       solver.addClause({anyTarget});
       status = conflictLimit == 0
           ? solver.solveStatus()
           : solver.solveWithKissatResourceLimits(static_cast<unsigned>(conflictLimit));
+    }
+    if (status == SATSolverWrapper::SolveStatus::Unsat && extras.unsatOut != nullptr) {
+      *extras.unsatOut = true;
     }
     logSeeded(diagnostics,
               "frame=%zu checked_frames=%zu status=%s solve_seconds=%.1f total_seconds=%.1f",
@@ -1610,7 +1786,9 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     const std::unordered_set<size_t>* needed =
         frame >= depth ? &layers[totalFrames - frame - 1] : nullptr;
     const auto isNeeded = [&](size_t symbol) {
-      return needed == nullptr || needed->find(symbol) != needed->end();
+      return (needed == nullptr || needed->find(symbol) != needed->end()) &&
+             (extras.keptStates == nullptr ||
+              extras.keptStates->find(symbol) != extras.keptStates->end());
     };
     FrameFormulaEncoder encoder(solver, variables.makeLeafLits(frame));
     size_t encodedStates = 0;
@@ -1630,7 +1808,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       if (sharedMemory[memoryIndex]) {
         continue;
       }
-      bool memoryNeeded = needed == nullptr;
+      bool memoryNeeded = needed == nullptr && extras.keptStates == nullptr;
       for (const auto& port : memory.readPorts) {
         for (const auto& outputRails : port.outputRails) {
           memoryNeeded = memoryNeeded ||
@@ -2162,6 +2340,21 @@ runSimulationSeededSearch(
     return trace;
   };
 
+  // The guide for abstraction and waypoints: the origins of the register
+  // differences when known, else the register differences, else the whole
+  // predicate.
+  const auto guideOf = [](const DivergenceProblem& divergence) {
+    if (divergence.originDivergence != nullptr &&
+        divergence.originDivergence != BoolExpr::createFalse()) {
+      return divergence.originDivergence;
+    }
+    if (divergence.registerDivergence != nullptr &&
+        divergence.registerDivergence != BoolExpr::createFalse()) {
+      return divergence.registerDivergence;
+    }
+    return divergence.problem.bad;
+  };
+
   // Waypoint chaining on the single-copy divergence problem (lighthouses:
   // Ganai, Aziz and Kuehlmann, DAC 1999; Ho et al., ICCAD 2000; distance
   // guidance: Kuehlmann, McMillan and Brayton, ICCAD 1999; Shyam and Bertacco,
@@ -2185,10 +2378,7 @@ runSimulationSeededSearch(
     const auto chainStart = std::chrono::steady_clock::now();
     constexpr size_t kMaxConeLayers = 32;
     constexpr size_t kMaxTargetSamples = 4;
-    BoolExpr* guide = divergence.registerDivergence != nullptr &&
-                              divergence.registerDivergence != BoolExpr::createFalse()
-                          ? divergence.registerDivergence
-                          : divergence.problem.bad;
+    BoolExpr* guide = guideOf(divergence);
     const auto layers = targetConeLayers(divergence.problem, guide, kMaxConeLayers);
     std::unordered_map<size_t, size_t> indexByRail;
     indexByRail.reserve(2 * divergence.railsByStateIndex.size());
@@ -2466,17 +2656,382 @@ runSimulationSeededSearch(
     return outcome;
   };
 
+  // Abstraction-guided search on the single-copy divergence problem
+  // (localization: Kurshan 1994; counterexample-guided refinement: Clarke,
+  // Grumberg, Jha, Lu and Veith, CAV 2000; guidance by abstract traces: Nanshi
+  // and Somenzi, DAC 2006). The abstract model keeps the registers within a
+  // few steps of the divergence predicate and leaves every other register
+  // free. Its trace pins the kept part's boundary registers frame by frame in
+  // the concrete search, which then only has to find inputs that reproduce
+  // them. When the pinned trace is infeasible, the registers whose pins took
+  // part in the refutation join the abstract model, and the loop repeats.
+  const auto runAbstractionGuided =
+      [&](const DivergenceProblem& divergence) -> std::optional<FrontierBoundedSearchResult> {
+    const auto abstractionStart = std::chrono::steady_clock::now();
+    constexpr size_t kMaxConeLayers = 32;
+    BoolExpr* guide = guideOf(divergence);
+    const auto layers = targetConeLayers(divergence.problem, guide, kMaxConeLayers);
+    const TransitionExprResolver transitions(divergence.problem);
+    std::unordered_map<size_t, size_t> indexByRail;
+    indexByRail.reserve(2 * divergence.railsByStateIndex.size());
+    for (size_t index = 0; index < divergence.railsByStateIndex.size(); ++index) {
+      indexByRail.emplace(divergence.railsByStateIndex[index].mayBeOne, index);
+      indexByRail.emplace(divergence.railsByStateIndex[index].mayBeZero, index);
+    }
+    // Memory cells are never model registers here: reads go through the port
+    // chains, so cells are neither kept nor boundary symbols.
+    std::unordered_set<size_t> cellRails;
+    if (divergence.problem.structuredMemories != nullptr) {
+      for (const auto& memory : *divergence.problem.structuredMemories) {
+        for (const auto& cell : memory.cellRails) {
+          for (const auto& rails : cell) {
+            cellRails.insert(rails.mayBeOne);
+            cellRails.insert(rails.mayBeZero);
+          }
+        }
+      }
+    }
+    std::unordered_set<size_t> kept;
+    size_t keptRegisters = 0;
+    const auto keepRegister = [&](size_t index) {
+      const auto& rails = divergence.railsByStateIndex[index];
+      if (cellRails.count(rails.mayBeOne) != 0) {
+        return;
+      }
+      if (kept.insert(rails.mayBeOne).second) {
+        ++keptRegisters;
+      }
+      kept.insert(rails.mayBeZero);
+    };
+    // abstractionLayers = 1 keeps the predicate's own support (layer 0).
+    size_t layer = std::min(options.abstractionLayers - 1, layers.size() - 1);
+    const auto keepLayer = [&](size_t which) {
+      for (const auto symbol : layers[which]) {
+        if (const auto it = indexByRail.find(symbol); it != indexByRail.end()) {
+          keepRegister(it->second);
+        }
+      }
+    };
+    // Instance scope: the component that holds the differing registers keeps
+    // its logic, its environment is free (compositional reasoning with the
+    // environment abstracted: Clarke, Long and McMillan, LICS 1989; Grumberg
+    // and Long, TOPLAS 1994). The instance is the deepest common ancestor of
+    // the differing registers, widened until it holds more than them.
+    bool instanceScoped = false;
+    if (options.abstractionByInstance && !divergence.differingIndices.empty()) {
+      const auto nameOf = [&](size_t index) -> std::string {
+        if (index >= model0.stateBits.size()) {
+          return std::string();
+        }
+        const auto it = model0.displayNameByKey.find(model0.stateBits[index]);
+        return it == model0.displayNameByKey.end() ? std::string() : it->second;
+      };
+      const auto parentOf = [](const std::string& name) {
+        const auto dot = name.rfind('.');
+        return dot == std::string::npos ? std::string() : name.substr(0, dot);
+      };
+      const auto commonInstance = [](const std::string& a, const std::string& b) {
+        size_t common = 0;  // length of the common leading elements
+        size_t pos = 0;
+        while (true) {
+          const auto dotA = a.find('.', pos);
+          const auto dotB = b.find('.', pos);
+          const auto endA = dotA == std::string::npos ? a.size() : dotA;
+          const auto endB = dotB == std::string::npos ? b.size() : dotB;
+          if (endA != endB || a.compare(pos, endA - pos, b, pos, endB - pos) != 0) {
+            break;
+          }
+          common = endA;
+          if (dotA == std::string::npos || dotB == std::string::npos) {
+            break;
+          }
+          pos = dotA + 1;
+        }
+        return a.substr(0, common);
+      };
+      std::string scope;
+      bool first = true;
+      for (const auto index : divergence.differingIndices) {
+        const auto parent = parentOf(nameOf(index));
+        scope = first ? parent : commonInstance(scope, parent);
+        first = false;
+      }
+      const std::unordered_set<size_t> differingSet(divergence.differingIndices.begin(),
+                                                    divergence.differingIndices.end());
+      std::vector<size_t> under;
+      while (true) {
+        under.clear();
+        bool beyondDiffering = false;
+        for (size_t index = 0; index < divergence.railsByStateIndex.size(); ++index) {
+          if (cellRails.count(divergence.railsByStateIndex[index].mayBeOne) != 0) {
+            continue;
+          }
+          const auto name = nameOf(index);
+          if (!scope.empty() &&
+              (name.size() <= scope.size() || name.compare(0, scope.size(), scope) != 0 ||
+               name[scope.size()] != '.')) {
+            continue;
+          }
+          under.push_back(index);
+          beyondDiffering = beyondDiffering || differingSet.count(index) == 0;
+        }
+        if (beyondDiffering || scope.empty()) {
+          break;
+        }
+        scope = parentOf(scope);
+      }
+      for (const auto index : under) {
+        keepRegister(index);
+      }
+      instanceScoped = true;
+      logSeeded(diagnostics, "abstraction: instance scope '%s' keeps %zu registers",
+                scope.empty() ? "(top)" : scope.c_str(), under.size());
+    }
+    if (!instanceScoped) {
+      keepLayer(layer);
+    }
+    KInductionProblem abstractProblem = divergence.problem;
+    abstractProblem.bad = guide;
+    abstractProblem.property = BoolExpr::simplify(BoolExpr::Not(guide));
+    const auto cutSymbols = [&]() {
+      std::vector<size_t> cut;
+      std::unordered_set<size_t> seen;
+      const auto addSupport = [&](const std::set<size_t>& support) {
+        for (const auto symbol : support) {
+          if (indexByRail.count(symbol) != 0 && kept.count(symbol) == 0 &&
+              cellRails.count(symbol) == 0 && seen.insert(symbol).second) {
+            cut.push_back(symbol);
+          }
+        }
+      };
+      for (const auto symbol : kept) {
+        if (transitions.contains(symbol)) {
+          addSupport(transitions.support(symbol));
+        }
+      }
+      if (divergence.problem.structuredMemories != nullptr) {
+        for (const auto& memory : *divergence.problem.structuredMemories) {
+          bool keptOutput = false;
+          for (const auto& port : memory.readPorts) {
+            for (const auto& rails : port.outputRails) {
+              keptOutput = keptOutput || (rails.has_value() && kept.count(rails->mayBeOne) != 0);
+            }
+          }
+          if (!keptOutput) {
+            continue;
+          }
+          const auto addRails = [&](const DualRailBoolExpr& expr) {
+            addSupport(expr.mayBeOne->getSupportVars());
+            addSupport(expr.mayBeZero->getSupportVars());
+          };
+          for (const auto& port : memory.readPorts) {
+            for (const auto& bit : port.address) {
+              addRails(bit);
+            }
+          }
+          for (const auto& port : memory.writePorts) {
+            for (const auto* word : {&port.address, &port.data, &port.mask, &port.enable}) {
+              for (const auto& bit : *word) {
+                addRails(bit);
+              }
+            }
+          }
+          if (memory.resetAsserted.has_value()) {
+            addRails(*memory.resetAsserted);
+          }
+        }
+      }
+      return cut;
+    };
+    const auto widen = [&]() {
+      if (layer + 1 >= layers.size()) {
+        return false;
+      }
+      ++layer;
+      keepLayer(layer);
+      return true;
+    };
+    for (size_t iteration = 0; iteration < options.abstractionIterations; ++iteration) {
+      const auto cut = cutSymbols();
+      logSeeded(diagnostics,
+                "abstraction: iteration=%zu kept_registers=%zu of %zu boundary_registers=%zu (%.1f s)",
+                iteration, keptRegisters,
+                divergence.railsByStateIndex.size() - cellRails.size() / 2, cut.size() / 2,
+                elapsedSeconds(abstractionStart));
+      if (diagnostics) {
+        std::vector<size_t> keptIndices;
+        std::vector<size_t> cutIndices;
+        for (const auto symbol : kept) {
+          if (const auto it = indexByRail.find(symbol);
+              it != indexByRail.end() &&
+              divergence.railsByStateIndex[it->second].mayBeOne == symbol) {
+            keptIndices.push_back(it->second);
+          }
+        }
+        for (const auto symbol : cut) {
+          if (const auto it = indexByRail.find(symbol);
+              it != indexByRail.end() &&
+              divergence.railsByStateIndex[it->second].mayBeOne == symbol) {
+            cutIndices.push_back(it->second);
+          }
+        }
+        std::sort(keptIndices.begin(), keptIndices.end());
+        std::sort(cutIndices.begin(), cutIndices.end());
+        logRegisterHistogram(diagnostics, "abstraction: kept", model0, keptIndices);
+        logRegisterHistogram(diagnostics, "abstraction: boundary", model0, cutIndices);
+      }
+      std::vector<std::vector<std::pair<size_t, bool>>> trace;
+      BoundedSearchExtras abstractExtras;
+      abstractExtras.keptStates = &kept;
+      abstractExtras.traceSymbols = &cut;
+      abstractExtras.traceValuesOut = &trace;
+      // Abstract traces start short and grow with each refinement, so the
+      // abstract search checks the target incrementally at every frame.
+      abstractExtras.forceAssumptionSolver = true;
+      const auto abstractResult = runFrontierBoundedSearch(
+          abstractProblem, divergence.frontier, {}, options.searchDepth,
+          options.checkEvery == 0 ? 1 : options.checkEvery, noEnlargement, nullptr, solverType,
+          diagnostics, nullptr, false, 0, heldFor(divergence.problem), abstractExtras);
+      if (!abstractResult.has_value()) {
+        logSeeded(diagnostics,
+                  "abstraction: the abstract model has no divergence within %zu frames (%.1f s)",
+                  options.searchDepth, elapsedSeconds(abstractionStart));
+        return std::nullopt;
+      }
+      if (abstractResult->badFrame == 0) {
+        logSeeded(diagnostics,
+                  "abstraction: the guide already holds at the frontier; not applicable (%.1f s)",
+                  elapsedSeconds(abstractionStart));
+        return std::nullopt;
+      }
+      // Pin the boundary registers' binary values along the abstract trace.
+      std::vector<std::tuple<size_t, size_t, bool>> pins;
+      for (size_t frame = 1; frame < trace.size(); ++frame) {
+        std::unordered_map<size_t, bool> value(trace[frame].begin(), trace[frame].end());
+        std::unordered_set<size_t> done;
+        for (const auto symbol : cut) {
+          const auto indexIt = indexByRail.find(symbol);
+          if (indexIt == indexByRail.end() || !done.insert(indexIt->second).second) {
+            continue;
+          }
+          const auto& rails = divergence.railsByStateIndex[indexIt->second];
+          const auto oneIt = value.find(rails.mayBeOne);
+          const auto zeroIt = value.find(rails.mayBeZero);
+          if (oneIt == value.end() || zeroIt == value.end() || oneIt->second == zeroIt->second) {
+            continue;  // unknown or absent: no pin
+          }
+          pins.emplace_back(rails.mayBeOne, frame, oneIt->second);
+          pins.emplace_back(rails.mayBeZero, frame, zeroIt->second);
+        }
+      }
+      logSeeded(diagnostics, "abstraction: abstract trace of %zu frames; %zu pinned rail values",
+                abstractResult->badFrame, pins.size());
+      // Lift the pins to those the abstract model needs: with every pin and
+      // every input of the abstract trace assumed, the negated guide at the
+      // last frame is unsatisfiable, and the failed assumptions are the
+      // relevant ones (minimal assignments by unsatisfiable core: Ravi and
+      // Somenzi, TACAS 2004; Een, Mishchenko and Brayton, FMCAD 2011).
+      {
+        std::vector<std::tuple<size_t, size_t, bool>> fixed = pins;
+        for (size_t frame = 0; frame < abstractResult->inputsByFrame.size(); ++frame) {
+          const auto& inputs = abstractResult->inputsByFrame[frame];
+          for (size_t i = 0; i < inputs.size() && i < abstractProblem.inputSymbols.size(); ++i) {
+            fixed.emplace_back(abstractProblem.inputSymbols[i], frame, inputs[i]);
+          }
+        }
+        KInductionProblem liftProblem = abstractProblem;
+        liftProblem.bad = abstractProblem.property;
+        liftProblem.property = abstractProblem.bad;
+        std::vector<std::tuple<size_t, size_t, bool>> needed;
+        bool liftUnsat = false;
+        BoundedSearchExtras liftExtras;
+        liftExtras.keptStates = &kept;
+        liftExtras.pins = &fixed;
+        liftExtras.failedPinsOut = &needed;
+        liftExtras.forceAssumptionSolver = true;
+        liftExtras.unsatOut = &liftUnsat;
+        runFrontierBoundedSearch(liftProblem, divergence.frontier, {}, abstractResult->badFrame,
+                                 0, noEnlargement, nullptr, solverType, false, nullptr,
+                                 /*targetAtLastFrameOnly=*/true, options.abstractionConflicts,
+                                 heldFor(divergence.problem), liftExtras);
+        if (liftUnsat) {
+          std::vector<std::tuple<size_t, size_t, bool>> lifted;
+          for (const auto& pin : needed) {
+            if (indexByRail.count(std::get<0>(pin)) != 0) {
+              lifted.push_back(pin);
+            }
+          }
+          logSeeded(diagnostics, "abstraction: lifted pins %zu -> %zu", pins.size(),
+                    lifted.size());
+          pins = std::move(lifted);
+        } else {
+          logSeeded(diagnostics, "abstraction: pin lifting inconclusive; keeping every pin");
+        }
+      }
+      std::vector<std::tuple<size_t, size_t, bool>> failed;
+      bool unsat = false;
+      BoundedSearchExtras concreteExtras;
+      concreteExtras.pins = &pins;
+      concreteExtras.failedPinsOut = &failed;
+      concreteExtras.forceAssumptionSolver = true;
+      concreteExtras.unsatOut = &unsat;
+      const auto concrete = runFrontierBoundedSearch(
+          divergence.problem, divergence.frontier, {}, abstractResult->badFrame, 0,
+          noEnlargement, nullptr, solverType, diagnostics, nullptr, false,
+          options.abstractionConflicts, heldFor(divergence.problem), concreteExtras);
+      if (concrete.has_value()) {
+        logSeeded(diagnostics, "abstraction: concrete trace found at suffix frame %zu (%.1f s)",
+                  concrete->badFrame, elapsedSeconds(abstractionStart));
+        return concrete;
+      }
+      if (!unsat) {
+        logSeeded(diagnostics, "abstraction: concretization inconclusive; widening the model");
+        if (!widen()) {
+          break;
+        }
+        continue;
+      }
+      // The abstract trace relied on every lifted pin, so the registers behind
+      // all of them join the model, not only those of the failed subset: a
+      // failed core is often a single pin and would refine one register per
+      // round.
+      size_t added = 0;
+      std::unordered_set<size_t> failedFrames;
+      for (const auto& [symbol, frame, value] : failed) {
+        failedFrames.insert(frame);
+      }
+      for (const auto& [symbol, frame, value] : pins) {
+        if (const auto it = indexByRail.find(symbol); it != indexByRail.end()) {
+          if (kept.count(divergence.railsByStateIndex[it->second].mayBeOne) == 0) {
+            keepRegister(it->second);
+            ++added;
+          }
+        }
+      }
+      logSeeded(diagnostics,
+                "abstraction: pinned trace infeasible; %zu failed pins over %zu frames; the %zu "
+                "lifted pins add %zu registers",
+                failed.size(), failedFrames.size(), pins.size(), added);
+      if (added == 0 && !widen()) {
+        break;
+      }
+    }
+    logSeeded(diagnostics, "abstraction: gave up after the iteration budget (%.1f s)",
+              elapsedSeconds(abstractionStart));
+    return std::nullopt;
+  };
+
   std::optional<SuffixTrace> trace;
   const auto divergence = buildDivergenceProblem(
       model0, model1, alignedInputs, alignedOutputs, best->state0, best->state1,
       resetActiveValue);
   logSeeded(diagnostics,
             "paired registers=%zu unpaired=%zu differing=%zu incomparable=%zu "
-            "differing_outputs=%zu frontier_differs=%d (%.1f s)",
+            "differing_outputs=%zu origin_pairs=%zu frontier_differs=%d (%.1f s)",
             divergence.pairedRegisters, divergence.unpairedRegisters,
             divergence.differingRegisters, divergence.incomparableRegisters,
-            divergence.differingOutputs, divergence.frontierDiffers ? 1 : 0,
-            elapsedSeconds(start));
+            divergence.differingOutputs, divergence.originPairs,
+            divergence.frontierDiffers ? 1 : 0, elapsedSeconds(start));
   if (diagnostics) {
     for (size_t i = 0; i < divergence.unpairedNames.size() && i < 64; ++i) {
       logSeeded(diagnostics, "unpaired design-2 register: %s", divergence.unpairedNames[i].c_str());
@@ -2484,6 +3039,8 @@ runSimulationSeededSearch(
     for (const auto& name : divergence.incomparableNames) {
       logSeeded(diagnostics, "incomparable pair (design 1): %s", name.c_str());
     }
+    logRegisterHistogram(diagnostics, "differing", model0, divergence.differingIndices, 3, 12,
+                         1024);
   }
   if (divergence.frontierDiffers) {
     // The designs already disagree in the selected state: look for the
@@ -2506,7 +3063,10 @@ runSimulationSeededSearch(
     std::vector<std::vector<bool>> chainInputs;
     std::vector<TernaryValue> from0 = best->state0;
     std::vector<TernaryValue> from1 = best->state1;
-    if (options.waypointHops > 0) {
+    if (options.abstractionLayers > 0) {
+      search = runAbstractionGuided(divergence);
+    }
+    if (!search.has_value() && options.waypointHops > 0) {
       auto outcome = runWaypointChain(divergence);
       if (outcome.divergence.has_value()) {
         search = std::move(outcome.divergence);

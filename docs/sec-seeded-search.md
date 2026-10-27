@@ -78,6 +78,9 @@ runs unchanged.
 | `--sec-seed-waypoint-depth <n>` | `sec_seed_waypoint_depth: <n>` | `8` | Frames per hop. |
 | `--sec-seed-waypoint-layers <n>` | `sec_seed_waypoint_layers: <n>` | `1` | Register distance from the target within which waypoints are taken first. |
 | `--sec-seed-waypoint-conflicts <n>` | `sec_seed_waypoint_conflicts: <n>` | `300000` | Solver conflict budget per hop (`0`: none). |
+| `--sec-seed-abstraction-layers <n>` | `sec_seed_abstraction_layers: <n>` | `0` (off) | Abstraction-guided search from the registers within `n` steps of the predicate (see below). |
+| `--sec-seed-abstraction-iterations <n>` | `sec_seed_abstraction_iterations: <n>` | `16` | Refinement rounds. |
+| `--sec-seed-abstraction-conflicts <n>` | `sec_seed_abstraction_conflicts: <n>` | `1000000` | Conflict budget of one concretization check (`0`: none). |
 
 The search needs the default `dual_rail_steady` encoding. It is skipped under
 the binary encoding and whenever a formula reads memory cells outside a read
@@ -156,6 +159,50 @@ starts from the state reached. When a hop reaches the divergence predicate,
 the chained inputs form the suffix, which is replayed to the outputs as
 usual. When the chain stops short, the plain bounded search continues from
 the chain's last state, and the chain's inputs are prepended to its trace.
+
+## Abstraction-guided search
+
+The deep search is hard because the core has to be driven to produce the
+addresses and control writes the changed logic needs; the changed logic
+itself is small. Abstraction-guided search (localization: Kurshan 1994;
+counterexample-guided refinement: Clarke, Grumberg, Jha, Lu and Veith,
+CAV 2000; guidance by abstract traces: Nanshi and Somenzi, DAC 2006) works on
+the single-copy divergence problem in rounds:
+
+1. **Abstract model.** The guide is the origin of the difference: the two
+   next-state formulas of each differing register pair are walked in lockstep
+   and the deepest mismatching subformulas (the changed logic itself) form a
+   "binary and different" predicate whose support is that logic's fan-in. The
+   walk descends through a node pair only while the operand correspondence
+   is unambiguous (one operand identical on both sides, in either order);
+   where both operands differ, that node pair is the origin, so the
+   predicate never compares unrelated subformulas. The
+   registers it reads (`layers` 1), or within `layers - 1` further steps, keep
+   their next-state functions; every other register is free after the
+   selected state. Memories are kept with their read outputs; their cells are
+   never boundary registers. With `--sec-seed-abstraction-instance true` the
+   first model is instead the smallest design instance that encloses the
+   differing registers (widened until it holds more than them): the component
+   keeps its logic and its environment is free, the usual compositional
+   abstraction (Clarke, Long and McMillan, LICS 1989; Grumberg and Long,
+   TOPLAS 1994). This suits a change whose registers read, in one step, far
+   more of the design than the change itself involves.
+2. **Abstract trace.** A bounded search of `depth` frames on that model finds
+   a divergence quickly; if it finds none, there is none within that depth.
+3. **Concretization.** The values the abstract trace gave the boundary
+   registers (the free registers the kept part reads) are first lifted to the
+   ones the abstract model needs: with every boundary value and every input of
+   the trace assumed, the negated predicate at the last frame is
+   unsatisfiable, and the failed assumptions are the relevant pins (minimal
+   assignments by unsatisfiable core: Ravi and Somenzi, TACAS 2004; Een,
+   Mishchenko and Brayton, FMCAD 2011). The remaining pins are assumed frame
+   by frame in a bounded search on the full design, which then only has to
+   find inputs that reproduce them. A trace found here is a real one.
+4. **Refinement.** When the pinned trace is infeasible, the registers behind
+   the lifted pins join the abstract model (the abstract trace relied on each
+   of them; the failed subset alone is often a single pin and would refine one
+   register per round), and the round repeats; an inconclusive check widens
+   the model by one register step instead.
 
 ## Diagnostics
 

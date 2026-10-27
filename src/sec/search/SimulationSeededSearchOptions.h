@@ -60,6 +60,19 @@ struct SimulationSeededSearchOptions {
   // Solver conflict budget of one hop; a hop that exceeds it counts as
   // unreachable and the chain tries the next mode. Zero means no budget.
   size_t waypointConflicts = 300000;
+  // Abstraction-guided search: the abstract model keeps the registers within
+  // abstractionLayers steps of the divergence predicate, its trace pins the
+  // boundary registers in the concrete search, and the registers behind a
+  // refuted pin join the model, for up to abstractionIterations rounds. A
+  // concrete check stops after abstractionConflicts solver conflicts (0: no
+  // budget). Zero layers disables it.
+  size_t abstractionLayers = 0;
+  size_t abstractionIterations = 16;
+  size_t abstractionConflicts = 1000000;
+  // Start the abstract model from the smallest design instance that encloses
+  // the differing registers (and more than them) instead of the predicate's
+  // register support.
+  bool abstractionByInstance = false;
 
   bool enabled() const {
     return prefixCycles != 0 && trials != 0 && searchDepth != 0;

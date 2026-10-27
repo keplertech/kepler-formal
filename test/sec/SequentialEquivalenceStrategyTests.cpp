@@ -20894,3 +20894,308 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
   EXPECT_NE(result.reason.find("q"), std::string::npos);
 }
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchAbstractionGuidedSearchRefinesToTheTrace) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0,
+      "seed_abstract_before",
+      std::string("module seed_abstract_before") + kSeededStagesPortsSv +
+          "  assign q = fire;\nendmodule\n");
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1,
+      "seed_abstract_after",
+      std::string("module seed_abstract_after") + kSeededStagesPortsSv +
+          "  assign q = 1'b0;\nendmodule\n");
+
+  // The first abstract model keeps the last stage only and sets the earlier
+  // stages' registers at will; the refuted pins pull those stages in, and the
+  // refined model's trace concretizes.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 20;
+  options.trials = 64;
+  options.searchDepth = 20;
+  options.abstractionLayers = 1;
+  options.abstractionIterations = 8;
+  strategy.setSimulationSeededSearchOptions(options);
+  const auto result = strategy.run(4);
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 20u);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchOriginGuideLocalizesTheChangedLogic) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  // The stage condition changes inside one register's next-state function;
+  // everything around it is shared logic.
+  const std::string afterBody =
+      std::string(kSeededStagesPortsSv)
+          .replace(std::string(kSeededStagesPortsSv).find(
+                       "if (c1 == 3'd6 && k == 4'h3) fire <= 1'b1;"),
+                   std::string("if (c1 == 3'd6 && k == 4'h3) fire <= 1'b1;").size(),
+                   "if (k == 4'h3 && (c1 == 3'd6 || c1 == 3'd5)) fire <= 1'b1;");
+  ASSERT_NE(afterBody, std::string(kSeededStagesPortsSv));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0,
+      "seed_origin_before",
+      std::string("module seed_origin_before") + kSeededStagesPortsSv +
+          "  assign q = fire;\nendmodule\n");
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1,
+      "seed_origin_after",
+      std::string("module seed_origin_after") + afterBody +
+          "  assign q = fire;\nendmodule\n");
+
+  // The origin walk must stop at the changed stage condition (one pair). The
+  // register's update mux repeats that condition in both operands, so the
+  // origin is the mux itself: the first abstract model keeps the register and
+  // the stage counter the condition reads, nothing from the earlier stages.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 20;
+  options.trials = 64;
+  options.searchDepth = 20;
+  options.abstractionLayers = 1;
+  options.abstractionIterations = 8;
+  strategy.setSimulationSeededSearchOptions(options);
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStdout();
+  const auto result = strategy.run(4);
+  const std::string stdoutOutput = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 20u);
+  EXPECT_NE(stdoutOutput.find(" differing=1 "), std::string::npos) << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find(" origin_pairs=1 "), std::string::npos) << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: iteration=0 kept_registers=4 of 9"),
+            std::string::npos)
+      << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: concrete trace found"), std::string::npos)
+      << stdoutOutput;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchAbstractionByInstanceKeepsTheChangedComponent) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  // Two staged components: the change sits in the second one, whose fire
+  // condition reads the first one's output.
+  const auto source = [](const std::string& suffix, const std::string& condition) {
+    return "module seed_front_" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  output logic       armed
+);
+  logic enabled;
+  logic [2:0] c0;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      enabled <= 1'b0;
+      armed   <= 1'b0;
+      c0      <= 3'd0;
+    end else begin
+      if (k == 4'hA) enabled <= 1'b1;
+      if (enabled && c0 != 3'd6) c0 <= c0 + 3'd1;
+      if (c0 == 3'd6 && k == 4'h5) armed <= 1'b1;
+    end
+  end
+endmodule
+module seed_back_)" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  input  logic       armed,
+  output logic       fire
+);
+  logic [2:0] c1;
+  logic tick;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      c1   <= 3'd0;
+      fire <= 1'b0;
+      tick <= 1'b0;
+    end else begin
+      tick <= ~tick;
+      if (armed && c1 != 3'd6) c1 <= c1 + 3'd1;
+      fire <= fire | ()" + condition + R"();
+    end
+  end
+endmodule
+module seed_scope_)" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  output logic       q
+);
+  logic armed, fire;
+  seed_front_)" + suffix + R"( u_front(.clk(clk), .rst_n(rst_n), .k(k), .armed(armed));
+  seed_back_)" + suffix + R"( u_back(.clk(clk), .rst_n(rst_n), .k(k), .armed(armed), .fire(fire));
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= 1'b0;
+    else q <= fire;
+  end
+endmodule
+)";
+  };
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0, "seed_scope_before", source("before", "c1 == 3'd6 && k == 4'h3"));
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1, "seed_scope_after",
+      source("after", "k == 4'h3 && (c1 == 3'd6 || c1 == 3'd5)"));
+
+  // The first abstract model is the changed component alone (its counter,
+  // the fire register and the unrelated toggle), with the front stage free;
+  // the refuted pins on the front stage's output pull that stage in.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 20;
+  options.trials = 64;
+  options.searchDepth = 20;
+  options.abstractionLayers = 1;
+  options.abstractionIterations = 8;
+  options.abstractionByInstance = true;
+  strategy.setSimulationSeededSearchOptions(options);
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStdout();
+  const auto result = strategy.run(4);
+  const std::string stdoutOutput = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 20u);
+  EXPECT_NE(stdoutOutput.find("abstraction: instance scope 'u_back' keeps 5 registers"),
+            std::string::npos)
+      << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: iteration=0 kept_registers=5 of 11"),
+            std::string::npos)
+      << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: lifted pins"), std::string::npos) << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: concrete trace found"), std::string::npos)
+      << stdoutOutput;
+}
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchAbstractionByInstanceWithInstanceOutputAtTheTopPort) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  // Two staged components: the change sits in the second one, whose fire
+  // condition reads the first one's output.
+  const auto source = [](const std::string& suffix, const std::string& condition) {
+    return "module seed_front_" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  output logic       armed
+);
+  logic enabled;
+  logic [2:0] c0;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      enabled <= 1'b0;
+      armed   <= 1'b0;
+      c0      <= 3'd0;
+    end else begin
+      if (k == 4'hA) enabled <= 1'b1;
+      if (enabled && c0 != 3'd6) c0 <= c0 + 3'd1;
+      if (c0 == 3'd6 && k == 4'h5) armed <= 1'b1;
+    end
+  end
+endmodule
+module seed_back_)" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  input  logic       armed,
+  output logic       fire
+);
+  logic [2:0] c1;
+  logic tick;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      c1   <= 3'd0;
+      fire <= 1'b0;
+      tick <= 1'b0;
+    end else begin
+      tick <= ~tick;
+      if (armed && c1 != 3'd6) c1 <= c1 + 3'd1;
+      fire <= fire | ()" + condition + R"();
+    end
+  end
+endmodule
+module seed_scope_)" + suffix + R"((
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic [3:0] k,
+  output logic       q
+);
+  logic armed;
+  seed_front_)" + suffix + R"( u_front(.clk(clk), .rst_n(rst_n), .k(k), .armed(armed));
+  seed_back_)" + suffix + R"( u_back(.clk(clk), .rst_n(rst_n), .k(k), .armed(armed), .fire(q));
+endmodule
+)";
+  };
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0, "seed_scope_port_before", source("port_before", "c1 == 3'd6 && k == 4'h3"));
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1, "seed_scope_port_after",
+      source("port_after", "k == 4'h3 && (c1 == 3'd6 || c1 == 3'd5)"));
+
+  // Same component split, but the changed component's output is the top
+  // port itself (no top-level logic): the extraction must handle an instance
+  // output that leaves the design directly, whatever ran before in the
+  // process.
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 20;
+  options.trials = 64;
+  options.searchDepth = 20;
+  options.abstractionLayers = 1;
+  options.abstractionIterations = 8;
+  options.abstractionByInstance = true;
+  strategy.setSimulationSeededSearchOptions(options);
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStdout();
+  const auto result = strategy.run(4);
+  const std::string stdoutOutput = testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_GE(result.bound, 20u);
+  EXPECT_NE(stdoutOutput.find("abstraction: instance scope 'u_back' keeps 5 registers"),
+            std::string::npos)
+      << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: iteration=0 kept_registers=5 of 10"),
+            std::string::npos)
+      << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: lifted pins"), std::string::npos) << stdoutOutput;
+  EXPECT_NE(stdoutOutput.find("abstraction: concrete trace found"), std::string::npos)
+      << stdoutOutput;
+}

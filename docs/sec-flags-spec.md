@@ -130,6 +130,10 @@ liberty_files:
 | `--sec-seed-waypoint-depth <n>` | `sec_seed_waypoint_depth: <n>` | `8` | Non-negative integer | Frames per waypoint hop. |
 | `--sec-seed-waypoint-layers <n>` | `sec_seed_waypoint_layers: <n>` | `1` | Non-negative integer | Register distance from the target within which waypoints are taken first. |
 | `--sec-seed-waypoint-conflicts <n>` | `sec_seed_waypoint_conflicts: <n>` | `300000` | Non-negative integer | Solver conflict budget per waypoint hop; `0` removes the budget. |
+| `--sec-seed-abstraction-layers <n>` | `sec_seed_abstraction_layers: <n>` | `0` | Non-negative integer | Abstraction-guided search in the seeded search, starting from the registers within `n` steps of the divergence predicate; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-abstraction-iterations <n>` | `sec_seed_abstraction_iterations: <n>` | `16` | Non-negative integer | Refinement rounds of the abstraction-guided search. |
+| `--sec-seed-abstraction-conflicts <n>` | `sec_seed_abstraction_conflicts: <n>` | `1000000` | Non-negative integer | Solver conflict budget of one concretization check; `0` removes the budget. |
+| `--sec-seed-abstraction-instance <true\|false>` | `sec_seed_abstraction_instance: <true\|false>` | `false` | boolean | Starts the abstract model from the smallest design instance enclosing the differing registers, with its environment free, instead of the predicate's register support. |
 
 Accepted values for `sec_engine`:
 
