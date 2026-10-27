@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "SNLTruthTableTree.h"
+#include "DnlLifetime.h"
 #include "SNLTruthTable.h"
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
@@ -395,6 +396,62 @@ TEST(SNLTruthTableTreeApiTest,
     }
     EXPECT_EQ(Config::getVerificationGeneration(), initialGeneration);
   }
+}
+
+TEST(SNLTruthTableTreeApiTest, RefreshesTablesAcrossDnlLifetimes) {
+  // Standalone runs stay in verification generation zero, so the shared table
+  // caches can only rely on the DNL epoch to notice that an unchanged key
+  // (design, instance, name, term) now denotes different logic. Rebuilding the
+  // DNL through the lifetime helper must retire the cached table.
+  ASSERT_EQ(NLUniverse::get(), nullptr);
+  auto* universe = NLUniverse::create();
+  auto* db = NLDB::create(universe);
+  auto* primitives =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* model =
+      SNLDesign::create(primitives, SNLDesign::Type::Primitive, NLName("LUT1"));
+  auto* input =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Input, NLName("A"));
+  auto* output =
+      SNLScalarTerm::create(model, SNLTerm::Direction::Output, NLName("Y"));
+  auto* init = SNLParameter::create(
+      model, NLName("INIT"), SNLParameter::Type::Binary, "2'h2");
+  SNLDesignModeling::setTruthTableFromParameter(model, output, {input}, init);
+  auto* top = SNLDesign::create(library, NLName("top"));
+  auto* instance = SNLInstance::create(top, model, NLName("lut"));
+  auto* parameter = SNLInstParameter::create(instance, init, "2'h2");
+  universe->setTopDesign(top);
+
+  const auto epochBefore = KEPLER_FORMAL::dnlEpoch();
+  KEPLER_FORMAL::destroyDnl();
+  EXPECT_GT(KEPLER_FORMAL::dnlEpoch(), epochBefore);
+  auto* dnl = naja::DNL::get();
+  auto termID = findDNLTermIDByInstanceAndTerm("lut", "Y");
+  ASSERT_NE(termID, naja::DNL::DNLID_MAX);
+  auto instanceID = dnl->getDNLTerminalFromID(termID).getDNLInstance().getID();
+  {
+    Node node(nullptr, instanceID, termID, Node::Type::Table);
+    EXPECT_EQ(node.getTruthTable(), makeMaskTable(1, 0b10));  // buffer
+  }
+
+  // Same objects, new logic: a stale cache would still answer the buffer.
+  parameter->setValue("2'h1");
+  KEPLER_FORMAL::destroyDnl();
+  dnl = naja::DNL::get();
+  termID = findDNLTermIDByInstanceAndTerm("lut", "Y");
+  ASSERT_NE(termID, naja::DNL::DNLID_MAX);
+  instanceID = dnl->getDNLTerminalFromID(termID).getDNLInstance().getID();
+  EXPECT_EQ(dnl->getDNLTerminalFromID(termID).getDNLInstance().getSNLInstance(),
+            instance);
+  {
+    Node node(nullptr, instanceID, termID, Node::Type::Table);
+    EXPECT_EQ(node.getTruthTable(), makeMaskTable(1, 0b01));  // inverter
+  }
+
+  KEPLER_FORMAL::destroyDnl();
+  universe->destroy();
 }
 
 TEST(SNLTruthTableTreeApiTest, ConstantRootHasNoBorderLeavesAndEvaluates) {

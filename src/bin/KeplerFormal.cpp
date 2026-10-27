@@ -50,6 +50,7 @@
 #include "KeplerFormalDriver.h"
 #include "KeplerFormalUtils.h"
 #include "Tree2BoolExpr.h"
+#include "DnlLifetime.h"
 #include "model/SequentialDesignModel.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
@@ -1294,7 +1295,7 @@ static int KeplerFormalMainImpl(
   enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, VHDL, PYTHON, NAJA_IF };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     if (NLUniverse::get()) {
       NLUniverse::get()->destroy();
     }
@@ -3012,7 +3013,7 @@ static int KeplerFormalMainImpl(
           KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
           builder.setBoundaryPairs(boundaryPairs, side);
           NLUniverse::get()->setTopDesign(top);
-          naja::DNL::destroy();
+          KEPLER_FORMAL::destroyDnl();
           builder.collect();
           if (const auto* boundary = builder.getLeafBoundary()) {
             boundaryPorts = boundary->getPorts();
@@ -3040,7 +3041,7 @@ static int KeplerFormalMainImpl(
           loadOneDesign(designInputs.design0, systemVerilogOptions.design0, 0, 2);
       top0 = compactDb0->getTopDesign();
       auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0", 0, boundaryPorts0);
-      naja::DNL::destroy();
+      KEPLER_FORMAL::destroyDnl();
       compactDb0->destroy();
       top0 = nullptr;
       // LCOV_EXCL_STOP
@@ -3050,7 +3051,7 @@ static int KeplerFormalMainImpl(
           loadOneDesign(designInputs.design1, systemVerilogOptions.design1, 1, 1);
       top1 = compactDb1->getTopDesign();
       auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1", 1, boundaryPorts1);
-      naja::DNL::destroy();
+      KEPLER_FORMAL::destroyDnl();
       compactDb1->destroy();
       top1 = nullptr;
       if (!boundaryPairs.empty()) {
@@ -3099,7 +3100,7 @@ static int KeplerFormalMainImpl(
 
     if (compactMode && verificationMode == VerificationMode::SEC) {
       auto releaseCompactDb = [](NLDB* db) {
-        naja::DNL::destroy();
+        KEPLER_FORMAL::destroyDnl();
         if (auto* universe = NLUniverse::get()) {
           // Sequential extraction restores the current top when possible. In
           // compact mode we deliberately drop that elaborated DB before loading

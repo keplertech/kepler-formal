@@ -22,6 +22,7 @@
 #include "SNLDesign.h"
 #include "SNLInstance.h"
 #include "Tree2BoolExpr.h"
+#include "DnlLifetime.h"
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -63,7 +64,7 @@ class BorrowedNajaState {
   }
 
   ~BorrowedNajaState() {
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     for (const auto& entry : termOrderIDs_) {
       entry.first->setOrderID(entry.second);
     }
