@@ -1109,6 +1109,68 @@ TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {
 }
 
 
+// A top clock whose name is not on the clock-name list (PCLK) together with a
+// CTS-named clock tree (clkbuf_*/clknet_*) on the gate side used to gate only
+// the gate-side flops and report a false counterexample. The clock must be
+// found by its fanout structure, and the same design with a real difference
+// must still fail.
+TEST_F(KeplerFormalCliTests, Sv2vTopClockIsFoundByStructureNotByName) {
+  const auto lib = repoRoot() / "examples" / "tinyrocket" /
+                   "NangateOpenCellLibrary_typical.lib";
+  ASSERT_TRUE(std::filesystem::exists(lib));
+  const auto tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_cli_pclk_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto rtl = tmpDir / "rtl.sv";
+  const auto gate = tmpDir / "gate.v";
+  const auto gateMutant = tmpDir / "gate_mutant.v";
+  {
+    std::ofstream f(rtl);
+    f << "module t(input PCLK, input PRESETn, input d, input sel, output y);\n"
+         "  reg a, b;\n"
+         "  always @(posedge PCLK or negedge PRESETn)\n"
+         "    if (!PRESETn) a <= 1'b0; else a <= d;\n"
+         "  always @(posedge PCLK or negedge PRESETn)\n"
+         "    if (!PRESETn) b <= 1'b0; else b <= ~d;\n"
+         "  assign y = sel ? a : b;\n"
+         "endmodule\n";
+  }
+  const auto writeGate = [](const std::filesystem::path& path,
+                            const char* bData) {
+    std::ofstream f(path);
+    f << "module t(PCLK, PRESETn, d, sel, y);\n"
+         "  input PCLK; input PRESETn; input d; input sel; output y;\n"
+         "  wire a, b, nd, clknet_0_PCLK, clknet_1_0__leaf_PCLK;\n"
+         "  CLKBUF_X1 clkbuf_0_PCLK (.A(PCLK), .Z(clknet_0_PCLK));\n"
+         "  CLKBUF_X1 clkbuf_1_0__f_PCLK (.A(clknet_0_PCLK), "
+         ".Z(clknet_1_0__leaf_PCLK));\n"
+         "  INV_X1 i (.A(d), .ZN(nd));\n"
+         "  DFFR_X1 fa (.CK(clknet_1_0__leaf_PCLK), .D(d), .RN(PRESETn), "
+         ".Q(a));\n"
+         "  DFFR_X1 fb (.CK(clknet_1_0__leaf_PCLK), .D(" << bData
+      << "), .RN(PRESETn), .Q(b));\n"
+         "  MUX2_X1 m (.A(b), .B(a), .S(sel), .Z(y));\n"
+         "endmodule\n";
+  };
+  writeGate(gate, "nd");
+  writeGate(gateMutant, "d");
+
+  const auto run = [&](const std::filesystem::path& design2) {
+    std::vector<std::string> args = {
+        "kepler-formal", "-sv2v", "-v", "sec", "--sec-encoding",
+        "dual_rail_steady", "--design1", rtl.string(), "--design2",
+        design2.string(), "--liberty", lib.string()};
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+      argv.push_back(arg.data());
+    }
+    return KeplerFormalMain(static_cast<int>(argv.size()), argv.data());
+  };
+  EXPECT_EQ(run(gate), kSecProvedExitCode);
+  EXPECT_EQ(run(gateMutant), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   const auto root = repoRoot();
   const auto exampleDir = root / "examples" / "tinyrocket";
