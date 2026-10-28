@@ -257,6 +257,19 @@ BoolExpr* substituteBoolExprVariableExpressionsImpl(
 
 BoolExpr* substituteBoolExprVariableExpressions(
     BoolExpr* root,
+    const std::unordered_map<size_t, BoolExpr*>& replacements,
+    std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
+  if (root == nullptr || replacements.empty()) {
+    return root;
+  }
+  // No per-root simplification pass: with many changed roots it would
+  // traverse the shared logic once per root. Node construction already
+  // folds constants.
+  return substituteBoolExprVariableExpressionsImpl(root, replacements, memo);
+}
+
+BoolExpr* substituteBoolExprVariableExpressions(
+    BoolExpr* root,
     const std::unordered_map<size_t, BoolExpr*>& replacements) {
   if (root == nullptr || replacements.empty()) {
     return root;

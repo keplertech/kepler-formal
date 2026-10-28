@@ -50,6 +50,7 @@
 #include "KeplerFormalDriver.h"
 #include "KeplerFormalUtils.h"
 #include "Tree2BoolExpr.h"
+#include "DnlLifetime.h"
 #include "model/SequentialDesignModel.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
@@ -66,23 +67,23 @@ static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
       "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--vhdl_design1_top <name>] [--vhdl_design2_top <name>] "
       "[--python_design1_top <name>] [--python_design2_top <name>] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
       "<-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> --design1 <file...> --design2 "
-      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] | "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -488,6 +489,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "learn_internal_relations",
       "learn_ineternal_relations",
       "allow_x_equality_in_internal_relations",
+      "binary_relation_round",
       "sec_reset",
       "btor2_export",
       "btor2_export_path",
@@ -510,6 +512,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf_path",
       "compact_mode",
       "report_skipped_pos",
+      "latch_abstraction",
+      "data_latch_model",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1282,7 +1286,7 @@ static int KeplerFormalMainImpl(
   enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, VHDL, PYTHON, NAJA_IF };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     if (NLUniverse::get()) {
       NLUniverse::get()->destroy();
     }
@@ -1344,6 +1348,8 @@ static int KeplerFormalMainImpl(
   bool compactMode = false;
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
+  bool latchAbstraction = true;
+  bool dataLatchModel = true;
   bool verilogPreprocessing = false;
   bool svSingleUnit = false;
   std::string dumpCnfPath;
@@ -1476,13 +1482,16 @@ static int KeplerFormalMainImpl(
           return EXIT_FAILURE;
         }
         for (const auto* name : {"learn_internal_relations", "learn_ineternal_relations",
-                                 "allow_x_equality_in_internal_relations"}) {
+                                 "allow_x_equality_in_internal_relations",
+                                 "binary_relation_round"}) {
           if (!cfg[name]) {
             continue;
           }
           bool& value = std::string(name) == "allow_x_equality_in_internal_relations"
               ? internalRelationOptions.allowXEqualityInInternalRelations
-              : internalRelationOptions.learnInternalRelations;
+              : std::string(name) == "binary_relation_round"
+                  ? internalRelationOptions.binaryRelationRound
+                  : internalRelationOptions.learnInternalRelations;
           std::string error;
           if (!cfg[name].IsScalar() ||
               !parseBooleanToken(cfg[name].as<std::string>(), name, value, error)) {
@@ -1605,6 +1614,16 @@ static int KeplerFormalMainImpl(
           reportSkippedPOs = cfg["report_skipped_pos"].as<bool>();
         }
         // LCOV_EXCL_STOP
+
+        // latch_abstraction (SEC, default true)
+        if (cfg["latch_abstraction"] && cfg["latch_abstraction"].IsScalar()) {
+          latchAbstraction = cfg["latch_abstraction"].as<bool>();
+        }
+
+        // data_latch_model (SEC, default true)
+        if (cfg["data_latch_model"] && cfg["data_latch_model"].IsScalar()) {
+          dataLatchModel = cfg["data_latch_model"].as<bool>();
+        }
 
         // verilog_preprocessing (optional)
         if (cfg["verilog_preprocessing"] && cfg["verilog_preprocessing"].IsScalar()) {
@@ -1774,20 +1793,38 @@ static int KeplerFormalMainImpl(
         continue;
       }
       if (arg == "--learn-internal-relations" ||
-          arg == "--allow-x-equality-in-internal-relations") {
+          arg == "--allow-x-equality-in-internal-relations" ||
+          arg == "--binary-relation-round") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
         bool& value = arg == "--learn-internal-relations"
             ? internalRelationOptions.learnInternalRelations
-            : internalRelationOptions.allowXEqualityInInternalRelations;
+            : arg == "--binary-relation-round"
+                ? internalRelationOptions.binaryRelationRound
+                : internalRelationOptions.allowXEqualityInInternalRelations;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
           return EXIT_FAILURE;
         }
         internalRelationOptionsExplicit = true;
+        parseStart += 2;
+        continue;
+      }
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        bool& value =
+            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        std::string error;
+        if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
         parseStart += 2;
         continue;
       }
@@ -1985,20 +2022,38 @@ static int KeplerFormalMainImpl(
         continue;
       }
       if (arg == "--learn-internal-relations" ||
-          arg == "--allow-x-equality-in-internal-relations") {
+          arg == "--allow-x-equality-in-internal-relations" ||
+          arg == "--binary-relation-round") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
         bool& value = arg == "--learn-internal-relations"
             ? internalRelationOptions.learnInternalRelations
-            : internalRelationOptions.allowXEqualityInInternalRelations;
+            : arg == "--binary-relation-round"
+                ? internalRelationOptions.binaryRelationRound
+                : internalRelationOptions.allowXEqualityInInternalRelations;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
           return EXIT_FAILURE;
         }
         internalRelationOptionsExplicit = true;
+        ++i;
+        continue;
+      }
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        bool& value =
+            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        std::string error;
+        if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
         ++i;
         continue;
       }
@@ -2425,6 +2480,8 @@ static int KeplerFormalMainImpl(
 
   auto solverType = KEPLER_FORMAL::Config::getSolverType();
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
+  KEPLER_FORMAL::Config::setSecLatchAbstraction(latchAbstraction);
+  KEPLER_FORMAL::Config::setSecDataLatchModel(dataLatchModel);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -2439,9 +2496,10 @@ static int KeplerFormalMainImpl(
     SPDLOG_INFO("SEC max_k: {}", secMaxK);
     SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
     SPDLOG_INFO("SEC encoding: {}", secEncodingName(secEncoding));
-    SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={}",
+    SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={} binary_relation_round={}",
                 internalRelationOptions.learnInternalRelations,
-                internalRelationOptions.allowXEqualityInInternalRelations);
+                internalRelationOptions.allowXEqualityInInternalRelations,
+                internalRelationOptions.binaryRelationRound);
     if (secResetSpec.enabled()) {
       SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
       for (const auto& port : secResetSpec.ports) {
@@ -2454,6 +2512,8 @@ static int KeplerFormalMainImpl(
   }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC data-enabled latch model: {}", dataLatchModel ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -2875,7 +2935,7 @@ static int KeplerFormalMainImpl(
           KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
           builder.setBoundaryPairs(boundaryPairs, side);
           NLUniverse::get()->setTopDesign(top);
-          naja::DNL::destroy();
+          KEPLER_FORMAL::destroyDnl();
           builder.collect();
           if (const auto* boundary = builder.getLeafBoundary()) {
             boundaryPorts = boundary->getPorts();
@@ -2903,7 +2963,7 @@ static int KeplerFormalMainImpl(
           loadOneDesign(designInputs.design0, systemVerilogOptions.design0, 0, 2);
       top0 = compactDb0->getTopDesign();
       auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0", 0, boundaryPorts0);
-      naja::DNL::destroy();
+      KEPLER_FORMAL::destroyDnl();
       compactDb0->destroy();
       top0 = nullptr;
       // LCOV_EXCL_STOP
@@ -2913,7 +2973,7 @@ static int KeplerFormalMainImpl(
           loadOneDesign(designInputs.design1, systemVerilogOptions.design1, 1, 1);
       top1 = compactDb1->getTopDesign();
       auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1", 1, boundaryPorts1);
-      naja::DNL::destroy();
+      KEPLER_FORMAL::destroyDnl();
       compactDb1->destroy();
       top1 = nullptr;
       if (!boundaryPairs.empty()) {
@@ -2962,7 +3022,7 @@ static int KeplerFormalMainImpl(
 
     if (compactMode && verificationMode == VerificationMode::SEC) {
       auto releaseCompactDb = [](NLDB* db) {
-        naja::DNL::destroy();
+        KEPLER_FORMAL::destroyDnl();
         if (auto* universe = NLUniverse::get()) {
           // Sequential extraction restores the current top when possible. In
           // compact mode we deliberately drop that elaborated DB before loading
@@ -3555,6 +3615,8 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
 
   const auto previousSolver = Config::getSolverType();
   const bool previousReportSkippedPOs = Config::getReportSkippedPOs();
+  const bool previousLatchAbstraction = Config::getSecLatchAbstraction();
+  const bool previousDataLatchModel = Config::getSecDataLatchModel();
   const auto previousDefaultLogger = spdlog::default_logger();
   const auto previousNamedLogger = spdlog::get("kepler_formal_main_logger");
   const auto previousMiterLogger = spdlog::get("miter_logger");
@@ -3563,6 +3625,8 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   struct RunStateGuard {
     Config::SolverType solver;
     bool reportSkippedPOs;
+    bool latchAbstraction;
+    bool dataLatchModel;
     std::shared_ptr<spdlog::logger> defaultLogger;
     std::shared_ptr<spdlog::logger> namedLogger;
     std::shared_ptr<spdlog::logger> miterLogger;
@@ -3571,6 +3635,8 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       cleanupKeplerFormalState();
       Config::setSolverType(solver);
       Config::setReportSkippedPOs(reportSkippedPOs);
+      Config::setSecLatchAbstraction(latchAbstraction);
+      Config::setSecDataLatchModel(dataLatchModel);
       const auto restoreNamedLogger = [](
                                           const char* name,
                                           const std::shared_ptr<spdlog::logger>&
@@ -3590,6 +3656,8 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   } stateGuard{
       previousSolver,
       previousReportSkippedPOs,
+      previousLatchAbstraction,
+      previousDataLatchModel,
       previousDefaultLogger,
       previousNamedLogger,
       previousMiterLogger,
@@ -3597,6 +3665,8 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
 
   Config::setSolverType(Config::SolverType::KISSAT);
   Config::setReportSkippedPOs(false);
+  Config::setSecLatchAbstraction(true);
+  Config::setSecDataLatchModel(true);
   const int rc = runKeplerFormalWorkflow(argc, argv, result, primitiveLoader);
   result.exitCode = rc;
   if (rc != EXIT_SUCCESS && result.status == RunStatus::Error &&

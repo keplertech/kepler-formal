@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "SNLTruthTableTree.h"
+
+#include "DnlLifetime.h"
 #include "../config/Config.h"
 #include <algorithm>
 #include <cassert>
@@ -191,6 +193,7 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
     size_t flatTermID) {
   static std::mutex cacheMutex;
   static uint64_t cacheGeneration = 0;
+  static uint64_t cacheEpoch = 0;
   static std::unordered_map<SharedTruthTableKey,
                             std::shared_ptr<const SNLTruthTable>,
                             SharedTruthTableKeyHash>
@@ -200,11 +203,17 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
                                   SharedTruthTableKeyHash>
       localCache;
 
+  // Keys hold design and instance addresses, which a later netlist can reuse
+  // for different models; both caches live for one verification generation of
+  // one DNL epoch.
   thread_local uint64_t localCacheGeneration = 0;
+  thread_local uint64_t localCacheEpoch = 0;
   const auto generation = KEPLER_FORMAL::Config::getVerificationGeneration();
-  if (localCacheGeneration != generation) {
+  const auto epoch = KEPLER_FORMAL::dnlEpoch();
+  if (localCacheGeneration != generation || localCacheEpoch != epoch) {
     localCache.clear();
     localCacheGeneration = generation;
+    localCacheEpoch = epoch;
   }
 
   const bool usesInstanceTable =
@@ -221,9 +230,10 @@ std::shared_ptr<const SNLTruthTable> getSharedTruthTable(
 
   {
     std::lock_guard<std::mutex> lock(cacheMutex);
-    if (cacheGeneration != generation) {
+    if (cacheGeneration != generation || cacheEpoch != epoch) {
       cache.clear();
       cacheGeneration = generation;
+      cacheEpoch = epoch;
     }
     const auto it = cache.find(key);
     if (it != cache.end()) {

@@ -51,6 +51,11 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::vector<SignalKey> skippedObservedOutputs;
   std::unordered_map<SignalKey, size_t, SignalKeyHash> inputVarByKey;
   std::unordered_map<SignalKey, std::string, SignalKeyHash> displayNameByKey;
+  // Name of the net on a state bit's output pin, when that net is named: the
+  // parent instance path, the net name and the bit. Only a guess source for
+  // register correspondence (netlist flows keep net names where they rename
+  // or re-cluster instances); it never takes part in a proof.
+  std::unordered_map<SignalKey, std::string, SignalKeyHash> outputNetNameByKey;
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> observedOutputExprByKey;
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> nextStateExprByStateKey;
   std::unordered_map<SignalKey, bool, SignalKeyHash> initialStateValueByKey;

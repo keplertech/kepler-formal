@@ -264,6 +264,43 @@ BoolExpr* buildTableSelectTruthTableExpr(const SNLTruthTable& tbl,
       addressSize, depth, 0, 0);
 }  // LCOV_EXCL_LINE
 
+// A read-only memory is a table select whose rows are constants: the
+// dependencies are the address bits, most significant bit first, and the
+// metadata column holds this output bit of every row. Rows at or beyond
+// depth read 0, like TABLE_SELECT.
+BoolExpr* buildRomTruthTableExprRecursive(
+    const SNLTruthTable::RomMetadata& rom,
+    uint32_t addressIndex,
+    uint64_t prefix) {
+  const uint32_t remaining = rom.addressSize - addressIndex;
+  if ((prefix << remaining) >= rom.depth) {
+    return BoolExpr::createFalse();
+  }
+  if (addressIndex == rom.addressSize) {
+    return rom.column[prefix] ? BoolExpr::createTrue()
+                              : BoolExpr::createFalse();
+  }
+  BoolExpr* low = buildRomTruthTableExprRecursive(
+      rom, addressIndex + 1, prefix << 1);
+  BoolExpr* high = buildRomTruthTableExprRecursive(
+      rom, addressIndex + 1, (prefix << 1) | 1);
+  if (low == high) {
+    return low;
+  }
+  BoolExpr* addressBit = getChildFETS(addressIndex);
+  return BoolExpr::Or(
+      BoolExpr::And(BoolExpr::Not(addressBit), low),
+      BoolExpr::And(addressBit, high));
+}
+
+BoolExpr* buildRomTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+  const auto& rom = tbl.getRomMetadata();
+  if (k != rom.addressSize) {
+    throw std::runtime_error("ROM truth table arity mismatch");
+  }
+  return buildRomTruthTableExprRecursive(rom, 0, 0);
+}
+
 namespace {
 
 using BoolExprBits = std::vector<BoolExpr*>;
@@ -467,6 +504,139 @@ BoolExpr* buildDivModTruthTableExpr(
   return selected;
 }
 
+std::mutex wordBuildMutex;
+
+BoolExprBits addBits(const BoolExprBits& lhs, const BoolExprBits& rhs) {
+  BoolExprBits sum(lhs.size());
+  BoolExpr* carry = BoolExpr::createFalse();
+  for (size_t bit = 0; bit < lhs.size(); ++bit) {
+    BoolExpr* half = BoolExpr::Xor(lhs[bit], rhs[bit]);
+    sum[bit] = BoolExpr::Xor(half, carry);
+    carry = BoolExpr::Or(
+        BoolExpr::And(lhs[bit], rhs[bit]), BoolExpr::And(half, carry));
+  }
+  return sum;
+}
+
+// The low WIDTH product bits: each partial product is added in place.
+BoolExprBits multiplyBits(const BoolExprBits& lhs, const BoolExprBits& rhs) {
+  const size_t width = lhs.size();
+  BoolExprBits product(width, BoolExpr::createFalse());
+  for (size_t shift = 0; shift < width; ++shift) {
+    BoolExprBits partial(width, BoolExpr::createFalse());
+    for (size_t bit = shift; bit < width; ++bit) {
+      partial[bit] = BoolExpr::And(lhs[bit - shift], rhs[shift]);
+    }
+    product = addBits(product, partial);
+  }
+  return product;
+}
+
+// Barrel shifter: stage s moves the data by 2^s when count bit s is set.
+// Bits shifted in are zero, or the original sign bit for an arithmetic
+// right shift, which also covers counts of the width or more.
+BoolExprBits shiftBits(
+    const BoolExprBits& data,
+    const BoolExprBits& count,
+    bool right,
+    bool arithmetic) {
+  const size_t width = data.size();
+  BoolExpr* fill = right && arithmetic ? data.back() : BoolExpr::createFalse();
+  BoolExprBits result = data;
+  for (size_t stage = 0; stage < count.size(); ++stage) {
+    const size_t distance = stage < 63 ? size_t{1} << stage : width;
+    BoolExprBits shifted(width);
+    for (size_t bit = 0; bit < width; ++bit) {
+      if (right) {
+        shifted[bit] = bit + distance < width ? result[bit + distance] : fill;
+      } else {
+        shifted[bit] = bit >= distance ? result[bit - distance]
+                                       : BoolExpr::createFalse();
+      }
+    }
+    for (size_t bit = 0; bit < width; ++bit) {
+      result[bit] = makeIte(count[stage], shifted[bit], result[bit]);
+    }
+  }
+  return result;
+}
+
+BoolExpr* buildWordTruthTableExpr(
+    const SNLTruthTable& table,
+    uint32_t arity,
+    const SNLTruthTableTree::Node* node,
+    naja::DNL::DNLID isoID) {
+  const auto& word = table.getWordMetadata();
+  const auto type = table.getGenericType();
+  const uint32_t secondWidth =
+      type == SNLTruthTable::GenericType::SHIFT ? word.countWidth : word.width;
+  if (arity != word.width + secondWidth || node == nullptr) {
+    throw std::runtime_error("Word arithmetic truth table metadata mismatch");  // LCOV_EXCL_LINE
+  }
+
+  std::lock_guard<std::mutex> lock(wordBuildMutex);
+  if (isoID != naja::DNL::DNLID_MAX) {
+    const auto cached = Tree2BoolExpr::iso2boolExpr_.find(isoID);
+    if (cached != Tree2BoolExpr::iso2boolExpr_.end() &&
+        cached->second != nullptr && cached->second->isValid()) {
+      return cached->second;
+    }
+  }
+
+  BoolExprBits first(word.width);
+  BoolExprBits second(secondWidth);
+  for (uint32_t bit = 0; bit < word.width; ++bit) {
+    first[bit] = getChildFETS(word.width - 1 - bit);
+  }
+  for (uint32_t bit = 0; bit < secondWidth; ++bit) {
+    second[bit] = getChildFETS(word.width + secondWidth - 1 - bit);
+  }
+  BoolExprBits outputs;
+  switch (type) {
+    case SNLTruthTable::GenericType::ADD_SUB:
+      outputs = word.subtract ? subtractBits(first, second).difference
+                              : addBits(first, second);
+      break;
+    case SNLTruthTable::GenericType::MULTIPLY:
+      outputs = multiplyBits(first, second);
+      break;
+    default:
+      outputs = shiftBits(first, second, word.right, word.arithmetic);
+      break;
+  }
+
+  const auto& currentTerm =
+      naja::DNL::get()->getDNLTerminalFromID(node->data.termid);
+  const auto& instance = currentTerm.getDNLInstance();
+  for (naja::DNL::DNLID termID = instance.getTermIndexes().first;
+       termID != naja::DNL::DNLID_MAX &&
+       termID <= instance.getTermIndexes().second;
+       ++termID) {
+    const auto& term = naja::DNL::get()->getDNLTerminalFromID(termID);
+    const auto* bitTerm = term.getSnlBitTerm();
+    if (bitTerm->getDirection() != SNLBitTerm::Direction::Output) {
+      continue;
+    }
+    const auto bit = static_cast<size_t>(bitTerm->getBit());
+    if (bit >= outputs.size()) {
+      throw std::runtime_error("Word arithmetic output bit is out of range");  // LCOV_EXCL_LINE
+    }
+    const auto outputIsoID = term.getIsoID();
+    if (outputIsoID != naja::DNL::DNLID_MAX) {
+      Tree2BoolExpr::iso2boolExpr_.insert({outputIsoID, outputs[bit]});
+    }
+  }
+
+  BoolExpr* selected = outputs[word.outputBit];
+  if (isoID != naja::DNL::DNLID_MAX) {
+    const auto cached = Tree2BoolExpr::iso2boolExpr_.find(isoID);
+    if (cached != Tree2BoolExpr::iso2boolExpr_.end()) {
+      selected = cached->second;
+    }
+  }
+  return selected;
+}
+
 }  // namespace
 
 BoolExpr* buildGenericTruthTableExpr(
@@ -507,8 +677,14 @@ BoolExpr* buildGenericTruthTableExpr(
       return expr;
     case SNLTruthTable::GenericType::TABLE_SELECT:
       return buildTableSelectTruthTableExpr(tbl, k);
+    case SNLTruthTable::GenericType::ROM:
+      return buildRomTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::DIVMOD:
       return buildDivModTruthTableExpr(tbl, k, node, isoID);
+    case SNLTruthTable::GenericType::ADD_SUB:
+    case SNLTruthTable::GenericType::MULTIPLY:
+    case SNLTruthTable::GenericType::SHIFT:
+      return buildWordTruthTableExpr(tbl, k, node, isoID);
     case SNLTruthTable::GenericType::NONE:
       // LCOV_EXCL_START
       // LCOV_DISABLED_START

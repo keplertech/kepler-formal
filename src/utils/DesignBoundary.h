@@ -31,6 +31,9 @@ struct BoundaryPort {
   int32_t msb = 0;
   int32_t lsb = 0;
   std::string topTermName;
+  // False only for an input pin without a net.  Such a pin has no driving
+  // cone: it is skipped when the other side leaves it unconnected too.
+  bool connected = true;
 };
 
 class BoundarySelection {

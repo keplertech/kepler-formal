@@ -7,6 +7,7 @@
 #include "NLUniverse.h"
 #include "SNLDesignModeling.h"
 #include "SNLLogicCloud.h"
+#include "DnlLifetime.h"
 #include "BoolExprCnfWriter.h"
 
 #include "core/Solver.h"
@@ -872,7 +873,7 @@ void MiterStrategy::init(bool enableLogging) {
   // build both sets of POs
   topInit_ = NLUniverse::get()->getTopDesign();
   NLUniverse* univ = NLUniverse::get();
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   univ->setTopDesign(top0_);
   if (enableLogging) {
     logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
@@ -889,7 +890,7 @@ void MiterStrategy::init(bool enableLogging) {
     logTerminalSummaryTable("design 0", "PO", builder0_.getOutputs());
   }
   PIs0_ = builder0_.getInputs();
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   univ->setTopDesign(top1_);
   if (enableLogging) {
     logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
@@ -939,7 +940,7 @@ bool MiterStrategy::run(bool compact) {
   logger->info("size of PIs in circuit 1: {}", inputs1sort.size());
   logger->info("size of POs in circuit 0: {}", outputs0sort.size());
   logger->info("size of POs in circuit 1: {}", outputs1sort.size());
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   univ->setTopDesign(top0_);
   builder0_.setInputs(inputs0sort);
   builder0_.setOutputs(outputs0sort);
@@ -949,7 +950,7 @@ bool MiterStrategy::run(bool compact) {
   const auto& outputs0 = builder0_.getOutputs();
   const auto& inputs2inputsIDs0 = builder0_.getInputs2InputsIDs();
   const auto&outputs2outputsIDs0 = builder0_.getOutputs2OutputsIDs();
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
 #ifndef KEPLER_BORROWED_DESIGNS_ONLY
   if (compact) {
     top0_->getDB()->destroy();
@@ -965,7 +966,7 @@ bool MiterStrategy::run(bool compact) {
   const auto& outputs1 = builder1_.getOutputs();
   const auto& inputs2inputsIDs1 = builder1_.getInputs2InputsIDs();
   const auto& outputs2outputsIDs1 = builder1_.getOutputs2OutputsIDs();
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
 #ifndef KEPLER_BORROWED_DESIGNS_ONLY
   if (compact) {
     top1_->getLibrary()->destroy();
@@ -1159,7 +1160,7 @@ bool MiterStrategy::run(bool compact) {
         std::unordered_set<std::string> insTerms0;
         std::unordered_set<std::string> insTerms1;
         for (size_t j = 0; j < topModels.size(); ++j) {
-          DNL::destroy();
+          KEPLER_FORMAL::destroyDnl();
           NLUniverse::get()->setTopDesign(topModels[j]);
           SNLLogicCone cone(j == 0 ? outputs0[i] : outputs1[i], PIs[j],
                             naja::DNL::get());

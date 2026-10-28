@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "SNLLogicCloud.h"
+
+#include "DnlLifetime.h"
 #include <tbb/tbb_allocator.h>
 #include <cassert>
 #include <sstream>
@@ -162,7 +164,9 @@ uint64_t termSignature(const DNLTerminalFull& term) {
 uint64_t dnlContextSignature(const DNLFull& dnl) {
   const auto& instances = dnl.getDNLInstances();
   const auto& terms = dnl.getDNLTerms();
-  uint64_t signature = pointerSignature(&dnl);
+  // The epoch separates DNLs that were rebuilt at the same addresses with the
+  // same sizes; the sampled structure below only tells apart live changes.
+  uint64_t signature = mixSignature(dnlEpoch(), pointerSignature(&dnl));
   signature = mixSignature(signature, pointerSignature(instances.data()));
   signature = mixSignature(signature, instances.size());
   signature = mixSignature(signature, instances.capacity());

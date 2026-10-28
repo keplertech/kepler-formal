@@ -3,6 +3,8 @@
 
 #include "model/SequentialDesignModel.h"
 
+#include "DnlLifetime.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -30,10 +32,13 @@
 #include "SNLBusTerm.h"
 #include "SNLBusTermBit.h"
 #include "SNLDesignModeling.h"
+#include "SNLBusNetBit.h"
 #include "SNLInstParameter.h"
+#include "SNLInstTerm.h"
 #include "SNLInstance.h"
 #include "SNLPath.h"
 #include "../../clauses/SNLLogicCloud.h"
+#include "../../config/Config.h"
 #include "../../clauses/Tree2BoolExpr.h"
 #include "common/BoolExprUtils.h"
 #include "model/SecNetlistChecks.h"
@@ -79,6 +84,8 @@ struct PendingTransition {  // LCOV_EXCL_LINE
   const naja::NL::SNLDesignModeling::SequentialState* sequentialState = nullptr;
   const naja::NL::SNLDesignModeling::BooleanExpression* clockedOn = nullptr;
   std::vector<PendingPinTerm> clockTermIDs;
+  // Latch: `clockedOn` is the level-sensitive enable, `nextState` the data.
+  bool isLatch = false;
 };
 
 struct PendingMemoryReadPort {
@@ -126,6 +133,7 @@ struct SequentialInstanceScan {
   std::vector<OpaqueStateOutputTerm> opaqueStateOutputs;
   std::vector<std::optional<std::string>> opaqueStateReasons;
   const naja::NL::SNLDesignModeling::SequentialModel* model = nullptr;
+  bool isLatch = false;
 };
 
 struct BuiltObservedExpr {  // LCOV_EXCL_LINE
@@ -1096,6 +1104,29 @@ std::string getTerminalDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
   }
   oss << terminal.getSnlBitTerm()->getName().getString() << "["
       << terminal.getSnlBitTerm()->getBit() << "]";
+  return oss.str();
+}
+
+// The net connected to an instance pin, named like the pin's display name
+// but at the parent's level: the net lives in the instance's parent.
+std::string getTerminalNetDisplayName(const naja::DNL::DNLTerminalFull& terminal) {
+  const auto* instTerm = terminal.getSnlTerm();
+  if (instTerm == nullptr) {
+    return {};  // LCOV_EXCL_LINE: a state output is always an instance pin
+  }
+  const auto* net = instTerm->getNet();
+  if (net == nullptr || net->getName().getString().empty()) {
+    return {};
+  }
+  std::ostringstream oss;
+  const auto pathNames = terminal.getDNLInstance().getPath().getPathNames();
+  for (size_t i = 0; i + 1 < pathNames.size(); ++i) {
+    oss << pathNames[i].getString() << ".";
+  }
+  oss << net->getName().getString();
+  if (const auto* bit = dynamic_cast<const naja::NL::SNLBusNetBit*>(net)) {
+    oss << "[" << bit->getBit() << "]";
+  }
   return oss.str();
 }
 
@@ -2418,7 +2449,7 @@ void logUnpublishedTransitionSupport(
 }
 
 void collectInitialBuilderBoundary(ExtractContext& ctx) {
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   ctx.universe->setTopDesign(ctx.top);
 
   // Reuse the existing miter frontend to discover the relevant boundary
@@ -2583,6 +2614,9 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
     model.displayNameByKey.try_emplace(key, getTerminalDisplayName(term));
     if (isSequentialStateOutput(term)) {
       ctx.stateBits.insert(key);
+      if (auto netName = getTerminalNetDisplayName(term); !netName.empty()) {
+        model.outputNetNameByKey.try_emplace(key, std::move(netName));
+      }
     } else if (term.isTopPort()) {
       ctx.environmentInputs.insert(key);
     } else {
@@ -2636,13 +2670,16 @@ std::optional<SequentialInstanceScan> scanSequentialInstance(
           : nullptr;
   if (sequentialModel != nullptr &&
       sequentialModel->kind ==
-          naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch) {
+          naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch &&
+      !KEPLER_FORMAL::Config::getSecLatchAbstraction()) {
     for (const auto termID : physicalStateOutputTermIDs) {
       scan.opaqueStateOutputs.push_back(
           {termID, "Naja latch sequential models are not supported by SEC"});
     }
   } else if (sequentialModel != nullptr) {
     scan.model = sequentialModel;
+    scan.isLatch = sequentialModel->kind ==
+                   naja::NL::SNLDesignModeling::SequentialModel::Kind::Latch;
     scan.opaqueStateReasons.resize(scan.model->states.size());
     std::unordered_set<naja::DNL::DNLID> modeledPhysicalOutputs;
     for (const auto& output : scan.model->outputs) {
@@ -2825,6 +2862,11 @@ bool supportsStructuredMemoryModel(
     const naja::NL::SNLDesignModeling::MemoryInterface& interface) {
   if (!interface.isValid()) {
     return false;  // LCOV_EXCL_LINE
+  }
+  // A read-only memory (no write ports) holds no state: its read data is
+  // combinational and comes from the primitive truth table.
+  if (interface.writePorts.empty()) {
+    return false;
   }
   for (const auto& readPort : interface.readPorts) {
     if (readPort.address.size() != interface.abits ||
@@ -3133,6 +3175,7 @@ void appendPendingTransitionsForInstance(
     pending.sequentialState = &scan.model->states[stateIndex];
     pending.clockedOn = &scan.model->clockedOn;
     pending.clockTermIDs = clockTermIDs;
+    pending.isLatch = scan.isLatch;
 
     for (const auto& candidate : scan.stateOutputs) {
       if (candidate.termID == stateOutput.termID ||
@@ -3984,7 +4027,189 @@ void materializeTopObservedOutputs(
 // LCOV_EXCL_STOP
 struct RebuiltTransitionArtifacts {
   std::unordered_set<SignalKey, SignalKeyHash> requiredStateKeys;
+  // Latches open while the positive-edge state samples: their state variable
+  // is replaced by this data-input formula and removed from the state.
+  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> transparentLatchExprByKey;
+  // Latches whose enable is data logic rather than a clock phase: state with
+  // next value `enable ? data : q`, and readers see that value, so the latch
+  // is transparent within the step (the synchronous latch model).
+  std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> dataLatchExprByKey;
+  // Those of them open only while the clock is low, with a gated enable
+  // `!clk & g`: they hold through the high phase, so negative-phase readers
+  // see their next value, supplied by the phase composition, instead.
+  std::unordered_set<SignalKey, SignalKeyHash> lowPhaseLatchKeys;
 };
+
+// A clear or preset whose cone folds to constant false, for example a pin
+// tied to its inactive level, can never fire.
+bool latchControlMayFire(
+    const PendingTransition& pending,
+    const std::vector<size_t>& termDNLID2varID,
+    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
+  const auto mayFire = [&](const auto& control) {
+    return control.has_value() &&
+           buildSequentialModelExpr(
+               *control, pending, termDNLID2varID, outputExprByTerm) !=
+               BoolExpr::createFalse();
+  };
+  return mayFire(pending.sequentialState->clear) ||
+         mayFire(pending.sequentialState->preset);
+}
+
+// Phase abstraction (Hasteer, Mathur, Banerjee, ACM TODAES 1998) for a latch
+// whose enable is one phase of a clock. The enable's clock event says when the
+// latch opens: at the positive edge it closes at the falling edge and becomes
+// negative-phase state; at the negative edge it is open when the positive-edge
+// state samples and becomes a wire carrying its data input. A latch reading
+// another latch is left opaque: the published method assumes alternating
+// phases and does not reduce such chains.
+std::optional<std::string> getLatchAbstractionUnsupportedReason(
+    const PendingTransition& pending,
+    const std::optional<ClockEvent>& clockEvent,
+    BoolExpr* nextStateExpr,
+    const std::unordered_set<size_t>& latchStateVarIDs,
+    const SequentialDesignModel& model,
+    const std::vector<size_t>& termDNLID2varID,
+    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm) {
+  if (!clockEvent.has_value()) {
+    return "latch enable does not resolve to one phase of a clock";
+  }
+  // A dead clear or preset leaves a plain latch and the abstraction applies
+  // unchanged.
+  if (latchControlMayFire(pending, termDNLID2varID, outputExprByTerm)) {
+    return "latch with clear or preset is not supported";
+  }
+  const auto ownVarIt = model.inputVarByKey.find(pending.stateKey);
+  for (const auto varID : nextStateExpr->getSupportVars()) {
+    if ((ownVarIt == model.inputVarByKey.end() || varID != ownVarIt->second) &&
+        latchStateVarIDs.find(varID) != latchStateVarIDs.end()) {
+      return "latch data input reads another latch; cascaded latches are not "
+             "reduced";
+    }
+  }
+  return std::nullopt;
+}
+
+// Wire half of the latch abstraction: substitute each transparent latch by its
+// data-input formula everywhere and drop it from the state.
+void substituteTransparentLatches(
+    const RebuiltTransitionArtifacts& artifacts,
+    SequentialDesignModel& model) {
+  const auto& latches = artifacts.transparentLatchExprByKey;
+  if (latches.empty()) {
+    return;
+  }
+  std::unordered_map<size_t, BoolExpr*> replacements;
+  for (const auto& [key, expr] : latches) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      replacements.emplace(varIt->second, expr);
+    }
+  }
+  if (replacements.empty()) {
+    return;  // LCOV_EXCL_LINE: every abstracted latch has a state variable
+  }
+  for (auto& [key, expr] : model.nextStateExprByStateKey) {
+    if (latches.find(key) == latches.end()) {
+      expr = substituteBoolExprVariableExpressions(expr, replacements);
+    }
+  }
+  for (auto& [key, expr] : model.observedOutputExprByKey) {
+    expr = substituteBoolExprVariableExpressions(expr, replacements);
+  }
+  for (const auto& [key, _] : latches) {
+    std::erase(model.stateBits, key);
+    model.inputVarByKey.erase(key);
+    model.nextStateExprByStateKey.erase(key);
+    model.clockEventByStateKey.erase(key);
+    model.initialStateValueByKey.erase(key);
+    model.displayNameByKey.erase(key);
+  }
+}
+
+// Readers of a data-enabled latch see its value for the current step rather
+// than the stored one; the latch itself stays in the state.
+void substituteDataEnabledLatches(
+    const RebuiltTransitionArtifacts& artifacts,
+    SequentialDesignModel& model) {
+  const auto& latches = artifacts.dataLatchExprByKey;
+  if (latches.empty()) {
+    return;
+  }
+  std::unordered_map<size_t, BoolExpr*> replacements;
+  // Negative-phase readers see a latch open only while the clock is low as it
+  // was held through the high phase: its next value, which the phase
+  // composition supplies, so it is not rewritten for them.
+  std::unordered_map<size_t, BoolExpr*> negativePhaseReplacements;
+  for (const auto& [key, expr] : latches) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      replacements.emplace(varIt->second, expr);
+      if (!artifacts.lowPhaseLatchKeys.contains(key)) {
+        negativePhaseReplacements.emplace(varIt->second, expr);
+      }
+    }
+  }
+  if (replacements.empty()) {
+    return;  // LCOV_EXCL_LINE: every data-enabled latch has a state variable
+  }
+  // One memo per replacement set: the readers share most of their logic.
+  std::unordered_map<BoolExpr*, BoolExpr*> memo;
+  std::unordered_map<BoolExpr*, BoolExpr*> negativePhaseMemo;
+  size_t rewritten = 0;
+  for (auto& [key, expr] : model.nextStateExprByStateKey) {
+    if (latches.find(key) == latches.end()) {
+      const auto eventIt = model.clockEventByStateKey.find(key);
+      const bool negativePhase = eventIt != model.clockEventByStateKey.end() &&
+                                 eventIt->second.phase == ClockPhase::Neg;
+      BoolExpr* substituted = expr;
+      if (!negativePhase) {
+        substituted =
+            substituteBoolExprVariableExpressions(expr, replacements, memo);
+      } else if (!negativePhaseReplacements.empty()) {
+        substituted = substituteBoolExprVariableExpressions(
+            expr, negativePhaseReplacements, negativePhaseMemo);
+      }
+      rewritten += substituted != expr ? 1 : 0;
+      expr = substituted;
+    }
+  }
+  for (auto& [key, expr] : model.observedOutputExprByKey) {
+    BoolExpr* substituted =
+        substituteBoolExprVariableExpressions(expr, replacements, memo);
+    rewritten += substituted != expr ? 1 : 0;
+    expr = substituted;
+  }
+  if (std::getenv("KEPLER_SEC_DIAG") != nullptr) {
+    fprintf(stderr, "SEC diag: data-enabled latches=%zu rewritten_readers=%zu\n",
+            latches.size(), rewritten);
+    fflush(stderr);
+  }
+  std::erase_if(model.complementedStateRelations, [&](const auto& relation) {
+    return latches.find(relation.primaryKey) != latches.end() ||
+           latches.find(relation.complementedKey) != latches.end();
+  });
+  if (std::getenv("KEPLER_SEC_DIAG") != nullptr) {
+    size_t staleReferences = 0;
+    const auto count = [&](BoolExpr* expr) {
+      if (expr == nullptr) {
+        return;  // LCOV_EXCL_LINE
+      }
+      for (const auto varID : expr->getSupportVars()) {
+        staleReferences += replacements.find(varID) != replacements.end() ? 1 : 0;
+      }
+    };
+    for (const auto& [_, expr] : model.nextStateExprByStateKey) {
+      count(expr);
+    }
+    for (const auto& [_, expr] : model.observedOutputExprByKey) {
+      count(expr);
+    }
+    fprintf(stderr, "SEC diag: latch abstraction wires=%zu stale_references=%zu\n",
+            replacements.size(), staleReferences);
+    fflush(stderr);
+  }
+}
 
 template <typename EnqueueStateKey>
 void enqueueStateDependenciesFromFormula(
@@ -4081,6 +4306,23 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
     requiredStateVarIDs.insert(varIt->second);
   }
 
+  std::unordered_set<size_t> latchStateVarIDs;
+  for (const auto& pending : ctx.pendingTransitions) {
+    if (!pending.isLatch) {
+      continue;
+    }
+    for (const auto& key : pending.complementedStateKeys) {
+      if (const auto varIt = model.inputVarByKey.find(key);
+          varIt != model.inputVarByKey.end()) {
+        latchStateVarIDs.insert(varIt->second);
+      }
+    }
+    if (const auto varIt = model.inputVarByKey.find(pending.stateKey);
+        varIt != model.inputVarByKey.end()) {
+      latchStateVarIDs.insert(varIt->second);
+    }
+  }
+
   std::unordered_map<SignalKey, size_t, SignalKeyHash> pendingIndexByStateKey;
   pendingIndexByStateKey.reserve(ctx.pendingTransitions.size() * 2);
   for (size_t pendingIndex = 0; pendingIndex < ctx.pendingTransitions.size();
@@ -4117,6 +4359,8 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   }
   std::unordered_map<size_t, ClockEvent> clockEventByCarrierVarID;
   std::unordered_map<BoolExpr*, BoolExpr*> transitionClockStripMemo;
+  std::unordered_map<SignalKey, const PendingTransition*, SignalKeyHash>
+      dataLatchPendingByKey;
   materializedOutputTerms.reserve(outputExprByTerm.size());
   for (const auto& [termID, _] : outputExprByTerm) {
     materializedOutputTerms.insert(termID);
@@ -4354,8 +4598,90 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
           buildNextStateExpr(pending, termDNLID2varID, pureClockCarrierTermIDs,
                              topClockCarrierVarIDs, clockEventByCarrierVarID,
                              outputExprByTerm, transitionClockStripMemo);
-      const auto clockEvent = classifyPendingClockEvent(
+      auto clockEvent = classifyPendingClockEvent(
           pending, termDNLID2varID, outputExprByTerm, clockEventByCarrierVarID);
+      // Open only while the clock is low and gated, `!clk & g`, as in a
+      // latch-based memory: when the positive-edge state samples the latch
+      // holds `g ? data : q`, the step-transparent form of a data-enabled
+      // latch, so it takes that model as positive-phase state.
+      // `buildNextStateExpr` already folded the gate as a clock enable.
+      const bool lowPhaseGatedLatch =
+          pending.isLatch && clockEvent.has_value() &&
+          clockEvent->phase == ClockPhase::Neg && clockEvent->enable != nullptr;
+      if (pending.isLatch &&
+          (lowPhaseGatedLatch ||
+           (!clockEvent.has_value() &&
+            KEPLER_FORMAL::Config::getSecDataLatchModel()))) {
+        // The enable is data logic, not a clock phase: the latch is state on
+        // the global step with next value `enable ? data : q`, and readers
+        // see that value (the synchronous latch model). It stays opaque when
+        // its output reaches a clock, since clock events must resolve to a
+        // top clock, or when a clear or preset can fire.
+        bool feedsClock = false;
+        std::vector<size_t> stateVars;
+        for (const auto& key : pending.complementedStateKeys) {
+          const auto varIt = model.inputVarByKey.find(key);
+          feedsClock = feedsClock || varIt == model.inputVarByKey.end() ||
+              topClockCarrierVarIDs.contains(varIt->second) ||
+              clockEventByCarrierVarID.contains(varIt->second);
+        }
+        const auto stateVarIt = model.inputVarByKey.find(pending.stateKey);
+        feedsClock = feedsClock || stateVarIt == model.inputVarByKey.end() ||
+            topClockCarrierVarIDs.contains(stateVarIt->second) ||
+            clockEventByCarrierVarID.contains(stateVarIt->second);
+        BoolExpr* enable = feedsClock ? nullptr
+            : lowPhaseGatedLatch
+                ? clockEvent->enable
+                : buildPendingClockExpr(pending, termDNLID2varID, outputExprByTerm);
+        if (enable == nullptr) {
+          markOpaqueState(pending,
+                          !feedsClock ? "latch enable does not resolve to one "
+                                        "phase of a clock"
+                          : lowPhaseGatedLatch
+                              ? "latch drives a clock"
+                              : "data-enabled latch drives a clock");
+          continue;
+        }
+        if (latchControlMayFire(pending, termDNLID2varID, outputExprByTerm)) {
+          markOpaqueState(pending, "latch with clear or preset is not supported");
+          continue;
+        }
+        if (lowPhaseGatedLatch) {
+          clockEvent->phase = ClockPhase::Pos;
+          artifacts.lowPhaseLatchKeys.insert(pending.stateKey);
+          artifacts.lowPhaseLatchKeys.insert(
+              pending.complementedStateKeys.begin(),
+              pending.complementedStateKeys.end());
+        } else {
+          nextStateExpr = makeIte(enable, nextStateExpr,
+                                  BoolExpr::Var(stateVarIt->second));
+        }
+        artifacts.dataLatchExprByKey.emplace(pending.stateKey, nextStateExpr);
+        for (const auto& complementedKey : pending.complementedStateKeys) {
+          artifacts.dataLatchExprByKey.emplace(complementedKey,
+                                               BoolExpr::Not(nextStateExpr));
+        }
+        dataLatchPendingByKey.emplace(pending.stateKey, &pending);
+      } else if (pending.isLatch) {
+        if (const auto reason = getLatchAbstractionUnsupportedReason(
+                pending, clockEvent, nextStateExpr, latchStateVarIDs, model,
+                termDNLID2varID, outputExprByTerm)) {
+          markOpaqueState(pending, *reason);
+          continue;
+        }
+        if (clockEvent->phase == ClockPhase::Pos) {
+          // Open while the clock is high: closes at the falling edge.
+          clockEvent->phase = ClockPhase::Neg;
+        } else {
+          // Open while the clock is low: a wire when the state samples.
+          artifacts.transparentLatchExprByKey.emplace(pending.stateKey,
+                                                      nextStateExpr);
+          for (const auto& complementedKey : pending.complementedStateKeys) {
+            artifacts.transparentLatchExprByKey.emplace(
+                complementedKey, BoolExpr::Not(nextStateExpr));
+          }
+        }
+      }
       logUnpublishedTransitionSupport(ctx, model, pending, nextStateExpr,
                                       termDNLID2varID, topClockCarrierVarIDs,
                                       pureClockCarrierTermIDs);
@@ -4374,11 +4700,79 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       stateDependencyWorkQueue.push_back(pending.stateKey);
     }
   }
+  if (!dataLatchPendingByKey.empty()) {
+    // A data-enabled latch reading another one sees that one's value for the
+    // step, so the values are resolved in dependency order. Latches that can
+    // be open together in a loop have no order and stay opaque.
+    auto& latches = artifacts.dataLatchExprByKey;
+    std::unordered_map<size_t, SignalKey> ownerByVar;
+    for (const auto& [key, pending] : dataLatchPendingByKey) {
+      ownerByVar.emplace(model.inputVarByKey.at(key), key);
+      for (const auto& complementedKey : pending->complementedStateKeys) {
+        ownerByVar.emplace(model.inputVarByKey.at(complementedKey), key);
+      }
+    }
+    std::unordered_map<SignalKey, std::vector<SignalKey>, SignalKeyHash> readersOf;
+    std::unordered_map<SignalKey, size_t, SignalKeyHash> unresolvedReads;
+    std::vector<SignalKey> ready;
+    for (const auto& [key, _] : dataLatchPendingByKey) {
+      size_t reads = 0;
+      for (const auto varID : latches.at(key)->getSupportVars()) {
+        const auto ownerIt = ownerByVar.find(varID);
+        if (ownerIt != ownerByVar.end() && ownerIt->second != key) {
+          readersOf[ownerIt->second].push_back(key);
+          ++reads;
+        }
+      }
+      unresolvedReads.emplace(key, reads);
+      if (reads == 0) {
+        ready.push_back(key);
+      }
+    }
+    while (!ready.empty()) {
+      const SignalKey key = ready.back();
+      ready.pop_back();
+      std::unordered_map<size_t, BoolExpr*> replacement{
+          {model.inputVarByKey.at(key), latches.at(key)}};
+      for (const auto& complementedKey :
+           dataLatchPendingByKey.at(key)->complementedStateKeys) {
+        replacement.emplace(model.inputVarByKey.at(complementedKey),
+                            BoolExpr::Not(latches.at(key)));
+      }
+      for (const auto& reader : readersOf[key]) {
+        latches[reader] =
+            substituteBoolExprVariableExpressions(latches.at(reader), replacement);
+        if (--unresolvedReads.at(reader) == 0) {
+          ready.push_back(reader);
+        }
+      }
+    }
+    for (const auto& [key, pending] : dataLatchPendingByKey) {
+      if (unresolvedReads.at(key) == 0) {
+        model.nextStateExprByStateKey[key] = latches.at(key);
+        for (const auto& complementedKey : pending->complementedStateKeys) {
+          latches[complementedKey] = BoolExpr::Not(latches.at(key));
+          model.nextStateExprByStateKey[complementedKey] = latches.at(complementedKey);
+        }
+        continue;
+      }
+      markOpaqueState(*pending,
+                      "data-enabled latch in a loop of latches open together");
+      latches.erase(key);
+      model.nextStateExprByStateKey.erase(key);
+      for (const auto& complementedKey : pending->complementedStateKeys) {
+        latches.erase(complementedKey);
+        model.nextStateExprByStateKey.erase(complementedKey);
+      }
+    }
+  }
   if (ctx.secDiagEnabled) {
     fprintf(stderr,
-            "SEC diag: extract(%s) rebuilt next-state exprs=%zu init=%zu\n",
+            "SEC diag: extract(%s) rebuilt next-state exprs=%zu init=%zu "
+            "data_latches=%zu\n",
             ctx.topName.c_str(), model.nextStateExprByStateKey.size(),
-            model.initialStateValueByKey.size());
+            model.initialStateValueByKey.size(),
+            artifacts.dataLatchExprByKey.size());
     fflush(stderr);
   }
 
@@ -5047,7 +5441,7 @@ SequentialDesignModel SequentialDesignModel::extract(
     // immediately so large designs fail fast before the expensive cone builder
     // tries to derive BoolExprs for a transition system we already know is
     // unsupported.
-    naja::DNL::destroy();
+    KEPLER_FORMAL::destroyDnl();
     if (ctx.previousTop != nullptr) {
       universe->setTopDesign(ctx.previousTop);  // LCOV_EXCL_LINE
     }  // LCOV_EXCL_LINE
@@ -5161,8 +5555,10 @@ SequentialDesignModel SequentialDesignModel::extract(
       outputExprByTerm,
       skippedOutputsByTerm);
   applyRebuiltTransitionArtifacts(rebuiltArtifacts, model);
+  substituteDataEnabledLatches(rebuiltArtifacts, model);
   pruneUnusedXConstantStates(model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
+  substituteTransparentLatches(rebuiltArtifacts, model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 
@@ -5178,7 +5574,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   validateExtractedModel(model);
 
   // Restore the original top design for callers that keep using the universe.
-  naja::DNL::destroy();
+  KEPLER_FORMAL::destroyDnl();
   if (ctx.previousTop != nullptr) {
     universe->setTopDesign(ctx.previousTop);
   }
