@@ -109,20 +109,6 @@ cmake .. \
   -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
-For a sanitizer build, which also compiles the bundled CaDiCaL and Kissat
-solvers with AddressSanitizer so that instrumented and uninstrumented code are
-not mixed:
-
-```bash
-cmake .. -DENABLE_SANITIZERS=ON
-```
-
-For a coverage build:
-
-```bash
-cmake .. -DCODE_COVERAGE=ON
-```
-
 ### Bazel
 
 The Bazel build needs no host packages on Linux (hermetic clang
