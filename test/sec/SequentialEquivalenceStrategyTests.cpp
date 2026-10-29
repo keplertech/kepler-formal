@@ -18622,8 +18622,10 @@ TEST_F(SequentialEquivalenceStrategyTests,
     EXPECT_FALSE(extracted.hasUnsupportedFeatures());
     EXPECT_EQ(extracted.observedOutputs.size(), 4u);
     EXPECT_TRUE(extracted.skippedObservedOutputs.empty());
-    ASSERT_EQ(extracted.stateBits.size(), 20u);
-    ASSERT_EQ(extracted.nextStateExprByStateKey.size(), 20u);
+    // The 16 cells are the state; the 4 read-data bits are combinational
+    // functions of the cells and the read address.
+    ASSERT_EQ(extracted.stateBits.size(), 16u);
+    ASSERT_EQ(extracted.nextStateExprByStateKey.size(), 16u);
     size_t heldCells = 0;
     for (const auto& stateKey : extracted.stateBits) {
       if (extracted.displayNameByKey.at(stateKey).find(".__MEM_CELL[") ==

@@ -1171,6 +1171,125 @@ TEST_F(KeplerFormalCliTests, Sv2vTopClockIsFoundByStructureNotByName) {
   std::filesystem::remove_all(tmpDir);
 }
 
+// An RTL array is lowered to a memory primitive whose read port is
+// asynchronous. SEC used to model the read data as a register, so a read of a
+// cell written in the previous cycle returned the old value and the array
+// differed from the same storage written as explicit registers. The two must
+// be equivalent, and a real difference must still be found.
+TEST_F(KeplerFormalCliTests, SvMemoryReadPortIsCombinational) {
+  const auto tmpDir =
+      std::filesystem::temp_directory_path() / "kepler_formal_cli_memory_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto array = tmpDir / "array.sv";
+  const auto registers = tmpDir / "registers.sv";
+  const auto registersMutant = tmpDir / "registers_mutant.sv";
+  {
+    std::ofstream f(array);
+    f << "module t(input clk, input we, input [1:0] waddr, input [1:0] raddr,\n"
+         "         input [1:0] wdata, output [1:0] rdata);\n"
+         "  reg [1:0] mem [3:0];\n"
+         "  always @(posedge clk) if (we) mem[waddr] <= wdata;\n"
+         "  assign rdata = mem[raddr];\n"
+         "endmodule\n";
+  }
+  const auto writeRegisters = [](const std::filesystem::path& path,
+                                 const char* cellTwo) {
+    std::ofstream f(path);
+    f << "module t(input clk, input we, input [1:0] waddr, input [1:0] raddr,\n"
+         "         input [1:0] wdata, output [1:0] rdata);\n"
+         "  reg [1:0] m0, m1, m2, m3;\n"
+         "  always @(posedge clk) begin\n"
+         "    if (we && waddr == 2'd0) m0 <= wdata;\n"
+         "    if (we && waddr == 2'd1) m1 <= wdata;\n"
+         "    if (we && waddr == 2'd2) m2 <= wdata;\n"
+         "    if (we && waddr == 2'd3) m3 <= wdata;\n"
+         "  end\n"
+         "  assign rdata = (raddr == 2'd0) ? m0 : (raddr == 2'd1) ? m1 :\n"
+         "                 (raddr == 2'd2) ? " << cellTwo << " : m3;\n"
+         "endmodule\n";
+  };
+  writeRegisters(registers, "m2");
+  writeRegisters(registersMutant, "m3");
+
+  const auto run = [&](const std::filesystem::path& design2) {
+    std::vector<std::string> args = {
+        "kepler-formal", "-sv", "-v", "sec", "--sec-encoding",
+        "dual_rail_steady", "--design1", array.string(), "--design2",
+        design2.string()};
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+      argv.push_back(arg.data());
+    }
+    return KeplerFormalMain(static_cast<int>(argv.size()), argv.data());
+  };
+  EXPECT_EQ(run(registers), kSecProvedExitCode);
+  EXPECT_EQ(run(registersMutant), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
+// A write block with an if/else produces two memory write ports. naja's
+// memory interface used to return the write enables in reversed port order,
+// so the else branch's guard enabled the if branch's data. The array must be
+// equivalent to the same storage as explicit registers, and swapping the
+// branches on one side must still be found.
+TEST_F(KeplerFormalCliTests, SvMemoryWritePortsKeepTheirEnables) {
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_memory_ports_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto array = tmpDir / "array.sv";
+  const auto registers = tmpDir / "registers.sv";
+  const auto registersSwapped = tmpDir / "registers_swapped.sv";
+  {
+    std::ofstream f(array);
+    f << "module t(input clk, input we, input sel, input [1:0] waddr,\n"
+         "         input [1:0] raddr, input [1:0] a, input [1:0] b,\n"
+         "         output [1:0] rdata);\n"
+         "  reg [1:0] mem [3:0];\n"
+         "  always @(posedge clk)\n"
+         "    if (we) begin\n"
+         "      if (sel) mem[waddr] <= a;\n"
+         "      else     mem[waddr] <= b;\n"
+         "    end\n"
+         "  assign rdata = mem[raddr];\n"
+         "endmodule\n";
+  }
+  const auto writeRegisters = [](const std::filesystem::path& path,
+                                 const char* data) {
+    std::ofstream f(path);
+    f << "module t(input clk, input we, input sel, input [1:0] waddr,\n"
+         "         input [1:0] raddr, input [1:0] a, input [1:0] b,\n"
+         "         output [1:0] rdata);\n"
+         "  reg [1:0] m0, m1, m2, m3;\n"
+         "  wire [1:0] d = " << data << ";\n"
+         "  always @(posedge clk) begin\n"
+         "    if (we && waddr == 2'd0) m0 <= d;\n"
+         "    if (we && waddr == 2'd1) m1 <= d;\n"
+         "    if (we && waddr == 2'd2) m2 <= d;\n"
+         "    if (we && waddr == 2'd3) m3 <= d;\n"
+         "  end\n"
+         "  assign rdata = (raddr == 2'd0) ? m0 : (raddr == 2'd1) ? m1 :\n"
+         "                 (raddr == 2'd2) ? m2 : m3;\n"
+         "endmodule\n";
+  };
+  writeRegisters(registers, "sel ? a : b");
+  writeRegisters(registersSwapped, "sel ? b : a");
+
+  const auto run = [&](const std::filesystem::path& design2) {
+    std::vector<std::string> args = {
+        "kepler-formal", "-sv", "-v", "sec", "--sec-encoding",
+        "dual_rail_steady", "--design1", array.string(), "--design2",
+        design2.string()};
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+      argv.push_back(arg.data());
+    }
+    return KeplerFormalMain(static_cast<int>(argv.size()), argv.data());
+  };
+  EXPECT_EQ(run(registers), kSecProvedExitCode);
+  EXPECT_EQ(run(registersSwapped), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   const auto root = repoRoot();
   const auto exampleDir = root / "examples" / "tinyrocket";

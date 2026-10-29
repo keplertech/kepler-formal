@@ -4035,9 +4035,8 @@ void buildStructuredMemoryTransitions(
       }
     }();
 
-    std::vector<std::vector<BoolExpr*>> cellNextExprs(
-        pendingMemory.depth,
-        std::vector<BoolExpr*>(pendingMemory.width, nullptr));
+    std::vector<std::vector<size_t>> cellVarIDs(
+        pendingMemory.depth, std::vector<size_t>(pendingMemory.width, 0));
     for (const auto& cellState : pendingMemory.cellStates) {
       const auto varIt = model.inputVarByKey.find(cellState.key);
       if (varIt == model.inputVarByKey.end()) {
@@ -4046,6 +4045,7 @@ void buildStructuredMemoryTransitions(
             cellState.displayName + "`");  // LCOV_EXCL_LINE
       }
       BoolExpr* next = BoolExpr::Var(varIt->second);
+      cellVarIDs[cellState.cellIndex][cellState.bitIndex] = varIt->second;
       for (size_t portIndex = 0; portIndex < pendingMemory.writePorts.size(); ++portIndex) {
         const auto& exprs = writePortExprs[portIndex];
         if (exprs.disabled) {
@@ -4073,7 +4073,6 @@ void buildStructuredMemoryTransitions(
         next = makeIte(resetAssertedExpr, BoolExpr::createFalse(), next);
       }
       model.nextStateExprByStateKey.emplace(cellState.key, next);
-      cellNextExprs[cellState.cellIndex][cellState.bitIndex] = next;
     }
 
     for (const auto& readOutput : pendingMemory.readOutputs) {
@@ -4089,20 +4088,21 @@ void buildStructuredMemoryTransitions(
             readOutput.key, *readPortSkips[readOutput.portIndex]);
         continue;
       }
+      // The read port is asynchronous: its data is the cell addressed in the
+      // current step, through a mux, not a register loaded at the clock edge.
+      // The formula replaces the read-data variable after the transitions are
+      // rebuilt; until then it also stands in as that variable's update so the
+      // cells stay reachable from the observed outputs.
       const auto& addressExprs = readAddressExprs[readOutput.portIndex];
-      BoolExpr* next = cellNextExprs[0][readOutput.bitIndex];
+      BoolExpr* read = BoolExpr::Var(cellVarIDs[0][readOutput.bitIndex]);
       for (size_t cellIndex = 1; cellIndex < pendingMemory.depth; ++cellIndex) {
-        next = makeIte(
+        read = makeIte(
             buildAddressEqualsExpr(addressExprs, cellIndex),
-            cellNextExprs[cellIndex][readOutput.bitIndex],
-            // LCOV_EXCL_START
-            next);
+            BoolExpr::Var(cellVarIDs[cellIndex][readOutput.bitIndex]),
+            read);
       }
-      if (resetAssertedExpr != nullptr) {
-        next = makeIte(resetAssertedExpr, BoolExpr::createFalse(), next);
-      }
-      // LCOV_EXCL_STOP
-      model.nextStateExprByStateKey.emplace(readOutput.key, next);
+      model.nextStateExprByStateKey.emplace(readOutput.key, read);
+      model.memoryReadExprByKey.emplace(readOutput.key, read);
     // LCOV_EXCL_START
     }
   }
@@ -4215,34 +4215,49 @@ std::optional<std::string> getLatchAbstractionUnsupportedReason(
   return std::nullopt;
 }
 
-// Wire half of the latch abstraction: substitute each transparent latch by its
-// data-input formula everywhere and drop it from the state.
-void substituteTransparentLatches(
-    const RebuiltTransitionArtifacts& artifacts,
+// Substitute each listed state bit by its formula everywhere and drop it from
+// the state. Formulas may read each other (a memory addressed by another
+// memory's read data), so they are resolved against each other first.
+void substituteStateFormulas(
+    std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> formulas,
     SequentialDesignModel& model) {
-  const auto& latches = artifacts.transparentLatchExprByKey;
-  if (latches.empty()) {
+  if (formulas.empty()) {
     return;
   }
   std::unordered_map<size_t, BoolExpr*> replacements;
-  for (const auto& [key, expr] : latches) {
+  for (const auto& [key, expr] : formulas) {
     if (const auto varIt = model.inputVarByKey.find(key);
         varIt != model.inputVarByKey.end()) {
       replacements.emplace(varIt->second, expr);
     }
   }
   if (replacements.empty()) {
-    return;  // LCOV_EXCL_LINE: every abstracted latch has a state variable
+    return;  // LCOV_EXCL_LINE: every listed bit has a state variable
+  }
+  for (size_t round = 0; round < formulas.size(); ++round) {
+    bool changed = false;
+    for (auto& [key, expr] : formulas) {
+      BoolExpr* substituted =
+          substituteBoolExprVariableExpressions(expr, replacements);
+      if (substituted != expr) {
+        expr = substituted;
+        replacements[model.inputVarByKey.at(key)] = substituted;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
   }
   for (auto& [key, expr] : model.nextStateExprByStateKey) {
-    if (latches.find(key) == latches.end()) {
+    if (formulas.find(key) == formulas.end()) {
       expr = substituteBoolExprVariableExpressions(expr, replacements);
     }
   }
   for (auto& [key, expr] : model.observedOutputExprByKey) {
     expr = substituteBoolExprVariableExpressions(expr, replacements);
   }
-  for (const auto& [key, _] : latches) {
+  for (const auto& [key, _] : formulas) {
     std::erase(model.stateBits, key);
     model.inputVarByKey.erase(key);
     model.nextStateExprByStateKey.erase(key);
@@ -4250,6 +4265,14 @@ void substituteTransparentLatches(
     model.initialStateValueByKey.erase(key);
     model.displayNameByKey.erase(key);
   }
+}
+
+// Wire half of the latch abstraction: substitute each transparent latch by its
+// data-input formula everywhere and drop it from the state.
+void substituteTransparentLatches(
+    const RebuiltTransitionArtifacts& artifacts,
+    SequentialDesignModel& model) {
+  substituteStateFormulas(artifacts.transparentLatchExprByKey, model);
 }
 
 // Readers of a data-enabled latch see its value for the current step rather
@@ -5697,6 +5720,8 @@ SequentialDesignModel SequentialDesignModel::extract(
   pruneUnusedXConstantStates(model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
   substituteTransparentLatches(rebuiltArtifacts, model);
+  substituteStateFormulas(model.memoryReadExprByKey, model);
+  model.memoryReadExprByKey.clear();
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 
