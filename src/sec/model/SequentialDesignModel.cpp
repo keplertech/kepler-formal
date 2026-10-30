@@ -125,6 +125,8 @@ struct PendingMemoryInstance {
   std::vector<PendingMemoryWritePort> writePorts;
   std::vector<PendingMemoryCellState> cellStates;
   std::vector<PendingMemoryReadOutput> readOutputs;
+  // A DB0 memory reads asynchronously; a memory macro's read output is clocked.
+  bool asynchronousRead = false;
 };
 
 struct SequentialInstanceScan {
@@ -3087,6 +3089,7 @@ void appendPendingMemoryInstance(
   pending.depth = interface.depth;
   pending.abits = interface.abits;
   pending.resetMode = interface.resetMode;
+  pending.asynchronousRead = NLDB0::isMemory(instance.getSNLInstance()->getModel());
   const std::string instancePath = instance.getFullPath();
 
   for (size_t cellIndex = 0; cellIndex < interface.depth; ++cellIndex) {
@@ -4035,8 +4038,12 @@ void buildStructuredMemoryTransitions(
       }
     }();
 
-    std::vector<std::vector<size_t>> cellVarIDs(
-        pendingMemory.depth, std::vector<size_t>(pendingMemory.width, 0));
+    std::vector<std::vector<BoolExpr*>> cellCurrentExprs(
+        pendingMemory.depth,
+        std::vector<BoolExpr*>(pendingMemory.width, nullptr));
+    std::vector<std::vector<BoolExpr*>> cellNextExprs(
+        pendingMemory.depth,
+        std::vector<BoolExpr*>(pendingMemory.width, nullptr));
     for (const auto& cellState : pendingMemory.cellStates) {
       const auto varIt = model.inputVarByKey.find(cellState.key);
       if (varIt == model.inputVarByKey.end()) {
@@ -4045,7 +4052,7 @@ void buildStructuredMemoryTransitions(
             cellState.displayName + "`");  // LCOV_EXCL_LINE
       }
       BoolExpr* next = BoolExpr::Var(varIt->second);
-      cellVarIDs[cellState.cellIndex][cellState.bitIndex] = varIt->second;
+      cellCurrentExprs[cellState.cellIndex][cellState.bitIndex] = next;
       for (size_t portIndex = 0; portIndex < pendingMemory.writePorts.size(); ++portIndex) {
         const auto& exprs = writePortExprs[portIndex];
         if (exprs.disabled) {
@@ -4073,6 +4080,7 @@ void buildStructuredMemoryTransitions(
         next = makeIte(resetAssertedExpr, BoolExpr::createFalse(), next);
       }
       model.nextStateExprByStateKey.emplace(cellState.key, next);
+      cellNextExprs[cellState.cellIndex][cellState.bitIndex] = next;
     }
 
     for (const auto& readOutput : pendingMemory.readOutputs) {
@@ -4088,21 +4096,27 @@ void buildStructuredMemoryTransitions(
             readOutput.key, *readPortSkips[readOutput.portIndex]);
         continue;
       }
-      // The read port is asynchronous: its data is the cell addressed in the
-      // current step, through a mux, not a register loaded at the clock edge.
-      // The formula replaces the read-data variable after the transitions are
-      // rebuilt; until then it also stands in as that variable's update so the
-      // cells stay reachable from the observed outputs.
+      // A clocked read port samples the address at the edge and returns the
+      // cell after that edge's write. An asynchronous one returns the addressed
+      // cell in the current step: that formula replaces the read-data variable
+      // once the transitions are rebuilt, and until then stands in as its update
+      // so the cells stay reachable from the observed outputs.
+      const auto& cells =
+          pendingMemory.asynchronousRead ? cellCurrentExprs : cellNextExprs;
       const auto& addressExprs = readAddressExprs[readOutput.portIndex];
-      BoolExpr* read = BoolExpr::Var(cellVarIDs[0][readOutput.bitIndex]);
+      BoolExpr* next = cells[0][readOutput.bitIndex];
       for (size_t cellIndex = 1; cellIndex < pendingMemory.depth; ++cellIndex) {
-        read = makeIte(
+        next = makeIte(
             buildAddressEqualsExpr(addressExprs, cellIndex),
-            BoolExpr::Var(cellVarIDs[cellIndex][readOutput.bitIndex]),
-            read);
+            cells[cellIndex][readOutput.bitIndex],
+            next);
       }
-      model.nextStateExprByStateKey.emplace(readOutput.key, read);
-      model.memoryReadExprByKey.emplace(readOutput.key, read);
+      if (pendingMemory.asynchronousRead) {
+        model.memoryReadExprByKey.emplace(readOutput.key, next);
+      } else if (resetAssertedExpr != nullptr) {
+        next = makeIte(resetAssertedExpr, BoolExpr::createFalse(), next);
+      }
+      model.nextStateExprByStateKey.emplace(readOutput.key, next);
     // LCOV_EXCL_START
     }
   }
@@ -4215,49 +4229,34 @@ std::optional<std::string> getLatchAbstractionUnsupportedReason(
   return std::nullopt;
 }
 
-// Substitute each listed state bit by its formula everywhere and drop it from
-// the state. Formulas may read each other (a memory addressed by another
-// memory's read data), so they are resolved against each other first.
-void substituteStateFormulas(
-    std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> formulas,
+// Wire half of the latch abstraction: substitute each transparent latch by its
+// data-input formula everywhere and drop it from the state.
+void substituteTransparentLatches(
+    const RebuiltTransitionArtifacts& artifacts,
     SequentialDesignModel& model) {
-  if (formulas.empty()) {
+  const auto& latches = artifacts.transparentLatchExprByKey;
+  if (latches.empty()) {
     return;
   }
   std::unordered_map<size_t, BoolExpr*> replacements;
-  for (const auto& [key, expr] : formulas) {
+  for (const auto& [key, expr] : latches) {
     if (const auto varIt = model.inputVarByKey.find(key);
         varIt != model.inputVarByKey.end()) {
       replacements.emplace(varIt->second, expr);
     }
   }
   if (replacements.empty()) {
-    return;  // LCOV_EXCL_LINE: every listed bit has a state variable
-  }
-  for (size_t round = 0; round < formulas.size(); ++round) {
-    bool changed = false;
-    for (auto& [key, expr] : formulas) {
-      BoolExpr* substituted =
-          substituteBoolExprVariableExpressions(expr, replacements);
-      if (substituted != expr) {
-        expr = substituted;
-        replacements[model.inputVarByKey.at(key)] = substituted;
-        changed = true;
-      }
-    }
-    if (!changed) {
-      break;
-    }
+    return;  // LCOV_EXCL_LINE: every abstracted latch has a state variable
   }
   for (auto& [key, expr] : model.nextStateExprByStateKey) {
-    if (formulas.find(key) == formulas.end()) {
+    if (latches.find(key) == latches.end()) {
       expr = substituteBoolExprVariableExpressions(expr, replacements);
     }
   }
   for (auto& [key, expr] : model.observedOutputExprByKey) {
     expr = substituteBoolExprVariableExpressions(expr, replacements);
   }
-  for (const auto& [key, _] : formulas) {
+  for (const auto& [key, _] : latches) {
     std::erase(model.stateBits, key);
     model.inputVarByKey.erase(key);
     model.nextStateExprByStateKey.erase(key);
@@ -4267,12 +4266,69 @@ void substituteStateFormulas(
   }
 }
 
-// Wire half of the latch abstraction: substitute each transparent latch by its
-// data-input formula everywhere and drop it from the state.
-void substituteTransparentLatches(
-    const RebuiltTransitionArtifacts& artifacts,
-    SequentialDesignModel& model) {
-  substituteStateFormulas(artifacts.transparentLatchExprByKey, model);
+// Replace asynchronous memory read data by its formula everywhere and drop it
+// from the state. A memory can be addressed by another memory's read data, so
+// the formulas are resolved in dependency order. A combinational loop through
+// read ports has no order and is reported as unsupported.
+void substituteMemoryReads(SequentialDesignModel& model) {
+  // Read data outside the observed cones has no variable left after filtering.
+  std::unordered_map<size_t, BoolExpr*> formulas;
+  for (const auto& [key, expr] : model.memoryReadExprByKey) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      formulas.emplace(varIt->second, expr);
+    }
+  }
+  std::unordered_set<size_t> resolving;
+  std::unordered_set<size_t> resolved;
+  const std::function<bool(size_t)> resolve = [&](size_t varID) {
+    if (resolved.count(varID) != 0) {
+      return true;
+    }
+    if (!resolving.insert(varID).second) {
+      return false;
+    }
+    BoolExpr*& expr = formulas.at(varID);
+    std::unordered_map<size_t, BoolExpr*> reads;
+    for (const auto support : expr->getSupportVars()) {
+      const auto readIt = formulas.find(support);
+      if (readIt != formulas.end()) {
+        if (!resolve(support)) {
+          return false;
+        }
+        reads.emplace(support, readIt->second);
+      }
+    }
+    if (!reads.empty()) {
+      expr = substituteBoolExprVariableExpressions(expr, reads);
+    }
+    resolved.insert(varID);
+    return true;
+  };
+  for (const auto& [varID, _] : formulas) {
+    if (!resolve(varID)) {
+      model.unsupportedReasons.push_back(
+          "Combinational loop through a memory read port");
+      return;
+    }
+  }
+  std::unordered_map<BoolExpr*, BoolExpr*> memo;
+  for (auto& [key, expr] : model.nextStateExprByStateKey) {
+    if (model.memoryReadExprByKey.find(key) == model.memoryReadExprByKey.end()) {
+      expr = substituteBoolExprVariableExpressions(expr, formulas, memo);
+    }
+  }
+  for (auto& [key, expr] : model.observedOutputExprByKey) {
+    expr = substituteBoolExprVariableExpressions(expr, formulas, memo);
+  }
+  for (const auto& [key, _] : model.memoryReadExprByKey) {
+    std::erase(model.stateBits, key);
+    model.inputVarByKey.erase(key);
+    model.nextStateExprByStateKey.erase(key);
+    model.clockEventByStateKey.erase(key);
+    model.initialStateValueByKey.erase(key);
+    model.displayNameByKey.erase(key);
+  }
 }
 
 // Readers of a data-enabled latch see its value for the current step rather
@@ -5720,8 +5776,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   pruneUnusedXConstantStates(model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
   substituteTransparentLatches(rebuiltArtifacts, model);
-  substituteStateFormulas(model.memoryReadExprByKey, model);
-  model.memoryReadExprByKey.clear();
+  substituteMemoryReads(model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 

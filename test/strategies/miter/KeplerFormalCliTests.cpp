@@ -1290,6 +1290,34 @@ TEST_F(KeplerFormalCliTests, SvMemoryWritePortsKeepTheirEnables) {
   std::filesystem::remove_all(tmpDir);
 }
 
+// A loop through an asynchronous read port has no evaluation order. SEC must
+// report it as unsupported rather than fail on the unresolved read data.
+TEST_F(KeplerFormalCliTests, SvMemoryReadPortLoopIsUnsupported) {
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_memory_loop_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto design = tmpDir / "loop.sv";
+  {
+    std::ofstream f(design);
+    f << "module t(input clk, input we, input [1:0] waddr, input [1:0] wdata,\n"
+         "         output [1:0] rdata);\n"
+         "  reg [1:0] mem [3:0];\n"
+         "  always @(posedge clk) if (we) mem[waddr] <= wdata;\n"
+         "  assign rdata = mem[rdata];\n"
+         "endmodule\n";
+  }
+  std::vector<std::string> args = {
+      "kepler-formal", "-sv", "-v", "sec", "--sec-encoding", "dual_rail_steady",
+      "--design1", design.string(), "--design2", design.string()};
+  std::vector<char*> argv;
+  for (auto& arg : args) {
+    argv.push_back(arg.data());
+  }
+  EXPECT_EQ(KeplerFormalMain(static_cast<int>(argv.size()), argv.data()),
+            kSecInconclusiveExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   const auto root = repoRoot();
   const auto exampleDir = root / "examples" / "tinyrocket";
