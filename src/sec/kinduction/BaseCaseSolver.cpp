@@ -80,6 +80,10 @@ constexpr size_t kMaxImcAssumptionFrontierBatchOutputs = 64;
 constexpr size_t kDualRailPublicBasePrefixWindow = 8;
 constexpr size_t kLargeDualRailPublicBasePrefixWindow = 32;
 constexpr size_t kMinLargeDualRailPublicBasePrefixStateSymbols = 512;
+// The dual-rail public base prefix proof is a sweep shortcut, not a required
+// result: a prefix that does not finish within this budget stays Unknown and
+// the sweep falls back to the exact per-frontier queries instead of hanging.
+constexpr int64_t kDualRailPublicBasePrefixConflictLimit = 200000;
 // Transition node counts are only reserve hints for FrameFormulaEncoder.
 // BlackParrot reset-frontier sampling showed exact counting across ~86k
 // transition targets dominating the whole query before any CNF was emitted.
@@ -1390,6 +1394,7 @@ enum class BaseCaseSolverProfile {
   PdrValidation,
   PdrValidationProofOnly,
   FastCounterexampleSearch,
+  DualRailPublicBasePrefixProof,
 };
 
 std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImpl(
@@ -1733,8 +1738,10 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
   solver.addClause(badClause);
 
   SATSolverWrapper::SolveStatus status = SATSolverWrapper::SolveStatus::Unknown;
+  int64_t conflictBudget = -1;
   // LCOV_EXCL_START
   if (solverProfile == BaseCaseSolverProfile::FastCounterexampleSearch) {
+    conflictBudget = kFastCounterexampleSearchConflictLimit;
     if (solverType == KEPLER_FORMAL::Config::SolverType::KISSAT) {
     // LCOV_EXCL_STOP
       status = solver.solveWithKissatResourceLimits(
@@ -1744,6 +1751,18 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
       status = solver.solveWithAssumptionsStatus(  // LCOV_EXCL_LINE
           {},  // LCOV_EXCL_LINE
           kFastCounterexampleSearchConflictLimit,
+          /*propagationLimit=*/-1);
+    }
+  } else if (solverProfile ==
+             BaseCaseSolverProfile::DualRailPublicBasePrefixProof) {
+    conflictBudget = kDualRailPublicBasePrefixConflictLimit;
+    if (solverType == KEPLER_FORMAL::Config::SolverType::KISSAT) {
+      status = solver.solveWithKissatResourceLimits(
+          static_cast<unsigned>(kDualRailPublicBasePrefixConflictLimit));
+    } else {
+      status = solver.solveWithAssumptionsStatus(  // LCOV_EXCL_LINE
+          {},  // LCOV_EXCL_LINE
+          kDualRailPublicBasePrefixConflictLimit,
           /*propagationLimit=*/-1);
     }
   } else {
@@ -1762,7 +1781,7 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
       emitSecDiag(  // LCOV_EXCL_LINE
           "SEC diag: k-induction fast base k=", k,
           " unknown within conflict budget ",
-          kFastCounterexampleSearchConflictLimit);
+          conflictBudget);
     }  // LCOV_EXCL_LINE
     return std::nullopt;
   }
@@ -2073,6 +2092,9 @@ struct DualRailPublicBasePrefixCache {
       KEPLER_FORMAL::Config::SolverType::KISSAT;
   bool hasSafeThrough = false;
   size_t safeThrough = 0;
+  // Set once the prefix proof ran out of budget: later frontiers go straight to
+  // the exact per-frontier queries instead of repeating the same hard prefix.
+  bool prefixUnknown = false;
 
   void reset(const KInductionProblem& newProblem,
              KEPLER_FORMAL::Config::SolverType newSolverType) {
@@ -2081,6 +2103,7 @@ struct DualRailPublicBasePrefixCache {
     solverType = newSolverType;
     hasSafeThrough = false;
     safeThrough = 0;
+    prefixUnknown = false;
   }
 };
 
@@ -2120,7 +2143,9 @@ std::optional<KInductionResult::CounterexampleWitness>
 findDualRailBatchedBaseCounterexampleUpTo(
     const KInductionProblem& problem,
     KEPLER_FORMAL::Config::SolverType solverType,
-    size_t k) {
+    size_t k,
+    SATSolverWrapper::SolveStatus& status) {
+  status = SATSolverWrapper::SolveStatus::Unknown;
   if (shouldUseMonolithicDualRailPublicBasePrefix(problem)) {
     // For large dual-rail SEC prefixes, one exact public bad query is cheaper
     // than rebuilding the same transition prefix for every output batch.  This
@@ -2131,22 +2156,35 @@ findDualRailBatchedBaseCounterexampleUpTo(
         solverType,
         k,
         /*exactPublicBadFrame=*/std::nullopt,
-        /*localizeMultiOutputFrontier=*/false);
+        /*localizeMultiOutputFrontier=*/false,
+        BaseCaseSolverProfile::DualRailPublicBasePrefixProof,
+        &status);
   }
 
+  bool allBatchesUnsat = true;
   for (const auto& [firstOutput, endOutput] :
        buildSupportBoundedOutputBatches(problem)) {
     KInductionProblem batch = problem;
     configureOutputBatchProblem(batch, problem, firstOutput, endOutput);
+    SATSolverWrapper::SolveStatus batchStatus =
+        SATSolverWrapper::SolveStatus::Unknown;
     if (auto witness = findBaseCounterexampleImpl(
             batch,
             solverType,
             k,
             /*exactPublicBadFrame=*/std::nullopt,
-            /*localizeMultiOutputFrontier=*/false);
+            /*localizeMultiOutputFrontier=*/false,
+            BaseCaseSolverProfile::DualRailPublicBasePrefixProof,
+            &batchStatus);
         witness.has_value()) {
+      status = SATSolverWrapper::SolveStatus::Sat;
       return witness;
     }
+    allBatchesUnsat = allBatchesUnsat &&
+                      batchStatus == SATSolverWrapper::SolveStatus::Unsat;
+  }
+  if (allBatchesUnsat) {
+    status = SATSolverWrapper::SolveStatus::Unsat;
   }
   return std::nullopt;
 }
@@ -2154,7 +2192,8 @@ findDualRailBatchedBaseCounterexampleUpTo(
 DualRailPublicBasePrefixResult tryDualRailPublicBasePrefixCache(
     const KInductionProblem& problem,
     KEPLER_FORMAL::Config::SolverType solverType,
-    size_t k) {
+    size_t k,
+    std::optional<size_t> maxK) {
   if (!canUseDualRailPublicBasePrefixCache(problem)) {
     return {};
   }
@@ -2168,11 +2207,26 @@ DualRailPublicBasePrefixResult tryDualRailPublicBasePrefixCache(
   if (cache.hasSafeThrough && k <= cache.safeThrough) {
     return {true, std::nullopt};
   }
+  if (cache.prefixUnknown) {
+    return {};
+  }
 
-  const size_t prefixK = k + dualRailPublicBasePrefixWindow(problem);
-  auto witness =
-      findDualRailBatchedBaseCounterexampleUpTo(problem, solverType, prefixK);
+  // The sweep never asks past maxK, so proving the prefix beyond it only costs
+  // solver time (asap7_ethmac: 33 frames for a max_k of 8 never finished).
+  size_t prefixK = k + dualRailPublicBasePrefixWindow(problem);
+  if (maxK.has_value()) {
+    prefixK = std::max(k, std::min(prefixK, *maxK));
+  }
+  SATSolverWrapper::SolveStatus status = SATSolverWrapper::SolveStatus::Unknown;
+  auto witness = findDualRailBatchedBaseCounterexampleUpTo(
+      problem, solverType, prefixK, status);
   if (!witness.has_value()) {
+    if (status != SATSolverWrapper::SolveStatus::Unsat) {
+      // A budget-limited answer is not a proof; let the exact per-frontier
+      // path decide this and every later frontier.
+      cache.prefixUnknown = true;
+      return {};
+    }
     // This is a real cumulative base-case UNSAT result over the prefix, so the
     // exact frontier checks inside that prefix are safe to answer from cache.
     cache.hasSafeThrough = true;
@@ -2290,11 +2344,12 @@ findBaseCounterexampleAtFrontier(
     const KInductionProblem& problem,
     KEPLER_FORMAL::Config::SolverType solverType,
     // LCOV_EXCL_START
-    size_t k) {
+    size_t k,
+    std::optional<size_t> maxK) {
     // LCOV_EXCL_STOP
   const auto localSolverType = baseCaseValidationSolverType(problem, solverType);
   if (auto prefixResult =
-          tryDualRailPublicBasePrefixCache(problem, localSolverType, k);
+          tryDualRailPublicBasePrefixCache(problem, localSolverType, k, maxK);
       prefixResult.handled) {
     return prefixResult.witness;
   }

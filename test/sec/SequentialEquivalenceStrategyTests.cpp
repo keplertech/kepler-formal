@@ -6566,8 +6566,9 @@ TEST_F(SequentialEquivalenceStrategyTests,
       problem, KEPLER_FORMAL::Config::SolverType::KISSAT, 1));
 }
 
-TEST_F(SequentialEquivalenceStrategyTests,
-       LargeDualRailPublicBaseCacheCoversDefaultHorizon) {
+namespace {
+
+std::unique_ptr<KInductionProblem> makeLargeDualRailPublicBaseProblem() {
   auto problem = std::make_unique<KInductionProblem>();
   problem->usesDualRailStateEncoding = true;
   problem->observedOutputNames = {"out0", "out1"};
@@ -6588,6 +6589,14 @@ TEST_F(SequentialEquivalenceStrategyTests,
       makeEqualityExpr(
           problem->observedOutputExprs0[1], problem->observedOutputExprs1[1]));
   problem->bad = BoolExpr::Not(problem->property);
+  return problem;
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LargeDualRailPublicBaseCacheCoversDefaultHorizon) {
+  auto problem = makeLargeDualRailPublicBaseProblem();
 
   const ScopedEnvVar kiDiag("KEPLER_SEC_KI_DIAG", "1");
   testing::internal::CaptureStderr();
@@ -6608,6 +6617,32 @@ TEST_F(SequentialEquivalenceStrategyTests,
       1u);
   EXPECT_EQ(
       stderrOutput.find("k-induction base coi k=8"),
+      std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       LargeDualRailPublicBaseCacheStopsAtSweepMaxK) {
+  // The prefix cache is keyed by problem address; a fresh generation keeps the
+  // previous test's safe prefix from being reused for this problem.
+  const KEPLER_FORMAL::Config::ScopedVerificationContext verificationContext;
+  auto problem = makeLargeDualRailPublicBaseProblem();
+  constexpr size_t maxK = 8;
+
+  const ScopedEnvVar kiDiag("KEPLER_SEC_KI_DIAG", "1");
+  testing::internal::CaptureStderr();
+  for (size_t depth = 0; depth <= maxK; ++depth) {
+    EXPECT_FALSE(findBaseCounterexampleAtFrontier(
+        *problem, KEPLER_FORMAL::Config::SolverType::KISSAT, depth, maxK));
+  }
+  const std::string stderrOutput = testing::internal::GetCapturedStderr();
+
+  // A sweep bounded by max_k must prove the public base prefix only up to that
+  // depth, once, and answer the remaining frontiers from the cache.
+  EXPECT_EQ(
+      detail::countTextOccurrences(stderrOutput, "k-induction base coi k=8"),
+      1u);
+  EXPECT_EQ(
+      stderrOutput.find("k-induction base coi k=32"),
       std::string::npos);
 }
 
