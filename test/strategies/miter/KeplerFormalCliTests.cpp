@@ -1290,6 +1290,61 @@ TEST_F(KeplerFormalCliTests, SvMemoryWritePortsKeepTheirEnables) {
   std::filesystem::remove_all(tmpDir);
 }
 
+// Dynamic indexed part selects lower to naja's VECTOR_SELECT and VECTOR_UPDATE
+// primitives. Reading a window is a zero-filled shift of the data and writing
+// one is a masked shift of the new bits; a window running past the vector is
+// clipped on both sides. Swapping the written bits must still be found.
+TEST_F(KeplerFormalCliTests, SvDynamicPartSelectsMatchShiftModels) {
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_vector_primitives_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto windows = tmpDir / "windows.sv";
+  const auto shifts = tmpDir / "shifts.sv";
+  const auto shiftsSwapped = tmpDir / "shifts_swapped.sv";
+  {
+    std::ofstream f(windows);
+    f << "module t(input [7:0] data, input [2:0] sel, input [1:0] d,\n"
+         "         output [1:0] rd, output [7:0] wr);\n"
+         "  reg [7:0] v;\n"
+         "  assign rd = data[sel +: 2];\n"
+         "  always @* begin\n"
+         "    v = data;\n"
+         "    v[sel +: 2] = d;\n"
+         "  end\n"
+         "  assign wr = v;\n"
+         "endmodule\n";
+  }
+  const auto writeShifts = [](const std::filesystem::path& path,
+                              const char* newBits) {
+    std::ofstream f(path);
+    f << "module t(input [7:0] data, input [2:0] sel, input [1:0] d,\n"
+         "         output [1:0] rd, output [7:0] wr);\n"
+         "  wire [7:0] shifted = data >> sel;\n"
+         "  assign rd = shifted[1:0];\n"
+         "  wire [7:0] mask = 8'b11 << sel;\n"
+         "  wire [7:0] placed = {6'b0, " << newBits << "} << sel;\n"
+         "  assign wr = (data & ~mask) | placed;\n"
+         "endmodule\n";
+  };
+  writeShifts(shifts, "d");
+  writeShifts(shiftsSwapped, "d[0], d[1]");
+
+  const auto run = [&](const std::filesystem::path& design2) {
+    std::vector<std::string> args = {
+        "kepler-formal", "-sv", "-v", "sec", "--sec-encoding",
+        "dual_rail_steady", "--design1", windows.string(), "--design2",
+        design2.string()};
+    std::vector<char*> argv;
+    for (auto& arg : args) {
+      argv.push_back(arg.data());
+    }
+    return KeplerFormalMain(static_cast<int>(argv.size()), argv.data());
+  };
+  EXPECT_EQ(run(shifts), kSecProvedExitCode);
+  EXPECT_EQ(run(shiftsSwapped), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
 // A loop through an asynchronous read port has no evaluation order. SEC must
 // report it as unsupported rather than fail on the unresolved read data.
 TEST_F(KeplerFormalCliTests, SvMemoryReadPortLoopIsUnsupported) {
