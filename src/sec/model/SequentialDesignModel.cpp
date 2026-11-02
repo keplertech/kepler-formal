@@ -125,6 +125,8 @@ struct PendingMemoryInstance {
   std::vector<PendingMemoryWritePort> writePorts;
   std::vector<PendingMemoryCellState> cellStates;
   std::vector<PendingMemoryReadOutput> readOutputs;
+  // A DB0 memory reads asynchronously; a memory macro's read output is clocked.
+  bool asynchronousRead = false;
 };
 
 struct SequentialInstanceScan {
@@ -1520,17 +1522,13 @@ BoolExpr* getLocalClockEnableExpr(
     return clockEventIsUngated(*event) ? nullptr : event->enable;
   }
 
-  // LCOV_EXCL_START
-  BoolExpr* enable = simplifyWhenClockCarriersChanged(  // LCOV_EXCL_LINE
-      clockExpr, stripClockCarrierFromClockEnable(  // LCOV_EXCL_LINE
-                     clockExpr, topClockCarrierVarIDs, clockCarrierStripMemo));  // LCOV_EXCL_LINE
-  if (enable == BoolExpr::createTrue()) {  // LCOV_EXCL_LINE
-    return nullptr;  // LCOV_EXCL_LINE
-    // LCOV_EXCL_STOP
-  }
-  // LCOV_EXCL_START
-  return enable;  // LCOV_EXCL_LINE
-  // LCOV_EXCL_STOP
+  // A clock expression that is not a recognized clock event must not become a
+  // clock enable: that gates this design's flops while the other design's
+  // identical flops stay ungated, and SEC then reports a false difference.
+  // Treat the pin as an ungated clock instead.
+  (void)topClockCarrierVarIDs;
+  (void)clockCarrierStripMemo;
+  return nullptr;
 }
 
 std::optional<std::string> getPendingTransitionUnsupportedReason(
@@ -2003,6 +2001,7 @@ std::unordered_set<size_t> collectTopClockCarrierVarIDs(
 void seedTopClockCarrierEvents(
     const SequentialDesignModel& model,
     const std::unordered_set<size_t>& clockCarrierVarIDs,
+    const std::unordered_set<size_t>& structuralTopClockVarIDs,
     std::unordered_map<size_t, ClockEvent>& clockEventByCarrierVarID) {
   for (const auto& key : model.topInputKeys) {
     const auto displayIt = model.displayNameByKey.find(key);
@@ -2011,9 +2010,11 @@ void seedTopClockCarrierEvents(
         varIt == model.inputVarByKey.end()) {
       continue;  // LCOV_EXCL_LINE
     }
-    // LCOV_EXCL_START
-    if (!isTopClockCarrierName(displayIt->second) ||
-    // LCOV_EXCL_STOP
+    const bool isTopClock =
+        isTopClockCarrierName(displayIt->second) ||
+        structuralTopClockVarIDs.find(varIt->second) !=
+            structuralTopClockVarIDs.end();
+    if (!isTopClock ||
         clockCarrierVarIDs.find(varIt->second) == clockCarrierVarIDs.end()) {
       continue;
     }
@@ -2220,6 +2221,24 @@ class PureClockCarrierStructureIndex {
            pureClockMemoStrict_[termID] == 1;
   }
 
+  // Input variables of the top ports that are pure clock carriers. These are
+  // top clocks whatever their name, found by their fanout structure.
+  std::unordered_set<size_t> topClockVarIDs(
+      const SequentialDesignModel& model) const {
+    std::unordered_set<size_t> varIDs;
+    for (const auto termID : pureClockCarrierTermIDs_) {
+      const auto& term = dnl_->getDNLTerminalFromID(termID);
+      if (term.isNull() || !term.isTopPort()) {
+        continue;
+      }
+      const auto varIt = model.inputVarByKey.find(getTerminalPathKey(term));
+      if (varIt != model.inputVarByKey.end() && varIt->second >= 2) {
+        varIDs.insert(varIt->second);
+      }
+    }
+    return varIDs;
+  }
+
   size_t addMappedCarrierVarIDs(
       const SequentialDesignModel& model,
       const std::vector<size_t>& termDNLID2varID,
@@ -2279,7 +2298,18 @@ class PureClockCarrierStructureIndex {
     if (term.isTopPort() &&
         term.getSnlBitTerm()->getDirection() !=
             naja::NL::SNLBitTerm::Direction::Output) {
-      const bool result = isTopClockCarrierName(getTerminalDisplayName(term));
+      // A top input is a clock when its fanout reaches only sequential clock
+      // pins, through combinational cells. The name is only a fallback.
+      const bool structural = drivesOnlySequentialClockPins(termID);
+      if (!structural && std::getenv("KEPLER_SEC_DIAG") != nullptr &&
+          !clockOnlyFailure_.empty()) {
+        std::fprintf(stderr, "SEC diag: top input %s is not clock-only: %s\n",
+                     getTerminalDisplayName(term).c_str(),
+                     clockOnlyFailure_.c_str());
+        clockOnlyFailure_.clear();
+      }
+      const bool result = structural ||
+                          isTopClockCarrierName(getTerminalDisplayName(term));
       cached = result ? 1 : 0;
       return result;
     }
@@ -2328,11 +2358,108 @@ class PureClockCarrierStructureIndex {
     return false;
   }
 
+  // Number of sequential clock pins reached from the term's iso when every
+  // reader is a sequential clock pin, an input of a combinational cell whose
+  // dependent outputs are clock-only in turn, or an inert sink (a pin without
+  // function such as an antenna diode, or a cell whose outputs drive nothing,
+  // such as a clock load). -1 when a reader is a data pin or a top output.
+  // A top input is a clock when this is positive.
+  bool drivesOnlySequentialClockPins(naja::DNL::DNLID termID) {
+    return clockPinsReached(termID) > 0;
+  }
+
+  int clockPinsReached(naja::DNL::DNLID termID) {
+    const auto memoIt = clockOnlyFanoutMemo_.find(termID);
+    if (memoIt != clockOnlyFanoutMemo_.end()) {
+      return memoIt->second == kInProgress ? -1 : memoIt->second;
+    }
+    clockOnlyFanoutMemo_[termID] = kInProgress;  // a loop is not a clock
+    int reached = 0;
+    const auto& term = dnl_->getDNLTerminalFromID(termID);
+    const auto isoID = term.isNull() ? naja::DNL::DNLID_MAX : term.getIsoID();
+    if (isoID != naja::DNL::DNLID_MAX) {
+      const auto& iso = dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      for (const auto readerID : iso.getReaders()) {
+        const int readerClockPins = clockPinsThroughReader(readerID);
+        if (readerClockPins < 0) {
+          reached = -1;
+          break;
+        }
+        reached += readerClockPins;
+      }
+    }
+    clockOnlyFanoutMemo_[termID] = reached;
+    return reached;
+  }
+
+  int clockPinsThroughReader(naja::DNL::DNLID readerID) {
+    const auto& reader = dnl_->getDNLTerminalFromID(readerID);
+    if (reader.isNull() || reader.isTopPort()) {
+      noteClockOnlyFailure("reader is a top port");
+      return -1;
+    }
+    const auto& instance = reader.getDNLInstance();
+    if (boundary_ && boundary_->containsInstance(instance.getID())) {
+      noteClockOnlyFailure("reader inside boundary");
+      return -1;
+    }
+    const auto* model = instance.getSNLModel();
+    auto* bitTerm = const_cast<naja::NL::SNLBitTerm*>(reader.getSnlBitTerm());
+    if (model == nullptr || bitTerm == nullptr) {
+      noteClockOnlyFailure("reader without model");
+      return -1;
+    }
+    const auto describe = [&]() {
+      return instance.getFullPath() + "/" + bitTerm->getName().getString() +
+             " (" + model->getName().getString() + ")";
+    };
+    if (naja::NL::SNLDesignModeling::hasSequentialModel(model)) {
+      const auto& sequential =
+          naja::NL::SNLDesignModeling::getSequentialModel(
+              instance.getSNLInstance());
+      using Operator =
+          naja::NL::SNLDesignModeling::BooleanExpression::Operator;
+      for (const auto& node : sequential.clockedOn.nodes) {
+        if (node.operation == Operator::Term && node.term == bitTerm) {
+          return 1;
+        }
+      }
+      noteClockOnlyFailure("sequential non-clock pin " + describe());
+      return -1;
+    }
+    int reached = 0;
+    for (auto* outputBitTerm :
+         naja::NL::SNLDesignModeling::getCombinatorialOutputs(bitTerm)) {
+      const auto& outputTerm = instance.getTerminalFromBitTerm(outputBitTerm);
+      if (outputTerm.isNull()) {
+        continue;
+      }
+      const int outputClockPins = clockPinsReached(outputTerm.getID());
+      if (outputClockPins < 0) {
+        noteClockOnlyFailure("combinational output not clock-only after " +
+                             describe());
+        return -1;
+      }
+      reached += outputClockPins;
+    }
+    return reached;  // a pin without function or without loads is inert
+  }
+
+  void noteClockOnlyFailure(const std::string& reason) {
+    if (clockOnlyFailure_.empty()) {
+      clockOnlyFailure_ = reason;
+    }
+  }
+
+  static constexpr int kInProgress = -2;
+
   naja::DNL::DNLFull* dnl_ = nullptr;
   const LeafBoundary* boundary_ = nullptr;
   std::vector<int8_t> pureClockMemoStrict_;
   std::vector<int8_t> pureClockMemoAfterNamedClockTree_;
   std::vector<naja::DNL::DNLID> pureClockCarrierTermIDs_;
+  std::unordered_map<naja::DNL::DNLID, int> clockOnlyFanoutMemo_;
+  std::string clockOnlyFailure_;
 };
 
 
@@ -2962,6 +3089,7 @@ void appendPendingMemoryInstance(
   pending.depth = interface.depth;
   pending.abits = interface.abits;
   pending.resetMode = interface.resetMode;
+  pending.asynchronousRead = NLDB0::isMemory(instance.getSNLInstance()->getModel());
   const std::string instancePath = instance.getFullPath();
 
   for (size_t cellIndex = 0; cellIndex < interface.depth; ++cellIndex) {
@@ -3910,6 +4038,9 @@ void buildStructuredMemoryTransitions(
       }
     }();
 
+    std::vector<std::vector<BoolExpr*>> cellCurrentExprs(
+        pendingMemory.depth,
+        std::vector<BoolExpr*>(pendingMemory.width, nullptr));
     std::vector<std::vector<BoolExpr*>> cellNextExprs(
         pendingMemory.depth,
         std::vector<BoolExpr*>(pendingMemory.width, nullptr));
@@ -3921,6 +4052,7 @@ void buildStructuredMemoryTransitions(
             cellState.displayName + "`");  // LCOV_EXCL_LINE
       }
       BoolExpr* next = BoolExpr::Var(varIt->second);
+      cellCurrentExprs[cellState.cellIndex][cellState.bitIndex] = next;
       for (size_t portIndex = 0; portIndex < pendingMemory.writePorts.size(); ++portIndex) {
         const auto& exprs = writePortExprs[portIndex];
         if (exprs.disabled) {
@@ -3964,19 +4096,26 @@ void buildStructuredMemoryTransitions(
             readOutput.key, *readPortSkips[readOutput.portIndex]);
         continue;
       }
+      // A clocked read port samples the address at the edge and returns the
+      // cell after that edge's write. An asynchronous one returns the addressed
+      // cell in the current step: that formula replaces the read-data variable
+      // once the transitions are rebuilt, and until then stands in as its update
+      // so the cells stay reachable from the observed outputs.
+      const auto& cells =
+          pendingMemory.asynchronousRead ? cellCurrentExprs : cellNextExprs;
       const auto& addressExprs = readAddressExprs[readOutput.portIndex];
-      BoolExpr* next = cellNextExprs[0][readOutput.bitIndex];
+      BoolExpr* next = cells[0][readOutput.bitIndex];
       for (size_t cellIndex = 1; cellIndex < pendingMemory.depth; ++cellIndex) {
         next = makeIte(
             buildAddressEqualsExpr(addressExprs, cellIndex),
-            cellNextExprs[cellIndex][readOutput.bitIndex],
-            // LCOV_EXCL_START
+            cells[cellIndex][readOutput.bitIndex],
             next);
       }
-      if (resetAssertedExpr != nullptr) {
+      if (pendingMemory.asynchronousRead) {
+        model.memoryReadExprByKey.emplace(readOutput.key, next);
+      } else if (resetAssertedExpr != nullptr) {
         next = makeIte(resetAssertedExpr, BoolExpr::createFalse(), next);
       }
-      // LCOV_EXCL_STOP
       model.nextStateExprByStateKey.emplace(readOutput.key, next);
     // LCOV_EXCL_START
     }
@@ -4118,6 +4257,71 @@ void substituteTransparentLatches(
     expr = substituteBoolExprVariableExpressions(expr, replacements);
   }
   for (const auto& [key, _] : latches) {
+    std::erase(model.stateBits, key);
+    model.inputVarByKey.erase(key);
+    model.nextStateExprByStateKey.erase(key);
+    model.clockEventByStateKey.erase(key);
+    model.initialStateValueByKey.erase(key);
+    model.displayNameByKey.erase(key);
+  }
+}
+
+// Replace asynchronous memory read data by its formula everywhere and drop it
+// from the state. A memory can be addressed by another memory's read data, so
+// the formulas are resolved in dependency order. A combinational loop through
+// read ports has no order and is reported as unsupported.
+void substituteMemoryReads(SequentialDesignModel& model) {
+  // Read data outside the observed cones has no variable left after filtering.
+  std::unordered_map<size_t, BoolExpr*> formulas;
+  for (const auto& [key, expr] : model.memoryReadExprByKey) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      formulas.emplace(varIt->second, expr);
+    }
+  }
+  std::unordered_set<size_t> resolving;
+  std::unordered_set<size_t> resolved;
+  const std::function<bool(size_t)> resolve = [&](size_t varID) {
+    if (resolved.count(varID) != 0) {
+      return true;
+    }
+    if (!resolving.insert(varID).second) {
+      return false;
+    }
+    BoolExpr*& expr = formulas.at(varID);
+    std::unordered_map<size_t, BoolExpr*> reads;
+    for (const auto support : expr->getSupportVars()) {
+      const auto readIt = formulas.find(support);
+      if (readIt != formulas.end()) {
+        if (!resolve(support)) {
+          return false;
+        }
+        reads.emplace(support, readIt->second);
+      }
+    }
+    if (!reads.empty()) {
+      expr = substituteBoolExprVariableExpressions(expr, reads);
+    }
+    resolved.insert(varID);
+    return true;
+  };
+  for (const auto& [varID, _] : formulas) {
+    if (!resolve(varID)) {
+      model.unsupportedReasons.push_back(
+          "Combinational loop through a memory read port");
+      return;
+    }
+  }
+  std::unordered_map<BoolExpr*, BoolExpr*> memo;
+  for (auto& [key, expr] : model.nextStateExprByStateKey) {
+    if (model.memoryReadExprByKey.find(key) == model.memoryReadExprByKey.end()) {
+      expr = substituteBoolExprVariableExpressions(expr, formulas, memo);
+    }
+  }
+  for (auto& [key, expr] : model.observedOutputExprByKey) {
+    expr = substituteBoolExprVariableExpressions(expr, formulas, memo);
+  }
+  for (const auto& [key, _] : model.memoryReadExprByKey) {
     std::erase(model.stateBits, key);
     model.inputVarByKey.erase(key);
     model.nextStateExprByStateKey.erase(key);
@@ -4365,6 +4569,10 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   for (const auto& [termID, _] : outputExprByTerm) {
     materializedOutputTerms.insert(termID);
   }
+  const std::unordered_set<size_t> structuralTopClockVarIDs =
+      pureClockCarrierStructure.topClockVarIDs(model);
+  const bool hasTopClock = !structuralTopClockVarIDs.empty() ||
+                           !collectTopClockCarrierVarIDs(model).empty();
   auto refreshClockCarrierVarIDs = [&]() {
     size_t addedTop = 0;
     for (const auto varID : collectTopClockCarrierVarIDs(model)) {
@@ -4372,12 +4580,20 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         ++addedTop;
       }
     }
+    for (const auto varID : structuralTopClockVarIDs) {
+      if (topClockCarrierVarIDs.insert(varID).second) {
+        ++addedTop;
+      }
+    }
     const size_t addedBoundary =
         expandClockCarrierVarIDsFromBoundaryNames(model, topClockCarrierVarIDs);
-    // LCOV_EXCL_START
-    const size_t addedTermNames = expandClockCarrierVarIDsFromTermNames(
-        ctx.dnl, termDNLID2varID, topClockCarrierVarIDs, ctx.boundary);
-    // LCOV_EXCL_STOP
+    // clkbuf/clknet names only mark a clock tree when a top clock exists;
+    // without one they would promote carriers in this design alone.
+    const size_t addedTermNames =
+        hasTopClock ? expandClockCarrierVarIDsFromTermNames(
+                          ctx.dnl, termDNLID2varID, topClockCarrierVarIDs,
+                          ctx.boundary)
+                    : 0;
     const size_t addedStructure =
         pureClockCarrierStructure.addMappedCarrierVarIDs(model, termDNLID2varID,
                                                          topClockCarrierVarIDs);
@@ -4385,6 +4601,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         expandClockCarrierVarIDsFromPureClockTermExprs(
             pureClockCarrierTermIDs, outputExprByTerm, topClockCarrierVarIDs);
     seedTopClockCarrierEvents(model, topClockCarrierVarIDs,
+                              structuralTopClockVarIDs,
                               clockEventByCarrierVarID);
     const size_t addedMaterialized =
         expandClockCarrierVarIDsFromMaterializedTerms(termDNLID2varID,
@@ -5559,6 +5776,7 @@ SequentialDesignModel SequentialDesignModel::extract(
   pruneUnusedXConstantStates(model);
   filterUnsupportedAndUnmappedBoundary(ctx, model);
   substituteTransparentLatches(rebuiltArtifacts, model);
+  substituteMemoryReads(model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
 

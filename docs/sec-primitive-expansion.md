@@ -18,6 +18,8 @@ structurally. This document lists those generic types and how each is built.
 | `MULTIPLY` | Multiplication | The low `width` product bits, each partial product added in place. |
 | `SHIFT` | Logical and arithmetic shifts | A barrel of multiplexer stages: stage `s` moves the data by `2^s` when count bit `s` is set. Bits shifted in are 0, or the sign bit for an arithmetic right shift, which also covers counts of the width or more. |
 | `ROM` | Dynamically indexed constant tables | A `TABLE_SELECT` tree whose rows are constants (section "Read-only memories"). |
+| `VECTOR_SELECT` | Dynamically indexed part-select reads, `data[offset +: w]` | A mux tree over the offset bits, most significant bit first, keyed by the offsets that place a data bit at this output bit (section "Dynamic part selects"). |
+| `VECTOR_UPDATE` | Dynamically indexed part-select writes, `v[offset +: w] = d` | The same tree keyed by the offsets that place a written bit at this output bit, keeping the base bit otherwise, under the enable. |
 
 A cell with no usable table and no sequential model is opaque, with the reason
 `no initialized combinational truth table or usable sequential model`; see the
@@ -49,3 +51,24 @@ generic table is of type `ROM`, its dependencies are the address bits, most
 significant bit first, and the table's metadata column holds that bit of every
 row. Rows at or beyond the depth read 0. Memories with write ports keep the
 structured-memory model.
+
+## Dynamic part selects
+
+Naja lowers an indexed part-select read `data[offset +: w]` to a
+`VECTOR_SELECT` primitive and an indexed write `v[offset +: w] = d` to a
+`VECTOR_UPDATE` primitive, which replaces that window of a base vector. Each
+output bit carries its own generic table holding the vector width, the window
+width, the offset width, the output bit index and whether the offset is
+signed. The dependencies arrive in the primitive's term order: for an update
+the base bit of this output first, then the data bits, most significant bit
+first, then the offset bits, most significant bit first, and for an update the
+enable last.
+
+The builder lists the offset values that place a window bit at this output
+bit, drops the ones the offset width cannot hold (Naja does not alias offsets
+modulo the offset range), and decodes the offset once as a mux tree over its
+bits, pruning every prefix no candidate shares. A select whose offset leaves
+no data bit at the output reads 0, like a `TABLE_SELECT` row beyond the depth;
+Naja's own model calls that bit X. An update with the enable low or with no
+window bit at the output keeps the base bit, so a window that runs past the
+vector is clipped.
