@@ -20,6 +20,7 @@ genrule(
     srcs = ["@naja//src/nl/python/naja_wrapping:naja.so"],
     outs = ["naja.so"],
     cmd = "cp $(location @naja//src/nl/python/naja_wrapping:naja.so) $@",
+    visibility = ["//packaging:__pkg__"],
 )
 
 cc_binary(

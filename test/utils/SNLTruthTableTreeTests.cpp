@@ -46,6 +46,9 @@ BoolExpr* buildGenericTruthTableExpr(
     uint32_t k,
     const SNLTruthTableTree::Node* node,
     naja::DNL::DNLID isoID);
+BoolExpr* buildRomTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
+BoolExpr* buildVectorSelectTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
+BoolExpr* buildVectorUpdateTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
 void clearChildFETS();
 void reserveChildFETS(size_t n);
 void setChildFETS(size_t i, BoolExpr* expr);
@@ -1092,6 +1095,212 @@ TEST(Tree2BoolExprGenericCoverageTest, NoneGenericTypeThrows) {
   BoolExprCache::destroy();
 }
 
+TEST(Tree2BoolExprGenericCoverageTest, RomArityMismatchThrows) {
+  setChildExpressions({BoolExpr::Var(10), BoolExpr::Var(20)});
+
+  // Four rows of one bit each: 1, 0, 1, 1, read by two address bits.
+  const auto table = SNLTruthTable::Rom(
+      {2, 4, {true, false, true, true}}, SNLTruthTable::fullDependencies(2));
+  EXPECT_THROW(buildRomTruthTableExpr(table, 3), std::runtime_error);
+
+  BoolExpr* expr = buildRomTruthTableExpr(table, 2);
+  ASSERT_NE(expr, nullptr);
+  EXPECT_FALSE(expr->evaluate({{10, false}, {20, true}}));
+  EXPECT_TRUE(expr->evaluate({{10, true}, {20, true}}));
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+namespace {
+
+constexpr size_t kVectorDataVarBase = 100;
+constexpr size_t kVectorOffsetVarBase = 200;
+constexpr size_t kVectorBaseVar = 300;
+constexpr size_t kVectorEnableVar = 400;
+
+// Appends BUS[width-1] .. BUS[0], the flattened model-term order naja uses for
+// the DATA and OFFSET dependencies of the vector primitives.
+void appendBusMsbFirst(std::vector<BoolExpr*>& children,
+                       size_t varBase,
+                       uint32_t width) {
+  for (uint32_t bit = width; bit-- > 0;) {
+    children.push_back(BoolExpr::Var(varBase + bit));
+  }
+}
+
+// The dependency-ordered input vector naja's evaluators take, read from the
+// per-variable assignment.
+std::vector<bool> inputsFromChildren(
+    const std::vector<BoolExpr*>& children,
+    const std::unordered_map<size_t, bool>& values) {
+  std::vector<bool> inputs;
+  inputs.reserve(children.size());
+  for (const auto* child : children) {
+    inputs.push_back(values.at(child->getId()));
+  }
+  return inputs;
+}
+
+}  // namespace
+
+// Every (data, offset) assignment agrees with naja's binary evaluator; an
+// out-of-range window bit, which naja reports as no value, reads 0.
+TEST(Tree2BoolExprGenericCoverageTest, VectorSelectMatchesNajaEvaluator) {
+  constexpr uint32_t width = 4;
+  constexpr uint32_t selectWidth = 2;
+  constexpr uint32_t addressSize = 3;
+  for (const bool isSigned : {false, true}) {
+    for (uint32_t outputBit = 0; outputBit < selectWidth; ++outputBit) {
+      SCOPED_TRACE(::testing::Message()
+                   << "signed=" << isSigned << " outputBit=" << outputBit);
+      std::vector<BoolExpr*> children;
+      appendBusMsbFirst(children, kVectorDataVarBase, width);
+      appendBusMsbFirst(children, kVectorOffsetVarBase, addressSize);
+      setChildExpressions(children);
+
+      const auto table = SNLTruthTable::VectorSelect(
+          {width, selectWidth, addressSize, outputBit, isSigned},
+          SNLTruthTable::fullDependencies(width + addressSize));
+      auto* expr = buildGenericTruthTableExpr(table, width + addressSize);
+      ASSERT_NE(expr, nullptr);
+
+      size_t inRange = 0;
+      size_t outOfRange = 0;
+      for (uint32_t data = 0; data < (1u << width); ++data) {
+        for (uint32_t offset = 0; offset < (1u << addressSize); ++offset) {
+          std::unordered_map<size_t, bool> values;
+          for (uint32_t bit = 0; bit < width; ++bit) {
+            values.emplace(kVectorDataVarBase + bit, (data >> bit) & 1);
+          }
+          for (uint32_t bit = 0; bit < addressSize; ++bit) {
+            values.emplace(kVectorOffsetVarBase + bit, (offset >> bit) & 1);
+          }
+          const auto expected =
+              table.evaluateVectorSelect(inputsFromChildren(children, values));
+          (expected.has_value() ? inRange : outOfRange)++;
+          EXPECT_EQ(expr->evaluate(values), expected.value_or(false))
+              << "data=" << data << " offset=" << offset;
+        }
+      }
+      EXPECT_GT(inRange, 0u);
+      EXPECT_GT(outOfRange, 0u);
+      clearChildFETS();
+      BoolExprCache::destroy();
+    }
+  }
+}
+
+// Every assignment agrees with naja's evaluator: EN low or an offset that
+// places no window bit at the output keeps BASE, a partial overlap is clipped.
+TEST(Tree2BoolExprGenericCoverageTest, VectorUpdateMatchesNajaEvaluator) {
+  constexpr uint32_t width = 4;
+  constexpr uint32_t updateWidth = 2;
+  constexpr uint32_t addressSize = 3;
+  constexpr uint32_t arity = updateWidth + addressSize + 2;
+  for (const bool isSigned : {false, true}) {
+    for (uint32_t outputBit = 0; outputBit < width; ++outputBit) {
+      SCOPED_TRACE(::testing::Message()
+                   << "signed=" << isSigned << " outputBit=" << outputBit);
+      std::vector<BoolExpr*> children{BoolExpr::Var(kVectorBaseVar)};
+      appendBusMsbFirst(children, kVectorDataVarBase, updateWidth);
+      appendBusMsbFirst(children, kVectorOffsetVarBase, addressSize);
+      children.push_back(BoolExpr::Var(kVectorEnableVar));
+      ASSERT_EQ(children.size(), arity);
+      setChildExpressions(children);
+
+      const auto table = SNLTruthTable::VectorUpdate(
+          {width, updateWidth, addressSize, outputBit, isSigned},
+          SNLTruthTable::fullDependencies(arity));
+      auto* expr = buildGenericTruthTableExpr(table, arity);
+      ASSERT_NE(expr, nullptr);
+
+      size_t written = 0;
+      for (uint32_t assignment = 0; assignment < (1u << arity); ++assignment) {
+        std::unordered_map<size_t, bool> values;
+        for (size_t index = 0; index < children.size(); ++index) {
+          values.emplace(children[index]->getId(), (assignment >> index) & 1);
+        }
+        const bool expected =
+            table.evaluateVectorUpdate(inputsFromChildren(children, values));
+        written += expected != values.at(kVectorBaseVar);
+        EXPECT_EQ(expr->evaluate(values), expected)
+            << "assignment=" << assignment;
+      }
+      EXPECT_GT(written, 0u);
+      clearChildFETS();
+      BoolExprCache::destroy();
+    }
+  }
+}
+
+// Offsets wider than 64 bits: the bits past the value repeat its sign, so a
+// high unsigned bit leaves the window and an all-ones signed offset is -1.
+TEST(Tree2BoolExprGenericCoverageTest, VectorSelectDecodesWideOffsets) {
+  constexpr uint32_t width = 2;
+  constexpr uint32_t addressSize = 65;
+  const auto evaluate = [&](bool isSigned, uint32_t outputBit,
+                            const std::vector<uint32_t>& highOffsetBits,
+                            uint32_t data) {
+    std::vector<BoolExpr*> children;
+    appendBusMsbFirst(children, kVectorDataVarBase, width);
+    appendBusMsbFirst(children, kVectorOffsetVarBase, addressSize);
+    setChildExpressions(children);
+    const auto table = SNLTruthTable::VectorSelect(
+        {width, 2, addressSize, outputBit, isSigned},
+        SNLTruthTable::fullDependencies(width + addressSize));
+    auto* expr = buildGenericTruthTableExpr(table, width + addressSize);
+    std::unordered_map<size_t, bool> values;
+    for (uint32_t bit = 0; bit < width; ++bit) {
+      values.emplace(kVectorDataVarBase + bit, (data >> bit) & 1);
+    }
+    for (uint32_t bit = 0; bit < addressSize; ++bit) {
+      values.emplace(kVectorOffsetVarBase + bit, false);
+    }
+    for (const auto bit : highOffsetBits) {
+      values[kVectorOffsetVarBase + bit] = true;
+    }
+    const bool result = expr->evaluate(values);
+    clearChildFETS();
+    BoolExprCache::destroy();
+    return result;
+  };
+
+  // data = 2'b10: offset 0 reads bit 0, offset 1 reads bit 1.
+  EXPECT_FALSE(evaluate(false, 0, {}, 0b10));
+  EXPECT_TRUE(evaluate(false, 0, {0}, 0b10));
+  // Only bit 64 set: out of range for an unsigned offset.
+  EXPECT_FALSE(evaluate(false, 0, {64}, 0b11));
+  // All 65 bits set: a signed offset of -1 places DATA[0] at output bit 1.
+  std::vector<uint32_t> allBits;
+  for (uint32_t bit = 0; bit < addressSize; ++bit) {
+    allBits.push_back(bit);
+  }
+  EXPECT_TRUE(evaluate(true, 1, allBits, 0b01));
+  EXPECT_FALSE(evaluate(true, 1, allBits, 0b10));
+}
+
+TEST(Tree2BoolExprGenericCoverageTest, VectorArityMismatchThrows) {
+  std::vector<BoolExpr*> children;
+  for (size_t i = 0; i < 6; ++i) {
+    children.push_back(BoolExpr::Var(10 + i));
+  }
+  setChildExpressions(children);
+
+  const auto select = SNLTruthTable::VectorSelect(
+      {2, 1, 2, 0, false}, SNLTruthTable::fullDependencies(4));
+  EXPECT_THROW(buildVectorSelectTruthTableExpr(select, 5), std::runtime_error);
+  EXPECT_NE(buildVectorSelectTruthTableExpr(select, 4), nullptr);
+
+  const auto update = SNLTruthTable::VectorUpdate(
+      {2, 1, 2, 0, false}, SNLTruthTable::fullDependencies(5));
+  EXPECT_THROW(buildVectorUpdateTruthTableExpr(update, 6), std::runtime_error);
+  EXPECT_NE(buildVectorUpdateTruthTableExpr(update, 5), nullptr);
+
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
 class Tree2BoolExprDivModTest : public ::testing::Test {
  protected:
   void TearDown() override {
@@ -1416,6 +1625,34 @@ TEST_F(Tree2BoolExprWordTest, AddSubtractMultiplyAndShiftMatchArithmetic) {
               const int value = a & 8u ? static_cast<int>(a) - 16 : static_cast<int>(a);
               return static_cast<unsigned>(b >= 4 ? (value < 0 ? -1 : 0) : value >> b);
             });
+}
+
+TEST_F(Tree2BoolExprWordTest, WordBuilderReusesTheCachedExpressionOfAnIsomorphicNode) {
+  NLUniverse::create();
+  auto* add = NLDB0::getOrCreateAddSub(4, false);
+  auto* output = NLDB0::getAddSubOutput(add);
+  const auto outputs = buildOutputs(add, output);
+  ASSERT_EQ(outputs.size(), static_cast<size_t>(output->getWidth()));
+
+  // The first build cached every output bit under the instance's iso IDs; a
+  // second request for a cached node is served from that cache unchanged.
+  auto* instance =
+      NLUniverse::get()->getTopDesign()->getInstance(NLName("word0"));
+  ASSERT_NE(instance, nullptr);
+  const auto output0ID = findDNLTermIDByInstanceTermAndBit(
+      "word0", output->getName().getString().c_str(), 0);
+  const auto& output0 = naja::DNL::get()->getDNLTerminalFromID(output0ID);
+  ASSERT_NE(output0.getIsoID(), naja::DNL::DNLID_MAX);
+  SNLTruthTableTree tree;
+  auto node = std::make_shared<Node>(0u, &tree);
+  node->type = Node::Type::Table;
+  node->data.termid = output0ID;
+  const auto table = SNLDesignModeling::getTruthTable(
+      instance, output->getBit(0)->getOrderID());
+  BoolExpr* cached = Tree2BoolExpr::iso2boolExpr_.at(output0.getIsoID());
+  EXPECT_EQ(buildGenericTruthTableExpr(table, table.size(), node.get(),
+                                       output0.getIsoID()),
+            cached);
 }
 
 TEST_F(Tree2BoolExprWordTest, ReadOnlyMemoryReadsItsContents) {

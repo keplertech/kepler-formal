@@ -19,7 +19,10 @@ Prepared equivalence-model export is documented in
 [btor2-export.md](btor2-export.md).
 
 Sequential primitive support and latch opacity are documented in
-[sec-sequential-models.md](sec-sequential-models.md).
+[sec-sequential-models.md](sec-sequential-models.md), latch handling in
+[sec-latch-support.md](sec-latch-support.md), and the expansion of
+combinational primitives in
+[sec-primitive-expansion.md](sec-primitive-expansion.md).
 
 Supported SEC flows:
 
@@ -120,8 +123,8 @@ liberty_files:
 | `--use-scopes` | `use_scopes: true` | `false` | boolean | Scoped SEC: compares the two hierarchies bottom-up and proves only the module pairs whose own implementation differs, each with its ports as the environment; see [Scoped SEC](#scoped-sec). Needs both designs loaded, so it cannot be combined with `--compact`, `--set-as-boundary`, `clean_scopes` or BTOR2 export. |
 | `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
-| `--no-latch-abstraction` | `latch_abstraction: false` | `true` | boolean | Disables the SEC latch abstraction described in [sec-sequential-models.md](sec-sequential-models.md); every latch output is opaque again, as before. |
-| `--no-data-latch-model` | `data_latch_model: false` | `true` | boolean | Disables the data-enabled latch model described in [sec-sequential-models.md](sec-sequential-models.md); latches whose enable is not a clock phase are opaque. |
+| `--latch-abstraction <bool>` | `latch_abstraction: <bool>` | `true` | `true`, `false`, `1`, `0` | Phase-abstract clock-driven latches as described in [sec-latch-support.md](sec-latch-support.md). `false` makes every latch output opaque again, as before, and disables the data-enabled latch model with it. |
+| `--data-latch-model <bool>` | `data_latch_model: <bool>` | `true` | `true`, `false`, `1`, `0` | Model latches whose enable is not a clock phase as step-transparent state, as described in [sec-latch-support.md](sec-latch-support.md). `false` leaves them opaque. |
 | `--sec-seed-cycles <n>` | `sec_seed_cycles: <n>` | `0` | Non-negative integer | Enables the simulation-seeded counterexample search with a simulated prefix of `n` cycles; see [sec-seeded-search.md](sec-seeded-search.md). |
 | `--sec-seed-trials <n>` | `sec_seed_trials: <n>` | `32` | Non-negative integer | Number of held-input simulation prefixes tried by the seeded search. |
 | `--sec-seed-depth <n>` | `sec_seed_depth: <n>` | `40` | Non-negative integer | Bounded search depth after the simulated prefix. |
@@ -380,6 +383,11 @@ write the following files in the current working directory:
 Skipped outputs are also summarized in the main run log, including no-driver,
 multi-driver, logical-loop, reset-unanchored, multi-clock-domain, and opaque
 internal skips.
+
+A sequential cell pin that has no net at all is recorded as a connectivity
+skip with the reason `its pin is not connected`. The state behind it and the
+outputs depending on that state are skipped and reported like a pin on an
+undriven net, and the rest of the design is still proved.
 
 ## Compact SEC
 

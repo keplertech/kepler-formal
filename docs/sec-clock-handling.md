@@ -37,6 +37,14 @@ clock domain when it is structurally derived from the same source clock.
 SEC seeds clock domains from top-level clock carrier inputs and then classifies
 clock expressions seen on sequential clock pins.
 
+A top-level input is a clock carrier when its fanout, through combinational
+cells, reaches only sequential clock pins. Loads without a function, such as
+antenna diodes or clock-load cells with unconnected outputs, are ignored. The
+port name does not matter; the names `CLK`, `CLOCK`, `CK` and `*_CLK` remain a
+fallback for inputs whose fanout cannot be classified. Routed clock-tree names
+(`clkbuf*`, `clknet*`) only extend a clock domain that was found this way; they
+never create one on their own.
+
 The classifier handles:
 
 - Direct clock use, such as `clk`.
@@ -106,7 +114,7 @@ next_state = enable ? data_next : current_state
 This means clock gating is modeled as state enable behavior rather than as a
 new independent clock when the gate is combinational and fully modelable.
 A clock-gate latch in the gating cone is reduced by the latch abstraction in
-[sec-sequential-models.md](sec-sequential-models.md): open while the clock is
+[sec-latch-support.md](sec-latch-support.md): open while the clock is
 low, it is a wire when the state samples, so the gate's enable becomes the latch
 data input. Latches the abstraction does not cover stay opaque.
 

@@ -23,14 +23,16 @@ slang's Python generators) come from Bazel modules.
 ## Dependencies
 
 Every dependency is a `bazel_dep` from BCR: `naja`, `onetbb`, `spdlog`,
-`yaml-cpp`, `kissat`, `glucose`, `googletest`, and, through naja,
+`yaml-cpp`, `cadical`, `kissat`, `glucose`, `googletest`, and, through naja,
 `naja-if`, `naja-verilog`, `capnp-cpp`, `boost.*`, `fmt`, `bison`,
 `flex`, `sv-lang`, `rules_python`, and others.
 
-The one exception is `cadical` 3.0.0, which `MODULE.bazel` vendors with
-`http_archive` and `bazel/cadical.BUILD.bazel` until
-bazelbuild/bazel-central-registry#10883 merges; then it becomes a
-`bazel_dep` again.
+One exception, to be dropped once a naja with the `VECTOR_SELECT` and
+`VECTOR_UPDATE` primitives is published: `naja` comes from a `git_override`
+on upstream `keplertech/naja` (commit `cb14239`, naja#507), with `naja-if`
+and `naja-verilog` pinned to the versions that naja builds with. A downstream
+module has to repeat the override, as `.github/consumer-test` does, because
+overrides only take effect in the root module.
 
 ## Depending on kepler-formal
 

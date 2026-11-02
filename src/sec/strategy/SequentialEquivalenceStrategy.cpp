@@ -1649,8 +1649,8 @@ findDualRailResidualCounterexample(const KInductionProblem& subsetProblem,
                                    size_t maxK) {
                                    // LCOV_DISABLED_STOP
   for (size_t depth = 0; depth <= maxK; ++depth) {
-    if (auto witness =
-            SEC::findBaseCounterexampleAtFrontier(subsetProblem, solverType, depth);
+    if (auto witness = SEC::findBaseCounterexampleAtFrontier(
+            subsetProblem, solverType, depth, maxK);
         witness.has_value()) {
       return witness; // LCOV_EXCL_LINE
     }
@@ -1767,7 +1767,7 @@ findSmallDualRailResidualConcreteCounterexample(
         makeOutputSubsetProblem(problem, {outputIndex});
     for (size_t depth = 0; depth <= maxK; ++depth) {
       if (auto witness = SEC::findBaseCounterexampleAtFrontier(
-              singleOutputProblem, solverType, depth);
+              singleOutputProblem, solverType, depth, maxK);
           witness.has_value()) {
         return witness; // LCOV_EXCL_LINE
       }

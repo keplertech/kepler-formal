@@ -637,7 +637,123 @@ BoolExpr* buildWordTruthTableExpr(
   return selected;
 }
 
+// Dynamic part selects.  naja's VECTOR_SELECT reads a window of DATA at a
+// signed or unsigned OFFSET and VECTOR_UPDATE overwrites a window of BASE
+// there.  Every output bit has its own table whose candidates are the window
+// bits an OFFSET value would place at that output; the OFFSET bits arrive most
+// significant bit first after the data they index and are decoded as one mux
+// tree that prunes every address prefix no candidate uses.
+struct OffsetCandidate {
+  int64_t offset;
+  BoolExpr* value;
+};
+
+// naja's evaluators skip offsets the ABITS-bit OFFSET cannot hold instead of
+// aliasing them modulo 2^ABITS.
+bool isOffsetRepresentable(int64_t offset, uint32_t addressSize, bool isSigned) {
+  if (!isSigned && offset < 0) {
+    return false;
+  }
+  if (addressSize >= 64) {
+    return true;
+  }
+  if (isSigned) {
+    const int64_t limit = int64_t{1} << (addressSize - 1);
+    return offset >= -limit && offset < limit;
+  }
+  return static_cast<uint64_t>(offset) < (uint64_t{1} << addressSize);
+}
+
+// Bit `bit` of the two's complement pattern naja compares OFFSET against; bits
+// past the 64 of the offset value repeat its sign.
+bool offsetPatternBit(int64_t offset, uint32_t bit) {
+  if (bit < 64) {
+    return ((static_cast<uint64_t>(offset) >> bit) & 1) != 0;
+  }
+  return offset < 0;
+}
+
+// Decodes OFFSET from its most significant bit (child `offsetChildBase`) down.
+// `candidates` are the values still consistent with the decoded prefix and
+// `miss` is the result when none remains.
+BoolExpr* decodeOffsetCandidates(
+    const std::vector<OffsetCandidate>& candidates,
+    uint32_t addressSize,
+    uint32_t addressIndex,
+    size_t offsetChildBase,
+    BoolExpr* miss) {
+  if (candidates.empty()) {
+    return miss;
+  }
+  if (addressIndex == addressSize) {
+    // Representable offsets have distinct patterns, so one candidate is left.
+    assert(candidates.size() == 1);
+    return candidates.front().value;
+  }
+  const uint32_t bit = addressSize - 1 - addressIndex;
+  std::vector<OffsetCandidate> low;
+  std::vector<OffsetCandidate> high;
+  for (const auto& candidate : candidates) {
+    (offsetPatternBit(candidate.offset, bit) ? high : low).push_back(candidate);
+  }
+  BoolExpr* lowExpr = decodeOffsetCandidates(
+      low, addressSize, addressIndex + 1, offsetChildBase, miss);
+  BoolExpr* highExpr = decodeOffsetCandidates(
+      high, addressSize, addressIndex + 1, offsetChildBase, miss);
+  if (lowExpr == highExpr) {
+    return lowExpr;
+  }
+  return makeIte(getChildFETS(offsetChildBase + addressIndex), highExpr, lowExpr);
+}
+
 }  // namespace
+
+// Output bit o of a VECTOR_SELECT reads DATA[OFFSET + o].  Dependencies: DATA
+// most significant bit first, then OFFSET most significant bit first.  A window
+// bit past either end of DATA is X in naja's model; like a TABLE_SELECT row at
+// or beyond the depth it reads 0 here.
+BoolExpr* buildVectorSelectTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+  const auto& select = tbl.getVectorSelectMetadata();
+  if (k != select.width + select.addressSize) {
+    throw std::runtime_error("VECTOR_SELECT truth table arity mismatch");
+  }
+  std::vector<OffsetCandidate> candidates;
+  for (uint32_t dataBit = 0; dataBit < select.width; ++dataBit) {
+    const int64_t offset =
+        static_cast<int64_t>(dataBit) - static_cast<int64_t>(select.outputBit);
+    if (!isOffsetRepresentable(offset, select.addressSize, select.isSigned)) {
+      continue;
+    }
+    candidates.push_back({offset, getChildFETS(select.width - 1 - dataBit)});
+  }
+  return decodeOffsetCandidates(
+      candidates, select.addressSize, 0, select.width, BoolExpr::createFalse());
+}
+
+// Output bit o of a VECTOR_UPDATE is DATA[o - OFFSET] when EN holds and that
+// window bit exists, else BASE[o].  Dependencies: BASE[o], DATA most
+// significant bit first, OFFSET most significant bit first, EN.
+BoolExpr* buildVectorUpdateTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+  const auto& update = tbl.getVectorUpdateMetadata();
+  if (k != update.updateWidth + update.addressSize + 2) {
+    throw std::runtime_error("VECTOR_UPDATE truth table arity mismatch");
+  }
+  BoolExpr* base = getChildFETS(0);
+  BoolExpr* enable = getChildFETS(k - 1);
+  std::vector<OffsetCandidate> candidates;
+  for (uint32_t dataBit = 0; dataBit < update.updateWidth; ++dataBit) {
+    const int64_t offset =
+        static_cast<int64_t>(update.outputBit) - static_cast<int64_t>(dataBit);
+    if (!isOffsetRepresentable(offset, update.addressSize, update.isSigned)) {
+      continue;
+    }
+    candidates.push_back(
+        {offset, getChildFETS(1 + update.updateWidth - 1 - dataBit)});
+  }
+  BoolExpr* written = decodeOffsetCandidates(
+      candidates, update.addressSize, 0, 1 + update.updateWidth, base);
+  return makeIte(enable, written, base);
+}
 
 BoolExpr* buildGenericTruthTableExpr(
     const SNLTruthTable& tbl,
@@ -679,6 +795,10 @@ BoolExpr* buildGenericTruthTableExpr(
       return buildTableSelectTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::ROM:
       return buildRomTruthTableExpr(tbl, k);
+    case SNLTruthTable::GenericType::VECTOR_SELECT:
+      return buildVectorSelectTruthTableExpr(tbl, k);
+    case SNLTruthTable::GenericType::VECTOR_UPDATE:
+      return buildVectorUpdateTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::DIVMOD:
       return buildDivModTruthTableExpr(tbl, k, node, isoID);
     case SNLTruthTable::GenericType::ADD_SUB:

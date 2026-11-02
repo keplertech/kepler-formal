@@ -11,3 +11,15 @@ sh_binary(
         "mcp/pyproject.toml",
     ],
 )
+
+filegroup(
+    name = "licenses",
+    srcs = ["LICENSE.rst"] + glob(["LICENSES/*"]),
+    visibility = ["//packaging:__pkg__"],
+)
+
+alias(
+    name = "install",
+    actual = "//packaging:install",
+    visibility = ["//visibility:public"],
+)

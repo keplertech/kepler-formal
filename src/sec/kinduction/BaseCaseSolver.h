@@ -71,12 +71,14 @@ BaseCounterexampleCheckResult checkBaseCounterexampleWithFastValidation(
 // Same bounded transition prefix as findBaseCounterexample(k), but the bad
 // predicate is asserted only on the newest frontier frame. K-induction calls
 // this after previous smaller frontiers were already proved safe, avoiding a
-// repeated OR over old bad frames on every depth.
+// repeated OR over old bad frames on every depth.  Sweeps that stop at maxK
+// pass it so the dual-rail public base prefix is never proved past that depth.
 std::optional<KInductionResult::CounterexampleWitness>
 findBaseCounterexampleAtFrontier(
     const KInductionProblem& problem,
     KEPLER_FORMAL::Config::SolverType solverType,
-    size_t k);
+    size_t k,
+    std::optional<size_t> maxK = std::nullopt);
 
 struct ImcBaseCounterexampleCache;
 using KInductionBaseCounterexampleCache = ImcBaseCounterexampleCache;

@@ -120,13 +120,24 @@ bazelisk build //src/bin:kepler-formal
 bazelisk test //...
 ```
 
+To install, run the `install` target with a prefix; the binary lands in
+`<prefix>/bin/kepler-formal` and finds its libraries and Python runtime
+next to it, so the prefix can be moved or copied:
+
+```bash
+bazelisk run -c opt //:install -- <prefix>
+```
+
+From another Bazel module, the same target is
+`@kepler-formal//:install`.
+
 Dependencies, where modules not yet on the Bazel Central Registry come
 from, and how to depend on kepler-formal from another Bazel
 module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 
-The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
+The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md). Latch handling is described in [docs/sec-latch-support.md](docs/sec-latch-support.md) and the expansion of word-level primitives and read-only memories in [docs/sec-primitive-expansion.md](docs/sec-primitive-expansion.md).
 
 ## Custom Python Primitives
 

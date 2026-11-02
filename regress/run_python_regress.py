@@ -82,7 +82,12 @@ def main():
             provider = build / "naja"
             run("cmake", "-S", ROOT / "thirdparty/naja", "-B", provider,
                 *common, "-DBUILD_NAJA_PYTHON=ON", "-DPREGENERATED_PARSER_SOURCES=OFF")
-            run("cmake", "--build", provider, "--target", "naja", "--parallel", args.jobs)
+            # Build the default target, as the najaeda wheel does, so the
+            # install step below finds every library the provider installs
+            # (naja_tgraph is installed but not linked by the naja module).
+            # With BUILD_NAJA_PYTHON=ON this is the libraries and the Python
+            # module only: no tests, apps or docs.
+            run("cmake", "--build", provider, "--parallel", args.jobs)
             run("cmake", "--install", provider)
 
             # Import before configuring Kepler so a missing provider cannot

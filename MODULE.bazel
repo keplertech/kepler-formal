@@ -1,8 +1,7 @@
 """kepler-formal: formal equivalence checking on naja netlists.
 
-Every dependency is a plain bazel_dep from the Bazel Central Registry,
-except cadical, vendored below until its BCR pull request merges. See
-docs/bcr-roadmap.md.
+Every dependency is a plain bazel_dep from the Bazel Central Registry.
+See docs/bcr-roadmap.md.
 """
 
 module(
@@ -12,12 +11,29 @@ module(
     bazel_compatibility = [">=8.0.0"],
 )
 
+bazel_dep(name = "cadical", version = "3.0.0")
 bazel_dep(name = "glucose", version = "4.2.1-20251230-674dbba")
 bazel_dep(name = "kissat", version = "4.0.4")
-bazel_dep(name = "naja", version = "0.7.26-20261014-3da8811d")
+bazel_dep(name = "naja", version = "0.7.26-20261023-4e324572")
+
+# The newest naja on BCR predates its VECTOR_SELECT/VECTOR_UPDATE primitives,
+# which src/clauses/Tree2BoolExpr.cpp expands, so naja comes from upstream
+# naja#507 until a newer naja is published. naja's own MODULE.bazel pins the
+# naja-if and naja-verilog versions its BCR overlay replaces; the two pins
+# below select the ones naja builds and tests with (its submodules), whose
+# naja-if schema defines the SCHEMA_* constants SNLDump.cpp uses. Overrides
+# apply to the root module only: .github/consumer-test repeats the override.
+git_override(
+    module_name = "naja",
+    remote = "https://github.com/keplertech/naja.git",
+    commit = "cb1423987af36264440720a3901c2332e1adc444",
+)
+bazel_dep(name = "naja-if", version = "0.0.0-20261020-e1ce72c5")
+bazel_dep(name = "naja-verilog", version = "0.0.0-20261014-4459520a")
 bazel_dep(name = "onetbb", version = "2023.1.0")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
 bazel_dep(name = "rules_python", version = "1.9.0")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "spdlog", version = "1.17.0")
@@ -25,35 +41,24 @@ bazel_dep(name = "yaml-cpp", version = "0.9.0.bcr.1")
 
 bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True)
 
-# TODO(bazelbuild/bazel-central-registry#10883): replace with
-# bazel_dep(name = "cadical", version = "3.0.0") once it merges, and
-# delete bazel/cadical.BUILD.bazel. Same archive and BUILD file.
-http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "cadical",
-    build_file = "//bazel:cadical.BUILD.bazel",
-    integrity = "sha256-KCsclCL96GMctyG4ZFCulN9OjeBUXBemmjAaqkv5L88=",
-    strip_prefix = "cadical-rel-3.0.0",
-    urls = ["https://github.com/arminbiere/cadical/archive/refs/tags/rel-3.0.0.tar.gz"],
-)
-
 # Hermetic zero-sysroot LLVM toolchain (hermetic-llvm): statically linked
 # clang 22, libc++ linked statically by default, glibc 2.28 floor. No host
 # compiler, headers or /usr/lib involved. Scoped to Linux for now; macOS
 # keeps the host Xcode toolchain.
 #
-# The toolchain is *registered* as a dev_dependency so it applies only when
-# kepler-formal is the root module (its own builds and CI). register_toolchains
-# from a dependency is global: a module that depends on kepler-formal would
-# otherwise inherit this toolchain and have its own C++ toolchain selection
-# silently replaced. A consumer that wants the same toolchain registers it
-# itself, as .github/consumer-test does. The extension usage itself stays
-# non-dev: its extension_metadata reports non-dev root deps, which Bazel
-# rejects if the only usage is dev.
-bazel_dep(name = "llvm", version = "0.8.24")
+# Everything below is a dev_dependency, so it applies only when
+# kepler-formal is the root module (its own builds and CI).
+# register_toolchains from a dependency is global: a module that depends
+# on kepler-formal would otherwise have its own C++ toolchain selection
+# silently replaced. A consumer that wants the same toolchain sets it up
+# itself, as .github/consumer-test does.
+bazel_dep(name = "llvm", version = "0.8.26", dev_dependency = True)
 
-llvm_toolchains = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+llvm_toolchains = use_extension(
+    "@llvm//extensions:toolchain.bzl",
+    "toolchain",
+    dev_dependency = True,
+)
 llvm_toolchains.exec(
     arch = "x86_64",
     os = "linux",
