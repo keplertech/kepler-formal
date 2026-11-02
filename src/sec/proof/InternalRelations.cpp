@@ -1050,16 +1050,41 @@ void learnInternalStateRelations(
     // pair can fail the rail check. Retry those pairs in binary semantics,
     // which proves equality from any common initial state; design 2's
     // register then takes design 1's transition in the proof problem.
-    std::unordered_set<size_t> provedSymbols;
+    // A pair is already proved when the rail-proved equalities put its two
+    // symbols in one class (van Eijk, TCAD 2000). Appearing in some rail pair
+    // is not enough: a register's Q and QN rails are proved complementary
+    // within one design, so once the rail fixed point converges every symbol
+    // appears in a rail pair, and a per-symbol test would drop every
+    // cross-design pair that only binary semantics proves.
+    std::unordered_map<size_t, size_t> railParent;
+    const auto railRoot = [&railParent](size_t symbol) {
+      size_t root = symbol;
+      for (auto it = railParent.find(root); it != railParent.end() && it->second != root;
+           it = railParent.find(root)) {
+        root = it->second;
+      }
+      while (symbol != root) {
+        const size_t next = railParent.at(symbol);
+        railParent[symbol] = root;
+        symbol = next;
+      }
+      return root;
+    };
     for (const auto& [lhs, rhs] : proved) {
-      provedSymbols.insert(lhs);
-      provedSymbols.insert(rhs);
+      const size_t a = railRoot(lhs);
+      const size_t b = railRoot(rhs);
+      if (a != b) {
+        railParent[std::max(a, b)] = std::min(a, b);
+      }
     }
+    const auto railProved = [&railRoot](size_t lhs, size_t rhs) {
+      return railRoot(lhs) == railRoot(rhs);
+    };
     // Every candidate is a hypothesis again: a rail-equal pair is binary
     // equal, and the others need it in the current frame.
     for (const auto& candidate : candidates) {
       for (const auto& [lhs, rhs] : candidate.equalities) {
-        if (!provedSymbols.contains(lhs) || !provedSymbols.contains(rhs)) {
+        if (!railProved(lhs, rhs)) {
           ++binaryRoundCandidates;
           break;
         }
@@ -1068,7 +1093,7 @@ void learnInternalStateRelations(
     const auto provedBinary =
         proveInternalRelations(problem, candidates, options, solverType, true);
     for (const auto& [lhs, rhs] : provedBinary) {
-      if (provedSymbols.contains(lhs)) {
+      if (railProved(lhs, rhs)) {
         continue;
       }
       problem.sharedTransitionPairs.emplace_back(lhs, rhs);
