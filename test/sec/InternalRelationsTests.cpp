@@ -467,6 +467,95 @@ TEST_F(InternalRelationsTests, BinaryRoundSharesTransitionsThatDifferOnlyInShape
   }
 }
 
+TEST_F(InternalRelationsTests, BinaryRoundKeepsPairsWhoseRegistersHaveRailPartners) {
+  // The designs of BinaryRoundSharesTransitionsThatDifferOnlyInShape, plus a
+  // register q2 beside q with the very same next-state formula. The rail
+  // round proves q ~ q2 inside each design, so every rail symbol of q appears
+  // in a proved pair, yet q of design 1 and q of design 2 are still unrelated:
+  // the binary round must prove and keep that pair.
+  const SignalKey q{{1}, {1}};
+  const SignalKey y{{2}, {2}};
+  const SignalKey sel{{3}, {3}};
+  const SignalKey in{{4}, {4}};
+  const SignalKey q2{{5}, {5}};
+  const auto design = [&](bool restructured) {
+    SequentialDesignModel model;
+    model.stateBits = {q, sel, q2};
+    model.inputVarByKey[q] = 2;
+    model.inputVarByKey[sel] = 3;
+    model.inputVarByKey[in] = 4;
+    model.inputVarByKey[q2] = 5;
+    model.environmentInputs = {in};
+    model.displayNameByKey[q] = "q";
+    model.displayNameByKey[sel] = "sel";
+    model.displayNameByKey[in] = "in";
+    model.displayNameByKey[q2] = "q2";
+    model.displayNameByKey[y] = "y";
+    model.nextStateExprByStateKey[sel] = BoolExpr::Var(3);
+    BoolExpr* next = restructured
+        ? BoolExpr::Or(BoolExpr::And(BoolExpr::Var(3), BoolExpr::Var(4)),
+                       BoolExpr::And(BoolExpr::Not(BoolExpr::Var(3)), BoolExpr::Var(4)))
+        : BoolExpr::Var(4);
+    model.nextStateExprByStateKey[q] = next;
+    model.nextStateExprByStateKey[q2] = next;
+    model.allObservedOutputs = model.observedOutputs = {y};
+    model.observedOutputExprByKey[y] = BoolExpr::Var(2);
+    return model;
+  };
+  const auto model0 = design(false);
+  const auto model1 = design(true);
+  // Rails 10..15 for q, sel and q2 of design 1, 16..21 for design 2, symbol
+  // 22 for the shared input.
+  KInductionProblem problem;
+  problem.usesDualRailStateEncoding = true;
+  problem.state0Symbols = {10, 11, 12, 13, 14, 15};
+  problem.state1Symbols = {16, 17, 18, 19, 20, 21};
+  problem.inputSymbols = {22};
+  for (size_t symbol = 10; symbol <= 22; ++symbol) {
+    problem.allSymbols.push_back(symbol);
+  }
+  problem.dualRailStatePairs = {{10, 11}, {12, 13}, {14, 15}, {16, 17}, {18, 19}, {20, 21}};
+  for (size_t symbol = 10; symbol < 22; ++symbol) {
+    problem.initialStateAssignments.emplace_back(symbol, true);
+  }
+  problem.observedOutputNames = {"y"};
+  problem.observedOutputExprs0 = {BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(10), BoolExpr::Var(16)))};
+  problem.observedOutputExprs1 = {BoolExpr::createTrue()};
+  problem.property = problem.observedOutputExprs0[0];
+  auto store = std::make_shared<LazyTransitionStore>();
+  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
+  const std::array<SignalKey, 3> bits{q, sel, q2};
+  for (size_t designIndex = 0; designIndex < 2; ++designIndex) {
+    store->localToCombinedByDesign[designIndex] = {{4, 22}};
+    const size_t base = 10 + 6 * designIndex;
+    store->dualRailStateByLocalSymbolByDesign[designIndex] = {
+        {2, {base, base + 1}}, {3, {base + 2, base + 3}}, {5, {base + 4, base + 5}}};
+    for (size_t bit = 0; bit < bits.size(); ++bit) {
+      BoolExpr* next = models[designIndex]->nextStateExprByStateKey.at(bits[bit]);
+      store->sourceByStateSymbol[base + 2 * bit] = {designIndex, next, LazyTransitionRail::DualRailOne};
+      store->sourceByStateSymbol[base + 2 * bit + 1] = {designIndex, next, LazyTransitionRail::DualRailZero};
+    }
+  }
+  problem.lazyTransitions = store;
+
+  learnInternalStateRelations(model0, model1, problem, {true, true, true},
+                              Config::SolverType::KISSAT, false);
+
+  const auto& pairs = problem.sameFrameStateEqualityPairs0;
+  const auto has = [&pairs](size_t lhs, size_t rhs) {
+    return std::find(pairs.begin(), pairs.end(), std::make_pair(lhs, rhs)) != pairs.end();
+  };
+  // The rail round relates q and q2 inside each design ...
+  EXPECT_TRUE(has(10, 14));
+  EXPECT_TRUE(has(16, 20));
+  // ... and the binary round still relates q across the designs.
+  EXPECT_TRUE(has(10, 16));
+  const auto& shared = problem.sharedTransitionPairs;
+  EXPECT_TRUE(std::find(shared.begin(), shared.end(), std::make_pair(10ul, 16ul)) != shared.end());
+  EXPECT_EQ(problem.observedOutputExprs0[0], BoolExpr::createTrue());
+  EXPECT_EQ(problem.property, BoolExpr::createTrue());
+}
+
 TEST_F(InternalRelationsTests, BinaryDischargeSkipsOutputsWithoutAFunctionOnBothSides) {
   // Same designs as BinaryRoundSharesTransitionsThatDifferOnlyInShape, plus
   // two observed output names that have no function to compare: "w" is a
