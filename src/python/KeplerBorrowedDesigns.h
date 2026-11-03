@@ -14,6 +14,8 @@ enum class BorrowedVerificationMode { LEC, SEC };
 
 // File loading, preprocessing, compact mode and scope cleaning deliberately
 // have no representation here: none may take ownership of a borrowed design.
+// The SEC proof controls (engine, encoding, bound, internal relations, latch
+// models, reset bootstrap and BTOR2 export) match the standalone CLI's.
 struct BorrowedDesignOptions {
   BorrowedVerificationMode mode = BorrowedVerificationMode::LEC;
   Config::SolverType solver = Config::SolverType::KISSAT;
@@ -21,6 +23,16 @@ struct BorrowedDesignOptions {
   SEC::SecEngine secEngine = SEC::SecEngine::Pdr;
   SEC::SecEncoding secEncoding = SEC::SecEncoding::DualRailSteady;
   SEC::InternalRelationOptions internalRelationOptions;
+  // SEC latch models; see Config::setSecLatchAbstraction and
+  // Config::setSecDataLatchModel. The call restores the caller's settings.
+  bool latchAbstraction = true;
+  bool dataLatchModel = true;
+  // SEC reset bootstrap: cycles and ports are given together. A spec with
+  // only one of the two is rejected instead of silently ignored.
+  SEC::SecResetSpec secReset;
+  // SEC BTOR2 export of the prepared obligation before solving; dumpOnly
+  // returns RunStatus::Exported without running the proof engine.
+  SEC::Btor2ExportOptions btor2Export;
   bool allowBoundaryMismatch = false;
   bool reportSkippedOutputs = false;
   std::string logFile;

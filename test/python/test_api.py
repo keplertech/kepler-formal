@@ -172,6 +172,103 @@ class PythonApiTest(unittest.TestCase):
                 with self.assertRaisesRegex(error_type, message):
                     verify_designs(self.reference, self.equivalent, options=options)
 
+    def test_sec_model_switches(self):
+        for binary_round in (False, True):
+            for latch in (False, True):
+                for data_latch in (False, True):
+                    with self.subTest(binary_round=binary_round, latch=latch,
+                                      data_latch=data_latch):
+                        result = verify_designs(
+                            self.reference, self.equivalent,
+                            options=VerificationOptions(
+                                mode=VerificationMode.SEC,
+                                binary_relation_round=binary_round,
+                                latch_abstraction=latch,
+                                data_latch_model=data_latch,
+                                log_file=self.root / "models.log"))
+                        self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+
+    def test_sec_reset_bootstrap(self):
+        result = verify_designs(
+            self.reference, self.equivalent,
+            options=VerificationOptions(
+                mode=VerificationMode.SEC,
+                sec_reset_cycles=2,
+                sec_reset_ports=[("a", True)],
+                log_file=self.root / "reset.log"))
+        self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+
+    def test_btor2_export(self):
+        exported = self.root / "obligation.btor2"
+        result = verify_designs(
+            self.reference, self.equivalent,
+            options=VerificationOptions(
+                mode=VerificationMode.SEC,
+                btor2_export_path=exported,
+                btor2_dump_only=True,
+                log_file=self.root / "export.log"))
+        self.assertEqual(VerificationStatus.EXPORTED, result.status)
+        self.assertEqual(0, result.exit_code)
+        self.assertFalse(result.conclusive)
+        self.assertTrue(exported.is_file())
+        self.assertIn("proof not run", result.reason)
+
+        exported.unlink()
+        proved = verify_designs(
+            self.reference, self.equivalent,
+            options=VerificationOptions(
+                mode=VerificationMode.SEC,
+                btor2_export_path=exported,
+                log_file=self.root / "export-and-prove.log"))
+        self.assertEqual(VerificationStatus.EQUIVALENT, proved.status)
+        self.assertTrue(exported.is_file())
+
+    def test_sec_only_option_validation(self):
+        sec = VerificationMode.SEC
+        invalid_options = (
+            (ValueError, "SEC", VerificationOptions(binary_relation_round=False)),
+            (ValueError, "SEC", VerificationOptions(latch_abstraction=False)),
+            (ValueError, "SEC", VerificationOptions(data_latch_model=False)),
+            (ValueError, "SEC", VerificationOptions(
+                sec_reset_cycles=1, sec_reset_ports=[("a", True)])),
+            (ValueError, "SEC", VerificationOptions(btor2_export_path="x.btor2")),
+            (TypeError, "binary_relation_round", VerificationOptions(
+                mode=sec, binary_relation_round="false")),
+            (TypeError, "latch_abstraction", VerificationOptions(
+                mode=sec, latch_abstraction=1)),
+            (TypeError, "data_latch_model", VerificationOptions(
+                mode=sec, data_latch_model=None)),
+            (TypeError, "sec_reset_cycles", VerificationOptions(
+                mode=sec, sec_reset_cycles="2", sec_reset_ports=[("a", True)])),
+            (ValueError, "positive", VerificationOptions(
+                mode=sec, sec_reset_cycles=0, sec_reset_ports=[("a", True)])),
+            (ValueError, "together", VerificationOptions(
+                mode=sec, sec_reset_cycles=2)),
+            (ValueError, "together", VerificationOptions(
+                mode=sec, sec_reset_ports=[("a", True)])),
+            (TypeError, "sec_reset_ports", VerificationOptions(
+                mode=sec, sec_reset_cycles=2, sec_reset_ports="a=1")),
+            (ValueError, "exactly", VerificationOptions(
+                mode=sec, sec_reset_cycles=2, sec_reset_ports=[("a",)])),
+            (TypeError, r"sec_reset_ports\[0\]\[1\]", VerificationOptions(
+                mode=sec, sec_reset_cycles=2, sec_reset_ports=[("a", 1)])),
+            (ValueError, "must not be empty", VerificationOptions(
+                mode=sec, sec_reset_cycles=2, sec_reset_ports=[("", True)])),
+            (ValueError, "duplicate", VerificationOptions(
+                mode=sec, sec_reset_cycles=2,
+                sec_reset_ports=[("a", True), ("a", False)])),
+            (ValueError, "btor2_export_path", VerificationOptions(
+                mode=sec, btor2_dump_only=True)),
+            (ValueError, "btor2_export_path", VerificationOptions(
+                mode=sec, btor2_export_path="")),
+            (TypeError, "btor2_dump_only", VerificationOptions(
+                mode=sec, btor2_export_path="x.btor2", btor2_dump_only="yes")),
+        )
+        for error_type, message, options in invalid_options:
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(error_type, message):
+                    verify_designs(self.reference, self.equivalent, options=options)
+
     def test_validation(self):
         invalid_options = (
             (ValueError, "SEC", VerificationOptions(max_k=2)),

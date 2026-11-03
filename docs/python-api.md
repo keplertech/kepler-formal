@@ -150,8 +150,9 @@ cannot change implicitly. If the design or its universe is destroyed, using
 the handle raises `ReferenceError`.
 
 `VerificationOptions` controls the mode, solver, SEC engine/encoding/bound,
-boundary handling, reports, and logging. Source formats, libraries, and
-preprocessing are configured through NajaEDA when loading designs.
+internal relations, latch models, reset bootstrap, BTOR2 export, boundary
+handling, reports, and logging. Source formats, libraries, and preprocessing
+are configured through NajaEDA when loading designs.
 
 The call is synchronous, serialized, and holds Python's GIL. Do not mutate,
 delete, or reset the shared NajaEDA universe from another native thread while
@@ -176,6 +177,13 @@ Enum fields accept either the exported enum member or its exact string value.
 | `sec_encoding` | native default (`dual_rail_steady`) | `dual_rail_steady` or `binary` |
 | `learn_internal_relations` | `True` | Learn proved internal register equalities for SEC |
 | `allow_x_equality_in_internal_relations` | `True` | Allow internal X/X relations without changing the final output property |
+| `binary_relation_round` | `True` | Retry unproved internal relations in binary semantics and share the proved transitions |
+| `latch_abstraction` | `True` | Phase-abstract clock-driven latches; `False` keeps every latch output opaque |
+| `data_latch_model` | `True` | Model data-enabled latches as step-transparent state; `False` leaves them opaque |
+| `sec_reset_cycles` | `None` | Hold the listed reset ports asserted for this many SEC cycles |
+| `sec_reset_ports` | `()` | `(name, active_value)` pairs naming top-level reset inputs and their asserted value |
+| `btor2_export_path` | `None` | Write the prepared SEC obligation as BTOR2 to this path before solving |
+| `btor2_dump_only` | `False` | Stop after the BTOR2 export; the result status is `EXPORTED` |
 | `allow_boundary_mismatch` | `False` | Permit supported extracted-boundary mismatches |
 | `report_skipped_outputs` | `False` | Ask the native engine to write detailed skipped-output reports |
 | `log_file` | `None` | Requested native log path; LEC selects a default path when omitted |
@@ -183,9 +191,37 @@ Enum fields accept either the exported enum member or its exact string value.
 | `set_as_boundary` | `()` | Ordered `(design1_path, design2_path)` instance-path pairs to treat as shared boundaries |
 
 `max_k`, `sec_engine`, and `sec_encoding` are SEC-only and are rejected when
-`mode` is LEC. Internal relation options may be changed only in SEC mode.
+`mode` is LEC. Internal relation and latch model options may be changed only
+in SEC mode, and reset bootstrap and BTOR2 export are rejected for LEC.
 `allow_boundary_mismatch` is supported only for LEC.
-`log_file` is expanded and resolved relative to the current working directory.
+`log_file` and `btor2_export_path` are expanded and resolved relative to the
+current working directory.
+
+### Reset bootstrap and BTOR2 export
+
+`sec_reset_cycles` and `sec_reset_ports` are given together and match the
+CLI's `--sec-reset-cycles` and `--sec-reset-port`; see
+[SEC reset bootstrap](sec-reset-bootstrap.md). The cycle count must be
+positive, and port names must be non-empty and unique.
+
+`btor2_export_path` matches `--dump-btor2`. With `btor2_dump_only=True` the
+call returns `VerificationStatus.EXPORTED` with `exit_code` zero and no proof
+verdict; see [BTOR2 export](btor2-export.md).
+
+```python
+exported = verify_designs(
+    reference,
+    implementation,
+    options=VerificationOptions(
+        mode=VerificationMode.SEC,
+        sec_reset_cycles=4,
+        sec_reset_ports=[("rst_n", False)],
+        btor2_export_path="obligation.btor2",
+        btor2_dump_only=True,
+    ),
+)
+assert exported.status is VerificationStatus.EXPORTED
+```
 
 ### Treat selected instances as shared boundaries
 
@@ -240,10 +276,11 @@ Always use `result.status` for the semantic outcome:
 | `PARTIALLY_PROVED` | SEC proved some observed outputs, but not all of them. |
 | `INCONCLUSIVE` | SEC completed without either a full proof or a counterexample, commonly because a bound or engine limit was reached. |
 | `UNSUPPORTED` | The selected SEC workflow cannot analyze the design pair. |
+| `EXPORTED` | `btor2_dump_only` wrote the BTOR2 obligation and no proof engine ran. |
 | `ERROR` | An operational step failed before a semantic verdict was produced; inspect `reason`. |
 
-`DIFFERENT`, `PARTIALLY_PROVED`, `INCONCLUSIVE`, `UNSUPPORTED`, and ordinary
-native `ERROR` outcomes are returned as values. For an `ERROR`, inspect `reason`,
+`DIFFERENT`, `PARTIALLY_PROVED`, `INCONCLUSIVE`, `UNSUPPORTED`, `EXPORTED`, and
+ordinary native `ERROR` outcomes are returned as values. For an `ERROR`, inspect `reason`,
 the native log output, and `exit_code`; some early failures can provide only a
 general reason.
 

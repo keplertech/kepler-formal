@@ -7,7 +7,7 @@ See docs/bcr-roadmap.md.
 module(
     name = "kepler-formal",
     # Keep in sync with KEPLER_VERSION in src/bin/KeplerVersion.h.in.
-    version = "0.5.0",
+    version = "1.0.0",
     bazel_compatibility = [">=8.0.0"],
 )
 
