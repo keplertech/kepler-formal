@@ -15,7 +15,7 @@ dependencies = ["najaeda==0.7.33"]
 license = {file = "LICENSE.rst"}
 dynamic = ["version"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: MacOS",

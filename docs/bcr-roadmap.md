@@ -45,7 +45,7 @@ build --cxxopt=-std=c++20
 
 ```python
 # MODULE.bazel
-bazel_dep(name = "kepler-formal", version = "0.5.0")
+bazel_dep(name = "kepler-formal", version = "1.0.0")
 git_override(
     module_name = "kepler-formal",
     remote = "https://github.com/keplertech/kepler-formal.git",
