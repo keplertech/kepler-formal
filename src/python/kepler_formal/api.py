@@ -49,6 +49,12 @@ class VerificationOptions:
     ``set_as_boundary`` pairs top-relative paths to leaf instances, whose
     models have no child instances. Hierarchical paths to leaves are valid;
     selecting a nonleaf instance is rejected.
+
+    ``sec_reset_ports`` pairs top-level reset input names with their asserted
+    value and ``sec_reset_cycles`` holds them for that many SEC cycles; both
+    are given together. ``btor2_export_path`` writes the prepared SEC
+    obligation before solving, and ``btor2_dump_only`` stops after the export
+    with ``VerificationStatus.EXPORTED``.
     """
 
     mode: VerificationMode | str = VerificationMode.LEC
@@ -65,6 +71,15 @@ class VerificationOptions:
     ) = ()
     learn_internal_relations: bool = True
     allow_x_equality_in_internal_relations: bool = True
+    binary_relation_round: bool = True
+    latch_abstraction: bool = True
+    data_latch_model: bool = True
+    sec_reset_cycles: int | None = None
+    sec_reset_ports: (
+        list[tuple[str, bool]] | tuple[tuple[str, bool], ...]
+    ) = ()
+    btor2_export_path: PathLike | None = None
+    btor2_dump_only: bool = False
 
 
 NativeDesign = _native.NativeDesign
@@ -181,8 +196,36 @@ def _build_native_design_options(
     if mode == VerificationMode.LEC.value and (
         settings.learn_internal_relations is not True
         or settings.allow_x_equality_in_internal_relations is not True
+        or settings.binary_relation_round is not True
     ):
         raise ValueError("Internal relation options are only supported for SEC")
+    if mode == VerificationMode.LEC.value and (
+        settings.latch_abstraction is not True
+        or settings.data_latch_model is not True
+    ):
+        raise ValueError("Latch model options are only supported for SEC")
+    sec_reset_cycles = _optional_positive_int(
+        settings.sec_reset_cycles, "sec_reset_cycles"
+    )
+    sec_reset_ports = _reset_ports(settings.sec_reset_ports)
+    btor2_export_path = _optional_path(
+        settings.btor2_export_path, "btor2_export_path"
+    )
+    btor2_dump_only = _boolean(settings.btor2_dump_only, "btor2_dump_only")
+    if mode == VerificationMode.LEC.value and (
+        sec_reset_cycles is not None or sec_reset_ports
+    ):
+        raise ValueError("SEC reset bootstrap is only supported for SEC")
+    if mode == VerificationMode.LEC.value and (
+        btor2_export_path is not None or btor2_dump_only
+    ):
+        raise ValueError("BTOR2 export is only supported for SEC")
+    if (sec_reset_cycles is None) != (not sec_reset_ports):
+        raise ValueError(
+            "sec_reset_cycles and sec_reset_ports must be given together"
+        )
+    if btor2_dump_only and btor2_export_path is None:
+        raise ValueError("btor2_dump_only requires btor2_export_path")
     if mode == VerificationMode.SEC.value and allow_boundary_mismatch:
         raise ValueError("allow_boundary_mismatch is only supported for LEC")
 
@@ -212,6 +255,16 @@ def _build_native_design_options(
         "allow_x_equality_in_internal_relations": _boolean(
             settings.allow_x_equality_in_internal_relations,
             "allow_x_equality_in_internal_relations"),
+        "binary_relation_round": _boolean(
+            settings.binary_relation_round, "binary_relation_round"),
+        "latch_abstraction": _boolean(
+            settings.latch_abstraction, "latch_abstraction"),
+        "data_latch_model": _boolean(
+            settings.data_latch_model, "data_latch_model"),
+        "sec_reset_cycles": sec_reset_cycles,
+        "sec_reset_ports": sec_reset_ports,
+        "btor2_export_path": btor2_export_path,
+        "btor2_dump_only": btor2_dump_only,
         "allow_boundary_mismatch": allow_boundary_mismatch,
         "set_as_boundary": set_as_boundary,
         "report_skipped_outputs": report_skipped_outputs,
@@ -292,3 +345,44 @@ def _boolean(value: bool, label: str) -> bool:
     if not isinstance(value, bool):
         raise TypeError(f"{label} must be a bool")
     return value
+
+
+def _optional_positive_int(value: int | None, label: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{label} must be positive")
+    return value
+
+
+def _reset_ports(value: object) -> list[tuple[str, bool]]:
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(
+            "sec_reset_ports must be a list or tuple of (name, active_value) pairs"
+        )
+    result: list[tuple[str, bool]] = []
+    names: set[str] = set()
+    for index, pair in enumerate(value):
+        label = f"sec_reset_ports[{index}]"
+        if not isinstance(pair, (list, tuple)):
+            raise TypeError(f"{label} must be a (name, active_value) pair")
+        if len(pair) != 2:
+            raise ValueError(
+                f"{label} must contain exactly a name and an active value"
+            )
+        name, active = pair
+        if not isinstance(name, str):
+            raise TypeError(f"{label}[0] must be a string")
+        if not name:
+            raise ValueError(f"{label}[0] must not be empty")
+        if "\0" in name:
+            raise ValueError(f"{label}[0] cannot contain NUL bytes")
+        if not isinstance(active, bool):
+            raise TypeError(f"{label}[1] must be a bool")
+        if name in names:
+            raise ValueError(f"duplicate reset port `{name}`")
+        names.add(name)
+        result.append((name, active))
+    return result

@@ -341,6 +341,85 @@ bool dictionaryBoundaryPairs(PyObject *dictionary, const char *key,
   return true;
 }
 
+bool dictionaryResetPorts(PyObject *dictionary, const char *key,
+                          KEPLER_FORMAL::SEC::SecResetSpec &value) {
+  PyObject *item = PyDict_GetItemString(dictionary, key);
+  if (item == nullptr) {
+    return true;
+  }
+  if (!PyList_Check(item) && !PyTuple_Check(item)) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s must be a list or tuple of (name, active_value) pairs",
+                 key);
+    return false;
+  }
+  OwnedPyObject ports(
+      PySequence_Fast(item, "sec_reset_ports must be a list or tuple"));
+  if (ports == nullptr) {
+    return false;
+  }
+  std::vector<KEPLER_FORMAL::SEC::SecResetPortSpec> parsed;
+  const Py_ssize_t portCount = PySequence_Fast_GET_SIZE(ports.get());
+  parsed.reserve(static_cast<size_t>(portCount));
+  for (Py_ssize_t index = 0; index < portCount; ++index) {
+    PyObject *port = PySequence_Fast_GET_ITEM(ports.get(), index);
+    if (!PyList_Check(port) && !PyTuple_Check(port)) {
+      PyErr_Format(PyExc_TypeError,
+                   "%s[%zd] must be a (name, active_value) pair", key, index);
+      return false;
+    }
+    OwnedPyObject pair(
+        PySequence_Fast(port, "reset port must be a list or tuple"));
+    if (pair == nullptr) {
+      return false;
+    }
+    if (PySequence_Fast_GET_SIZE(pair.get()) != 2) {
+      PyErr_Format(PyExc_ValueError,
+                   "%s[%zd] must contain exactly a name and an active value",
+                   key, index);
+      return false;
+    }
+    PyObject *name = PySequence_Fast_GET_ITEM(pair.get(), 0);
+    PyObject *active = PySequence_Fast_GET_ITEM(pair.get(), 1);
+    if (!PyUnicode_Check(name)) {
+      PyErr_Format(PyExc_TypeError, "%s[%zd][0] must be a string", key, index);
+      return false;
+    }
+    if (!PyBool_Check(active)) {
+      PyErr_Format(PyExc_TypeError, "%s[%zd][1] must be a bool", key, index);
+      return false;
+    }
+    Py_ssize_t size = 0;
+    const char *data = PyUnicode_AsUTF8AndSize(name, &size);
+    if (data == nullptr) {
+      return false;
+    }
+    KEPLER_FORMAL::SEC::SecResetPortSpec spec;
+    spec.name.assign(data, static_cast<size_t>(size));
+    spec.activeValue = active == Py_True;
+    if (spec.name.empty()) {
+      PyErr_Format(PyExc_ValueError, "%s[%zd][0] must not be empty", key,
+                   index);
+      return false;
+    }
+    if (spec.name.find('\0') != std::string::npos) {
+      PyErr_Format(PyExc_ValueError, "%s[%zd][0] cannot contain NUL bytes",
+                   key, index);
+      return false;
+    }
+    for (const auto &previous : parsed) {
+      if (previous.name == spec.name) {
+        PyErr_Format(PyExc_ValueError, "duplicate reset port `%s`",
+                     spec.name.c_str());
+        return false;
+      }
+    }
+    parsed.push_back(std::move(spec));
+  }
+  value.ports = std::move(parsed);
+  return true;
+}
+
 bool parseBorrowedOptions(PyObject *object,
                           KEPLER_FORMAL::BorrowedDesignOptions &options) {
   if (!PyDict_Check(object)) {
@@ -352,7 +431,10 @@ bool parseBorrowedOptions(PyObject *object,
       "mode",          "solver",          "max_k",
       "sec_engine",    "sec_encoding",    "allow_boundary_mismatch",
       "set_as_boundary", "report_skipped_outputs", "log_file", "log_level",
-      "learn_internal_relations", "allow_x_equality_in_internal_relations"};
+      "learn_internal_relations", "allow_x_equality_in_internal_relations",
+      "binary_relation_round", "latch_abstraction", "data_latch_model",
+      "sec_reset_cycles", "sec_reset_ports", "btor2_export_path",
+      "btor2_dump_only"};
   Py_ssize_t position = 0;
   PyObject *key = nullptr;
   PyObject *value = nullptr;
@@ -392,21 +474,66 @@ bool parseBorrowedOptions(PyObject *object,
                          options.internalRelationOptions.learnInternalRelations) ||
       !dictionaryBoolean(object, "allow_x_equality_in_internal_relations",
                          options.internalRelationOptions.allowXEqualityInInternalRelations) ||
+      !dictionaryBoolean(object, "binary_relation_round",
+                         options.internalRelationOptions.binaryRelationRound) ||
+      !dictionaryBoolean(object, "latch_abstraction", options.latchAbstraction) ||
+      !dictionaryBoolean(object, "data_latch_model", options.dataLatchModel) ||
+      !dictionarySize(object, "sec_reset_cycles", options.secReset.cycles) ||
+      !dictionaryResetPorts(object, "sec_reset_ports", options.secReset) ||
+      !dictionaryString(object, "btor2_export_path", options.btor2Export.path,
+                        true) ||
+      !dictionaryBoolean(object, "btor2_dump_only",
+                         options.btor2Export.dumpOnly) ||
       !dictionaryBoolean(object, "report_skipped_outputs",
                          options.reportSkippedOutputs)) {
     return false;
   }
 
+  const bool resetRequested =
+      options.secReset.cycles != 0 || !options.secReset.ports.empty();
+  const bool exportRequested =
+      options.btor2Export.enabled() || options.btor2Export.dumpOnly;
   if (mode == "lec") {
     options.mode = KEPLER_FORMAL::BorrowedVerificationMode::LEC;
     if (!options.internalRelationOptions.learnInternalRelations ||
-        !options.internalRelationOptions.allowXEqualityInInternalRelations) {
+        !options.internalRelationOptions.allowXEqualityInInternalRelations ||
+        !options.internalRelationOptions.binaryRelationRound) {
       PyErr_SetString(PyExc_ValueError,
                       "Internal relation options are only supported for SEC");
       return false;
     }
+    if (!options.latchAbstraction || !options.dataLatchModel) {
+      PyErr_SetString(PyExc_ValueError,
+                      "Latch model options are only supported for SEC");
+      return false;
+    }
+    if (resetRequested) {
+      PyErr_SetString(PyExc_ValueError,
+                      "SEC reset bootstrap is only supported for SEC");
+      return false;
+    }
+    if (exportRequested) {
+      PyErr_SetString(PyExc_ValueError,
+                      "BTOR2 export is only supported for SEC");
+      return false;
+    }
   } else if (mode == "sec") {
     options.mode = KEPLER_FORMAL::BorrowedVerificationMode::SEC;
+    if (resetRequested && options.secReset.cycles == 0) {
+      PyErr_SetString(PyExc_ValueError,
+                      "sec_reset_cycles must be a positive integer");
+      return false;
+    }
+    if (resetRequested && options.secReset.ports.empty()) {
+      PyErr_SetString(PyExc_ValueError,
+                      "sec_reset_ports must list at least one reset port");
+      return false;
+    }
+    if (options.btor2Export.dumpOnly && !options.btor2Export.enabled()) {
+      PyErr_SetString(PyExc_ValueError,
+                      "btor2_dump_only requires btor2_export_path");
+      return false;
+    }
   } else {
     PyErr_SetString(PyExc_ValueError, "mode must be 'lec' or 'sec'");
     return false;

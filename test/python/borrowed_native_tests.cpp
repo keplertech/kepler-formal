@@ -403,6 +403,57 @@ void runTests() {
         "inconclusive SEC verdict/exit code changed: " + result.reason);
   checkState();
 
+  // SEC-only controls: reset bootstrap, BTOR2 export and latch models. The
+  // process-wide latch settings are restored after each call, and an
+  // inconsistent spec is a structured error rather than a silent no-op.
+  options.secEngine = SEC::SecEngine::KInduction;
+  options.secEncoding = SEC::SecEncoding::Binary;
+  options.maxK = 2;
+  options.latchAbstraction = false;
+  options.dataLatchModel = false;
+  options.internalRelationOptions.binaryRelationRound = false;
+  options.secReset.cycles = 1;
+  options.secReset.ports = {{"I", true}};
+  check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 0 &&
+            result.status == RunStatus::Equivalent,
+        "SEC with reset bootstrap and opaque latches failed: " + result.reason);
+  check(Config::getSecLatchAbstraction() && Config::getSecDataLatchModel(),
+        "caller latch model settings changed");
+  checkState();
+  options.latchAbstraction = true;
+  options.dataLatchModel = true;
+  options.internalRelationOptions.binaryRelationRound = true;
+  options.secReset.cycles = 0;
+  check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 1 &&
+            result.status == RunStatus::Error &&
+            result.reason.find("greater than zero") != std::string::npos,
+        "reset bootstrap without cycles was not rejected: " + result.reason);
+  checkState();
+  options.secReset.cycles = 1;
+  options.mode = BorrowedVerificationMode::LEC;
+  check(verifyBorrowedDesigns(first, second, options, result) == 1 &&
+            result.status == RunStatus::Error &&
+            result.reason.find("only supported for SEC") != std::string::npos,
+        "LEC accepted a reset bootstrap: " + result.reason);
+  checkState();
+  options.mode = BorrowedVerificationMode::SEC;
+  options.secReset = {};
+  options.btor2Export.path = "borrowed_native_sec.btor2";
+  options.btor2Export.dumpOnly = true;
+  check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 0 &&
+            result.status == RunStatus::Exported &&
+            std::filesystem::is_regular_file(options.btor2Export.path),
+        "BTOR2 dump-only did not export: " + result.reason);
+  checkState();
+  std::filesystem::remove(options.btor2Export.path);
+  options.btor2Export.path.clear();
+  check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 1 &&
+            result.status == RunStatus::Error &&
+            result.reason.find("export path") != std::string::npos,
+        "dump-only without a path was not rejected: " + result.reason);
+  checkState();
+  options.btor2Export = {};
+
   // Editing an instance parameter keeps its pointer and topology stable, but
   // changes its primitive truth table. Neither worker-local extraction caches
   // nor the multi-output KI base-prefix cache may reuse the previous proof.

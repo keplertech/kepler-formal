@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -112,6 +113,8 @@ class BorrowedRunState {
   BorrowedRunState()
       : solver_(Config::getSolverType()),
         reportSkipped_(Config::getReportSkippedPOs()),
+        latchAbstraction_(Config::getSecLatchAbstraction()),
+        dataLatchModel_(Config::getSecDataLatchModel()),
         defaultLogger_(spdlog::default_logger()),
         borrowedLogger_(spdlog::get("kepler_formal_borrowed_logger")),
         miterLogger_(spdlog::get("miter_logger")),
@@ -123,6 +126,8 @@ class BorrowedRunState {
     MiterStrategy::logFileName_ = std::move(miterLogFile_);
     Config::setSolverType(solver_);
     Config::setReportSkippedPOs(reportSkipped_);
+    Config::setSecLatchAbstraction(latchAbstraction_);
+    Config::setSecDataLatchModel(dataLatchModel_);
     restoreLogger("miter_logger", miterLogger_);
     restoreLogger("miter_logger_fallback", fallbackLogger_);
     // set_default_logger also registers its logger by name. Restoring only
@@ -144,12 +149,52 @@ class BorrowedRunState {
 
   Config::SolverType solver_;
   bool reportSkipped_;
+  bool latchAbstraction_;
+  bool dataLatchModel_;
   std::shared_ptr<spdlog::logger> defaultLogger_;
   std::shared_ptr<spdlog::logger> borrowedLogger_;
   std::shared_ptr<spdlog::logger> miterLogger_;
   std::shared_ptr<spdlog::logger> fallbackLogger_;
   std::string miterLogFile_;
 };
+
+// Mirror the CLI's checks for the SEC-only controls so an inconsistent spec
+// is reported instead of silently disabling the feature.
+void validateOptions(const BorrowedDesignOptions& options) {
+  const bool resetRequested =
+      options.secReset.cycles != 0 || !options.secReset.ports.empty();
+  const bool exportRequested =
+      options.btor2Export.enabled() || options.btor2Export.dumpOnly;
+  if (options.mode == BorrowedVerificationMode::LEC) {
+    if (resetRequested) {
+      throw std::invalid_argument("SEC reset bootstrap is only supported for SEC");
+    }
+    if (exportRequested) {
+      throw std::invalid_argument("BTOR2 export is only supported for SEC");
+    }
+    return;
+  }
+  if (resetRequested) {
+    if (options.secReset.cycles == 0) {
+      throw std::invalid_argument("reset bootstrap cycles must be greater than zero");
+    }
+    if (options.secReset.ports.empty()) {
+      throw std::invalid_argument("reset bootstrap must list at least one reset port");
+    }
+    std::unordered_set<std::string> names;
+    for (const auto& port : options.secReset.ports) {
+      if (port.name.empty()) {
+        throw std::invalid_argument("reset port name must not be empty");
+      }
+      if (!names.insert(port.name).second) {
+        throw std::invalid_argument("duplicate reset port `" + port.name + "`");
+      }
+    }
+  }
+  if (options.btor2Export.dumpOnly && !options.btor2Export.enabled()) {
+    throw std::invalid_argument("BTOR2 dump-only requires an export path");
+  }
+}
 
 void configureLogger(const BorrowedDesignOptions& options, RunResult& result) {
   std::vector<spdlog::sink_ptr> sinks;
@@ -238,6 +283,7 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
   std::lock_guard<std::mutex> lock(mutex);
 
   try {
+    validateOptions(options);
     auto* universe = naja::NL::NLUniverse::get();
     if (!universe || !design0 || !design1) {
       throw std::invalid_argument("Borrowed designs need a live Naja universe and two live designs");
@@ -253,14 +299,20 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     BorrowedRunState runState;
     Config::setSolverType(options.solver);
     Config::setReportSkippedPOs(options.reportSkippedOutputs);
+    Config::setSecLatchAbstraction(options.latchAbstraction);
+    Config::setSecDataLatchModel(options.dataLatchModel);
     configureLogger(options, result);
     if (options.mode == BorrowedVerificationMode::SEC) {
       SEC::SequentialEquivalenceStrategy strategy(
-          design0, design1, options.solver, options.secEngine, options.secEncoding);
+          design0, design1, options.solver, options.secEngine, options.secEncoding,
+          options.secReset, options.btor2Export);
       strategy.setInternalRelationOptions(options.internalRelationOptions);
       strategy.setBoundaryPairs(options.setAsBoundary);
       const auto proof = strategy.run(options.maxK);
       assignSecResult(proof, result);
+      if (result.status == RunStatus::Exported) {
+        SPDLOG_INFO("SEC BTOR2 exported to {}; proof not run", options.btor2Export.path);
+      }
       if (options.reportSkippedOutputs) {
         writeBoundaryTermsReport("boundary_terms.txt", proof.extractedBoundaryReports);
         writeResetUnanchoredSkippedOutputsReport(
