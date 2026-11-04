@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -180,6 +181,32 @@ struct LazyTransitionStore {
   }
 };
 
+// Rail-valued port view of one structured memory in the proof symbol space.
+// Cell rails stay ordinary state symbols; an engine that models the array by
+// its ports uses this description instead of the cell transitions.
+struct ProofMemoryReadPort {
+  std::vector<DualRailBoolExpr> address;  // least significant bit first
+  // Registered read data rails per bit; absent when extraction skipped it.
+  std::vector<std::optional<DualRailSymbolPair>> outputRails;
+};
+
+struct ProofMemoryWritePort {
+  std::vector<DualRailBoolExpr> address;
+  std::vector<DualRailBoolExpr> data;
+  std::vector<DualRailBoolExpr> mask;    // empty: every bit is written
+  std::vector<DualRailBoolExpr> enable;  // all must hold for a write
+};
+
+struct ProofMemoryDescription {
+  size_t width = 0;
+  size_t depth = 0;
+  size_t abits = 0;
+  std::vector<std::vector<DualRailSymbolPair>> cellRails;  // [cell][bit]
+  std::vector<ProofMemoryReadPort> readPorts;
+  std::vector<ProofMemoryWritePort> writePorts;
+  std::optional<DualRailBoolExpr> resetAsserted;
+};
+
 struct KInductionProblem {
   std::vector<SignalKey> environmentInputs;
   std::vector<SignalKey> observedOutputs;
@@ -239,6 +266,10 @@ struct KInductionProblem {
   std::vector<std::pair<size_t, BoolExpr*>> transitions0;
   std::vector<std::pair<size_t, BoolExpr*>> transitions1;
   std::vector<std::pair<size_t, BoolExpr*>> auxiliaryTransitions;
+  // Dual-rail problems only: port-level view of the structured memories whose
+  // cell rails are among the state symbols. Shared because problems are copied
+  // per output slice.
+  std::shared_ptr<const std::vector<ProofMemoryDescription>> structuredMemories;
   std::shared_ptr<LazyTransitionStore> lazyTransitions;
   BoolExpr* initialCondition = nullptr;
   size_t initializedStateCount = 0;

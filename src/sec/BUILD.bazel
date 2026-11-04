@@ -36,6 +36,7 @@ cc_library(
         "proof/InternalRelations.cpp",
         "proof/ProofEngineShared.cpp",
         "proof/TransitionExprResolver.cpp",
+        "search/SimulationSeededSearch.cpp",
         "strategy/SequentialEquivalenceStrategy.cpp",
     ],
     hdrs = [
@@ -62,6 +63,8 @@ cc_library(
         "proof/InternalRelations.h",
         "proof/ProofEngineShared.h",
         "proof/TransitionExprResolver.h",
+        "search/SimulationSeededSearch.h",
+        "search/SimulationSeededSearchOptions.h",
         "strategy/SequentialEquivalenceStrategy.h",
     ],
     includes = [

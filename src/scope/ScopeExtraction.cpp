@@ -1,13 +1,20 @@
 #include "ScopeExtraction.h"
 #include <tbb/concurrent_unordered_set.h>
+#include <algorithm>
 #include <stack>
 #include "DNL.h"
 #include "NLUniverse.h"
 #include "RemoveLoadlessLogic.h"
-#include "SNLDesign.h"
-#include "SNLLogicCone.h"
-#include <tbb/enumerable_thread_specific.h>
 #include "SNLBitNet.h"
+#include "SNLBitTerm.h"
+#include "SNLBusNetBit.h"
+#include "SNLDesign.h"
+#include "SNLInstParameter.h"
+#include "SNLInstTerm.h"
+#include "SNLInstance.h"
+#include "SNLLogicCone.h"
+#include "SNLParameter.h"
+#include <tbb/enumerable_thread_specific.h>
 
 // #define DEBUG_PRINTS
 
@@ -20,152 +27,339 @@
 using namespace naja::NL;
 using namespace naja::DNL;
 
-void ScopeExtraction::collectVerificationScopes() {
-  // Find leaf models(model that contain leaf only)
-  // DFS
-  std::stack<std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>> stack;
-  std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> toCompare;
-  toCompare.first = top0_;
-  toCompare.second = top1_;
-  stack.push(toCompare);
-  while (!stack.empty()) {
-    std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> toCompareNew =
-        stack.top();
-    stack.pop();
-    auto design0 = toCompareNew.first;
-    auto design1 = toCompareNew.second;
-    bool modelsAreEqual = true;
-    // First check, same number of instances
-    if (design0->getInstances().size() == design1->getInstances().size()) {
-      // We have same number of instances moving on to next checks
-      // 1. Check same child instances
-      DEBUG_LOG(" - Comparing models %s and %s\n",
-                design0->getName().getString().c_str(),
-                design1->getName().getString().c_str());
-      std::vector<naja::NL::NLID::DesignObjectID> childInstances0;
-      for (auto instance : design0->getInstances()) {
-        childInstances0.push_back(instance->getID());
-      }
-      std::vector<naja::NL::NLID::DesignObjectID> childInstances1;
-      for (auto instance : design1->getInstances()) {
-        childInstances1.push_back(instance->getID());
-      }
-      if (childInstances0 != childInstances1) {
-        DEBUG_LOG(" - Child instances are different.\n");
-        // LCOV_EXCL_START
-        modelsAreEqual = false;  // LCOV_EXCL_LINE
-      }  // LCOV_EXCL_LINE
-      // LCOV_EXCL_STOP
-      if (modelsAreEqual) {
-        DEBUG_LOG(" - Child instances are the same -> Comparing nets.\n");
-        // Same child instances, now we will check all nets
-        std::vector<naja::NL::SNLBitNet*> nets0;
-        for (auto net : design0->getBitNets()) {
-          nets0.push_back(net);
-        }
-        std::vector<naja::NL::SNLBitNet*> nets1;
-        for (auto net : design1->getBitNets()) {
-          nets1.push_back(net);
-        }
-        if (nets0.size() != nets1.size()) {
-          DEBUG_LOG(" - Different number of nets.\n");
-          modelsAreEqual = false;
-        }
-        if (modelsAreEqual) {
-          for (size_t i = 0; i < nets0.size(); ++i) {
-            DEBUG_LOG(" - Comparing net %s and %s\n",
-                      nets0[i]->getName().getString().c_str(),
-                      nets1[i]->getName().getString().c_str());
-            DEBUG_LOG("Comparing bit terms.\n");
-            auto net0 = nets0[i];
-            auto net1 = nets1[i];
-            // Check drivers
-            std::vector<SNLBitTerm*> bitTerms0;
-            for (auto bitterm : net0->getBitTerms()) {
-              bitTerms0.push_back(bitterm);
-            }
-            std::vector<SNLBitTerm*> bitTerms1;
-            for (auto bitterm : net1->getBitTerms()) {
-              bitTerms1.push_back(bitterm);
-            }
-            if (bitTerms0.size() != bitTerms1.size()) {
-              // LCOV_EXCL_START
-              modelsAreEqual = false;  // LCOV_EXCL_LINE
-              break;  // LCOV_EXCL_LINE
-              // LCOV_EXCL_STOP
-            }
-            for (size_t j = 0; j < bitTerms0.size(); ++j) {
-              auto term0 = bitTerms0[j];
-              auto term1 = bitTerms1[j];
-              if (term0->getID() != term1->getID()) {
-                modelsAreEqual = false;
-                break;
-              }
-            }
-            if (modelsAreEqual) {
-              DEBUG_LOG("Comparing inst terms.\n");
-              // bit terms are same, now check ins terms
-              std::vector<SNLInstTerm*> instTerms0;
-              for (auto instterm : net0->getInstTerms()) {
-                instTerms0.push_back(instterm);
-              }
-              std::vector<SNLInstTerm*> instTerms1;
-              for (auto instterm : net1->getInstTerms()) {
-                instTerms1.push_back(instterm);
-              }
-              if (instTerms0.size() != instTerms1.size()) {
-                // LCOV_EXCL_START
-                modelsAreEqual = false;  // LCOV_EXCL_LINE
-                break;  // LCOV_EXCL_LINE
-                // LCOV_EXCL_STOP
-              }
-              for (size_t j = 0; j < instTerms0.size(); ++j) {
-                auto term0 = instTerms0[j];
-                auto term1 = instTerms1[j];
-                if (term0->getInstance()->getID() !=
-                        term1->getInstance()->getID() ||
-                    term0->getBitTerm()->getID() !=
-                        term1->getBitTerm()->getID()) {
-                  // LCOV_EXCL_START
-                  modelsAreEqual = false;  // LCOV_EXCL_LINE
-                  break;  // LCOV_EXCL_LINE
-                  // LCOV_EXCL_STOP
-                }
-              }
-            }
-          }
-        }
-      }
+namespace {
+
+// Name-based key of one bit of a term or net. Bits of a bus share the bus
+// name and differ by index; scalars use bit 0.
+std::string bitKey(const NLName& name, NLID::Bit bit) {
+  return name.getString() + "[" + std::to_string(bit) + "]";
+}
+
+NLID::Bit netBit(const SNLBitNet* net) {
+  if (auto* busBit = dynamic_cast<const SNLBusNetBit*>(net)) {
+    return busBit->getBit();
+  }
+  return 0;
+}
+
+std::string termKey(const SNLBitTerm* term) {
+  // A term without a name (anonymous primitive ports) is identified by its
+  // position, which the lowering assigns deterministically.
+  if (term->getName().empty()) {
+    return "#" + std::to_string(term->getID()) + "[" +
+           std::to_string(term->getBit()) + "]";
+  }
+  return bitKey(term->getName(), term->getBit());
+}
+
+template <class Container>
+bool sameSorted(Container& left, Container& right) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  std::sort(left.begin(), left.end());
+  std::sort(right.begin(), right.end());
+  return left == right;
+}
+
+}  // namespace
+
+bool ScopeExtraction::sameInterface(SNLDesign* design0, SNLDesign* design1) {
+  std::vector<std::string> keys0;
+  std::vector<std::string> keys1;
+  for (auto* term : design0->getBitTerms()) {
+    keys0.push_back(termKey(term) + ":" +
+                    std::to_string(static_cast<int>(term->getDirection())));
+  }
+  for (auto* term : design1->getBitTerms()) {
+    keys1.push_back(termKey(term) + ":" +
+                    std::to_string(static_cast<int>(term->getDirection())));
+  }
+  return sameSorted(keys0, keys1);
+}
+
+bool ScopeExtraction::sameParameters(SNLDesign* design0, SNLDesign* design1) {
+  std::vector<std::string> keys0;
+  std::vector<std::string> keys1;
+  for (auto* parameter : design0->getParameters()) {
+    keys0.push_back(parameter->getName().getString() + "=" +
+                    (parameter->hasDefaultValue() ? parameter->getValue() : ""));
+  }
+  for (auto* parameter : design1->getParameters()) {
+    keys1.push_back(parameter->getName().getString() + "=" +
+                    (parameter->hasDefaultValue() ? parameter->getValue() : ""));
+  }
+  return sameSorted(keys0, keys1);
+}
+
+bool ScopeExtraction::sameInstanceParameters(SNLInstance* instance0,
+                                             SNLInstance* instance1) {
+  std::vector<std::string> keys0;
+  std::vector<std::string> keys1;
+  for (auto* parameter : instance0->getInstParameters()) {
+    keys0.push_back(parameter->getName().getString() + "=" + parameter->getValue());
+  }
+  for (auto* parameter : instance1->getInstParameters()) {
+    keys1.push_back(parameter->getName().getString() + "=" + parameter->getValue());
+  }
+  return sameSorted(keys0, keys1);
+}
+
+bool ScopeExtraction::sameLeafModels(SNLDesign* model0, SNLDesign* model1) {
+  if (model0 == model1) {
+    return true;
+  }
+  if (!model0->isLeaf() || !model1->isLeaf()) {
+    return false;
+  }
+  if (model0->getName() != model1->getName()) {
+    return false;
+  }
+  if (model0->getType().getString() != model1->getType().getString()) {
+    return false;
+  }
+  return sameInterface(model0, model1) && sameParameters(model0, model1);
+}
+
+bool ScopeExtraction::pairInstances(SNLDesign* design0,
+                                    SNLDesign* design1,
+                                    InstancePairs& pairs) {
+  pairs.clear();
+  if (design0->getInstances().size() != design1->getInstances().size()) {
+    return false;
+  }
+  std::map<NLName, SNLInstance*> named0;
+  std::map<NLName, SNLInstance*> named1;
+  std::vector<SNLInstance*> unnamed0;
+  std::vector<SNLInstance*> unnamed1;
+  for (auto* instance : design0->getInstances()) {
+    if (instance->getName().empty()) {
+      unnamed0.push_back(instance);
     } else {
-      DEBUG_LOG(" - Different number of instances.\n");
-      modelsAreEqual = false;
-    }
-    if (!modelsAreEqual) {
-      designsToVerify_.insert(toCompareNew);
-    } else {
-      // Add checks for children instances in next interation
-      std::vector<naja::NL::SNLInstance*> instancesVector0;
-      for (auto instance : design0->getInstances()) {
-        if (instance->isPrimitive()) {
-          continue;
-        }
-        instancesVector0.push_back(instance);
-      }
-      std::vector<naja::NL::SNLInstance*> instancesVector1;
-      for (auto instance : design1->getInstances()) {
-        if (instance->isPrimitive()) {
-          continue;
-        }
-        instancesVector1.push_back(instance);
-      }
-      for (size_t i = 0; i < instancesVector1.size(); ++i) {
-        std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*> pair;
-        pair.first = instancesVector0[i]->getModel();
-        pair.second = instancesVector1[i]->getModel();
-        stack.push(pair);
-      }
+      named0.emplace(instance->getName(), instance);
     }
   }
+  for (auto* instance : design1->getInstances()) {
+    if (instance->getName().empty()) {
+      unnamed1.push_back(instance);
+    } else {
+      named1.emplace(instance->getName(), instance);
+    }
+  }
+  if (named0.size() != named1.size() || unnamed0.size() != unnamed1.size()) {
+    return false;
+  }
+  for (const auto& [name, instance0] : named0) {
+    auto it = named1.find(name);
+    if (it == named1.end()) {
+      return false;
+    }
+    pairs.emplace_back(instance0, it->second);
+  }
+  for (size_t i = 0; i < unnamed0.size(); ++i) {
+    pairs.emplace_back(unnamed0[i], unnamed1[i]);
+  }
+  return true;
+}
+
+bool ScopeExtraction::sameNets(
+    SNLDesign* design0,
+    SNLDesign* design1,
+    const std::map<SNLInstance*, SNLInstance*>& instanceMap) {
+  if (design0->getBitNets().size() != design1->getBitNets().size()) {
+    return false;
+  }
+  std::map<SNLInstance*, SNLInstance*> reverseMap;
+  for (const auto& [instance0, instance1] : instanceMap) {
+    reverseMap.emplace(instance1, instance0);
+  }
+  // Pair nets like instances: by name where the RTL named them, in creation
+  // order where the lowering created them.
+  std::map<std::string, SNLBitNet*> named0;
+  std::map<std::string, SNLBitNet*> named1;
+  std::vector<SNLBitNet*> unnamed0;
+  std::vector<SNLBitNet*> unnamed1;
+  for (auto* net : design0->getBitNets()) {
+    if (net->getName().empty()) {
+      unnamed0.push_back(net);
+    } else {
+      named0.emplace(bitKey(net->getName(), netBit(net)), net);
+    }
+  }
+  for (auto* net : design1->getBitNets()) {
+    if (net->getName().empty()) {
+      unnamed1.push_back(net);
+    } else {
+      named1.emplace(bitKey(net->getName(), netBit(net)), net);
+    }
+  }
+  if (named0.size() != named1.size() || unnamed0.size() != unnamed1.size()) {
+    return false;
+  }
+  std::vector<std::pair<SNLBitNet*, SNLBitNet*>> pairs;
+  for (const auto& [key, net0] : named0) {
+    auto it = named1.find(key);
+    if (it == named1.end()) {
+      return false;
+    }
+    pairs.emplace_back(net0, it->second);
+  }
+  for (size_t i = 0; i < unnamed0.size(); ++i) {
+    pairs.emplace_back(unnamed0[i], unnamed1[i]);
+  }
+  for (const auto& [net0, net1] : pairs) {
+    if (!(net0->getType() == net1->getType())) {
+      return false;
+    }
+    // Connections to the module ports.
+    std::vector<std::string> ports0;
+    std::vector<std::string> ports1;
+    for (auto* term : net0->getBitTerms()) {
+      ports0.push_back(termKey(term));
+    }
+    for (auto* term : net1->getBitTerms()) {
+      ports1.push_back(termKey(term));
+    }
+    if (!sameSorted(ports0, ports1)) {
+      return false;
+    }
+    // Connections to instance pins, expressed on design 0's instances so both
+    // sides use one vocabulary.
+    std::vector<std::string> pins0;
+    std::vector<std::string> pins1;
+    for (auto* instTerm : net0->getInstTerms()) {
+      pins0.push_back(std::to_string(instTerm->getInstance()->getID()) + ":" +
+                      termKey(instTerm->getBitTerm()));
+    }
+    for (auto* instTerm : net1->getInstTerms()) {
+      auto it = reverseMap.find(instTerm->getInstance());
+      if (it == reverseMap.end()) {
+        return false;
+      }
+      pins1.push_back(std::to_string(it->second->getID()) + ":" +
+                      termKey(instTerm->getBitTerm()));
+    }
+    if (!sameSorted(pins0, pins1)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const ScopeExtraction::Comparison& ScopeExtraction::compareModels(
+    SNLDesign* design0, SNLDesign* design1) {
+  const ModelPair key(design0, design1);
+  auto found = comparisons_.find(key);
+  if (found != comparisons_.end()) {
+    return found->second;
+  }
+  // Reserve the slot first so a malformed cyclic hierarchy cannot recurse
+  // forever; the hierarchy is a DAG so the slot is final after this call.
+  comparisons_[key];
+  Comparison result;
+  if (design0 == design1) {
+    result.ownIdentical = true;
+    result.identical = true;
+  } else if (design0->isLeaf() || design1->isLeaf()) {
+    result.ownIdentical = sameLeafModels(design0, design1);
+    result.identical = result.ownIdentical;
+  } else {
+    DEBUG_LOG(" - Comparing models %s and %s\n",
+              design0->getName().getString().c_str(),
+              design1->getName().getString().c_str());
+    bool own = sameInterface(design0, design1) && sameParameters(design0, design1);
+    bool childrenIdentical = true;
+    InstancePairs pairs;
+    if (own && !pairInstances(design0, design1, pairs)) {
+      DEBUG_LOG(" - Instances do not pair.\n");
+      own = false;
+    }
+    std::map<SNLInstance*, SNLInstance*> instanceMap;
+    if (own) {
+      for (const auto& [instance0, instance1] : pairs) {
+        instanceMap.emplace(instance0, instance1);
+        if (!sameInstanceParameters(instance0, instance1)) {
+          own = false;
+          break;
+        }
+        auto* model0 = instance0->getModel();
+        auto* model1 = instance1->getModel();
+        if (model0->isLeaf() || model1->isLeaf()) {
+          // Leaf models are part of this module's own implementation.
+          if (!sameLeafModels(model0, model1)) {
+            own = false;
+            break;
+          }
+          continue;
+        }
+        // A child whose interface changed changes this module's connections
+        // too, and the pair could not be verified as a scope of its own.
+        if (!sameInterface(model0, model1)) {
+          own = false;
+          break;
+        }
+        // Bottom-up: the child pair is decided before this one.
+        if (!compareModels(model0, model1).identical) {
+          childrenIdentical = false;
+        }
+      }
+    }
+    if (own && !sameNets(design0, design1, instanceMap)) {
+      DEBUG_LOG(" - Nets differ.\n");
+      own = false;
+    }
+    result.ownIdentical = own;
+    result.identical = own && childrenIdentical;
+  }
+  if (result.ownIdentical) {
+    ++identicalOwnPairs_;
+  }
+  Comparison& slot = comparisons_[key];
+  slot = result;
+  return slot;
+}
+
+void ScopeExtraction::collectScopesBelow(SNLDesign* design0,
+                                         SNLDesign* design1,
+                                         std::set<ModelPair>& visited) {
+  if (!visited.insert(ModelPair(design0, design1)).second) {
+    return;
+  }
+  const Comparison& comparison = compareModels(design0, design1);
+  if (!comparison.ownIdentical) {
+    // This module's own implementation differs: verify it as a whole, its
+    // differing descendants included.
+    designsToVerify_.insert(ModelPair(design0, design1));
+    return;
+  }
+  if (comparison.identical) {
+    return;
+  }
+  // Own wiring identical, some descendant differs: descend to find it.
+  InstancePairs pairs;
+  pairInstances(design0, design1, pairs);
+  for (const auto& [instance0, instance1] : pairs) {
+    auto* model0 = instance0->getModel();
+    auto* model1 = instance1->getModel();
+    if (model0->isLeaf() || model1->isLeaf()) {
+      continue;
+    }
+    collectScopesBelow(model0, model1, visited);
+  }
+}
+
+void ScopeExtraction::collectVerificationScopes() {
+  comparisons_.clear();
+  designsToVerify_.clear();
+  identicalOwnPairs_ = 0;
+  if (top0_ == nullptr || top1_ == nullptr) {
+    return;
+  }
+  // Bottom-up comparison: every model pair is decided after its children,
+  // and each pair is compared once however many instances share it.
+  compareModels(top0_, top1_);
+  std::set<ModelPair> visited;
+  collectScopesBelow(top0_, top1_, visited);
 }
 
 void ScopeExtraction::cleanVerificationScopes(
@@ -240,49 +434,14 @@ void ScopeExtraction::cleanVerificationScopes(
         }
       }
     }
-    // After this loop the dnl variable contain deleted DNL as cone destroy it in constructor for safety 
-    size_t readerCount = 0;
+    // After this loop the dnl variable contain deleted DNL as cone destroy it in constructor for safety
     std::vector<DNLID> readersVector;
-    readersVector.assign(readers.begin(), readers.end());   
+    readersVector.assign(readers.begin(), readers.end());
     KEPLER_FORMAL::SNLLogicCone cone(readersVector, pis[i]);
     cone.run();
     for (const auto& isoID : cone.getConeIsoIDs()) {
       isosToKeep.insert(isoID);
     }
-    // if (getenv("KEPLER_NO_MT") || true) {
-    //   for (const auto& reader : readersVector) {
-    //     printf("Processing reader %zu / %zu\r", readerCount + 1,
-    //            readersVector.size());
-    //     readerCount++;
-    //     KEPLER_FORMAL::SNLLogicCone cone(reader, pis[i]);
-    //     cone.initConeIsos(isosToKeep);
-    //     cone.run();
-    //     printf("inserting isos %zu\n", cone.getConeIsoIDs().size());
-    //     // for (const auto& isoID : cone.getConeIsoIDs()) {
-    //     //   isosToKeep.insert(isoID);
-    //     // }
-    //     printf("inserted\n");
-    //   }
-    // } else {
-    //   tbb::enumerable_thread_specific<std::set<DNLID>> localIsosToKeep;
-    //   tbb::parallel_for(tbb::blocked_range<DNLID>(0, readersVector.size()),
-    //                     [&](const tbb::blocked_range<DNLID>& r) {
-    //                       for (DNLID j = r.begin(); j < r.end(); ++j) {
-    //                         KEPLER_FORMAL::SNLLogicCone cone(readersVector[j], pis[i]);
-    //                         //cone.initConeIsos(isosToKeep);
-    //                         cone.run();
-    //                         auto& localIsosToKeepSet = localIsosToKeep.local();
-    //                         localIsosToKeepSet.insert(
-    //                             cone.getConeIsoIDs().begin(),
-    //                             cone.getConeIsoIDs().end());
-    //                       }
-    //                     });
-    //   for (const auto& localSet : localIsosToKeep) {
-    //     for (const auto& isoID : localSet) {
-    //       isosToKeep.insert(isoID);
-    //     }
-    //   }
-    // }
     naja::NAJA_OPT::LoadlessLogicRemover remover;
     auto loadlessInstances = remover.getLoadlessInstances(*naja::DNL::get(), isosToKeep);
     remover.removeLoadlessInstances(top, loadlessInstances);

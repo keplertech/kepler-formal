@@ -36,8 +36,17 @@ struct KInductionResult {
     size_t frame = 0;
     std::vector<Assignment> assignments;
   };
+  // A stretch of cycles whose environment inputs were all held constant.
+  struct HeldInputSegment {  // LCOV_EXCL_LINE
+    size_t firstFrame = 0;
+    size_t lastFrame = 0;
+    std::vector<bool> values;
+    std::vector<FrameInputAssignments::Assignment> assignments;
+  };
   struct CounterexampleWitness {  // LCOV_EXCL_LINE
     size_t badFrame = 0;
+    // Held-input cycles that precede inputTrace, oldest first.
+    std::vector<HeldInputSegment> heldInputSegments;
     std::vector<FrameInputAssignments> inputTrace;
     std::vector<SignalMismatch> outputMismatches;
   };
