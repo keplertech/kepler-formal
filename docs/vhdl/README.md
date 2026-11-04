@@ -35,21 +35,22 @@ input_paths:
 
 ## File order
 
-Files are loaded one at a time, in the order given, and each file can use the
-units of the files before it. List them in compile order: packages and
-instantiated entities first, the top-level unit last. A file that instantiates
-an entity from a later file is rejected with a `missing entity` error.
+All files of a design are registered before anything is elaborated, so they
+may be listed in any order. An entity instantiated from another file resolves
+from the complete unit index, and a child entity takes the generic actuals of
+its parent's `generic map` rather than its own defaults, so a child whose
+defaults alone would not elaborate (a null array, say) is fine. Files that are
+listed twice are read once.
 
 ## Top selection
 
 `vhdl_design1_top` and `vhdl_design2_top` name the top entity of each design.
-The top is elaborated after the last file is loaded, so it may be declared in
-any of the files.
+The top is elaborated once all files are known, so it may be declared in any
+of them.
 
-Without a top option, the top is the design built from the last file that
-produces one; package-only files produce none. When that file declares several
-entities, the top is the one no other entity instantiates. Name the top
-explicitly whenever the last file is not the top-level unit.
+Without a top option, the top is the one entity no other entity instantiates
+across the design's files. Name the top explicitly when several entities are
+left uninstantiated.
 
 ## Supported language subset
 
