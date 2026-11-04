@@ -21,6 +21,7 @@
 #include "BuildPrimaryOutputClauses.h"
 #include "BoolExprCache.h"
 #include "DnlLifetime.h"
+#include "SNLRTLInfos.h"
 #include "Tree2BoolExpr.h"
 #include "ConstantPropagation.h"
 #include "MiterStrategy.h"
@@ -1000,6 +1001,9 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesVectorSelectPastVectorReadsUnknown) 
   inst->setTermNet(NLDB0::getVectorSelectData(select), dataNet);
   inst->setTermNet(NLDB0::getVectorSelectOffset(select), offsetNet);
   inst->setTermNet(NLDB0::getVectorSelectOutput(select), yNet);
+  // A frontend records where the select came from; the skip repeats it.
+  SNLRTLInfos::create(inst)->setSourceLoc(
+      SNLSourceLoc{NLName("design.sv"), 7, 7, 3, 3});
 
   // y[0] = d[sel] hits for every offset; y[1] = d[sel + 1] reads d[4] when
   // sel is 3.
@@ -1038,7 +1042,7 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesVectorSelectPastVectorReadsUnknown) 
       for (const char* expected :
            {"unsupported X read", "VECTOR_SELECT output bit 1",
             "reads past its 4-bit vector", "this encoding has no X value",
-            "select0"}) {
+            "select0", "assignment/expression at design.sv:7:3"}) {
         EXPECT_NE(skip.detail.find(expected), std::string::npos)
             << expected << " not in: " << skip.detail;
       }

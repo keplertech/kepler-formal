@@ -3697,12 +3697,11 @@ void assignUnknownReadStateVars(
     SequentialDesignModel& model) {
   for (const auto& [isoID, varID] : unknownReadVars) {
     const SignalKey key = xConstantStateKey(isoID);
-    if (!model.inputVarByKey.emplace(key, varID).second) {
-      continue;
+    if (model.inputVarByKey.emplace(key, varID).second) {
+      model.stateBits.push_back(key);
+      model.nextStateExprByStateKey.emplace(key, BoolExpr::Var(varID));
+      model.displayNameByKey.emplace(key, "x-read#" + std::to_string(isoID));
     }
-    model.stateBits.push_back(key);
-    model.nextStateExprByStateKey.emplace(key, BoolExpr::Var(varID));
-    model.displayNameByKey.emplace(key, "x-read#" + std::to_string(isoID));
   }
 }
 

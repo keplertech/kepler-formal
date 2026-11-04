@@ -1368,12 +1368,13 @@ bool isResetAbstractConstant(ResetAbstractValue value) {
 
 // Evaluates formulas over the abstract values: constants fold, a constant
 // decides an AND or OR, and otherwise a Free operand makes the result Free.
+// Every leaf is a constant, a state bit from `valueByVar` or a top input;
+// memory read data was replaced by its cell formula at extraction.
 class ResetAbstractEvaluator {
  public:
-  ResetAbstractEvaluator(
-      const std::unordered_map<size_t, ResetAbstractValue>& valueByVar,
-      const std::unordered_map<size_t, BoolExpr*>& exprByVar)
-      : valueByVar_(valueByVar), exprByVar_(exprByVar) {}
+  explicit ResetAbstractEvaluator(
+      const std::unordered_map<size_t, ResetAbstractValue>& valueByVar)
+      : valueByVar_(valueByVar) {}
 
   ResetAbstractValue evaluate(BoolExpr* root) {
     if (root == nullptr) {
@@ -1400,18 +1401,6 @@ class ResetAbstractEvaluator {
         } else if (const auto valueIt = valueByVar_.find(id);
                    valueIt != valueByVar_.end()) {
           memo_.emplace(node, valueIt->second);
-        } else if (const auto exprIt = exprByVar_.find(id);
-                   exprIt != exprByVar_.end()) {
-          // A memory read: the formula over its cells and address.
-          if (const auto readIt = memo_.find(exprIt->second);
-              readIt != memo_.end()) {
-            memo_.emplace(node, readIt->second);
-          } else if (frame.visited) {
-            memo_.emplace(node, ResetAbstractValue::Free);  // LCOV_EXCL_LINE
-          } else {
-            stack.push_back({node, true});
-            stack.push_back({exprIt->second, false});
-          }
         } else {
           // Every other leaf is a top input, the same in both copies.
           memo_.emplace(node, ResetAbstractValue::Shared);
@@ -1495,7 +1484,6 @@ class ResetAbstractEvaluator {
   }
 
   const std::unordered_map<size_t, ResetAbstractValue>& valueByVar_;
-  const std::unordered_map<size_t, BoolExpr*>& exprByVar_;
   std::unordered_map<BoolExpr*, ResetAbstractValue> memo_;
 };
 
@@ -1525,18 +1513,12 @@ std::vector<std::pair<size_t, bool>> resolveResetBootstrapModelVars(
 // window does not determine with the reset ports held active and every other
 // input unknown, and every bit that can read one of them once the ports are
 // released. The two copies of such a bit may differ, so binary SEC must not
-// compare the outputs that read it.
+// compare the outputs that read it. Memory cells are state bits like any
+// other.
 std::unordered_set<SignalKey, SignalKeyHash> collectResetFreeStateKeys(
     const SequentialDesignModel& model,
     const std::vector<std::pair<size_t, bool>>& resetVars,
     size_t cycles) {
-  std::unordered_map<size_t, BoolExpr*> exprByVar;
-  for (const auto& [key, expr] : model.memoryReadExprByKey) {
-    if (const auto varIt = model.inputVarByKey.find(key);
-        varIt != model.inputVarByKey.end()) {
-      exprByVar.emplace(varIt->second, expr);
-    }
-  }
   std::vector<SignalKey> keys;
   std::vector<size_t> stateVars;
   std::vector<BoolExpr*> nextExprs;
@@ -1563,7 +1545,7 @@ std::unordered_set<SignalKey, SignalKeyHash> collectResetFreeStateKeys(
     for (size_t i = 0; i < stateVars.size(); ++i) {
       valueByVar[stateVars[i]] = current[i];
     }
-    ResetAbstractEvaluator evaluator(valueByVar, exprByVar);
+    ResetAbstractEvaluator evaluator(valueByVar);
     std::vector<ResetAbstractValue> next(current.size());
     for (size_t i = 0; i < nextExprs.size(); ++i) {
       next[i] = evaluator.evaluate(nextExprs[i]);
@@ -4107,14 +4089,14 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       // the two copies, so the outputs reading it are skipped as
       // reset-unanchored, exactly as without a bootstrap.
       const auto& problem = symbolSpace.problem;
+      const auto resetVars0 =
+          resolveResetBootstrapModelVars(model0, aligned.inputs.keys0, problem);
+      const auto resetVars1 =
+          resolveResetBootstrapModelVars(model1, aligned.inputs.keys1, problem);
       const auto freeKeys0 = collectResetFreeStateKeys(
-          model0,
-          resolveResetBootstrapModelVars(model0, aligned.inputs.keys0, problem),
-          problem.resetBootstrapCycles);
+          model0, resetVars0, problem.resetBootstrapCycles);
       const auto freeKeys1 = collectResetFreeStateKeys(
-          model1,
-          resolveResetBootstrapModelVars(model1, aligned.inputs.keys1, problem),
-          problem.resetBootstrapCycles);
+          model1, resetVars1, problem.resetBootstrapCycles);
       logResetFreeStateKeys(secDiagEnabled, model0, freeKeys0, 0);
       logResetFreeStateKeys(secDiagEnabled, model1, freeKeys1, 1);
       filterOutputsRequiringUninitializedState(

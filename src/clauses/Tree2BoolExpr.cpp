@@ -48,10 +48,6 @@ void Tree2BoolExpr::setUnknownReadVarBase(std::optional<size_t> base) {
   unknownReadVars.clear();
 }
 
-std::optional<size_t> Tree2BoolExpr::getUnknownReadVarBase() {
-  return unknownReadVarBase;
-}
-
 size_t Tree2BoolExpr::unknownReadVar(naja::DNL::DNLID isoID,
                                      const std::string& what) {
   if (!unknownReadVarBase.has_value()) {

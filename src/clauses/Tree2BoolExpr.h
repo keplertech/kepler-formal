@@ -44,7 +44,6 @@ class Tree2BoolExpr {
   // Without a base, converting such a cone throws UnknownValueReadError and
   // the clause builder skips the output.
   static void setUnknownReadVarBase(std::optional<size_t> base);
-  static std::optional<size_t> getUnknownReadVarBase();
   // The variable for an unknown read at `isoID`, recording the pair; throws
   // UnknownValueReadError when no base is set or the output drives no net.
   static size_t unknownReadVar(naja::DNL::DNLID isoID, const std::string& what);

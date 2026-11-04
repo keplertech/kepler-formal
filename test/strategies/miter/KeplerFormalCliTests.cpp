@@ -2732,63 +2732,81 @@ TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapPdrFindsDifference) {
   std::filesystem::remove_all(same.tmpDir);
 }
 
-// A register the reset window leaves free (q, written only under an enable)
-// may start differently in the two copies of a design, so binary SEC with a
-// reset bootstrap skips the outputs that can read it, as it does without the
-// bootstrap, instead of reporting a difference between a design and itself.
-// A register the reset sets, or one an input overwrites every cycle, is the
-// same in both copies and stays in the proof.
+// A register the reset window leaves free (q, written only under an enable,
+// or the cells of a memory) may start differently in the two copies of a
+// design, so binary SEC with a reset bootstrap skips the outputs that can read
+// it, as it does without the bootstrap, instead of reporting a difference
+// between a design and itself. A register the reset sets, or one an input
+// overwrites every cycle, is the same in both copies and stays in the proof,
+// also through XOR logic and the constant register c.
 TEST_F(KeplerFormalCliTests, CliSvBinaryResetBootstrapSkipsRegistersResetLeavesFree) {
+  const EnvVarGuard secDiag("KEPLER_SEC_DIAG");
+  secDiag.set("1");
   const auto tmpDir = std::filesystem::temp_directory_path() /
                       "kepler_formal_cli_binary_bootstrap_free_state";
   std::filesystem::create_directories(tmpDir);
-  const auto write = [&](const char* name, const std::string& qUpdate) {
-    const auto path = tmpDir / name;
+  const auto write = [&](const std::string& name, const std::string& qUpdate) {
+    const auto path = tmpDir / (name + ".sv");
     std::ofstream f(path);
     f << "module t(input logic clk_i, input logic rst_ni, input logic en_i,\n"
-         "         input logic go_i, input logic [3:0] d_i,\n"
-         "         output logic [3:0] q_o);\n"
+         "         input logic go_i, input logic [1:0] a_i,\n"
+         "         input logic [3:0] d_i, output logic [3:0] q_o);\n"
          "  logic [3:0] q;\n"
          "  logic sel_q;\n"
+         "  logic c;\n"
+         "  always_ff @(posedge clk_i) c <= 1'b1;\n"
       << qUpdate
       << "  always_ff @(posedge clk_i or negedge rst_ni)\n"
          "    if (!rst_ni) sel_q <= 1'b0; else if (go_i) sel_q <= 1'b1;\n"
-         "  assign q_o = sel_q ? q : 4'h0;\n"
+         "  assign q_o = sel_q ? q : {4{c}};\n"
          "endmodule\n";
     return path;
   };
-  const auto hidden =
-      write("hidden.sv", "  always_ff @(posedge clk_i) if (en_i) q <= d_i;\n");
-  const auto reset = write(
-      "reset.sv",
-      "  always_ff @(posedge clk_i or negedge rst_ni)\n"
-      "    if (!rst_ni) q <= 4'h0; else if (en_i) q <= d_i;\n");
-  const auto overwritten =
-      write("overwritten.sv", "  always_ff @(posedge clk_i) q <= d_i;\n");
+  const std::vector<std::pair<std::string, std::string>> freeDesigns = {
+      {"hidden", "  always_ff @(posedge clk_i) if (en_i) q <= d_i;\n"},
+      {"memory",
+       "  logic [3:0] mem [4];\n"
+       "  always_ff @(posedge clk_i) if (en_i) mem[a_i] <= d_i;\n"
+       "  assign q = mem[a_i];\n"},
+  };
+  const std::vector<std::pair<std::string, std::string>> sharedDesigns = {
+      {"reset",
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) q <= 4'h0; else if (en_i) q <= d_i;\n"},
+      {"overwritten", "  always_ff @(posedge clk_i) q <= d_i;\n"},
+      {"xor_input",
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) q <= 4'h0; else q <= q ^ d_i;\n"},
+      {"xor_constant",
+       "  logic [3:0] k;\n"
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) k <= 4'h5; else k <= k;\n"
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) q <= 4'h0; else q <= q ^ k;\n"},
+  };
   const auto run = [&](const std::filesystem::path& design) {
     return runStructuredWithArgs(
         {"kepler-formal", "-sv", "-v", "sec", "--sec-encoding", "binary",
          "--sec-reset-cycles", "2", "--sec-reset-port", "rst_ni=0",
          "--design1", design.string(), "--design2", design.string()});
   };
-  {
-    SCOPED_TRACE("hidden");
-    const auto hiddenRun = run(hidden);
-    EXPECT_EQ(hiddenRun.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
-    EXPECT_EQ(hiddenRun.result.totalOutputs, 4u);
-    EXPECT_EQ(hiddenRun.result.coveredOutputs, 0u);
-    ASSERT_EQ(hiddenRun.result.skippedObservedOutputs.size(), 4u);
-    for (const auto& skipped : hiddenRun.result.skippedObservedOutputs) {
+  for (const auto& [name, qUpdate] : freeDesigns) {
+    SCOPED_TRACE(name);
+    const auto freeRun = run(write(name, qUpdate));
+    EXPECT_EQ(freeRun.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+    EXPECT_EQ(freeRun.result.totalOutputs, 4u);
+    EXPECT_EQ(freeRun.result.coveredOutputs, 0u);
+    ASSERT_EQ(freeRun.result.skippedObservedOutputs.size(), 4u);
+    for (const auto& skipped : freeRun.result.skippedObservedOutputs) {
       EXPECT_NE(skipped.find("q_o["), std::string::npos) << skipped;
       EXPECT_NE(skipped.find("reset-unanchored internal state"),
                 std::string::npos)
           << skipped;
     }
   }
-  for (const auto* name : {"reset", "overwritten"}) {
+  for (const auto& [name, qUpdate] : sharedDesigns) {
     SCOPED_TRACE(name);
-    const auto sharedRun =
-        run(std::string(name) == "reset" ? reset : overwritten);
+    const auto sharedRun = run(write(name, qUpdate));
     EXPECT_EQ(sharedRun.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
     EXPECT_EQ(sharedRun.result.totalOutputs, 4u);
     EXPECT_EQ(sharedRun.result.coveredOutputs, 4u);
