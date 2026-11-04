@@ -2732,6 +2732,71 @@ TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapPdrFindsDifference) {
   std::filesystem::remove_all(same.tmpDir);
 }
 
+// A register the reset window leaves free (q, written only under an enable)
+// may start differently in the two copies of a design, so binary SEC with a
+// reset bootstrap skips the outputs that can read it, as it does without the
+// bootstrap, instead of reporting a difference between a design and itself.
+// A register the reset sets, or one an input overwrites every cycle, is the
+// same in both copies and stays in the proof.
+TEST_F(KeplerFormalCliTests, CliSvBinaryResetBootstrapSkipsRegistersResetLeavesFree) {
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_binary_bootstrap_free_state";
+  std::filesystem::create_directories(tmpDir);
+  const auto write = [&](const char* name, const std::string& qUpdate) {
+    const auto path = tmpDir / name;
+    std::ofstream f(path);
+    f << "module t(input logic clk_i, input logic rst_ni, input logic en_i,\n"
+         "         input logic go_i, input logic [3:0] d_i,\n"
+         "         output logic [3:0] q_o);\n"
+         "  logic [3:0] q;\n"
+         "  logic sel_q;\n"
+      << qUpdate
+      << "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+         "    if (!rst_ni) sel_q <= 1'b0; else if (go_i) sel_q <= 1'b1;\n"
+         "  assign q_o = sel_q ? q : 4'h0;\n"
+         "endmodule\n";
+    return path;
+  };
+  const auto hidden =
+      write("hidden.sv", "  always_ff @(posedge clk_i) if (en_i) q <= d_i;\n");
+  const auto reset = write(
+      "reset.sv",
+      "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+      "    if (!rst_ni) q <= 4'h0; else if (en_i) q <= d_i;\n");
+  const auto overwritten =
+      write("overwritten.sv", "  always_ff @(posedge clk_i) q <= d_i;\n");
+  const auto run = [&](const std::filesystem::path& design) {
+    return runStructuredWithArgs(
+        {"kepler-formal", "-sv", "-v", "sec", "--sec-encoding", "binary",
+         "--sec-reset-cycles", "2", "--sec-reset-port", "rst_ni=0",
+         "--design1", design.string(), "--design2", design.string()});
+  };
+  {
+    SCOPED_TRACE("hidden");
+    const auto hiddenRun = run(hidden);
+    EXPECT_EQ(hiddenRun.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+    EXPECT_EQ(hiddenRun.result.totalOutputs, 4u);
+    EXPECT_EQ(hiddenRun.result.coveredOutputs, 0u);
+    ASSERT_EQ(hiddenRun.result.skippedObservedOutputs.size(), 4u);
+    for (const auto& skipped : hiddenRun.result.skippedObservedOutputs) {
+      EXPECT_NE(skipped.find("q_o["), std::string::npos) << skipped;
+      EXPECT_NE(skipped.find("reset-unanchored internal state"),
+                std::string::npos)
+          << skipped;
+    }
+  }
+  for (const auto* name : {"reset", "overwritten"}) {
+    SCOPED_TRACE(name);
+    const auto sharedRun =
+        run(std::string(name) == "reset" ? reset : overwritten);
+    EXPECT_EQ(sharedRun.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+    EXPECT_EQ(sharedRun.result.totalOutputs, 4u);
+    EXPECT_EQ(sharedRun.result.coveredOutputs, 4u);
+    EXPECT_TRUE(sharedRun.result.skippedObservedOutputs.empty());
+  }
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSv2vGateLevelVerilogTopAccepted) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v");

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
@@ -1344,12 +1345,317 @@ std::string describeUnanchoredStateSupport(
 
 void logSecDiagLine(bool secDiagEnabled, const char* message);
 
+// How a signal relates across the two copies of a design once a reset
+// bootstrap has run: a constant, the same function of the shared inputs and of
+// reset-determined state in both copies, or possibly a function of state the
+// reset window left free, which the two copies may hold differently.
+enum class ResetAbstractValue : uint8_t { Zero, One, Shared, Free };
+
+ResetAbstractValue joinResetAbstractValues(ResetAbstractValue a,
+                                           ResetAbstractValue b) {
+  if (a == b) {
+    return a;
+  }
+  if (a == ResetAbstractValue::Free || b == ResetAbstractValue::Free) {
+    return ResetAbstractValue::Free;
+  }
+  return ResetAbstractValue::Shared;
+}
+
+bool isResetAbstractConstant(ResetAbstractValue value) {
+  return value == ResetAbstractValue::Zero || value == ResetAbstractValue::One;
+}
+
+// Evaluates formulas over the abstract values: constants fold, a constant
+// decides an AND or OR, and otherwise a Free operand makes the result Free.
+class ResetAbstractEvaluator {
+ public:
+  ResetAbstractEvaluator(
+      const std::unordered_map<size_t, ResetAbstractValue>& valueByVar,
+      const std::unordered_map<size_t, BoolExpr*>& exprByVar)
+      : valueByVar_(valueByVar), exprByVar_(exprByVar) {}
+
+  ResetAbstractValue evaluate(BoolExpr* root) {
+    if (root == nullptr) {
+      return ResetAbstractValue::Shared;  // LCOV_EXCL_LINE
+    }
+    struct Frame {
+      BoolExpr* node = nullptr;
+      bool visited = false;
+    };
+    std::vector<Frame> stack;
+    stack.push_back({root, false});
+    while (!stack.empty()) {
+      const Frame frame = stack.back();
+      stack.pop_back();
+      BoolExpr* node = frame.node;
+      if (memo_.find(node) != memo_.end()) {
+        continue;
+      }
+      if (node->getOp() == Op::VAR) {
+        const size_t id = node->getId();
+        if (id < 2) {
+          memo_.emplace(node, id == 1 ? ResetAbstractValue::One
+                                      : ResetAbstractValue::Zero);
+        } else if (const auto valueIt = valueByVar_.find(id);
+                   valueIt != valueByVar_.end()) {
+          memo_.emplace(node, valueIt->second);
+        } else if (const auto exprIt = exprByVar_.find(id);
+                   exprIt != exprByVar_.end()) {
+          // A memory read: the formula over its cells and address.
+          if (const auto readIt = memo_.find(exprIt->second);
+              readIt != memo_.end()) {
+            memo_.emplace(node, readIt->second);
+          } else if (frame.visited) {
+            memo_.emplace(node, ResetAbstractValue::Free);  // LCOV_EXCL_LINE
+          } else {
+            stack.push_back({node, true});
+            stack.push_back({exprIt->second, false});
+          }
+        } else {
+          // Every other leaf is a top input, the same in both copies.
+          memo_.emplace(node, ResetAbstractValue::Shared);
+        }
+        continue;
+      }
+      if (!frame.visited) {
+        stack.push_back({node, true});
+        if (node->getRight() != nullptr) {
+          stack.push_back({node->getRight(), false});
+        }
+        if (node->getLeft() != nullptr) {
+          stack.push_back({node->getLeft(), false});
+        }
+        continue;
+      }
+      memo_.emplace(node, combine(node));
+    }
+    return memo_.at(root);
+  }
+
+ private:
+  ResetAbstractValue combine(BoolExpr* node) const {
+    const auto left = memo_.at(node->getLeft());
+    switch (node->getOp()) {
+      case Op::NOT:
+        if (left == ResetAbstractValue::Zero) {
+          return ResetAbstractValue::One;
+        }
+        if (left == ResetAbstractValue::One) {
+          return ResetAbstractValue::Zero;
+        }
+        return left;
+      case Op::AND: {
+        const auto right = memo_.at(node->getRight());
+        if (left == ResetAbstractValue::Zero ||
+            right == ResetAbstractValue::Zero) {
+          return ResetAbstractValue::Zero;
+        }
+        if (left == ResetAbstractValue::One) {
+          return right;
+        }
+        if (right == ResetAbstractValue::One) {
+          return left;
+        }
+        return joinResetAbstractValues(left, right);
+      }
+      case Op::OR: {
+        const auto right = memo_.at(node->getRight());
+        if (left == ResetAbstractValue::One ||
+            right == ResetAbstractValue::One) {
+          return ResetAbstractValue::One;
+        }
+        if (left == ResetAbstractValue::Zero) {
+          return right;
+        }
+        if (right == ResetAbstractValue::Zero) {
+          return left;
+        }
+        return joinResetAbstractValues(left, right);
+      }
+      case Op::XOR: {
+        const auto right = memo_.at(node->getRight());
+        if (isResetAbstractConstant(left) && isResetAbstractConstant(right)) {
+          return left == right ? ResetAbstractValue::Zero
+                               : ResetAbstractValue::One;
+        }
+        if (isResetAbstractConstant(left)) {
+          return right;
+        }
+        if (isResetAbstractConstant(right)) {
+          return left;
+        }
+        return joinResetAbstractValues(left, right);
+      }
+      // LCOV_EXCL_START
+      default:
+        return ResetAbstractValue::Free;
+      // LCOV_EXCL_STOP
+    }
+  }
+
+  const std::unordered_map<size_t, ResetAbstractValue>& valueByVar_;
+  const std::unordered_map<size_t, BoolExpr*>& exprByVar_;
+  std::unordered_map<BoolExpr*, ResetAbstractValue> memo_;
+};
+
+// The reset bootstrap ports of one design as (local variable, active value).
+std::vector<std::pair<size_t, bool>> resolveResetBootstrapModelVars(
+    const SequentialDesignModel& model,
+    const std::vector<SignalKey>& alignedInputKeys,
+    const KInductionProblem& problem) {
+  std::vector<std::pair<size_t, bool>> vars;
+  for (const auto& [symbol, activeValue] : problem.resetBootstrapInputs) {
+    for (size_t i = 0;
+         i < problem.inputSymbols.size() && i < alignedInputKeys.size(); ++i) {
+      if (problem.inputSymbols[i] != symbol) {
+        continue;
+      }
+      if (const auto varIt = model.inputVarByKey.find(alignedInputKeys[i]);
+          varIt != model.inputVarByKey.end()) {
+        vars.emplace_back(varIt->second, activeValue);
+      }
+      break;
+    }
+  }
+  return vars;
+}
+
+// The state bits a reset bootstrap leaves free in one design: every bit the
+// window does not determine with the reset ports held active and every other
+// input unknown, and every bit that can read one of them once the ports are
+// released. The two copies of such a bit may differ, so binary SEC must not
+// compare the outputs that read it.
+std::unordered_set<SignalKey, SignalKeyHash> collectResetFreeStateKeys(
+    const SequentialDesignModel& model,
+    const std::vector<std::pair<size_t, bool>>& resetVars,
+    size_t cycles) {
+  std::unordered_map<size_t, BoolExpr*> exprByVar;
+  for (const auto& [key, expr] : model.memoryReadExprByKey) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      exprByVar.emplace(varIt->second, expr);
+    }
+  }
+  std::vector<SignalKey> keys;
+  std::vector<size_t> stateVars;
+  std::vector<BoolExpr*> nextExprs;
+  for (const auto& key : model.stateBits) {
+    const auto varIt = model.inputVarByKey.find(key);
+    const auto exprIt = model.nextStateExprByStateKey.find(key);
+    if (varIt == model.inputVarByKey.end() ||
+        exprIt == model.nextStateExprByStateKey.end()) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    keys.push_back(key);
+    stateVars.push_back(varIt->second);
+    nextExprs.push_back(exprIt->second);
+  }
+
+  std::unordered_map<size_t, ResetAbstractValue> valueByVar;
+  const auto holdResetPorts = [&](bool active) {
+    for (const auto& [var, activeValue] : resetVars) {
+      valueByVar[var] = activeValue == active ? ResetAbstractValue::One
+                                              : ResetAbstractValue::Zero;
+    }
+  };
+  const auto step = [&](const std::vector<ResetAbstractValue>& current) {
+    for (size_t i = 0; i < stateVars.size(); ++i) {
+      valueByVar[stateVars[i]] = current[i];
+    }
+    ResetAbstractEvaluator evaluator(valueByVar, exprByVar);
+    std::vector<ResetAbstractValue> next(current.size());
+    for (size_t i = 0; i < nextExprs.size(); ++i) {
+      next[i] = evaluator.evaluate(nextExprs[i]);
+    }
+    return next;
+  };
+
+  // The proof starts every state bit free, then holds the reset for `cycles`
+  // frames; a frame that changes nothing fixes the rest of the window.
+  std::vector<ResetAbstractValue> state(keys.size(), ResetAbstractValue::Free);
+  holdResetPorts(true);
+  for (size_t cycle = 0; cycle < cycles; ++cycle) {
+    auto next = step(state);
+    if (next == state) {
+      break;
+    }
+    state = std::move(next);
+  }
+  // After the window the outputs are compared on every frame, so join each
+  // later frame into the state until nothing can still change.
+  holdResetPorts(false);
+  for (size_t round = 0; round <= 2 * keys.size() + 1; ++round) {
+    const auto next = step(state);
+    bool changed = false;
+    for (size_t i = 0; i < state.size(); ++i) {
+      const auto joined = joinResetAbstractValues(state[i], next[i]);
+      if (joined != state[i]) {
+        state[i] = joined;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
+  }
+
+  std::unordered_set<SignalKey, SignalKeyHash> freeKeys;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (state[i] == ResetAbstractValue::Free) {
+      freeKeys.insert(keys[i]);
+    }
+  }
+  return freeKeys;
+}
+
+std::unordered_set<SignalKey, SignalKeyHash> anchoredStateKeysExcept(
+    const SequentialDesignModel& model,
+    const std::unordered_set<SignalKey, SignalKeyHash>& freeKeys) {
+  std::unordered_set<SignalKey, SignalKeyHash> anchored;
+  for (const auto& key : model.stateBits) {
+    if (freeKeys.find(key) == freeKeys.end()) {
+      anchored.insert(key);
+    }
+  }
+  return anchored;
+}
+
+void logResetFreeStateKeys(
+    bool secDiagEnabled,
+    const SequentialDesignModel& model,
+    const std::unordered_set<SignalKey, SignalKeyHash>& freeKeys,
+    size_t designIndex) {
+  if (!secDiagEnabled) {
+    return;
+  }
+  std::vector<std::string> names;
+  names.reserve(freeKeys.size());
+  for (const auto& key : model.stateBits) {
+    if (freeKeys.find(key) != freeKeys.end()) {
+      names.push_back(describeSecSignalKey(model, key));
+    }
+  }
+  fprintf(  // LCOV_EXCL_LINE
+      stderr,  // LCOV_EXCL_LINE
+      "SEC diag: reset bootstrap leaves design%zu state free=%zu/%zu: %s\n",
+      designIndex,  // LCOV_EXCL_LINE
+      freeKeys.size(),  // LCOV_EXCL_LINE
+      model.stateBits.size(),  // LCOV_EXCL_LINE
+      formatStringList(names, 16).c_str());  // LCOV_EXCL_LINE
+  fflush(stderr);  // LCOV_EXCL_LINE
+}
+
+// Drops the outputs whose cones read state the two copies may hold
+// differently: every state bit outside `anchoredStateKeys` of its design.
 void filterOutputsRequiringUninitializedState(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
     bool hasIncompleteInitialState,
     AlignedSecInterface& aligned,
-    bool secDiagEnabled) {
+    bool secDiagEnabled,
+    const std::unordered_set<SignalKey, SignalKeyHash>& anchoredStateKeys0,
+    const std::unordered_set<SignalKey, SignalKeyHash>& anchoredStateKeys1) {
   if (!hasIncompleteInitialState || aligned.outputs.names.empty()) {
     return;
   }
@@ -1360,8 +1666,6 @@ void filterOutputsRequiringUninitializedState(
     return;  // LCOV_EXCL_LINE
   }
 
-  const std::unordered_set<SignalKey, SignalKeyHash> anchoredStateKeys0;
-  const std::unordered_set<SignalKey, SignalKeyHash> anchoredStateKeys1;
   const auto [abstractOutputMap0, abstractOutputMap1] =
       buildPublicInputAbstractMaps(model0, model1, aligned.inputs);
 
@@ -3797,10 +4101,30 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   }
   if (encoding_ == SecEncoding::Binary) {
     if (symbolSpace.problem.hasResetBootstrap()) {
-      logSecDiagLine(
+      // The proof starts every register free and only assumes the outputs
+      // agree on the first frame after the reset window. A register the window
+      // leaves free, or one that can read it later, may still differ between
+      // the two copies, so the outputs reading it are skipped as
+      // reset-unanchored, exactly as without a bootstrap.
+      const auto& problem = symbolSpace.problem;
+      const auto freeKeys0 = collectResetFreeStateKeys(
+          model0,
+          resolveResetBootstrapModelVars(model0, aligned.inputs.keys0, problem),
+          problem.resetBootstrapCycles);
+      const auto freeKeys1 = collectResetFreeStateKeys(
+          model1,
+          resolveResetBootstrapModelVars(model1, aligned.inputs.keys1, problem),
+          problem.resetBootstrapCycles);
+      logResetFreeStateKeys(secDiagEnabled, model0, freeKeys0, 0);
+      logResetFreeStateKeys(secDiagEnabled, model1, freeKeys1, 1);
+      filterOutputsRequiringUninitializedState(
+          model0,
+          model1,
+          !freeKeys0.empty() || !freeKeys1.empty(),
+          aligned,
           secDiagEnabled,
-          "SEC diag: reset bootstrap keeps reset-unanchored outputs in the "
-          "binary proof");
+          anchoredStateKeysExcept(model0, freeKeys0),
+          anchoredStateKeysExcept(model1, freeKeys1));
     } else {
       const bool hasIncompleteInitialState =
           model0.initialStateValueByKey.size() != model0.stateBits.size() ||
@@ -3810,7 +4134,9 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
           model1,
           hasIncompleteInitialState,
           aligned,
-          secDiagEnabled);
+          secDiagEnabled,
+          /*anchoredStateKeys0=*/{},
+          /*anchoredStateKeys1=*/{});
     }
   } else {
     logSecDiagLine(
