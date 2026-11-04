@@ -17,7 +17,7 @@ The SEC-specific flag surface is documented separately in
 | `sec` | Gate-level sequential equivalence checking | Sequential Verilog/SystemVerilog netlists plus Liberty/Python primitive libraries as needed. |
 | `sec` | RTL-level sequential equivalence checking | RTL Verilog/SystemVerilog sources, including SystemVerilog flists with explicit tops. |
 | `sec` | SystemVerilog-to-Verilog RTL-vs-gate checking (`sv2v`) | SystemVerilog design 1 and Verilog design 2, plus Liberty/Python primitive libraries as needed. |
-| `sec` | VHDL RTL-level sequential equivalence checking (`vhdl`) | VHDL sources for both designs, in compile order. Experimental; see [VHDL support](vhdl/README.md). |
+| `sec` | VHDL RTL-level sequential equivalence checking (`vhdl`) | VHDL sources for both designs, in any order. Experimental; see [VHDL support](vhdl/README.md). |
 | `lec`, `sec` | Designs built by Python scripts (`python`) | One or more scripts per design that create the design with the Naja Python API, plus Liberty/Python primitive libraries. See [Python design input](python-design-input.md). |
 
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
