@@ -18,7 +18,7 @@ structurally. This document lists those generic types and how each is built.
 | `MULTIPLY` | Multiplication | The low `width` product bits, each partial product added in place. |
 | `SHIFT` | Logical and arithmetic shifts | A barrel of multiplexer stages: stage `s` moves the data by `2^s` when count bit `s` is set. Bits shifted in are 0, or the sign bit for an arithmetic right shift, which also covers counts of the width or more. |
 | `ROM` | Dynamically indexed constant tables | A `TABLE_SELECT` tree whose rows are constants (section "Read-only memories"). |
-| `VECTOR_SELECT` | Dynamically indexed part-select reads, `data[offset +: w]` | A mux tree over the offset bits, most significant bit first, keyed by the offsets that place a data bit at this output bit (section "Dynamic part selects"). |
+| `VECTOR_SELECT` | Dynamically indexed part-select reads, `data[offset +: w]` | A mux tree over the offset bits, most significant bit first, keyed by the offsets that place a data bit at this output bit; an offset that places none reads X (section "Dynamic part selects"). |
 | `VECTOR_UPDATE` | Dynamically indexed part-select writes, `v[offset +: w] = d` | The same tree keyed by the offsets that place a written bit at this output bit, keeping the base bit otherwise, under the enable. |
 
 A cell with no usable table and no sequential model is opaque, with the reason
@@ -68,7 +68,13 @@ The builder lists the offset values that place a window bit at this output
 bit, drops the ones the offset width cannot hold (Naja does not alias offsets
 modulo the offset range), and decodes the offset once as a mux tree over its
 bits, pruning every prefix no candidate shares. A select whose offset leaves
-no data bit at the output reads 0, like a `TABLE_SELECT` row beyond the depth;
-Naja's own model calls that bit X. An update with the enable low or with no
-window bit at the output keeps the base bit, so a window that runs past the
-vector is clipped.
+no data bit at the output reads X, as in Naja's model: the output's net gets
+an unknown-read variable, which SEC publishes as the same permanently-X state
+as an X literal (`docs/sec-sequential-models.md`, section "X Constant
+Literals"). Under the dual-rail encoding a binary value on the other side is
+then no difference; under the binary encoding the dependent outputs are
+skipped as reset-unanchored. The combinational flow has no X value and skips
+such an output, reporting the select that reads past its vector. An offset
+width whose every pattern hits the vector needs no unknown read. An update
+with the enable low or with no window bit at the output keeps the base bit, so
+a window that runs past the vector is clipped.

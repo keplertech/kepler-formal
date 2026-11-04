@@ -112,6 +112,12 @@ literals. Under the binary encoding the bit behaves like any uninitialized
 register, and dependent outputs are skipped. Z literals remain unsupported and
 skip the cones that read them.
 
+A primitive output that reads X somewhere gets the same state: a
+`VECTOR_SELECT` whose offset can leave its vector
+(`docs/sec-primitive-expansion.md`, section "Dynamic part selects") reads an
+unknown-read state, displayed as `x-read#<iso>`, for the window bits outside
+the vector.
+
 ## Opaque Outputs
 
 Opacity is strict and local to an output terminal. During backward cone

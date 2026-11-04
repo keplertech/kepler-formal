@@ -1345,6 +1345,72 @@ TEST_F(KeplerFormalCliTests, SvDynamicPartSelectsMatchShiftModels) {
   std::filesystem::remove_all(tmpDir);
 }
 
+// A select whose offset can leave its vector reads X there, as in naja's
+// model. Dual rail keeps that X as permanently-X state, so a model that fills
+// the bits past the vector with ones is no binary-defined difference, while
+// the binary encoding skips the output as reset-unanchored state.
+TEST_F(KeplerFormalCliTests, SvDynamicPartSelectPastVectorReadsUnknown) {
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_vector_select_unknown_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto window = tmpDir / "window.sv";
+  const auto onesPastEnd = tmpDir / "ones_past_end.sv";
+  {
+    std::ofstream f(window);
+    f << "module t(input [7:0] data, input [2:0] sel,\n"
+         "         output [1:0] rd, output [7:0] pass);\n"
+         "  assign rd = data[sel +: 2];\n"
+         "  assign pass = data;\n"
+         "endmodule\n";
+  }
+  {
+    // rd[1] for sel == 7 is data[8]: X in the window model, 1 here.
+    std::ofstream f(onesPastEnd);
+    f << "module t(input [7:0] data, input [2:0] sel,\n"
+         "         output [1:0] rd, output [7:0] pass);\n"
+         "  wire [15:0] shifted = {8'hff, data} >> sel;\n"
+         "  assign rd = shifted[1:0];\n"
+         "  assign pass = data;\n"
+         "endmodule\n";
+  }
+  const auto configFor = [&](const char* encoding) {
+    return writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "sec_encoding: " + std::string(encoding) + "\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + window.string() + "\n"
+        "  - " + onesPastEnd.string() + "\n");
+  };
+  {
+    SCOPED_TRACE("dual_rail_steady");
+    const auto cfgPath = configFor("dual_rail_steady");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+    EXPECT_EQ(run.result.totalOutputs, 10u);
+    EXPECT_EQ(run.result.provenOutputs, 10u);
+    EXPECT_TRUE(run.result.skippedObservedOutputs.empty());
+    KEPLER_FORMAL::cleanupKeplerFormalState();
+    std::filesystem::remove(cfgPath);
+  }
+  {
+    SCOPED_TRACE("binary");
+    const auto cfgPath = configFor("binary");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, kSecPartiallyProvedExitCode);
+    EXPECT_EQ(run.result.totalOutputs, 10u);
+    EXPECT_EQ(run.result.provenOutputs, 9u);
+    ASSERT_EQ(run.result.skippedObservedOutputs.size(), 1u);
+    const auto& detail = run.result.skippedObservedOutputs.front();
+    EXPECT_NE(detail.find("rd[1]"), std::string::npos) << detail;
+    EXPECT_NE(detail.find("x-read#"), std::string::npos) << detail;
+    KEPLER_FORMAL::cleanupKeplerFormalState();
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(tmpDir);
+}
+
 // A loop through an asynchronous read port has no evaluation order. SEC must
 // report it as unsupported rather than fail on the unresolved read data.
 TEST_F(KeplerFormalCliTests, SvMemoryReadPortLoopIsUnsupported) {

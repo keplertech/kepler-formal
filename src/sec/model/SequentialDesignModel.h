@@ -50,6 +50,9 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::vector<SignalKey> skippedStateBits;
   std::vector<SignalKey> skippedObservedOutputs;
   std::unordered_map<SignalKey, size_t, SignalKeyHash> inputVarByKey;
+  // Synthetic state variables are allocated at or above this, past every
+  // unknown-read variable a later dependency build may still publish.
+  size_t syntheticVarFloor = 2;
   std::unordered_map<SignalKey, std::string, SignalKeyHash> displayNameByKey;
   // Name of the net on a state bit's output pin, when that net is named: the
   // parent instance path, the net name and the bit. Only a guess source for

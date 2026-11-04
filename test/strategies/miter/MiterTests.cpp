@@ -20,6 +20,8 @@
 
 #include "BuildPrimaryOutputClauses.h"
 #include "BoolExprCache.h"
+#include "DnlLifetime.h"
+#include "Tree2BoolExpr.h"
 #include "ConstantPropagation.h"
 #include "MiterStrategy.h"
 #include "SNLLogicCloud.h"
@@ -960,6 +962,106 @@ TEST_F(MiterTests, BuildPrimaryOutputClausesUnknownConstantsWithoutSourceLocatio
     EXPECT_NE(skip.detail.find(name), std::string::npos);
     EXPECT_NE(skip.detail.find("source location unavailable"), std::string::npos);
     EXPECT_EQ(skip.detail.find("has no drivers"), std::string::npos);
+  }
+}
+
+// A VECTOR_SELECT output whose offset can leave the vector reads X there.
+// Without X modeling the builder has no value for it and skips that output,
+// naming the select; with X modeling the output reads an unknown-read
+// variable numbered past every terminal, published for SEC.
+TEST_F(MiterTests, BuildPrimaryOutputClausesVectorSelectPastVectorReadsUnknown) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* libraryDesigns =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  NLDB0::VectorSelectSignature signature;
+  signature.width = 4;
+  signature.selectWidth = 2;
+  signature.abits = 2;
+  auto* select = NLDB0::getOrCreateVectorSelect(signature);
+  ASSERT_NE(select, nullptr);
+
+  auto* top = SNLDesign::create(
+      libraryDesigns, SNLDesign::Type::Standard, NLName("top"));
+  univ->setTopDesign(top);
+  auto* data =
+      SNLBusTerm::create(top, SNLTerm::Direction::Input, 3, 0, NLName("d"));
+  auto* offset =
+      SNLBusTerm::create(top, SNLTerm::Direction::Input, 1, 0, NLName("sel"));
+  auto* y =
+      SNLBusTerm::create(top, SNLTerm::Direction::Output, 1, 0, NLName("y"));
+  auto* dataNet = SNLBusNet::create(top, 3, 0, NLName("d_net"));
+  auto* offsetNet = SNLBusNet::create(top, 1, 0, NLName("sel_net"));
+  auto* yNet = SNLBusNet::create(top, 1, 0, NLName("y_net"));
+  data->setNet(dataNet);
+  offset->setNet(offsetNet);
+  y->setNet(yNet);
+  auto* inst = SNLInstance::create(top, select, NLName("select0"));
+  inst->setTermNet(NLDB0::getVectorSelectData(select), dataNet);
+  inst->setTermNet(NLDB0::getVectorSelectOffset(select), offsetNet);
+  inst->setTermNet(NLDB0::getVectorSelectOutput(select), yNet);
+
+  // y[0] = d[sel] hits for every offset; y[1] = d[sel + 1] reads d[4] when
+  // sel is 3.
+  for (const bool modelX : {false, true}) {
+    SCOPED_TRACE(modelX ? "modeling X" : "without X");
+    auto* dnl = naja::DNL::get();
+    BuildPrimaryOutputClauses builder;
+    builder.setRetainDnl(true);
+    builder.setModelXConstants(modelX);
+    builder.collect();
+    builder.build();
+    const auto& outputs = builder.getOutputs();
+    ASSERT_EQ(outputs.size(), 2u);
+    size_t pastIndex = outputs.size();
+    size_t hitIndex = outputs.size();
+    for (size_t i = 0; i < outputs.size(); ++i) {
+      const auto bit =
+          dnl->getDNLTerminalFromID(outputs[i]).getSnlBitTerm()->getBit();
+      (bit == 1 ? pastIndex : hitIndex) = i;
+    }
+    ASSERT_LT(pastIndex, outputs.size());
+    ASSERT_LT(hitIndex, outputs.size());
+    ASSERT_NE(builder.getPOs()[hitIndex], nullptr);
+    EXPECT_TRUE(builder.getPOs()[hitIndex]->isValid());
+    ASSERT_NE(builder.getPOs()[pastIndex], nullptr);
+    const size_t termCount = dnl->getDNLTerms().size();
+    if (!modelX) {
+      EXPECT_FALSE(builder.getPOs()[pastIndex]->isValid());
+      EXPECT_TRUE(builder.getUnknownReadVars().empty());
+      EXPECT_FALSE(builder.getUnknownReadVarBase().has_value());
+      ASSERT_EQ(builder.getSkippedOutputs().size(), 1u);
+      const auto& [skippedTerm, skip] = *builder.getSkippedOutputs().begin();
+      EXPECT_EQ(skippedTerm, outputs[pastIndex]);
+      EXPECT_EQ(skip.reason,
+                BuildPrimaryOutputClauses::SkippedOutputReason::UnknownConstant);
+      for (const char* expected :
+           {"unsupported X read", "VECTOR_SELECT output bit 1",
+            "reads past its 4-bit vector", "this encoding has no X value",
+            "select0"}) {
+        EXPECT_NE(skip.detail.find(expected), std::string::npos)
+            << expected << " not in: " << skip.detail;
+      }
+    } else {
+      EXPECT_TRUE(builder.getPOs()[pastIndex]->isValid());
+      EXPECT_TRUE(builder.getSkippedOutputs().empty());
+      ASSERT_TRUE(builder.getUnknownReadVarBase().has_value());
+      // No X constants, so the base sits right past the terminal variables.
+      EXPECT_EQ(*builder.getUnknownReadVarBase(), termCount + 2);
+      const auto pastIso =
+          dnl->getDNLTerminalFromID(outputs[pastIndex]).getIsoID();
+      const size_t unknownVar = termCount + 2 + pastIso;
+      ASSERT_EQ(builder.getUnknownReadVars().size(), 1u);
+      EXPECT_EQ(builder.getUnknownReadVars().front().first, pastIso);
+      EXPECT_EQ(builder.getUnknownReadVars().front().second, unknownVar);
+      EXPECT_TRUE(
+          builder.getPOs()[pastIndex]->getSupportVars().contains(unknownVar));
+      EXPECT_FALSE(
+          builder.getPOs()[hitIndex]->getSupportVars().contains(unknownVar));
+    }
+    KEPLER_FORMAL::destroyDnl();
+    KEPLER_FORMAL::Tree2BoolExpr::iso2boolExpr_.clear();
+    KEPLER_FORMAL::BoolExprCache::destroy();
   }
 }
 

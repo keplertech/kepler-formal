@@ -15,7 +15,9 @@
 #include <bitset>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -33,6 +35,44 @@ using namespace KEPLER_FORMAL;
 // This allows sharing of BoolExpr objects across conversions and threads.
 tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> Tree2BoolExpr::iso2boolExpr_ =
     tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*>();
+
+namespace {
+// Set by the clause builder for the duration of one build; the map is filled
+// from the conversion threads and drained by takeUnknownReadVars().
+std::optional<size_t> unknownReadVarBase;
+tbb::concurrent_unordered_map<naja::DNL::DNLID, size_t> unknownReadVars;
+}  // namespace
+
+void Tree2BoolExpr::setUnknownReadVarBase(std::optional<size_t> base) {
+  unknownReadVarBase = base;
+  unknownReadVars.clear();
+}
+
+std::optional<size_t> Tree2BoolExpr::getUnknownReadVarBase() {
+  return unknownReadVarBase;
+}
+
+size_t Tree2BoolExpr::unknownReadVar(naja::DNL::DNLID isoID,
+                                     const std::string& what) {
+  if (!unknownReadVarBase.has_value()) {
+    throw UnknownValueReadError(what + "; this encoding has no X value", isoID);
+  }
+  if (isoID == naja::DNL::DNLID_MAX) {
+    throw UnknownValueReadError(what + "; the output drives no net", isoID);
+  }
+  const size_t var = *unknownReadVarBase + isoID;
+  unknownReadVars.insert({isoID, var});
+  return var;
+}
+
+std::vector<std::pair<naja::DNL::DNLID, size_t>>
+Tree2BoolExpr::takeUnknownReadVars() {
+  std::vector<std::pair<naja::DNL::DNLID, size_t>> vars(
+      unknownReadVars.begin(), unknownReadVars.end());
+  std::sort(vars.begin(), vars.end());
+  unknownReadVars.clear();
+  return vars;
+}
 
 // Helper typedefs for thread-local containers. Each pair stores a vector
 // allocated with TBB allocator and a size_t representing the logical size.
@@ -710,9 +750,13 @@ BoolExpr* decodeOffsetCandidates(
 
 // Output bit o of a VECTOR_SELECT reads DATA[OFFSET + o].  Dependencies: DATA
 // most significant bit first, then OFFSET most significant bit first.  A window
-// bit past either end of DATA is X in naja's model; like a TABLE_SELECT row at
-// or beyond the depth it reads 0 here.
-BoolExpr* buildVectorSelectTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) {
+// bit past either end of DATA is X in naja's model and reads the unknown-read
+// variable of the output's iso here (Tree2BoolExpr::unknownReadVar), which SEC
+// models as permanently-X state like an X literal; an encoding without X skips
+// the output instead.  An offset width whose every pattern hits DATA needs no
+// unknown read.
+BoolExpr* buildVectorSelectTruthTableExpr(
+    const SNLTruthTable& tbl, uint32_t k, naja::DNL::DNLID isoID) {
   const auto& select = tbl.getVectorSelectMetadata();
   if (k != select.width + select.addressSize) {
     throw std::runtime_error("VECTOR_SELECT truth table arity mismatch");
@@ -726,8 +770,21 @@ BoolExpr* buildVectorSelectTruthTableExpr(const SNLTruthTable& tbl, uint32_t k) 
     }
     candidates.push_back({offset, getChildFETS(select.width - 1 - dataBit)});
   }
+  // The candidates are distinct representable offsets, so DATA covers every
+  // one of the 2^ABITS offset patterns exactly when there are that many.
+  const bool everyOffsetHits =
+      select.addressSize < 64 &&
+      candidates.size() == (uint64_t{1} << select.addressSize);
+  BoolExpr* miss = BoolExpr::createFalse();
+  if (!everyOffsetHits) {
+    miss = BoolExpr::Var(Tree2BoolExpr::unknownReadVar(
+        isoID,
+        "VECTOR_SELECT output bit " + std::to_string(select.outputBit) +
+            " reads past its " + std::to_string(select.width) +
+            "-bit vector for some offset (X in naja's model)"));
+  }
   return decodeOffsetCandidates(
-      candidates, select.addressSize, 0, select.width, BoolExpr::createFalse());
+      candidates, select.addressSize, 0, select.width, miss);
 }
 
 // Output bit o of a VECTOR_UPDATE is DATA[o - OFFSET] when EN holds and that
@@ -796,7 +853,7 @@ BoolExpr* buildGenericTruthTableExpr(
     case SNLTruthTable::GenericType::ROM:
       return buildRomTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::VECTOR_SELECT:
-      return buildVectorSelectTruthTableExpr(tbl, k);
+      return buildVectorSelectTruthTableExpr(tbl, k, isoID);
     case SNLTruthTable::GenericType::VECTOR_UPDATE:
       return buildVectorUpdateTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::DIVMOD:
