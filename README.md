@@ -177,7 +177,7 @@ build/src/bin/kepler-formal -sv -v sec \
   --sv_design2_flist <file> --sv_design2_top <top> \
   [--liberty <library-file>...]
 
-# VHDL SEC, files in compile order with the top-level unit last
+# VHDL SEC, each design's files in any order
 build/src/bin/kepler-formal -vhdl -v sec \
   --design1 <file...> --design2 <file...> \
   [--vhdl_design1_top <top>] [--vhdl_design2_top <top>]

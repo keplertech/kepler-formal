@@ -855,31 +855,24 @@ static naja::NL::SNLDesign* selectTopDesign(
   return top;
 }
 
-// Naja's VHDL loader reads one file per call and keeps the earlier sources in
-// the library, so files are loaded in compile order: packages and instantiated
-// entities first, the top-level unit last. The requested top is elaborated
-// once every file is known.
+// Naja registers every file of a design before elaborating anything, so the
+// files come in any order: packages and instantiated entities resolve from the
+// complete unit index, and a child entity takes the generic actuals of its
+// parent rather than its own defaults. The requested top, or the one entity no
+// other entity instantiates, is elaborated once all files are known.
 static naja::NL::SNLDesign* constructVhdlDesign(
     naja::NL::NLLibrary* library,
     const std::vector<std::string>& designPaths,
     const std::optional<std::string>& requestedTop) {
   naja::NL::VHDLConstructor::ConstructOptions options;
-  // Naja's default report file is rewritten by every load, so a multi-file
-  // design would keep only its last file. Warnings stay on the console.
+  // Warnings stay on the console; no separate diagnostics report is written.
   options.diagnosticsReportPath.reset();
   const naja::NL::VHDLConstructor constructor(library, options);
-  naja::NL::SNLDesign* top = nullptr;
-  for (size_t i = 0; i < designPaths.size(); ++i) {
-    const bool isLast = i + 1 == designPaths.size();
-    const std::string_view fileTop =
-        isLast && requestedTop ? std::string_view(*requestedTop)
-                               : std::string_view();
-    // Package-only files and entities awaiting generic values return null.
-    if (auto* design = constructor.constructFile(designPaths[i], fileTop)) {
-      top = design;
-    }
-  }
-  return top;
+  const std::vector<std::filesystem::path> paths(designPaths.begin(),
+                                                 designPaths.end());
+  return constructor.constructFiles(
+      paths,
+      requestedTop ? std::string_view(*requestedTop) : std::string_view());
 }
 
 static bool applySystemVerilogConfigOption(const YAML::Node& cfg,

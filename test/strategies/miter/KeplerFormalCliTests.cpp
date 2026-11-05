@@ -2454,7 +2454,8 @@ TEST_F(KeplerFormalCliTests, CliVhdlMultiFileHierarchyMatchesFlatDesign) {
                "end;\n";
   }
 
-  // Files are loaded in compile order, so the instantiated entity comes first.
+  // Every file of a design is registered before elaboration, so the
+  // instantiated entity may come first or last, with or without a named top.
   const auto run = runStructuredWithArgs(
       {"kepler-formal", "-vhdl", "-v", "sec",
        "--vhdl_design1_top", "htop", "--vhdl_design2_top", "htop",
@@ -2463,12 +2464,78 @@ TEST_F(KeplerFormalCliTests, CliVhdlMultiFileHierarchyMatchesFlatDesign) {
   EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
 
-  const auto wrongOrder = runStructuredWithArgs(
+  const auto reversedOrder = runStructuredWithArgs(
       {"kepler-formal", "-vhdl", "-v", "sec",
        "--design1", fixture.design0Path.string(), leafPath.string(),
        "--design2", fixture.design1Path.string()});
-  EXPECT_NE(wrongOrder.exitCode, EXIT_SUCCESS);
-  EXPECT_NE(wrongOrder.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(reversedOrder.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(reversedOrder.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+// A child entity whose generic defaults cannot elaborate on their own (a null
+// vector here) must take its parent's generic map. Loading the files one at a
+// time built the child with its defaults first and failed with a null or
+// oversized hardware array; loading them together specializes it only from the
+// generic map, in either file order.
+TEST_F(KeplerFormalCliTests, CliVhdlGenericMapAcrossFilesSizesChild) {
+  SimpleCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_vhdl_generic_map");
+  const auto leafPath = fixture.tmpDir / "leaf.vhd";
+  fixture.design0Path = fixture.tmpDir / "design0_top.vhd";
+  fixture.design1Path = fixture.tmpDir / "design1.vhd";
+  {
+    std::ofstream leaf(leafPath);
+    leaf << "entity widen is\n"
+            "  generic (W : natural := 0);\n"
+            "  port (a : in bit_vector(W-1 downto 0);\n"
+            "        y : out bit_vector(W-1 downto 0));\n"
+            "end;\n"
+            "architecture rtl of widen is\n"
+            "begin\n"
+            "  y <= not a;\n"
+            "end;\n";
+  }
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << "entity gtop is\n"
+               "  port (a : in bit_vector(3 downto 0);\n"
+               "        y : out bit_vector(3 downto 0));\n"
+               "end;\n"
+               "architecture structural of gtop is\n"
+               "begin\n"
+               "  u0: entity work.widen generic map (W => 4) port map (a, y);\n"
+               "end;\n";
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << "entity gtop is\n"
+               "  port (a : in bit_vector(3 downto 0);\n"
+               "        y : out bit_vector(3 downto 0));\n"
+               "end;\n"
+               "architecture rtl of gtop is\n"
+               "begin\n"
+               "  y <= not a;\n"
+               "end;\n";
+  }
+
+  for (const bool leafFirst : {true, false}) {
+    SCOPED_TRACE(leafFirst ? "leaf first" : "top first");
+    std::vector<std::string> args = {
+        "kepler-formal", "-vhdl", "-v", "sec",
+        "--vhdl_design1_top", "gtop", "--vhdl_design2_top", "gtop",
+        "--design1"};
+    if (leafFirst) {
+      args.insert(args.end(), {leafPath.string(), fixture.design0Path.string()});
+    } else {
+      args.insert(args.end(), {fixture.design0Path.string(), leafPath.string()});
+    }
+    args.insert(args.end(), {"--design2", fixture.design1Path.string()});
+    const auto run = runStructuredWithArgs(std::move(args));
+    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  }
 
   std::filesystem::remove_all(fixture.tmpDir);
 }
