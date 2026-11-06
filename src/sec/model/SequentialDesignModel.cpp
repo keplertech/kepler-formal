@@ -595,6 +595,7 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
 struct MaterializedBuilderOutputs {
   std::vector<naja::DNL::DNLID> inputs;
   std::vector<naja::DNL::DNLID> outputs;
+  std::vector<std::pair<naja::DNL::DNLID, size_t>> unknownReadVars;
   std::vector<size_t> termDNLID2varID;
   std::unordered_map<naja::DNL::DNLID, BoolExpr*> outputExprByTerm;
   std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo> skippedOutputsByTerm;
@@ -918,6 +919,7 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
 
   result.inputs = builder.getInputs();
   result.outputs = builder.getOutputs();
+  result.unknownReadVars = builder.getUnknownReadVars();
   result.termDNLID2varID = stableTermDNLID2varID;
   mergeBuilderTermVarIDs(result.termDNLID2varID, builder.getTermDNLID2VarID());
   const auto stableVarRemap = buildStableBuilderVarRemap(
@@ -3615,7 +3617,7 @@ void recordBoundaryInputVars(
 }
 
 size_t getNextSyntheticVarID(const SequentialDesignModel& model) {
-  size_t nextVarID = 2;
+  size_t nextVarID = std::max<size_t>(2, model.syntheticVarFloor);
   for (const auto& [_, varID] : model.inputVarByKey) {
     nextVarID = std::max(nextVarID, varID + 1);
   }
@@ -3683,6 +3685,23 @@ void assignXConstantStateVars(
     model.inputVarByKey.emplace(key, varID);
     model.nextStateExprByStateKey.emplace(key, BoolExpr::Var(varID));
     model.displayNameByKey.emplace(key, "1'bx#" + std::to_string(isoID));
+  }
+}
+
+// A primitive output that reads X somewhere, such as a VECTOR_SELECT whose
+// offset can leave its vector, reads an unknown-read variable there: the same
+// permanently-X state as an X literal, keyed by the output's iso. Builders of
+// one DNL agree on these variables, so a pair seen again is the same state.
+void assignUnknownReadStateVars(
+    const std::vector<std::pair<naja::DNL::DNLID, size_t>>& unknownReadVars,
+    SequentialDesignModel& model) {
+  for (const auto& [isoID, varID] : unknownReadVars) {
+    const SignalKey key = xConstantStateKey(isoID);
+    if (model.inputVarByKey.emplace(key, varID).second) {
+      model.stateBits.push_back(key);
+      model.nextStateExprByStateKey.emplace(key, BoolExpr::Var(varID));
+      model.displayNameByKey.emplace(key, "x-read#" + std::to_string(isoID));
+    }
   }
 }
 
@@ -4747,6 +4766,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       mergeBuilderTermVarIDs(termDNLID2varID,
                              dependencyOutputs.termDNLID2varID);
       recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
+      assignUnknownReadStateVars(dependencyOutputs.unknownReadVars, model);
       for (const auto& [termID, expr] : dependencyOutputs.outputExprByTerm) {
         outputExprByTerm.insert_or_assign(termID, expr);
       }
@@ -5687,6 +5707,15 @@ SequentialDesignModel SequentialDesignModel::extract(
   std::vector<size_t> termDNLID2varID = ctx.builder.getTermDNLID2VarID();
   recordBoundaryInputVars(ctx, builderInputs, termDNLID2varID, model);
   assignXConstantStateVars(ctx, model);
+  assignUnknownReadStateVars(ctx.builder.getUnknownReadVars(), model);
+  if (const auto unknownReadBase = ctx.builder.getUnknownReadVarBase()) {
+    // Dependency builds below may publish more unknown-read variables, which
+    // are `base + iso` in every builder, so synthetic state starts above the
+    // whole range.
+    model.syntheticVarFloor = std::max(
+        model.syntheticVarFloor,
+        *unknownReadBase + naja::DNL::get()->getDNLIsoDB().getNumIsos() + 1);
+  }
 
   std::unordered_map<naja::DNL::DNLID, BoolExpr*> outputExprByTerm;
   const auto& outputTerms = builderOutputs;

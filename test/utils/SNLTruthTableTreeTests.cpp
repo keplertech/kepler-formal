@@ -47,7 +47,8 @@ BoolExpr* buildGenericTruthTableExpr(
     const SNLTruthTableTree::Node* node,
     naja::DNL::DNLID isoID);
 BoolExpr* buildRomTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
-BoolExpr* buildVectorSelectTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
+BoolExpr* buildVectorSelectTruthTableExpr(
+    const SNLTruthTable& tbl, uint32_t k, naja::DNL::DNLID isoID);
 BoolExpr* buildVectorUpdateTruthTableExpr(const SNLTruthTable& tbl, uint32_t k);
 void clearChildFETS();
 void reserveChildFETS(size_t n);
@@ -1118,6 +1119,7 @@ constexpr size_t kVectorDataVarBase = 100;
 constexpr size_t kVectorOffsetVarBase = 200;
 constexpr size_t kVectorBaseVar = 300;
 constexpr size_t kVectorEnableVar = 400;
+constexpr size_t kUnknownReadVarBase = 500;
 
 // Appends BUS[width-1] .. BUS[0], the flattened model-term order naja uses for
 // the DATA and OFFSET dependencies of the vector primitives.
@@ -1145,11 +1147,15 @@ std::vector<bool> inputsFromChildren(
 }  // namespace
 
 // Every (data, offset) assignment agrees with naja's binary evaluator; an
-// out-of-range window bit, which naja reports as no value, reads 0.
+// out-of-range window bit, which naja reports as no value, reads the output's
+// unknown-read variable.
 TEST(Tree2BoolExprGenericCoverageTest, VectorSelectMatchesNajaEvaluator) {
   constexpr uint32_t width = 4;
   constexpr uint32_t selectWidth = 2;
   constexpr uint32_t addressSize = 3;
+  constexpr naja::DNL::DNLID selectIso = 7;
+  constexpr size_t unknownVar = kUnknownReadVarBase + selectIso;
+  Tree2BoolExpr::setUnknownReadVarBase(kUnknownReadVarBase);
   for (const bool isSigned : {false, true}) {
     for (uint32_t outputBit = 0; outputBit < selectWidth; ++outputBit) {
       SCOPED_TRACE(::testing::Message()
@@ -1162,7 +1168,8 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorSelectMatchesNajaEvaluator) {
       const auto table = SNLTruthTable::VectorSelect(
           {width, selectWidth, addressSize, outputBit, isSigned},
           SNLTruthTable::fullDependencies(width + addressSize));
-      auto* expr = buildGenericTruthTableExpr(table, width + addressSize);
+      auto* expr = buildGenericTruthTableExpr(
+          table, width + addressSize, nullptr, selectIso);
       ASSERT_NE(expr, nullptr);
 
       size_t inRange = 0;
@@ -1179,16 +1186,25 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorSelectMatchesNajaEvaluator) {
           const auto expected =
               table.evaluateVectorSelect(inputsFromChildren(children, values));
           (expected.has_value() ? inRange : outOfRange)++;
-          EXPECT_EQ(expr->evaluate(values), expected.value_or(false))
-              << "data=" << data << " offset=" << offset;
+          for (const bool unknown : {false, true}) {
+            values[unknownVar] = unknown;
+            EXPECT_EQ(expr->evaluate(values), expected.value_or(unknown))
+                << "data=" << data << " offset=" << offset
+                << " unknown=" << unknown;
+          }
         }
       }
       EXPECT_GT(inRange, 0u);
       EXPECT_GT(outOfRange, 0u);
+      const auto unknownReads = Tree2BoolExpr::takeUnknownReadVars();
+      ASSERT_EQ(unknownReads.size(), 1u);
+      EXPECT_EQ(unknownReads.front().first, selectIso);
+      EXPECT_EQ(unknownReads.front().second, unknownVar);
       clearChildFETS();
       BoolExprCache::destroy();
     }
   }
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
 }
 
 // Every assignment agrees with naja's evaluator: EN low or an offset that
@@ -1235,13 +1251,17 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorUpdateMatchesNajaEvaluator) {
 }
 
 // Offsets wider than 64 bits: the bits past the value repeat its sign, so a
-// high unsigned bit leaves the window and an all-ones signed offset is -1.
+// high unsigned bit leaves the window and reads the unknown-read variable,
+// and an all-ones signed offset is -1.
 TEST(Tree2BoolExprGenericCoverageTest, VectorSelectDecodesWideOffsets) {
   constexpr uint32_t width = 2;
   constexpr uint32_t addressSize = 65;
+  constexpr naja::DNL::DNLID selectIso = 9;
+  constexpr size_t unknownVar = kUnknownReadVarBase + selectIso;
+  Tree2BoolExpr::setUnknownReadVarBase(kUnknownReadVarBase);
   const auto evaluate = [&](bool isSigned, uint32_t outputBit,
                             const std::vector<uint32_t>& highOffsetBits,
-                            uint32_t data) {
+                            uint32_t data, bool unknown) {
     std::vector<BoolExpr*> children;
     appendBusMsbFirst(children, kVectorDataVarBase, width);
     appendBusMsbFirst(children, kVectorOffsetVarBase, addressSize);
@@ -1249,7 +1269,8 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorSelectDecodesWideOffsets) {
     const auto table = SNLTruthTable::VectorSelect(
         {width, 2, addressSize, outputBit, isSigned},
         SNLTruthTable::fullDependencies(width + addressSize));
-    auto* expr = buildGenericTruthTableExpr(table, width + addressSize);
+    auto* expr = buildGenericTruthTableExpr(
+        table, width + addressSize, nullptr, selectIso);
     std::unordered_map<size_t, bool> values;
     for (uint32_t bit = 0; bit < width; ++bit) {
       values.emplace(kVectorDataVarBase + bit, (data >> bit) & 1);
@@ -1260,24 +1281,30 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorSelectDecodesWideOffsets) {
     for (const auto bit : highOffsetBits) {
       values[kVectorOffsetVarBase + bit] = true;
     }
+    values.emplace(unknownVar, unknown);
     const bool result = expr->evaluate(values);
     clearChildFETS();
     BoolExprCache::destroy();
     return result;
   };
 
-  // data = 2'b10: offset 0 reads bit 0, offset 1 reads bit 1.
-  EXPECT_FALSE(evaluate(false, 0, {}, 0b10));
-  EXPECT_TRUE(evaluate(false, 0, {0}, 0b10));
-  // Only bit 64 set: out of range for an unsigned offset.
-  EXPECT_FALSE(evaluate(false, 0, {64}, 0b11));
+  // data = 2'b10: offset 0 reads bit 0, offset 1 reads bit 1, whatever the
+  // unknown-read variable holds.
+  EXPECT_FALSE(evaluate(false, 0, {}, 0b10, true));
+  EXPECT_TRUE(evaluate(false, 0, {0}, 0b10, false));
+  // Only bit 64 set: out of range for an unsigned offset, so the output reads
+  // the unknown-read variable.
+  EXPECT_FALSE(evaluate(false, 0, {64}, 0b11, false));
+  EXPECT_TRUE(evaluate(false, 0, {64}, 0b11, true));
   // All 65 bits set: a signed offset of -1 places DATA[0] at output bit 1.
   std::vector<uint32_t> allBits;
   for (uint32_t bit = 0; bit < addressSize; ++bit) {
     allBits.push_back(bit);
   }
-  EXPECT_TRUE(evaluate(true, 1, allBits, 0b01));
-  EXPECT_FALSE(evaluate(true, 1, allBits, 0b10));
+  EXPECT_TRUE(evaluate(true, 1, allBits, 0b01, false));
+  EXPECT_FALSE(evaluate(true, 1, allBits, 0b10, true));
+  EXPECT_EQ(Tree2BoolExpr::takeUnknownReadVars().size(), 1u);
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
 }
 
 TEST(Tree2BoolExprGenericCoverageTest, VectorArityMismatchThrows) {
@@ -1286,16 +1313,59 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorArityMismatchThrows) {
     children.push_back(BoolExpr::Var(10 + i));
   }
   setChildExpressions(children);
+  Tree2BoolExpr::setUnknownReadVarBase(kUnknownReadVarBase);
 
   const auto select = SNLTruthTable::VectorSelect(
       {2, 1, 2, 0, false}, SNLTruthTable::fullDependencies(4));
-  EXPECT_THROW(buildVectorSelectTruthTableExpr(select, 5), std::runtime_error);
-  EXPECT_NE(buildVectorSelectTruthTableExpr(select, 4), nullptr);
+  EXPECT_THROW(buildVectorSelectTruthTableExpr(select, 5, 3),
+               std::runtime_error);
+  EXPECT_NE(buildVectorSelectTruthTableExpr(select, 4, 3), nullptr);
 
   const auto update = SNLTruthTable::VectorUpdate(
       {2, 1, 2, 0, false}, SNLTruthTable::fullDependencies(5));
   EXPECT_THROW(buildVectorUpdateTruthTableExpr(update, 6), std::runtime_error);
   EXPECT_NE(buildVectorUpdateTruthTableExpr(update, 5), nullptr);
+
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
+  clearChildFETS();
+  BoolExprCache::destroy();
+}
+
+// Without an unknown-read variable base the encoding has no X: a select that
+// can read past its vector is refused, naming the output's iso, while one
+// whose every offset hits the vector needs no unknown read at all.
+TEST(Tree2BoolExprGenericCoverageTest, VectorSelectWithoutUnknownReadsIsRefused) {
+  std::vector<BoolExpr*> children;
+  for (size_t i = 0; i < 6; ++i) {
+    children.push_back(BoolExpr::Var(10 + i));
+  }
+  setChildExpressions(children);
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
+
+  // Width 4 with 2 offset bits: offsets 0..3 all read a data bit at output 0.
+  const auto covered = SNLTruthTable::VectorSelect(
+      {4, 1, 2, 0, false}, SNLTruthTable::fullDependencies(6));
+  EXPECT_NE(buildVectorSelectTruthTableExpr(covered, 6, 3), nullptr);
+  EXPECT_TRUE(Tree2BoolExpr::takeUnknownReadVars().empty());
+
+  // Width 2 with 2 offset bits: offsets 2 and 3 read past the vector.
+  const auto past = SNLTruthTable::VectorSelect(
+      {2, 1, 2, 0, false}, SNLTruthTable::fullDependencies(4));
+  try {
+    buildVectorSelectTruthTableExpr(past, 4, 3);
+    FAIL() << "a select reading past its vector was encoded without X";
+  } catch (const UnknownValueReadError& error) {
+    EXPECT_EQ(error.getIsoID(), naja::DNL::DNLID{3});
+    EXPECT_NE(std::string(error.what()).find("reads past its 2-bit vector"),
+              std::string::npos)
+        << error.what();
+  }
+  // With a base, the output still needs a net to key its variable.
+  Tree2BoolExpr::setUnknownReadVarBase(kUnknownReadVarBase);
+  EXPECT_THROW(buildVectorSelectTruthTableExpr(past, 4, naja::DNL::DNLID_MAX),
+               UnknownValueReadError);
+  EXPECT_TRUE(Tree2BoolExpr::takeUnknownReadVars().empty());
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
 
   clearChildFETS();
   BoolExprCache::destroy();

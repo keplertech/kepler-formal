@@ -1345,6 +1345,72 @@ TEST_F(KeplerFormalCliTests, SvDynamicPartSelectsMatchShiftModels) {
   std::filesystem::remove_all(tmpDir);
 }
 
+// A select whose offset can leave its vector reads X there, as in naja's
+// model. Dual rail keeps that X as permanently-X state, so a model that fills
+// the bits past the vector with ones is no binary-defined difference, while
+// the binary encoding skips the output as reset-unanchored state.
+TEST_F(KeplerFormalCliTests, SvDynamicPartSelectPastVectorReadsUnknown) {
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_vector_select_unknown_test";
+  std::filesystem::create_directories(tmpDir);
+  const auto window = tmpDir / "window.sv";
+  const auto onesPastEnd = tmpDir / "ones_past_end.sv";
+  {
+    std::ofstream f(window);
+    f << "module t(input [7:0] data, input [2:0] sel,\n"
+         "         output [1:0] rd, output [7:0] pass);\n"
+         "  assign rd = data[sel +: 2];\n"
+         "  assign pass = data;\n"
+         "endmodule\n";
+  }
+  {
+    // rd[1] for sel == 7 is data[8]: X in the window model, 1 here.
+    std::ofstream f(onesPastEnd);
+    f << "module t(input [7:0] data, input [2:0] sel,\n"
+         "         output [1:0] rd, output [7:0] pass);\n"
+         "  wire [15:0] shifted = {8'hff, data} >> sel;\n"
+         "  assign rd = shifted[1:0];\n"
+         "  assign pass = data;\n"
+         "endmodule\n";
+  }
+  const auto configFor = [&](const char* encoding) {
+    return writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "sec_encoding: " + std::string(encoding) + "\n"
+        "max_k: 2\n"
+        "input_paths:\n"
+        "  - " + window.string() + "\n"
+        "  - " + onesPastEnd.string() + "\n");
+  };
+  {
+    SCOPED_TRACE("dual_rail_steady");
+    const auto cfgPath = configFor("dual_rail_steady");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+    EXPECT_EQ(run.result.totalOutputs, 10u);
+    EXPECT_EQ(run.result.provenOutputs, 10u);
+    EXPECT_TRUE(run.result.skippedObservedOutputs.empty());
+    KEPLER_FORMAL::cleanupKeplerFormalState();
+    std::filesystem::remove(cfgPath);
+  }
+  {
+    SCOPED_TRACE("binary");
+    const auto cfgPath = configFor("binary");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, kSecPartiallyProvedExitCode);
+    EXPECT_EQ(run.result.totalOutputs, 10u);
+    EXPECT_EQ(run.result.provenOutputs, 9u);
+    ASSERT_EQ(run.result.skippedObservedOutputs.size(), 1u);
+    const auto& detail = run.result.skippedObservedOutputs.front();
+    EXPECT_NE(detail.find("rd[1]"), std::string::npos) << detail;
+    EXPECT_NE(detail.find("x-read#"), std::string::npos) << detail;
+    KEPLER_FORMAL::cleanupKeplerFormalState();
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(tmpDir);
+}
+
 // A loop through an asynchronous read port has no evaluation order. SEC must
 // report it as unsupported rather than fail on the unresolved read data.
 TEST_F(KeplerFormalCliTests, SvMemoryReadPortLoopIsUnsupported) {
@@ -2664,6 +2730,89 @@ TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapPdrFindsDifference) {
             KEPLER_FORMAL::RunStatus::Equivalent);
   std::filesystem::remove_all(fixture.tmpDir);
   std::filesystem::remove_all(same.tmpDir);
+}
+
+// A register the reset window leaves free (q, written only under an enable,
+// or the cells of a memory) may start differently in the two copies of a
+// design, so binary SEC with a reset bootstrap skips the outputs that can read
+// it, as it does without the bootstrap, instead of reporting a difference
+// between a design and itself. A register the reset sets, or one an input
+// overwrites every cycle, is the same in both copies and stays in the proof,
+// also through XOR logic and the constant register c.
+TEST_F(KeplerFormalCliTests, CliSvBinaryResetBootstrapSkipsRegistersResetLeavesFree) {
+  const EnvVarGuard secDiag("KEPLER_SEC_DIAG");
+  secDiag.set("1");
+  const auto tmpDir = std::filesystem::temp_directory_path() /
+                      "kepler_formal_cli_binary_bootstrap_free_state";
+  std::filesystem::create_directories(tmpDir);
+  const auto write = [&](const std::string& name, const std::string& qUpdate) {
+    const auto path = tmpDir / (name + ".sv");
+    std::ofstream f(path);
+    f << "module t(input logic clk_i, input logic rst_ni, input logic en_i,\n"
+         "         input logic go_i, input logic [1:0] a_i,\n"
+         "         input logic [3:0] d_i, output logic [3:0] q_o);\n"
+         "  logic [3:0] q;\n"
+         "  logic sel_q;\n"
+         "  logic c;\n"
+         "  always_ff @(posedge clk_i) c <= 1'b1;\n"
+      << qUpdate
+      << "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+         "    if (!rst_ni) sel_q <= 1'b0; else if (go_i) sel_q <= 1'b1;\n"
+         "  assign q_o = sel_q ? q : {4{c}};\n"
+         "endmodule\n";
+    return path;
+  };
+  const std::vector<std::pair<std::string, std::string>> freeDesigns = {
+      {"hidden", "  always_ff @(posedge clk_i) if (en_i) q <= d_i;\n"},
+      {"memory",
+       "  logic [3:0] mem [4];\n"
+       "  always_ff @(posedge clk_i) if (en_i) mem[a_i] <= d_i;\n"
+       "  assign q = mem[a_i];\n"},
+  };
+  const std::vector<std::pair<std::string, std::string>> sharedDesigns = {
+      {"reset",
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) q <= 4'h0; else if (en_i) q <= d_i;\n"},
+      {"overwritten", "  always_ff @(posedge clk_i) q <= d_i;\n"},
+      {"xor_input",
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) q <= 4'h0; else q <= q ^ d_i;\n"},
+      {"xor_constant",
+       "  logic [3:0] k;\n"
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) k <= 4'h5; else k <= k;\n"
+       "  always_ff @(posedge clk_i or negedge rst_ni)\n"
+       "    if (!rst_ni) q <= 4'h0; else q <= q ^ k;\n"},
+  };
+  const auto run = [&](const std::filesystem::path& design) {
+    return runStructuredWithArgs(
+        {"kepler-formal", "-sv", "-v", "sec", "--sec-encoding", "binary",
+         "--sec-reset-cycles", "2", "--sec-reset-port", "rst_ni=0",
+         "--design1", design.string(), "--design2", design.string()});
+  };
+  for (const auto& [name, qUpdate] : freeDesigns) {
+    SCOPED_TRACE(name);
+    const auto freeRun = run(write(name, qUpdate));
+    EXPECT_EQ(freeRun.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+    EXPECT_EQ(freeRun.result.totalOutputs, 4u);
+    EXPECT_EQ(freeRun.result.coveredOutputs, 0u);
+    ASSERT_EQ(freeRun.result.skippedObservedOutputs.size(), 4u);
+    for (const auto& skipped : freeRun.result.skippedObservedOutputs) {
+      EXPECT_NE(skipped.find("q_o["), std::string::npos) << skipped;
+      EXPECT_NE(skipped.find("reset-unanchored internal state"),
+                std::string::npos)
+          << skipped;
+    }
+  }
+  for (const auto& [name, qUpdate] : sharedDesigns) {
+    SCOPED_TRACE(name);
+    const auto sharedRun = run(write(name, qUpdate));
+    EXPECT_EQ(sharedRun.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+    EXPECT_EQ(sharedRun.result.totalOutputs, 4u);
+    EXPECT_EQ(sharedRun.result.coveredOutputs, 4u);
+    EXPECT_TRUE(sharedRun.result.skippedObservedOutputs.empty());
+  }
+  std::filesystem::remove_all(tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSv2vGateLevelVerilogTopAccepted) {

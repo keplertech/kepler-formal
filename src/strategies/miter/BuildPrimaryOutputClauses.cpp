@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <sstream>
 #include <string_view>
@@ -257,6 +258,35 @@ BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
     std::string detail,
     DNLID opaqueTerm = DNLID_MAX) {
   return {reason, std::move(detail), opaqueTerm};
+}
+
+// The cone reads X somewhere this encoding cannot hold, like an X literal in
+// a build without X modeling: name the primitive output that reads it.
+BuildPrimaryOutputClauses::SkippedOutputInfo describeUnknownRead(
+    const UnknownValueReadError& error) {
+  std::ostringstream detail;
+  detail << "unsupported X read: " << error.what();
+  const DNLID isoID = error.getIsoID();
+  if (isoID != DNLID_MAX) {
+    const auto* dnl = naja::DNL::get();
+    const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+    if (!iso.getDrivers().empty()) {
+      const auto& driver = dnl->getDNLTerminalFromID(iso.getDrivers().front());
+      detail << " at ";
+      appendTerminalName(detail, driver);
+      const auto* instTerm = driver.getSnlTerm();
+      const auto* rtlInfos =
+          instTerm ? instTerm->getInstance()->getRTLInfos() : nullptr;
+      if (rtlInfos && rtlInfos->hasSourceLoc()) {
+        const auto& loc = *rtlInfos->getSourceLoc();
+        detail << "; assignment/expression at " << loc.file.getString() << ":"
+               << loc.line;
+        if (loc.column) detail << ":" << loc.column;
+      }
+    }
+  }
+  return {BuildPrimaryOutputClauses::SkippedOutputReason::UnknownConstant,
+          detail.str()};
 }
 
 void reportSkippedPO(const DNLFull* dnl,
@@ -843,6 +873,8 @@ void BuildPrimaryOutputClauses::initVarNames() {
     }
   }
   xConstantVars_.clear();
+  unknownReadVars_.clear();
+  unknownReadVarBase_.reset();
   if (modelXConstants_) {
     // Number X variables past every terminal: input variables are numbered
     // from 2 and never exceed the terminal count, so builders with different
@@ -858,7 +890,11 @@ void BuildPrimaryOutputClauses::initVarNames() {
       }
       xConstantVars_.emplace_back(isoID, nextVar++);
     }
+    // Unknown reads take `nextVar + iso`: above every terminal and X
+    // constant, and again the same in every builder of this DNL.
+    unknownReadVarBase_ = nextVar;
   }
+  Tree2BoolExpr::setUnknownReadVarBase(unknownReadVarBase_);
 }
 
 void BuildPrimaryOutputClauses::build() {
@@ -1057,7 +1093,21 @@ void BuildPrimaryOutputClauses::build() {
     auto startConv = std::chrono::steady_clock::now();
     #endif
     if (cloud.getTruthTable().isValid() && POs_[i] == nullptr) {
-      POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+      try {
+        POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+      } catch (const UnknownValueReadError& error) {
+        POs_[i] = BoolExpr::createInvalid();
+        const auto skip = describeUnknownRead(error);
+        {
+          std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
+          skippedOutputs_[out] = skip;
+        }
+        reportSkippedPO(
+            get(),
+            get()->getDNLTerminalFromID(out),
+            skip.detail.c_str(),
+            kSkippedNoDriverPOReport);
+      }
     } else if (POs_[i] == nullptr) {
       POs_[i] = BoolExpr::createInvalid();
       SkippedOutputReason skipReason = SkippedOutputReason::None;
@@ -1136,6 +1186,8 @@ void BuildPrimaryOutputClauses::build() {
       tbb::static_partitioner()
     );
   }
+  unknownReadVars_ = Tree2BoolExpr::takeUnknownReadVars();
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
   for (size_t i = 0; i < outputs_.size(); ++i) {
     const size_t representative = representativeForOutput[i];
     if (representative == i) {
