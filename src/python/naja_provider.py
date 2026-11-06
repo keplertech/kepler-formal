@@ -5,7 +5,7 @@
 Kepler's Python extension links the native libraries of the NajaEDA package
 installed in the build interpreter. The default provider is a wheel built from
 ``thirdparty/naja``, which ships its headers under ``najaeda/sdk/include``.
-``--published`` selects the unmodified NajaEDA 0.7.24 release instead and takes
+``--published`` selects the unmodified NajaEDA 0.7.33 release instead and takes
 its headers from the verified source archive. This helper never builds or
 edits Naja. PE export/import-library handling and Mach-O fixup are adapted from
 the former Apache-2.0 licensed najaeda/sdk.py (The Naja authors).
@@ -28,10 +28,10 @@ import tempfile
 from typing import NamedTuple
 import urllib.request
 
-PUBLISHED_VERSION = "0.7.24"
-PUBLISHED_GIT_COMMIT = "2263958"
-PUBLISHED_SOURCE_SHA256 = "00145fd267e50031e92637160df3b164e9da5df2f75591ce5bd3f2f786a7abc0"
-PUBLISHED_SOURCE_URL = "https://files.pythonhosted.org/packages/source/n/najaeda/najaeda-0.7.24.tar.gz"
+PUBLISHED_VERSION = "0.7.33"
+PUBLISHED_GIT_COMMIT = "64164ff"
+PUBLISHED_SOURCE_SHA256 = "35c989777ffa492277760d7bee022ad1186c55bf213df42e02a8205f5d2ec689"
+PUBLISHED_SOURCE_URL = "https://files.pythonhosted.org/packages/source/n/najaeda/najaeda-0.7.33.tar.gz"
 RUNTIMES = ("naja_nl", "naja_dnl", "naja_bne", "naja_opt", "naja_metrics", "naja_python")
 
 
