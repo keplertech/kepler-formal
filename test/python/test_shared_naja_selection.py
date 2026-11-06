@@ -105,7 +105,7 @@ endif()
             source.mkdir()
             _write_fixture(source, "")
             site = root / "site"
-            package = _make_provider(site, version="0.7.24", git_hash="2263958")
+            package = _make_provider(site, version="0.7.33", git_hash="64164ff")
             shutil.rmtree(package / "sdk")
             environment = os.environ.copy()
             environment.update(PYTHONPATH=str(site), PYTHONDONTWRITEBYTECODE="1")
