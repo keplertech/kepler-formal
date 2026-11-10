@@ -2682,32 +2682,31 @@ const char* const kVerilogWire =
     "  assign y = a;\n"
     "endmodule\n";
 
-std::filesystem::path writeFreeFormatSource(const std::filesystem::path& path,
-                                            const std::string& contents) {
+std::filesystem::path writeDesignSource(const std::filesystem::path& path,
+                                        const std::string& contents) {
   std::ofstream(path) << contents;
   return path;
 }
 
 }  // namespace
 
-// Free format gives each design its own format, in either order: a VHDL
-// register against the same register in SystemVerilog, also in compact mode,
-// and a VHDL register that stores the inverted input is still found.
+// Without an input format flag each design names its own format, in either
+// order: a VHDL register against the same register in SystemVerilog, also in
+// compact mode, and a VHDL register that stores the inverted input is found.
 TEST_F(KeplerFormalCliTests,
-       CliFreeFormatComparesVhdlAndSystemVerilogInBothOrders) {
-  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_free_format_rtl");
-  const auto vhdl =
-      writeFreeFormatSource(tmpDir / "register.vhd", kVhdlRegister);
+       CliDesignFormatsCompareVhdlAndSystemVerilogInBothOrders) {
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_design_formats_rtl");
+  const auto vhdl = writeDesignSource(tmpDir / "register.vhd", kVhdlRegister);
   const auto invertedVhdl =
-      writeFreeFormatSource(tmpDir / "inverted.vhd", kVhdlInvertedRegister);
-  const auto sv = writeFreeFormatSource(tmpDir / "register.sv", kSvRegister);
+      writeDesignSource(tmpDir / "inverted.vhd", kVhdlInvertedRegister);
+  const auto sv = writeDesignSource(tmpDir / "register.sv", kSvRegister);
   const auto run = [](const std::string& format1,
                       const std::filesystem::path& design1,
                       const std::string& format2,
                       const std::filesystem::path& design2,
                       bool compact) {
     std::vector<std::string> args = {
-        "kepler-formal", "-free", "-v", "sec",
+        "kepler-formal", "-v", "sec",
         "--design1_format", format1, "--design2_format", format2,
         "--design1", design1.string(), "--design2", design2.string()};
     if (compact) {
@@ -2719,11 +2718,12 @@ TEST_F(KeplerFormalCliTests,
   const auto vhdlFirst = run("vhdl", vhdl, "systemverilog", sv, false);
   EXPECT_EQ(vhdlFirst.exitCode, EXIT_SUCCESS);
   EXPECT_EQ(vhdlFirst.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
-  EXPECT_EQ(vhdlFirst.result.inputFormat, "free");
+  EXPECT_EQ(vhdlFirst.result.inputFormat, "vhdl+systemverilog");
 
   const auto svFirst = run("sv", sv, "vhd", vhdl, false);
   EXPECT_EQ(svFirst.exitCode, EXIT_SUCCESS);
   EXPECT_EQ(svFirst.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(svFirst.result.inputFormat, "systemverilog+vhdl");
 
   EXPECT_EQ(run("vhdl", vhdl, "systemverilog", sv, true).result.status,
             KEPLER_FORMAL::RunStatus::Equivalent);
@@ -2734,34 +2734,33 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(tmpDir);
 }
 
-// The reverse of sv2v: the Verilog netlist is design 1 and the SystemVerilog
-// design, which instantiates a loaded primitive itself, is design 2.
+// The reverse of sv2v, from a config without a format: the Verilog netlist is
+// design 1, which needs no design format, and the SystemVerilog design, which
+// instantiates a loaded primitive itself, is design 2.
 TEST_F(KeplerFormalCliTests,
-       ConfigFreeFormatVerilogNetlistBeforeSystemVerilog) {
+       ConfigDesignFormatsVerilogNetlistBeforeSystemVerilog) {
   const auto tmpDir =
-      makeUniqueTempDir("kepler_formal_cli_free_format_netlist");
+      makeUniqueTempDir("kepler_formal_cli_design_formats_netlist");
   const auto libertyPath = repoRoot() / "examples" / "tinyrocket" /
                            "NangateOpenCellLibrary_typical.lib";
   ASSERT_TRUE(std::filesystem::exists(libertyPath));
-  const auto netlist = writeFreeFormatSource(
+  const auto netlist = writeDesignSource(
       tmpDir / "netlist.v",
       "module top(input a, output y);\n"
       "  INV_X1 u_inv(.A(a), .ZN(y));\n"
       "endmodule\n");
-  const auto inverter = writeFreeFormatSource(
+  const auto inverter = writeDesignSource(
       tmpDir / "inverter.sv",
       "module top(input logic a, output logic y);\n"
       "  INV_X1 u_inv(.A(a), .ZN(y));\n"
       "endmodule\n");
-  const auto wire = writeFreeFormatSource(
+  const auto wire = writeDesignSource(
       tmpDir / "wire.sv",
       "module top(input logic a, output logic y);\n"
       "  assign y = a;\n"
       "endmodule\n");
   const auto run = [&](const std::filesystem::path& design2) {
     const auto cfgPath = writeTempConfig(
-        "format: free\n"
-        "design1_format: verilog\n"
         "design2_format: systemverilog\n"
         "verification: sec\n"
         "max_k: 2\n"
@@ -2776,25 +2775,37 @@ TEST_F(KeplerFormalCliTests,
     std::filesystem::remove(cfgPath);
     return structuredRun;
   };
-  EXPECT_EQ(run(inverter).result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  const auto same = run(inverter);
+  EXPECT_EQ(same.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(same.result.inputFormat, "verilog+systemverilog");
   EXPECT_EQ(run(wire).result.status, KEPLER_FORMAL::RunStatus::Different);
   std::filesystem::remove_all(tmpDir);
 }
 
-// Two designs of the same format behave as in that format's own mode: LEC on
-// two Verilog netlists, from the command line and from a config.
-TEST_F(KeplerFormalCliTests, FreeFormatWithOneFormatRunsLec) {
+// A design that names no format is Verilog, and two designs of one format run
+// in that format's own mode: LEC on two Verilog netlists with no format at
+// all, with one design format, with both, and from a config.
+TEST_F(KeplerFormalCliTests, DesignFormatsDefaultToVerilog) {
   const auto fixture = createEquivalentDesignFixture("v", kVerilogWire);
-  const auto run = runStructuredWithArgs(
-      {"kepler-formal", "-free", "--design1_format", "verilog",
-       "--design2_format", "v", "--verilog_design1_top", "top",
-       fixture.design0Path.string(), fixture.design1Path.string()});
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
-  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
-  EXPECT_EQ(run.result.inputFormat, "free");
+  const std::vector<std::vector<std::string>> optionSets = {
+      {},
+      {"--design2_format", "v"},
+      {"--design1_format", "verilog", "--design2_format", "v",
+       "--verilog_design1_top", "top"},
+  };
+  for (const auto& options : optionSets) {
+    SCOPED_TRACE(options.size());
+    std::vector<std::string> args = {"kepler-formal"};
+    args.insert(args.end(), options.begin(), options.end());
+    args.push_back(fixture.design0Path.string());
+    args.push_back(fixture.design1Path.string());
+    const auto run = runStructuredWithArgs(std::move(args));
+    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+    EXPECT_EQ(run.result.inputFormat, "verilog");
+  }
 
   const auto cfgPath = writeTempConfig(
-      "format: free\n"
       "design1_format: v\n"
       "design2_format: verilog\n"
       "input_paths:\n"
@@ -2805,42 +2816,38 @@ TEST_F(KeplerFormalCliTests, FreeFormatWithOneFormatRunsLec) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, CliFreeFormatRejectsInconsistentOptions) {
-  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_free_format_reject");
+TEST_F(KeplerFormalCliTests, CliDesignFormatsRejectInconsistentOptions) {
+  const auto tmpDir =
+      makeUniqueTempDir("kepler_formal_cli_design_formats_reject");
   const auto verilog =
-      writeFreeFormatSource(tmpDir / "design.v", kVerilogWire).string();
+      writeDesignSource(tmpDir / "design.v", kVerilogWire).string();
   const auto vhdl =
-      writeFreeFormatSource(tmpDir / "design.vhd", kVhdlRegister).string();
-  const auto sv =
-      writeFreeFormatSource(tmpDir / "design.sv", kSvRegister).string();
+      writeDesignSource(tmpDir / "design.vhd", kVhdlRegister).string();
+  const auto sv = writeDesignSource(tmpDir / "design.sv", kSvRegister).string();
   const std::vector<std::pair<const char*, std::vector<std::string>>> cases = {
-      {"no per-design format", {"-free", verilog, verilog}},
-      {"one per-design format",
-       {"-free", "--design1_format", "verilog", verilog, verilog}},
-      {"per-design formats outside free format",
+      {"a design format with an input format flag",
        {"-verilog", "--design1_format", "verilog", "--design2_format",
         "verilog", verilog, verilog}},
       {"a pair format for one design",
-       {"-free", "--design1_format", "sv2v", "--design2_format", "verilog",
-        verilog, verilog}},
-      {"missing format value",
-       {"-free", "--design1_format", "verilog", verilog, verilog,
-        "--design2_format"}},
+       {"--design1_format", "sv2v", verilog, verilog}},
+      {"missing format value", {verilog, verilog, "--design2_format"}},
+      {"an unknown option in place of a format flag",
+       {"-free", verilog, verilog}},
       {"hdl designs under lec",
-       {"-free", "--design1_format", "vhdl", "--design2_format",
-        "systemverilog", vhdl, sv}},
+       {"--design1_format", "vhdl", "--design2_format", "systemverilog", vhdl,
+        sv}},
       {"top option of another format",
-       {"-free", "-v", "sec", "--design1_format", "vhdl", "--design2_format",
+       {"-v", "sec", "--design1_format", "vhdl", "--design2_format",
         "systemverilog", "--verilog_design1_top", "top", vhdl, sv}},
       {"single unit without systemverilog",
-       {"-free", "--design1_format", "verilog", "--design2_format", "verilog",
-        "--sv_single_unit", verilog, verilog}},
+       {"-v", "sec", "--design1_format", "vhdl", "--sv_single_unit", vhdl,
+        verilog}},
       {"no sources for design 2",
-       {"-free", "-v", "sec", "--design1_format", "vhdl", "--design2_format",
+       {"-v", "sec", "--design1_format", "vhdl", "--design2_format",
         "systemverilog", "--design1", vhdl}},
       {"two naja_if files for one design",
-       {"-free", "--design1_format", "naja_if", "--design2_format", "verilog",
-        "--design1", verilog, verilog, "--design2", verilog}},
+       {"--design1_format", "naja_if", "--design1", verilog, verilog,
+        "--design2", verilog}},
   };
   for (const auto& [name, options] : cases) {
     SCOPED_TRACE(name);
@@ -2853,12 +2860,12 @@ TEST_F(KeplerFormalCliTests, CliFreeFormatRejectsInconsistentOptions) {
   std::filesystem::remove_all(tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests, ConfigFreeFormatRejectsBadDesignFormats) {
+TEST_F(KeplerFormalCliTests, ConfigDesignFormatsRejectBadValues) {
   const auto fixture = createEquivalentDesignFixture("v", kVerilogWire);
   for (const std::string header :
        {"format: free\n",
-        "format: free\ndesign1_format: bogus\ndesign2_format: verilog\n",
-        "format: free\ndesign1_format: [verilog]\ndesign2_format: verilog\n",
+        "design1_format: bogus\n",
+        "design1_format: [verilog]\n",
         "format: verilog\ndesign1_format: verilog\ndesign2_format: verilog\n"}) {
     SCOPED_TRACE(header);
     const auto cfgPath = writeTempConfig(

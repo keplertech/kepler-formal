@@ -163,7 +163,7 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ```bash
 # Single file per design
-build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl/-python/-free> [options] \
+build/src/bin/kepler-formal [-verilog/-naja_if/-systemverilog/-sv/-sv2v/-vhdl/-python] [options] \
   <design1> <design2> [<library-file>...]
 
 # Multi-file Verilog
@@ -182,8 +182,8 @@ build/src/bin/kepler-formal -vhdl -v sec \
   --design1 <file...> --design2 <file...> \
   [--vhdl_design1_top <top>] [--vhdl_design2_top <top>]
 
-# Free format: each design names its own format, in any combination and order
-build/src/bin/kepler-formal -free -v sec \
+# No format flag: each design names its own format, in any combination and order
+build/src/bin/kepler-formal -v sec \
   --design1_format vhdl --design2_format verilog \
   --design1 <file...> --design2 <file...> [--liberty <library-file>...]
 ```
@@ -203,8 +203,7 @@ build/src/bin/kepler-formal -free -v sec \
 | `-sv2v` | Parse design 1 as SystemVerilog and design 2 as Verilog for SEC RTL-vs-gate comparison. |
 | `-vhdl` | Parse both designs as VHDL. Requires SEC. Experimental; see [VHDL support](docs/vhdl/README.md). |
 | `-python`, `-py` | Build both designs from Python scripts through the Naja Python API; see [Python design input](docs/python-design-input.md). |
-| `-free` | Free format: each design names its own format with `--design1_format` and `--design2_format`, in any combination and order. SystemVerilog and VHDL designs require SEC. |
-| `--design1_format <format>`, `--design2_format <format>` | Format of each design in `-free` mode: `verilog`, `systemverilog`, `vhdl`, `python` or `naja_if` (aliases `v`, `sv`, `vhd`, `py`). The per-format options, such as `--vhdl_design1_top`, apply to the design that uses that format. |
+| `--design1_format <format>`, `--design2_format <format>` | Without a format flag, the format of each design, in any combination and order: `verilog` (the default), `systemverilog`, `vhdl`, `python` or `naja_if` (aliases `v`, `sv`, `vhd`, `py`). SystemVerilog and VHDL designs require SEC. The per-format options, such as `--vhdl_design1_top`, apply to the design that uses that format. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Select the top module for each Verilog design. In `sv2v` mode, only design 2 is Verilog. |
@@ -230,8 +229,8 @@ build/src/bin/kepler-formal --config <file.yaml>
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `python`, `py`, or `free`. Defaults to `verilog` if omitted. |
-| `design1_format`, `design2_format` | string | Format of each design with `format: free`: `verilog`, `systemverilog`, `vhdl`, `python` or `naja_if`. Both are required then, and neither is valid otherwise. |
+| `format` | string | `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `python`, or `py`, for both designs. If omitted, each design uses its own format. |
+| `design1_format`, `design2_format` | string | Format of each design when `format` is omitted: `verilog` (the default), `systemverilog`, `vhdl`, `python` or `naja_if`. Not valid together with `format`. |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `btor2_export` | bool | Enable BTOR2 export before solving; SEC only. Defaults to `false`. |
 | `btor2_export_path` | string | BTOR2 destination; defaults to `miter.btor2` when enabled. Requires `btor2_export: true`. |

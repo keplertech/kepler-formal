@@ -66,16 +66,17 @@ static const char* kSkippedOpaqueCellPOReport =
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python/-free> "
+      "Usage: {} --version | [--config <file>] | [-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python] "
       "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--vhdl_design1_top <name>] [--vhdl_design2_top <name>] "
       "[--python_design1_top <name>] [--python_design2_top <name>] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
-      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python/-free> "
+      "[-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python] "
       "[--design1_format <verilog|systemverilog|vhdl|python|naja_if>] "
-      "[--design2_format <verilog|systemverilog|vhdl|python|naja_if>] (-free only) "
+      "[--design2_format <verilog|systemverilog|vhdl|python|naja_if>] "
+      "(without a format flag; default verilog) "
       "--design1 <file...> --design2 "
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
@@ -1281,10 +1282,11 @@ static int KeplerFormalMainImpl(
     KEPLER_FORMAL::RunResult* runResult,
     const KEPLER_FORMAL::PrimitiveLibraryLoader& primitiveLoader) {
   using namespace std::chrono;
-  // FREE lets each design name its own format (designFormatOptions); every
-  // other value fixes the format of both designs.
+  // PER_DESIGN is the state without an input format when the two designs
+  // name different formats (designFormatOptions). Every other value is one
+  // format, or for SV2V one fixed pair, for both designs.
   enum class FormatType {
-    VERILOG, SYSTEMVERILOG, SV2V, VHDL, PYTHON, NAJA_IF, FREE
+    VERILOG, SYSTEMVERILOG, SV2V, VHDL, PYTHON, NAJA_IF, PER_DESIGN
   };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
@@ -1305,10 +1307,14 @@ static int KeplerFormalMainImpl(
 
   // Default values
   FormatType inputFormatType = FormatType::VERILOG;
-  // Free format (-free, format: free): the format of design 1 and design 2.
+  // Set by an input format flag or by the `format` config key. Without one,
+  // each design is parsed with its own format.
+  bool inputFormatExplicit = false;
+  // --design1_format and --design2_format, or design1_format and
+  // design2_format in the config: Verilog for a design that names none.
   std::optional<FormatType> designFormatOptions[2];
-  // A format one design can be parsed with on its own. sv2v and free name a
-  // pair of formats, so they are not accepted for a single design.
+  // A format one design can be parsed with on its own. sv2v names a pair of
+  // formats, so it is not accepted for a single design.
   const auto parseDesignFormatToken =
       [](const std::string& token) -> std::optional<FormatType> {
     if (token == "verilog" || token == "v") {
@@ -1421,6 +1427,7 @@ static int KeplerFormalMainImpl(
 
         // format
         if (cfg["format"] && cfg["format"].IsScalar()) {
+          inputFormatExplicit = true;
           std::string fmt = cfg["format"].as<std::string>();
           if (fmt == "naja_if") {
             // LCOV_EXCL_START
@@ -1437,8 +1444,6 @@ static int KeplerFormalMainImpl(
             inputFormatType = FormatType::VHDL;
           } else if (fmt == "python" || fmt == "py") {
             inputFormatType = FormatType::PYTHON;
-          } else if (fmt == "free") {
-            inputFormatType = FormatType::FREE;
           } else {
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
@@ -1446,7 +1451,7 @@ static int KeplerFormalMainImpl(
           }
         }
 
-        // design1_format / design2_format (free format)
+        // design1_format / design2_format (when there is no format)
         for (int designIndex = 0; designIndex < 2; ++designIndex) {
           const char* key =
               designIndex == 0 ? "design1_format" : "design2_format";
@@ -1981,21 +1986,12 @@ static int KeplerFormalMainImpl(
         formatFound = true;
         break;
       }
-      if (arg == "-free") {
-        inputFormatType = FormatType::FREE;
-        ++parseStart;
-        formatFound = true;
-        break;
-      }
-      // LCOV_EXCL_START
-      SPDLOG_CRITICAL("Unrecognized option before input format type: {}", arg);
-      return EXIT_FAILURE;
+      // Not a format flag: the designs are given without an input format, so
+      // each one is parsed with its own (--design1_format, --design2_format).
+      // The arguments from here on are the same as after a format flag.
+      break;
     }
-    if (!formatFound) {
-      SPDLOG_CRITICAL("Missing input format type");
-      return EXIT_FAILURE;
-      // LCOV_EXCL_STOP
-    }
+    inputFormatExplicit = formatFound;
 
     // LCOV_EXCL_START
     bool explicitDesignFlags = false;
@@ -2327,24 +2323,30 @@ static int KeplerFormalMainImpl(
       logLevel, verificationMode == VerificationMode::SEC, logFileName);
 
   SPDLOG_INFO("KEPLER FORMAL: Run.");
-  if (inputFormatType == FormatType::FREE) {
-    if (!designFormatOptions[0] || !designFormatOptions[1]) {
+  if (inputFormatExplicit) {
+    if (designFormatOptions[0] || designFormatOptions[1]) {
       SPDLOG_CRITICAL(
-          "Free format needs a format for each design: --design1_format and "
-          "--design2_format, or design1_format and design2_format in the "
-          "config");
+          "A design format (--design1_format, --design2_format, or "
+          "design1_format, design2_format in the config) cannot be combined "
+          "with an input format for both designs");
       return EXIT_FAILURE;
     }
-  } else if (designFormatOptions[0] || designFormatOptions[1]) {
-    SPDLOG_CRITICAL(
-        "Per-design formats are only valid with free format "
-        "(-free, or format: free)");
-    return EXIT_FAILURE;
+  } else {
+    // No input format: each design is parsed with its own, Verilog unless it
+    // names another. Two designs of one format are that format's own mode.
+    for (auto& designFormatOption : designFormatOptions) {
+      if (!designFormatOption) {
+        designFormatOption = FormatType::VERILOG;
+      }
+    }
+    inputFormatType = designFormatOptions[0] == designFormatOptions[1]
+                          ? *designFormatOptions[0]
+                          : FormatType::PER_DESIGN;
   }
   // The format each design is parsed with: the same for both, except in sv2v
-  // (SystemVerilog, then Verilog) and in free format (one choice per design).
+  // (SystemVerilog, then Verilog) and when the designs name different ones.
   const auto designFormat = [&](int designIndex) {
-    if (inputFormatType == FormatType::FREE) {
+    if (inputFormatType == FormatType::PER_DESIGN) {
       return *designFormatOptions[designIndex];
     }
     if (inputFormatType == FormatType::SV2V) {
@@ -2382,9 +2384,10 @@ static int KeplerFormalMainImpl(
     inputFormatName = "PYTHON";
     inputFormatToken = "python";
   }
-  if (inputFormatType == FormatType::FREE) {
-    inputFormatName = "FREE";
-    inputFormatToken = "free";
+  if (inputFormatType == FormatType::PER_DESIGN) {
+    inputFormatName = "PER DESIGN";
+    inputFormatToken = std::string(designFormatName(designFormat(0))) + "+" +
+                       designFormatName(designFormat(1));
   }
   if (runResult != nullptr) {
     runResult->inputFormat = inputFormatToken;
@@ -2393,7 +2396,7 @@ static int KeplerFormalMainImpl(
     runResult->logFile = runLogFilePath;
   }
   SPDLOG_INFO("Input format: {}", inputFormatName);
-  if (inputFormatType == FormatType::FREE) {
+  if (inputFormatType == FormatType::PER_DESIGN) {
     SPDLOG_INFO("Design 1 format: {}", designFormatName(designFormat(0)));
     SPDLOG_INFO("Design 2 format: {}", designFormatName(designFormat(1)));
   }
@@ -2439,7 +2442,7 @@ static int KeplerFormalMainImpl(
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
-  } else if (inputFormatType == FormatType::FREE) {
+  } else if (inputFormatType == FormatType::PER_DESIGN) {
     for (int designIndex = 0; designIndex < 2; ++designIndex) {
       const auto& designPaths =
           designIndex == 0 ? designInputs.design0 : designInputs.design1;
@@ -2489,7 +2492,7 @@ static int KeplerFormalMainImpl(
         "VHDL input format requires SEC verification (-v sec or verification: sec)");
     return EXIT_FAILURE;
   }
-  if (inputFormatType == FormatType::FREE &&
+  if (inputFormatType == FormatType::PER_DESIGN &&
       verificationMode != VerificationMode::SEC &&
       (anyDesignUses(FormatType::SYSTEMVERILOG) ||
        anyDesignUses(FormatType::VHDL))) {
@@ -2572,7 +2575,7 @@ static int KeplerFormalMainImpl(
   systemVerilogOptions.design1.singleUnit = svSingleUnit;
   if (inputFormatType != FormatType::SYSTEMVERILOG &&
       inputFormatType != FormatType::SV2V &&
-      inputFormatType != FormatType::FREE &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (svSingleUnit ||
        systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
        systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
@@ -2591,20 +2594,20 @@ static int KeplerFormalMainImpl(
   }
   if (inputFormatType != FormatType::VERILOG &&
       inputFormatType != FormatType::SV2V &&
-      inputFormatType != FormatType::FREE &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (verilogTopOptions.design0 || verilogTopOptions.design1)) {
     SPDLOG_CRITICAL(
         "Verilog top options are only valid with -verilog/-sv2v input");
     return EXIT_FAILURE;
   }
   if (inputFormatType != FormatType::VHDL &&
-      inputFormatType != FormatType::FREE &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (vhdlTopOptions.design0 || vhdlTopOptions.design1)) {
     SPDLOG_CRITICAL("VHDL top options are only valid with -vhdl input");
     return EXIT_FAILURE;
   }
   if (inputFormatType != FormatType::PYTHON &&
-      inputFormatType != FormatType::FREE &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (pythonTopOptions.design0 || pythonTopOptions.design1)) {
     SPDLOG_CRITICAL("Python top options are only valid with -python input");
     return EXIT_FAILURE;
@@ -2615,7 +2618,7 @@ static int KeplerFormalMainImpl(
         "design 1 is parsed as SystemVerilog");
     return EXIT_FAILURE;
   }
-  if (inputFormatType == FormatType::FREE) {
+  if (inputFormatType == FormatType::PER_DESIGN) {
     // A per-format option belongs to one design and needs that design to use
     // the format.
     for (int designIndex = 0; designIndex < 2; ++designIndex) {
@@ -2958,10 +2961,11 @@ static int KeplerFormalMainImpl(
     };
     // A SystemVerilog design compared with a netlist may instantiate the
     // loaded primitives itself, so it is parsed with generated stubs for
-    // them: design 1 of sv2v, and any SystemVerilog design in free format.
+    // them: design 1 of sv2v, and the SystemVerilog design of a pair with
+    // different formats.
     const auto designUsesPrimitiveStubs = [&](int designIndex) {
       return (inputFormatType == FormatType::SV2V && designIndex == 0) ||
-             (inputFormatType == FormatType::FREE &&
+             (inputFormatType == FormatType::PER_DESIGN &&
               designUsesSystemVerilog(designIndex));
     };
 
