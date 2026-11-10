@@ -46,6 +46,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
 | `-vhdl` | Use VHDL format for both designs. Requires SEC verification. |
 | `-python`, `-py` | Build both designs from Python scripts through the Naja Python API. |
+| `--design1_format <format>`, `--design2_format <format>` | Without a format flag, the format of each design: `verilog` (the default), `systemverilog`, `vhdl`, `python` or `naja_if` (aliases `v`, `sv`, `vhd`, `py`). Not valid together with a format flag. See [Per-design formats](#per-design-formats). |
 | `--help`, `-h` | Print usage and exit. |
 | `--version`, `-V` | Print the embedded Kepler Formal and Naja versions and Git hashes to stdout and exit successfully. Use as a standalone option. |
 | `--config <file>`, `-c <file>` | Load a YAML config file. Config mode cannot be combined with other command-line options. |
@@ -68,7 +69,8 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `python`, or `py`. If omitted, the implementation defaults to `verilog`. |
+| `format` | string | Input format for both designs: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, `sv2v`, `vhdl`, `vhd`, `python`, or `py`. If omitted, each design uses its own format, which defaults to `verilog`. |
+| `design1_format`, `design2_format` | string | Format of each design when `format` is omitted: `verilog` (the default), `systemverilog`, `vhdl`, `python` or `naja_if`. See [Per-design formats](#per-design-formats). |
 | `verification` | string | `lec` or `sec`. Defaults to `lec`. |
 | `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
 | `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
@@ -146,6 +148,47 @@ solver: kissat
 compact_mode: true
 report_skipped_pos: true
 ```
+
+## Per-design formats
+
+A format flag, or the `format` config key, fixes the format of both designs,
+or for `sv2v` a SystemVerilog design followed by a Verilog one. Without it,
+each design is parsed with its own format, in any combination and order:
+
+```sh
+kepler-formal -v sec \
+  --design1_format vhdl --design2_format verilog \
+  --design1 rtl/pkg.vhd rtl/top.vhd --design2 netlist.v \
+  --liberty cells.lib
+```
+
+```yaml
+design2_format: systemverilog
+verification: sec
+input_paths:
+  - [netlist.v]
+  - [rtl/top.sv]
+liberty_files: [cells.lib]
+```
+
+- A design format is `verilog`, `systemverilog`, `vhdl`, `python` or
+  `naja_if`. A design that names none is Verilog, so a run with no format at
+  all compares two Verilog netlists. `sv2v` names a pair of formats and is not
+  a design format.
+- A design format cannot be combined with a format flag or the `format` key.
+- Two designs of the same format run exactly as with that format's flag.
+- With two different formats, each design is loaded as in the mode of its
+  format. The per-format options apply to the design that uses the format:
+  `--vhdl_design1_top` needs design 1 to be VHDL, `--sv_design2_flist` needs
+  design 2 to be SystemVerilog, and so on. An option given for a design of
+  another format is rejected.
+- A run with a SystemVerilog or a VHDL design requires SEC, as with the flags
+  of those formats.
+- Next to a design of another format, a SystemVerilog design is parsed with
+  stubs for the loaded Liberty and Python primitives, as design 1 of `sv2v`
+  is, so it can instantiate them.
+- With two different formats the result reports both as its input format,
+  for example `vhdl+verilog`.
 
 ## User-defined instance boundaries
 
