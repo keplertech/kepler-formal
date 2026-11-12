@@ -88,7 +88,8 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> nextStateExprByStateKey;
   // Read data of asynchronously read memories: the cell addressed in the current
   // step. The formula replaces the read-data variable everywhere and the
-  // variable leaves the state.
+  // variable leaves the state; it is kept here exactly as substituted, so an
+  // engine can recognize the read inside its readers.
   std::unordered_map<SignalKey, BoolExpr*, SignalKeyHash> memoryReadExprByKey;
   std::unordered_map<SignalKey, bool, SignalKeyHash> initialStateValueByKey;
   // Variables proven during extraction to be pure routed clock carriers.

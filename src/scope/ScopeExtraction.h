@@ -46,6 +46,17 @@ class ScopeExtraction {
     size_t getIdenticalModelPairCount() const { return identicalOwnPairs_; }
     // Number of model pairs compared in total.
     size_t getComparedModelPairCount() const { return comparisons_.size(); }
+    // The model pairs that instantiate a pair at paired instances, as reached
+    // from the tops through pairs whose own implementation is identical. A
+    // scope's difference under free ports is checked again in these pairs,
+    // where the surrounding logic drives its ports. The top pair has none.
+    // Available after collectVerificationScopes().
+    std::set<std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>> getParentPairs(
+        naja::NL::SNLDesign* design0, naja::NL::SNLDesign* design1) const;
+    // True when `outer` encloses `inner` through those parent pairs, at any
+    // depth. A pair does not enclose itself.
+    bool isBelow(const std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>& inner,
+                 const std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>& outer) const;
     // Provide extracted verification scopes for debugging purposes by:
     // 1 Collecting scopes via collectVerificationScopes()
     // 2 Collecting logic cones for all differ elements in the scopes with SNLLogicCone
@@ -93,6 +104,7 @@ class ScopeExtraction {
     void collectScopesBelow(naja::NL::SNLDesign* design0, naja::NL::SNLDesign* design1,
                             std::set<ModelPair>& visited);
     std::map<ModelPair, Comparison> comparisons_;
+    std::map<ModelPair, std::set<ModelPair>> parents_;
     size_t identicalOwnPairs_ = 0;
 };
 #endif // SCOPE_EXTRACTION_H

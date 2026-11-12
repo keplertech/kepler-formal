@@ -577,6 +577,81 @@ bool supportTouches(const std::set<size_t>& support, const std::unordered_set<si
   return false;
 }
 
+// The memories of a search problem whose cells something other than their
+// own ports reads: a state transition, the target, or a port expression. The
+// port model leaves the cells out of the unrolling, so such a memory has to
+// be searched as registers.
+std::vector<size_t> memoriesReadOutsidePorts(const KInductionProblem& problem) {
+  std::vector<size_t> result;
+  if (problem.structuredMemories == nullptr) {
+    return result;
+  }
+  const auto& memories = *problem.structuredMemories;
+  std::unordered_map<size_t, size_t> memoryByCellRail;
+  std::unordered_set<size_t> readRails;
+  for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+    for (const auto& cell : memories[memoryIndex].cellRails) {
+      for (const auto& rails : cell) {
+        memoryByCellRail.emplace(rails.mayBeOne, memoryIndex);
+        memoryByCellRail.emplace(rails.mayBeZero, memoryIndex);
+      }
+    }
+    for (const auto& port : memories[memoryIndex].readPorts) {
+      for (const auto& rails : port.outputRails) {
+        if (rails.has_value()) {
+          readRails.insert(rails->mayBeOne);
+          readRails.insert(rails->mayBeZero);
+        }
+      }
+    }
+  }
+  std::vector<bool> readOutside(memories.size(), false);
+  const auto mark = [&](const std::set<size_t>& support) {
+    for (const auto symbol : support) {
+      if (const auto it = memoryByCellRail.find(symbol); it != memoryByCellRail.end()) {
+        readOutside[it->second] = true;
+      }
+    }
+  };
+  const auto markRails = [&](const DualRailBoolExpr& expr) {
+    mark(expr.mayBeOne->getSupportVars());
+    mark(expr.mayBeZero->getSupportVars());
+  };
+  const TransitionExprResolver transitions(problem);
+  for (const auto symbol : problem.combinedStateSymbols()) {
+    if (memoryByCellRail.count(symbol) == 0 && readRails.count(symbol) == 0 &&
+        transitions.contains(symbol)) {
+      mark(transitions.support(symbol));
+    }
+  }
+  if (problem.bad != nullptr) {
+    mark(problem.bad->getSupportVars());
+  }
+  for (const auto& memory : memories) {
+    for (const auto& port : memory.readPorts) {
+      for (const auto& bit : port.address) {
+        markRails(bit);
+      }
+    }
+    for (const auto& port : memory.writePorts) {
+      for (const auto* word : {&port.address, &port.data, &port.mask, &port.enable}) {
+        for (const auto& bit : *word) {
+          markRails(bit);
+        }
+      }
+    }
+    if (memory.resetAsserted.has_value()) {
+      markRails(*memory.resetAsserted);
+    }
+  }
+  for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+    if (readOutside[memoryIndex]) {
+      result.push_back(memoryIndex);
+    }
+  }
+  return result;
+}
+
 // Maps one design's local variables into a private rail symbol space.
 class LocalRailMapper final : public DualRailVariableMapper {
  public:
@@ -645,6 +720,15 @@ struct DivergenceProblem {
   // is the changed logic's fan-in only, which makes it the preferred guide.
   BoolExpr* originDivergence = nullptr;
   size_t originPairs = 0;
+  // Memories read outside their ports are searched as registers; the rails
+  // of their cells, which keep the selected state's contents like the cells
+  // of a structured memory.
+  size_t registerMemories = 0;
+  std::vector<size_t> registerCellRails;
+  size_t sameCycleReadPorts = 0;
+  // Model memories given a port model that something still reads outside
+  // their ports; the problem has to be rebuilt without their port model.
+  std::vector<size_t> readOutsidePorts;
 
   std::unordered_map<size_t, bool> frontierFor(const std::vector<TernaryValue>& state0) const {
     std::unordered_map<size_t, bool> result;
@@ -665,7 +749,8 @@ DivergenceProblem buildDivergenceProblem(
     const AlignedSignals& alignedOutputs,
     const std::vector<TernaryValue>& state0,
     const std::vector<TernaryValue>& state1,
-    const std::vector<std::optional<bool>>& resetActiveValue) {
+    const std::vector<std::optional<bool>>& resetActiveValue,
+    const std::vector<bool>& memoryThroughPorts) {
   DivergenceProblem out;
   const size_t inputCount = alignedInputs.names.size();
 
@@ -911,6 +996,35 @@ DivergenceProblem buildDivergenceProblem(
   LocalRailMapper mapper(railsByLocalVar, inputSymbolByLocalVar);
   std::unordered_map<BoolExpr*, DualRailBoolExpr> memo;
   const auto lift = [&](BoolExpr* expr) { return buildDualRailBoolExpr(expr, mapper, memo); };
+  // Same-cycle read data has no state variable: the model inlined the read
+  // formula into its readers. Each read gets fresh rails and lifting maps the
+  // formula to them, so the readers take the port model's data instead of
+  // reading the cells.
+  std::vector<std::vector<std::vector<std::optional<DualRailSymbolPair>>>> sameCycleRails(
+      model0.structuredMemories.size());  // [memory][port][bit]
+  for (size_t memoryIndex = 0; memoryIndex < model0.structuredMemories.size(); ++memoryIndex) {
+    if (!memoryThroughPorts[memoryIndex]) {
+      continue;
+    }
+    const auto& readPorts = model0.structuredMemories[memoryIndex].readPorts;
+    sameCycleRails[memoryIndex].resize(readPorts.size());
+    for (size_t portIndex = 0; portIndex < readPorts.size(); ++portIndex) {
+      for (const auto& outputKey : readPorts[portIndex].outputKeys) {
+        const auto readIt = model0.memoryReadExprByKey.find(outputKey);
+        if (readIt == model0.memoryReadExprByKey.end() || readIt->second == nullptr) {
+          sameCycleRails[memoryIndex][portIndex].push_back(std::nullopt);
+          continue;
+        }
+        const DualRailSymbolPair rails{nextSymbol, nextSymbol + 1};
+        nextSymbol += 2;
+        problem.allSymbols.push_back(rails.mayBeOne);
+        problem.allSymbols.push_back(rails.mayBeZero);
+        memo.emplace(readIt->second, DualRailBoolExpr{BoolExpr::Var(rails.mayBeOne),
+                                                      BoolExpr::Var(rails.mayBeZero)});
+        sameCycleRails[memoryIndex][portIndex].push_back(rails);
+      }
+    }
+  }
   for (size_t index = 0; index < model0.stateBits.size(); ++index) {
     const auto& key = model0.stateBits[index];
     const auto nextIt = model0.nextStateExprByStateKey.find(key);
@@ -924,6 +1038,7 @@ DivergenceProblem buildDivergenceProblem(
   }
 
   auto memories = std::make_shared<std::vector<ProofMemoryDescription>>();
+  std::vector<size_t> describedMemories;  // model memory index per description
   const auto liftWord = [&](const std::vector<BoolExpr*>& exprs) {
     std::vector<DualRailBoolExpr> lifted;
     lifted.reserve(exprs.size());
@@ -932,7 +1047,20 @@ DivergenceProblem buildDivergenceProblem(
     }
     return lifted;
   };
-  for (const auto& memory : model0.structuredMemories) {
+  for (size_t memoryIndex = 0; memoryIndex < model0.structuredMemories.size(); ++memoryIndex) {
+    const auto& memory = model0.structuredMemories[memoryIndex];
+    if (!memoryThroughPorts[memoryIndex]) {
+      ++out.registerMemories;
+      for (const auto& cellKeys : memory.cellKeys) {
+        for (const auto& cellKey : cellKeys) {
+          if (const auto rails = railsOfKey0(cellKey); rails.has_value()) {
+            out.registerCellRails.push_back(rails->mayBeOne);
+            out.registerCellRails.push_back(rails->mayBeZero);
+          }
+        }
+      }
+      continue;
+    }
     ProofMemoryDescription description;
     description.width = memory.width;
     description.depth = memory.depth;
@@ -953,12 +1081,22 @@ DivergenceProblem buildDivergenceProblem(
     if (!complete) {
       continue;  // LCOV_EXCL_LINE
     }
-    for (const auto& port : memory.readPorts) {
+    for (size_t portIndex = 0; portIndex < memory.readPorts.size(); ++portIndex) {
+      const auto& port = memory.readPorts[portIndex];
+      const auto& portSameCycleRails = sameCycleRails[memoryIndex][portIndex];
       ProofMemoryReadPort readPort;
       readPort.address = liftWord(port.addressExprs);
-      for (const auto& outputKey : port.outputKeys) {
-        readPort.outputRails.push_back(railsOfKey0(outputKey));
+      readPort.combinational = std::any_of(
+          portSameCycleRails.begin(), portSameCycleRails.end(),
+          [](const auto& rails) { return rails.has_value(); });
+      if (readPort.combinational) {
+        readPort.outputRails = portSameCycleRails;
+      } else {
+        for (const auto& outputKey : port.outputKeys) {
+          readPort.outputRails.push_back(railsOfKey0(outputKey));
+        }
       }
+      out.sameCycleReadPorts += readPort.combinational ? 1 : 0;
       description.readPorts.push_back(std::move(readPort));
     }
     for (const auto& port : memory.writePorts) {
@@ -970,6 +1108,7 @@ DivergenceProblem buildDivergenceProblem(
       description.resetAsserted = lift(memory.resetAssertedExpr);
     }
     memories->push_back(std::move(description));
+    describedMemories.push_back(memoryIndex);
   }
   if (!memories->empty()) {
     problem.structuredMemories = std::move(memories);
@@ -1091,6 +1230,13 @@ DivergenceProblem buildDivergenceProblem(
   problem.bad = BoolExpr::simplify(diverge);
   problem.property = BoolExpr::simplify(BoolExpr::Not(problem.bad));
   problem.description = "seeded search divergence predicate";
+  // A memory still read outside its ports (a reader whose formula no longer
+  // holds the read as extracted, or a design-2 read that differs from design
+  // 1's) has to be searched as registers; the caller rebuilds without its
+  // port model.
+  for (const auto index : memoriesReadOutsidePorts(problem)) {
+    out.readOutsidePorts.push_back(describedMemories[index]);
+  }
   return out;
 }
 
@@ -1165,6 +1311,7 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
                              : noMemories;
   std::unordered_set<size_t> cellRailSymbols;
   std::unordered_map<size_t, size_t> memoryByReadOutput;
+  std::unordered_map<size_t, size_t> memoryBySameCycleRead;
   for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
     for (const auto& cell : memories[memoryIndex].cellRails) {
       for (const auto& rails : cell) {
@@ -1173,10 +1320,11 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
       }
     }
     for (const auto& port : memories[memoryIndex].readPorts) {
+      auto& byRail = port.combinational ? memoryBySameCycleRead : memoryByReadOutput;
       for (const auto& rails : port.outputRails) {
         if (rails.has_value()) {
-          memoryByReadOutput.emplace(rails->mayBeOne, memoryIndex);
-          memoryByReadOutput.emplace(rails->mayBeZero, memoryIndex);
+          byRail.emplace(rails->mayBeOne, memoryIndex);
+          byRail.emplace(rails->mayBeZero, memoryIndex);
         }
       }
     }
@@ -1190,7 +1338,8 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
   const auto addStateSupport = [&](const std::set<size_t>& support,
                                    std::unordered_set<size_t>& out) {
     for (const auto symbol : support) {
-      if (stateSymbols.find(symbol) != stateSymbols.end()) {
+      if (stateSymbols.find(symbol) != stateSymbols.end() ||
+          memoryBySameCycleRead.find(symbol) != memoryBySameCycleRead.end()) {
         out.insert(symbol);
       }
     }
@@ -1218,9 +1367,27 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
       addRails(*memory.resetAsserted);
     }
   }
+  // Same-cycle read data stands for its memory's port logic in the same layer.
+  const auto addSameCycleReadSupport = [&](std::unordered_set<size_t>& layerSymbols) {
+    std::vector<size_t> pending(layerSymbols.begin(), layerSymbols.end());
+    while (!pending.empty()) {
+      const size_t symbol = pending.back();
+      pending.pop_back();
+      const auto readIt = memoryBySameCycleRead.find(symbol);
+      if (readIt == memoryBySameCycleRead.end()) {
+        continue;
+      }
+      for (const auto supported : memoryPortSupport[readIt->second]) {
+        if (layerSymbols.insert(supported).second) {
+          pending.push_back(supported);
+        }
+      }
+    }
+  };
   const TransitionExprResolver transitions(problem);
   std::vector<std::unordered_set<size_t>> layers(1);
   addStateSupport(target->getSupportVars(), layers[0]);
+  addSameCycleReadSupport(layers[0]);
   for (size_t layer = 0; layer < maxLayers; ++layer) {
     std::unordered_set<size_t> next = layers[layer];
     for (const auto symbol : layers[layer]) {
@@ -1232,6 +1399,7 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
         addStateSupport(transitions.support(symbol), next);
       }
     }
+    addSameCycleReadSupport(next);
     const bool grew = next.size() > layers[layer].size();
     layers.push_back(std::move(next));
     if (!grew) {
@@ -1291,12 +1459,40 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     return mergedRails.find(symbol) != mergedRails.end();
   };
   const std::vector<ProofMemoryDescription> noMemories;
-  const auto& memories = problem.structuredMemories != nullptr
-                             ? *problem.structuredMemories
-                             : noMemories;
+  const std::vector<ProofMemoryDescription>* searchedMemories =
+      problem.structuredMemories != nullptr ? problem.structuredMemories.get() : &noMemories;
+  // A memory whose cells are read outside its ports is searched as
+  // registers: its cells keep their transitions like any other state.
+  std::vector<ProofMemoryDescription> portMemories;
+  if (const auto readOutside = memoriesReadOutsidePorts(problem); !readOutside.empty()) {
+    const std::unordered_set<size_t> demoted(readOutside.begin(), readOutside.end());
+    for (size_t memoryIndex = 0; memoryIndex < searchedMemories->size(); ++memoryIndex) {
+      const auto& memory = (*searchedMemories)[memoryIndex];
+      if (demoted.count(memoryIndex) == 0) {
+        portMemories.push_back(memory);
+        continue;
+      }
+      for (const auto& port : memory.readPorts) {
+        if (port.combinational) {
+          // Its read data is defined by the port model alone.
+          logSeeded(diagnostics,
+                    "a memory with same-cycle reads is read outside its ports; search skipped");
+          return std::nullopt;
+        }
+      }
+    }
+    logSeeded(diagnostics, "%zu memories read outside their ports are searched as registers",
+              readOutside.size());
+    searchedMemories = &portMemories;
+  }
+  const auto& memories = *searchedMemories;
 
   std::unordered_set<size_t> cellRailSymbols;
   std::unordered_map<size_t, ReadOutputRef> readOutputBySymbol;
+  // Same-cycle read data: search variables without a transition, defined
+  // per frame by the port model.
+  std::unordered_map<size_t, ReadOutputRef> sameCycleReadBySymbol;
+  std::vector<size_t> sameCycleRails;
   for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
     const auto& memory = memories[memoryIndex];
     for (const auto& cell : memory.cellRails) {
@@ -1307,14 +1503,19 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     }
     for (size_t portIndex = 0; portIndex < memory.readPorts.size(); ++portIndex) {
       const auto& port = memory.readPorts[portIndex];
+      auto& bySymbol = port.combinational ? sameCycleReadBySymbol : readOutputBySymbol;
       for (size_t bit = 0; bit < port.outputRails.size(); ++bit) {
         if (!port.outputRails[bit].has_value()) {
           continue;
         }
-        readOutputBySymbol.emplace(
+        bySymbol.emplace(
             port.outputRails[bit]->mayBeOne, ReadOutputRef{memoryIndex, portIndex, bit});
-        readOutputBySymbol.emplace(
+        bySymbol.emplace(
             port.outputRails[bit]->mayBeZero, ReadOutputRef{memoryIndex, portIndex, bit});
+        if (port.combinational) {
+          sameCycleRails.push_back(port.outputRails[bit]->mayBeOne);
+          sameCycleRails.push_back(port.outputRails[bit]->mayBeZero);
+        }
       }
     }
   }
@@ -1361,6 +1562,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
 
   std::vector<size_t> symbols = problem.inputSymbols;
   symbols.insert(symbols.end(), stateSymbols.begin(), stateSymbols.end());
+  symbols.insert(symbols.end(), sameCycleRails.begin(), sameCycleRails.end());
 
   // State-set target enlargement: generalized preimage cubes of the target.
   // Memory cells are not search variables, so a problem with structured
@@ -1504,6 +1706,10 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
         const size_t symbol = mergedIt == mergedRails.end() ? raw : mergedIt->second;
         if (stateSymbolSet.find(symbol) != stateSymbolSet.end()) {
           out.insert(symbol);
+        } else if (const auto readIt = sameCycleReadBySymbol.find(symbol);
+                   readIt != sameCycleReadBySymbol.end()) {
+          const auto& ref = readIt->second;
+          out.insert(memories[ref.memory].readPorts[ref.port].outputRails[ref.bit]->mayBeOne);
         }
       }
     };
@@ -1539,6 +1745,24 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
         layers[0].insert(symbol);
       }
     }
+    // A same-cycle read needs its memory's port logic in its own layer.
+    const auto addSameCycleReadSupport = [&](std::unordered_set<size_t>& layerSymbols) {
+      std::vector<size_t> pending(layerSymbols.begin(), layerSymbols.end());
+      while (!pending.empty()) {
+        const size_t symbol = pending.back();
+        pending.pop_back();
+        const auto readIt = sameCycleReadBySymbol.find(symbol);
+        if (readIt == sameCycleReadBySymbol.end()) {
+          continue;
+        }
+        for (const auto supported : memoryPortSupport[readIt->second.memory]) {
+          if (layerSymbols.insert(supported).second) {
+            pending.push_back(supported);
+          }
+        }
+      }
+    };
+    addSameCycleReadSupport(layers[0]);
     for (size_t layer = 0; layer < tailFrames; ++layer) {
       layers[layer + 1] = layers[layer];
       for (const auto symbol : layers[layer]) {
@@ -1550,6 +1774,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
           addMergedStateSupport(transitions.support(symbol), layers[layer + 1]);
         }
       }
+      addSameCycleReadSupport(layers[layer + 1]);
     }
     logSeeded(diagnostics, "structural enlargement tail_frames=%zu cone_states=%zu of %zu",
               tailFrames, layers[tailFrames].size(), stateSymbols.size());
@@ -1634,33 +1859,6 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     }
   };
 
-  std::vector<int> pendingBadLits;
-  std::vector<int> pendingTargetLits;
-  size_t firstPendingFrame = 0;
-  // The selected state itself may already show the difference.
-  {
-    int badLit = 0;
-    int targetLit = 0;
-    encodeTarget(0, badLit, targetLit);
-    if (targetAtLastFrameOnly) {
-      firstPendingFrame = totalFrames;  // only the last frame's target counts
-    } else if (finalCheckOnly) {
-      pendingBadLits.push_back(badLit);
-      pendingTargetLits.push_back(targetLit);
-    } else {
-      const auto status = solver.solveWithAssumptionsStatus({targetLit});
-      if (status == SATSolverWrapper::SolveStatus::Sat) {
-        logSeeded(diagnostics, "difference at the selected state itself");
-        return extractInputs(0, !solver.getLiteralValue(badLit));
-      }
-      if (status != SATSolverWrapper::SolveStatus::Unsat) {
-        return std::nullopt;  // LCOV_EXCL_LINE
-      }
-      solver.addClause({-targetLit});
-      firstPendingFrame = 1;
-    }
-  }
-
   // Frontier memory contents per cell bit, as rail values.
   struct FrontierCell {
     bool one = true;
@@ -1698,6 +1896,167 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       }
     }
     sharedMemory[memoryIndex] = anyOutput && allMerged;
+  }
+
+  const auto isNeededIn = [&](const std::unordered_set<size_t>* needed, size_t symbol) {
+    return (needed == nullptr || needed->find(symbol) != needed->end()) &&
+           (extras.keptStates == nullptr ||
+            extras.keptStates->find(symbol) != extras.keptStates->end());
+  };
+  const auto portNeededIn = [&](const ProofMemoryReadPort& port,
+                                const std::unordered_set<size_t>* needed) {
+    for (const auto& outputRails : port.outputRails) {
+      if (outputRails.has_value() && isNeededIn(needed, outputRails->mayBeOne)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  // Constrains a read port's data rails at `dataFrame` to a read at `address`
+  // after the write events recorded so far: per bit, the latest matching
+  // write, else the frontier contents at the address. A registered read sees
+  // the writes of its own clock edge, a same-cycle read those of the frames
+  // before it.
+  const auto encodeRead = [&](size_t memoryIndex, const ProofMemoryReadPort& port,
+                              const std::vector<RailLits>& address, size_t dataFrame,
+                              const std::unordered_set<size_t>* needed) {
+    const auto& memory = memories[memoryIndex];
+    const auto& events = eventsByMemory[memoryIndex];
+    // Address decode against the frontier contents, built on demand.
+    std::vector<int> mayEqualCell;
+    const auto decode = [&]() {
+      if (mayEqualCell.empty()) {
+        mayEqualCell.reserve(memory.depth);
+        for (size_t cell = 0; cell < memory.depth; ++cell) {
+          mayEqualCell.push_back(rails.wordMayEqualConstant(address, cell));
+        }
+      }
+    };
+    // Write conditions of every recorded write event.
+    std::vector<std::vector<RailLits>> writeHits(events.size());
+    for (size_t eventFrame = 0; eventFrame < events.size(); ++eventFrame) {
+      for (const auto& write : events[eventFrame].writes) {
+        writeHits[eventFrame].push_back(
+            rails.railAnd(write.enable, rails.wordEqual(write.address, address)));
+      }
+    }
+    for (size_t bit = 0; bit < port.outputRails.size(); ++bit) {
+      if (!port.outputRails[bit].has_value() ||
+          isMerged(port.outputRails[bit]->mayBeOne) ||
+          !variables.hasSymbol(port.outputRails[bit]->mayBeOne) ||
+          !isNeededIn(needed, port.outputRails[bit]->mayBeOne)) {
+        continue;
+      }
+      // Frontier contents at the read address.
+      RailLits value;
+      {
+        bool allOne = true;
+        bool allZero = true;
+        bool anyOne = false;
+        bool anyZero = false;
+        std::vector<FrontierCell> cells(memory.depth);
+        for (size_t cell = 0; cell < memory.depth; ++cell) {
+          const auto& cellRails = memory.cellRails[cell][bit];
+          cells[cell].one = frontierRail(cellRails.mayBeOne);
+          cells[cell].zero = frontierRail(cellRails.mayBeZero);
+          allOne = allOne && cells[cell].one;
+          allZero = allZero && cells[cell].zero;
+          anyOne = anyOne || cells[cell].one;
+          anyZero = anyZero || cells[cell].zero;
+        }
+        if (allOne || !anyOne) {
+          value.one = allOne ? rails.trueLit() : rails.falseLit();
+        } else {
+          decode();
+          value.one = rails.falseLit();
+          for (size_t cell = 0; cell < memory.depth; ++cell) {
+            if (cells[cell].one) {
+              value.one = rails.orLit(value.one, mayEqualCell[cell]);
+            }
+          }
+        }
+        if (allZero || !anyZero) {
+          value.zero = allZero ? rails.trueLit() : rails.falseLit();
+        } else {
+          decode();
+          value.zero = rails.falseLit();
+          for (size_t cell = 0; cell < memory.depth; ++cell) {
+            if (cells[cell].zero) {
+              value.zero = rails.orLit(value.zero, mayEqualCell[cell]);
+            }
+          }
+        }
+      }
+      for (size_t eventFrame = 0; eventFrame < events.size(); ++eventFrame) {
+        const auto& frameEvent = events[eventFrame];
+        for (size_t writeIndex = 0; writeIndex < frameEvent.writes.size(); ++writeIndex) {
+          const auto& write = frameEvent.writes[writeIndex];
+          if (bit >= write.data.size()) {
+            continue;  // LCOV_EXCL_LINE
+          }
+          RailLits hit = writeHits[eventFrame][writeIndex];
+          if (bit < write.mask.size()) {
+            hit = rails.railAnd(hit, write.mask[bit]);
+          }
+          value = rails.ite(hit, write.data[bit], value);
+        }
+        if (frameEvent.reset.has_value()) {
+          value = rails.ite(*frameEvent.reset, rails.constRail(false), value);
+        }
+      }
+      addLiteralEquivalence(
+          solver, variables.getLiteral(port.outputRails[bit]->mayBeOne, dataFrame), value.one);
+      addLiteralEquivalence(
+          solver, variables.getLiteral(port.outputRails[bit]->mayBeZero, dataFrame), value.zero);
+    }
+  };
+  // Same-cycle reads at `dataFrame` see the write events of the frames before
+  // it, and their address in that frame.
+  const auto encodeSameCycleReads = [&](size_t dataFrame,
+                                        const std::unordered_set<size_t>* needed) {
+    std::optional<FrameFormulaEncoder> encoder;
+    for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+      for (const auto& port : memories[memoryIndex].readPorts) {
+        if (!port.combinational || !portNeededIn(port, needed)) {
+          continue;
+        }
+        if (!encoder.has_value()) {
+          encoder.emplace(solver, variables.makeLeafLits(dataFrame));
+        }
+        encodeRead(memoryIndex, port, encodeRailWord(*encoder, mergeRailWord(port.address)),
+                   dataFrame, needed);
+      }
+    }
+  };
+
+  // Same-cycle reads of the selected state itself.
+  encodeSameCycleReads(0, nullptr);
+
+  std::vector<int> pendingBadLits;
+  std::vector<int> pendingTargetLits;
+  size_t firstPendingFrame = 0;
+  // The selected state itself may already show the difference.
+  {
+    int badLit = 0;
+    int targetLit = 0;
+    encodeTarget(0, badLit, targetLit);
+    if (targetAtLastFrameOnly) {
+      firstPendingFrame = totalFrames;  // only the last frame's target counts
+    } else if (finalCheckOnly) {
+      pendingBadLits.push_back(badLit);
+      pendingTargetLits.push_back(targetLit);
+    } else {
+      const auto status = solver.solveWithAssumptionsStatus({targetLit});
+      if (status == SATSolverWrapper::SolveStatus::Sat) {
+        logSeeded(diagnostics, "difference at the selected state itself");
+        return extractInputs(0, !solver.getLiteralValue(badLit));
+      }
+      if (status != SATSolverWrapper::SolveStatus::Unsat) {
+        return std::nullopt;  // LCOV_EXCL_LINE
+      }
+      solver.addClause({-targetLit});
+      firstPendingFrame = 1;
+    }
   }
 
   // Pinned rail values: assumptions when the solver supports them (so the
@@ -1785,11 +2144,7 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     // target still depends on at that distance from the last frame.
     const std::unordered_set<size_t>* needed =
         frame >= depth ? &layers[totalFrames - frame - 1] : nullptr;
-    const auto isNeeded = [&](size_t symbol) {
-      return (needed == nullptr || needed->find(symbol) != needed->end()) &&
-             (extras.keptStates == nullptr ||
-              extras.keptStates->find(symbol) != extras.keptStates->end());
-    };
+    const auto isNeeded = [&](size_t symbol) { return isNeededIn(needed, symbol); };
     FrameFormulaEncoder encoder(solver, variables.makeLeafLits(frame));
     size_t encodedStates = 0;
     for (const auto symbol : transitionStates) {
@@ -1837,104 +2192,15 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
       events.push_back(std::move(frameEvents));
 
       for (const auto& port : memory.readPorts) {
-        bool portNeeded = false;
-        for (const auto& outputRails : port.outputRails) {
-          portNeeded = portNeeded ||
-                       (outputRails.has_value() && isNeeded(outputRails->mayBeOne));
-        }
-        if (!portNeeded) {
+        if (port.combinational || !portNeededIn(port, needed)) {
           continue;
         }
-        const auto address = encodeRailWord(encoder, mergeRailWord(port.address));
-        // Address decode against the frontier contents, built on demand.
-        std::vector<int> mayEqualCell;
-        const auto decode = [&]() {
-          if (mayEqualCell.empty()) {
-            mayEqualCell.reserve(memory.depth);
-            for (size_t cell = 0; cell < memory.depth; ++cell) {
-              mayEqualCell.push_back(rails.wordMayEqualConstant(address, cell));
-            }
-          }
-        };
-        // Write conditions of every earlier and same-cycle write event.
-        std::vector<std::vector<RailLits>> writeHits(events.size());
-        for (size_t eventFrame = 0; eventFrame < events.size(); ++eventFrame) {
-          for (const auto& write : events[eventFrame].writes) {
-            writeHits[eventFrame].push_back(
-                rails.railAnd(write.enable, rails.wordEqual(write.address, address)));
-          }
-        }
-        for (size_t bit = 0; bit < port.outputRails.size(); ++bit) {
-          if (!port.outputRails[bit].has_value() ||
-              isMerged(port.outputRails[bit]->mayBeOne) ||
-              !variables.hasSymbol(port.outputRails[bit]->mayBeOne) ||
-              !isNeeded(port.outputRails[bit]->mayBeOne)) {
-            continue;
-          }
-          // Frontier contents at the read address.
-          RailLits value;
-          {
-            bool allOne = true;
-            bool allZero = true;
-            bool anyOne = false;
-            bool anyZero = false;
-            std::vector<FrontierCell> cells(memory.depth);
-            for (size_t cell = 0; cell < memory.depth; ++cell) {
-              const auto& cellRails = memory.cellRails[cell][bit];
-              cells[cell].one = frontierRail(cellRails.mayBeOne);
-              cells[cell].zero = frontierRail(cellRails.mayBeZero);
-              allOne = allOne && cells[cell].one;
-              allZero = allZero && cells[cell].zero;
-              anyOne = anyOne || cells[cell].one;
-              anyZero = anyZero || cells[cell].zero;
-            }
-            if (allOne || !anyOne) {
-              value.one = allOne ? rails.trueLit() : rails.falseLit();
-            } else {
-              decode();
-              value.one = rails.falseLit();
-              for (size_t cell = 0; cell < memory.depth; ++cell) {
-                if (cells[cell].one) {
-                  value.one = rails.orLit(value.one, mayEqualCell[cell]);
-                }
-              }
-            }
-            if (allZero || !anyZero) {
-              value.zero = allZero ? rails.trueLit() : rails.falseLit();
-            } else {
-              decode();
-              value.zero = rails.falseLit();
-              for (size_t cell = 0; cell < memory.depth; ++cell) {
-                if (cells[cell].zero) {
-                  value.zero = rails.orLit(value.zero, mayEqualCell[cell]);
-                }
-              }
-            }
-          }
-          for (size_t eventFrame = 0; eventFrame < events.size(); ++eventFrame) {
-            const auto& frameEvent = events[eventFrame];
-            for (size_t writeIndex = 0; writeIndex < frameEvent.writes.size(); ++writeIndex) {
-              const auto& write = frameEvent.writes[writeIndex];
-              if (bit >= write.data.size()) {
-                continue;  // LCOV_EXCL_LINE
-              }
-              RailLits hit = writeHits[eventFrame][writeIndex];
-              if (bit < write.mask.size()) {
-                hit = rails.railAnd(hit, write.mask[bit]);
-              }
-              value = rails.ite(hit, write.data[bit], value);
-            }
-            if (frameEvent.reset.has_value()) {
-              value = rails.ite(*frameEvent.reset, rails.constRail(false), value);
-            }
-          }
-          addLiteralEquivalence(
-              solver, variables.getLiteral(port.outputRails[bit]->mayBeOne, frame + 1), value.one);
-          addLiteralEquivalence(
-              solver, variables.getLiteral(port.outputRails[bit]->mayBeZero, frame + 1), value.zero);
-        }
+        encodeRead(memoryIndex, port, encodeRailWord(encoder, mergeRailWord(port.address)),
+                   frame + 1, needed);
       }
     }
+    // Same-cycle reads of the next frame see this frame's writes.
+    encodeSameCycleReads(frame + 1, needed);
 
     addFrameDomainConstraints(solver, variables, problem, frame + 1);
     holdInputs(frame + 1);
@@ -2294,6 +2560,24 @@ runSimulationSeededSearch(
   enlargement.cubeSteps = options.enlargeCubes > 0 ? options.enlargeSteps : 0;
   enlargement.cubeBudget = options.enlargeCubes;
   const TargetEnlargement noEnlargement;
+  // Every memory starts with its port model; one that something still reads
+  // outside its ports is searched as registers from then on.
+  std::vector<bool> memoryThroughPorts(model0.structuredMemories.size(), true);
+  const auto divergenceFrom = [&](const std::vector<TernaryValue>& from0,
+                                  const std::vector<TernaryValue>& from1) {
+    while (true) {
+      auto built = buildDivergenceProblem(model0, model1, alignedInputs, alignedOutputs, from0,
+                                          from1, resetActiveValue, memoryThroughPorts);
+      if (built.readOutsidePorts.empty()) {
+        return built;
+      }
+      for (const auto index : built.readOutsidePorts) {
+        memoryThroughPorts[index] = false;
+      }
+      logSeeded(diagnostics, "%zu memories read outside their ports; searched as registers",
+                built.readOutsidePorts.size());
+    }
+  };
 
   // Single-bit inputs that feed the next state of most registers are global
   // controls (resets, scan and test enables). Letting a bounded search drive
@@ -2531,6 +2815,11 @@ runSimulationSeededSearch(
             }
           }
         }
+      }
+    }
+    for (const auto symbol : divergence.registerCellRails) {
+      if (const auto it = divergence.frontier.find(symbol); it != divergence.frontier.end()) {
+        cellFrontier.emplace(symbol, it->second);
       }
     }
     std::vector<TernaryValue> target(outcome.state0.size(), TernaryValue::Unknown);
@@ -2956,7 +3245,72 @@ runSimulationSeededSearch(
       keepLayer(layer);
       return true;
     };
+    // Same-cycle reads of the kept logic are kept too, with the reads their
+    // port logic makes: their data comes from the memory's port model, whose
+    // port logic then joins the boundary like a kept registered read's.
+    std::unordered_map<size_t, std::pair<DualRailSymbolPair, size_t>> sameCycleReadByRail;
+    if (divergence.problem.structuredMemories != nullptr) {
+      const auto& memories = *divergence.problem.structuredMemories;
+      for (size_t memoryIndex = 0; memoryIndex < memories.size(); ++memoryIndex) {
+        for (const auto& port : memories[memoryIndex].readPorts) {
+          for (const auto& rails : port.outputRails) {
+            if (port.combinational && rails.has_value()) {
+              sameCycleReadByRail.emplace(rails->mayBeOne, std::make_pair(*rails, memoryIndex));
+              sameCycleReadByRail.emplace(rails->mayBeZero, std::make_pair(*rails, memoryIndex));
+            }
+          }
+        }
+      }
+    }
+    const auto keepSameCycleReads = [&]() {
+      if (sameCycleReadByRail.empty()) {
+        return;
+      }
+      const auto& memories = *divergence.problem.structuredMemories;
+      std::vector<size_t> pendingMemories;
+      const auto visit = [&](const std::set<size_t>& support) {
+        for (const auto symbol : support) {
+          const auto readIt = sameCycleReadByRail.find(symbol);
+          if (readIt != sameCycleReadByRail.end() &&
+              kept.insert(readIt->second.first.mayBeOne).second) {
+            kept.insert(readIt->second.first.mayBeZero);
+            pendingMemories.push_back(readIt->second.second);
+          }
+        }
+      };
+      const auto visitRails = [&](const DualRailBoolExpr& expr) {
+        visit(expr.mayBeOne->getSupportVars());
+        visit(expr.mayBeZero->getSupportVars());
+      };
+      visit(guide->getSupportVars());
+      const std::vector<size_t> keptNow(kept.begin(), kept.end());
+      for (const auto symbol : keptNow) {
+        if (transitions.contains(symbol)) {
+          visit(transitions.support(symbol));
+        }
+      }
+      while (!pendingMemories.empty()) {
+        const auto& memory = memories[pendingMemories.back()];
+        pendingMemories.pop_back();
+        for (const auto& port : memory.readPorts) {
+          for (const auto& bit : port.address) {
+            visitRails(bit);
+          }
+        }
+        for (const auto& port : memory.writePorts) {
+          for (const auto* word : {&port.address, &port.data, &port.mask, &port.enable}) {
+            for (const auto& bit : *word) {
+              visitRails(bit);
+            }
+          }
+        }
+        if (memory.resetAsserted.has_value()) {
+          visitRails(*memory.resetAsserted);
+        }
+      }
+    };
     for (size_t iteration = 0; iteration < options.abstractionIterations; ++iteration) {
+      keepSameCycleReads();
       const auto cut = cutSymbols();
       logSeeded(diagnostics,
                 "abstraction: iteration=%zu kept_registers=%zu of %zu boundary_registers=%zu (%.1f s)",
@@ -3149,9 +3503,7 @@ runSimulationSeededSearch(
     };
     for (size_t rank = 0; rank < ranking.size(); ++rank) {
       const PrefixTrial& trial = trials[ranking[rank]];
-      const auto candidate = buildDivergenceProblem(
-          model0, model1, alignedInputs, alignedOutputs, trial.state0, trial.state1,
-          resetActiveValue);
+      const auto candidate = divergenceFrom(trial.state0, trial.state1);
       if (candidate.frontierDiffers) {
         logSeeded(diagnostics, "probe: trial %zu (rank %zu) already differs in its end state",
                   trial.index, rank);
@@ -3194,9 +3546,7 @@ runSimulationSeededSearch(
   }
 
   std::optional<SuffixTrace> trace;
-  const auto divergence = buildDivergenceProblem(
-      model0, model1, alignedInputs, alignedOutputs, best->state0, best->state1,
-      resetActiveValue);
+  const auto divergence = divergenceFrom(best->state0, best->state1);
   logSeeded(diagnostics,
             "paired registers=%zu unpaired=%zu differing=%zu incomparable=%zu "
             "differing_outputs=%zu origin_pairs=%zu frontier_differs=%d (%.1f s)",
@@ -3204,6 +3554,11 @@ runSimulationSeededSearch(
             divergence.differingRegisters, divergence.incomparableRegisters,
             divergence.differingOutputs, divergence.originPairs,
             divergence.frontierDiffers ? 1 : 0, elapsedSeconds(start));
+  logSeeded(diagnostics,
+            "memories: %zu same-cycle read ports; %zu memories searched as registers "
+            "(%zu cell bits)",
+            divergence.sameCycleReadPorts, divergence.registerMemories,
+            divergence.registerCellRails.size() / 2);
   if (diagnostics) {
     for (size_t i = 0; i < divergence.unpairedNames.size() && i < 64; ++i) {
       logSeeded(diagnostics, "unpaired design-2 register: %s", divergence.unpairedNames[i].c_str());

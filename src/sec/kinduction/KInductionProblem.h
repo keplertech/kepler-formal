@@ -186,8 +186,12 @@ struct LazyTransitionStore {
 // its ports uses this description instead of the cell transitions.
 struct ProofMemoryReadPort {
   std::vector<DualRailBoolExpr> address;  // least significant bit first
-  // Registered read data rails per bit; absent when extraction skipped it.
+  // Read data rails per bit; absent when extraction skipped it.
   std::vector<std::optional<DualRailSymbolPair>> outputRails;
+  // Registered data holds the cell addressed at the previous clock edge.
+  // Combinational (asynchronous) data holds the cell addressed in the same
+  // frame; its rails are not state.
+  bool combinational = false;
 };
 
 struct ProofMemoryWritePort {

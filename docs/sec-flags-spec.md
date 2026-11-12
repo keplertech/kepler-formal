@@ -121,6 +121,7 @@ liberty_files:
 | `--dump-only` | `dump_only: true` | `false` | boolean | Stops after BTOR2 export. Requires export to be enabled. Success is an export result, not a proof verdict. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
 | `--use-scopes` | `use_scopes: true` | `false` | boolean | Scoped SEC: compares the two hierarchies bottom-up and proves only the module pairs whose own implementation differs, each with its ports as the environment; see [Scoped SEC](#scoped-sec). Needs both designs loaded, so it cannot be combined with `--compact`, `--set-as-boundary`, `clean_scopes` or BTOR2 export. |
+| `--scope-refinement <bool>` | `scope_refinement: <bool>` | `true` | `true`, `false`, `1`, `0` | With `--use-scopes`, checks a scope's difference again in the module pairs that instantiate the scope, up to the tops, before reporting it; see [Scoped SEC](#scoped-sec). `false` reports the scope difference under free scope ports. Ignored without `--use-scopes`. |
 | `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 | `--latch-abstraction <bool>` | `latch_abstraction: <bool>` | `true` | `true`, `false`, `1`, `0` | Phase-abstract clock-driven latches as described in [sec-latch-support.md](sec-latch-support.md). `false` makes every latch output opaque again, as before, and disables the data-enabled latch model with it. |
@@ -257,11 +258,22 @@ bootstrap spec are matched by name inside the scope.
 
 The verdict is composed from the scope verdicts. All scopes `Equivalent` gives
 `Equivalent`, which is sound because the environments of the scopes are
-identical on both sides. A scope `Different` stops the run and is reported as
-`Different` with the scope named in the reason: the trace holds under free
-scope ports and may need the surrounding logic to be reached from the top.
-Otherwise the least conclusive scope status is reported. Identity detection is
-only a shortcut for the proof: a renamed instance or a resynthesized module
+identical on both sides.
+
+A scope `Different` holds under free scope ports: the trace may drive the
+scope's inputs with values the surrounding logic never produces. With scope
+refinement (`--scope-refinement`, on by default) such a scope is widened to the
+module pairs that instantiate it, and those are verified in its place with
+their own ports as the environment. Widening repeats until a pair is proved,
+where the surrounding logic masks the difference, or the tops are reached,
+where a difference is one of the designs (localization refinement: Kurshan,
+1994; Clarke, Grumberg, Jha, Lu and Veith, CAV 2000). A widened pair also
+decides every other scope it encloses. A `Different` at the tops stops the run
+and is reported with the scope named in the reason. Without refinement a scope
+`Different` stops the run and is reported as is. Otherwise the least conclusive
+status of the outermost verified pairs is reported.
+
+Identity detection is only a shortcut for the proof: a renamed instance or a resynthesized module
 compares as different and is proved by SAT, so names can cost proof time but
 never a wrong verdict.
 

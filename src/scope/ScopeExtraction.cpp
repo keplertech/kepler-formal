@@ -344,13 +344,42 @@ void ScopeExtraction::collectScopesBelow(SNLDesign* design0,
     if (model0->isLeaf() || model1->isLeaf()) {
       continue;
     }
+    parents_[ModelPair(model0, model1)].insert(ModelPair(design0, design1));
     collectScopesBelow(model0, model1, visited);
   }
+}
+
+std::set<std::pair<SNLDesign*, SNLDesign*>> ScopeExtraction::getParentPairs(
+    SNLDesign* design0, SNLDesign* design1) const {
+  const auto found = parents_.find(ModelPair(design0, design1));
+  return found == parents_.end() ? std::set<ModelPair>() : found->second;
+}
+
+bool ScopeExtraction::isBelow(const ModelPair& inner, const ModelPair& outer) const {
+  std::set<ModelPair> seen;
+  std::vector<ModelPair> stack{inner};
+  while (!stack.empty()) {
+    const auto found = parents_.find(stack.back());
+    stack.pop_back();
+    if (found == parents_.end()) {
+      continue;
+    }
+    for (const auto& parent : found->second) {
+      if (parent == outer) {
+        return true;
+      }
+      if (seen.insert(parent).second) {
+        stack.push_back(parent);
+      }
+    }
+  }
+  return false;
 }
 
 void ScopeExtraction::collectVerificationScopes() {
   comparisons_.clear();
   designsToVerify_.clear();
+  parents_.clear();
   identicalOwnPairs_ = 0;
   if (top0_ == nullptr || top1_ == nullptr) {
     return;

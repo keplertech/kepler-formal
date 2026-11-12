@@ -55,10 +55,15 @@ runs unchanged.
    bounded check an ordinary bounded-model-checking query; unrolling both
    designs would turn each check into a combinational equivalence proof of
    the two copies. Structured memories are not unrolled cell by cell: a read
-   at a frame returns the data of the latest earlier write to the same
-   address, under its enables and bit mask, and otherwise the selected
-   state's contents at that address. Resets of the memory are ordered after
-   the writes of their cycle, as in the extracted model. The predicate is
+   returns the data of the latest earlier write to the same address, under
+   its enables and bit mask, and otherwise the selected state's contents at
+   that address. A registered read port returns it at the next frame and
+   sees the writes of its own clock edge; an asynchronous read port, such as
+   an RTL array read that the model inlines into its readers, returns it in
+   the frame of its address and sees the writes of the frames before.
+   Resets of the memory are ordered after the writes of their cycle, as in
+   the extracted model. A memory whose cells are still read outside its
+   ports is searched cell by cell as ordinary registers. The predicate is
    checked once, at the full depth, as a disjunction over all frames and with
    a single solver call: every intermediate check would be an
    unsatisfiability proof the search does not need.
@@ -93,8 +98,7 @@ runs unchanged.
 | `--sec-seed-probe-conflicts <n>` | `sec_seed_probe_conflicts: <n>` | `200000` | Solver conflict budget of one probe (`0`: none). |
 
 The search needs the default `dual_rail_steady` encoding. It is skipped under
-the binary encoding and whenever a formula reads memory cells outside a read
-port.
+the binary encoding.
 
 ```sh
 kepler-formal -sv -v sec \

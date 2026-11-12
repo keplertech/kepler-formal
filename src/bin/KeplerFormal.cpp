@@ -77,13 +77,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--use-scopes] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] [--sec-seed-abstraction-layers <n>] [--sec-seed-abstraction-iterations <n>] [--sec-seed-abstraction-conflicts <n>] [--sec-seed-abstraction-instance <true|false>] [--sec-seed-probe-depth <n>] [--sec-seed-probe-conflicts <n>] | "
+      "[--report-skipped-pos] [--use-scopes] [--scope-refinement <true|false>] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] [--sec-seed-abstraction-layers <n>] [--sec-seed-abstraction-iterations <n>] [--sec-seed-abstraction-conflicts <n>] [--sec-seed-abstraction-instance <true|false>] [--sec-seed-probe-depth <n>] [--sec-seed-probe-conflicts <n>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--use-scopes] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] [--sec-seed-abstraction-layers <n>] [--sec-seed-abstraction-iterations <n>] [--sec-seed-abstraction-conflicts <n>] [--sec-seed-abstraction-instance <true|false>] [--sec-seed-probe-depth <n>] [--sec-seed-probe-conflicts <n>] "
+      "[--report-skipped-pos] [--use-scopes] [--scope-refinement <true|false>] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] [--sec-seed-abstraction-layers <n>] [--sec-seed-abstraction-iterations <n>] [--sec-seed-abstraction-conflicts <n>] [--sec-seed-abstraction-instance <true|false>] [--sec-seed-probe-depth <n>] [--sec-seed-probe-conflicts <n>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -518,6 +518,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "log_level",
       "log_file",
       "use_scopes",
+      "scope_refinement",
       "clean_scopes",
       "cnf_export",
       "cnf_export_path",
@@ -1359,6 +1360,7 @@ static int KeplerFormalMainImpl(
   std::string logFileName;
 
   bool useScopes = false;
+  bool scopeRefinement = true;
   bool cleanScopes = false;
   bool dumpCnf = false;
   bool dumpPoCnf = false;
@@ -1626,6 +1628,11 @@ static int KeplerFormalMainImpl(
         }
         // LCOV_EXCL_STOP
 
+        // scope_refinement (SEC with use_scopes, default true)
+        if (cfg["scope_refinement"] && cfg["scope_refinement"].IsScalar()) {
+          scopeRefinement = cfg["scope_refinement"].as<bool>();
+        }
+
         // clean_scopes
         if (cfg["clean_scopes"] && cfg["clean_scopes"].IsScalar()) {
           // LCOV_EXCL_START
@@ -1876,13 +1883,15 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--scope-refinement") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction" ? latchAbstraction
+                      : arg == "--data-latch-model"  ? dataLatchModel
+                                                     : scopeRefinement;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2156,13 +2165,15 @@ static int KeplerFormalMainImpl(
         ++i;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--scope-refinement") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction" ? latchAbstraction
+                      : arg == "--data-latch-model"  ? dataLatchModel
+                                                     : scopeRefinement;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -3613,8 +3624,11 @@ static int KeplerFormalMainImpl(
         // Scoped SEC: compare the hierarchies bottom-up and prove only the
         // module pairs whose own implementation differs, each with its ports
         // as the environment. Identical environments make a proof of every
-        // scope a proof of the tops; a scope difference is reported under
-        // free scope ports.
+        // scope a proof of the tops. A scope difference holds under free scope
+        // ports only; with scope refinement it is checked again in the pairs
+        // that instantiate the scope, up to the tops, so that a reported
+        // difference is one of the tops (localization refinement: Kurshan
+        // 1994; Clarke, Grumberg, Jha, Lu and Veith, CAV 2000).
         // Naja may have replaced spdlog's default logger while loading
         // SystemVerilog; report the scopes through the run logger.
         if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
@@ -3664,17 +3678,54 @@ static int KeplerFormalMainImpl(
               }
               return 4;
             };
-        std::optional<KEPLER_FORMAL::SEC::SequentialEquivalenceResult> worst;
+        using ScopePair = std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>;
+        const auto scopeName = [](const ScopePair& scope) {
+          return scope.first->getName().getString() + " vs " +
+                 scope.second->getName().getString();
+        };
+        // Regions are verified in name order so that runs are reproducible.
+        const auto byName = [&scopeName](const ScopePair& a, const ScopePair& b) {
+          const auto nameA = scopeName(a);
+          const auto nameB = scopeName(b);
+          return nameA != nameB ? nameA < nameB : a < b;
+        };
+        std::set<ScopePair, decltype(byName)> pending(byName);
+        pending.insert(scopes.begin(), scopes.end());
+        std::map<ScopePair, std::string> widenedFrom;
+        std::vector<std::pair<ScopePair, KEPLER_FORMAL::SEC::SequentialEquivalenceResult>>
+            results;
+        // A region inside a pending or verified region is decided by that one.
+        const auto enclosed = [&](const ScopePair& region) {
+          for (const auto& other : pending) {
+            if (extractor.isBelow(region, other)) {
+              return true;
+            }
+          }
+          for (const auto& [other, result] : results) {
+            if (extractor.isBelow(region, other)) {
+              return true;
+            }
+          }
+          return false;
+        };
+        SPDLOG_INFO("SEC scope refinement: {}", scopeRefinement ? "enabled" : "disabled");
         size_t scopeIndex = 0;
-        for (const auto& scope : scopes) {
+        while (!pending.empty()) {
+          const ScopePair region = *pending.begin();
+          pending.erase(pending.begin());
+          if (enclosed(region)) {
+            SPDLOG_INFO("SEC scope {}: decided by an enclosing scope", scopeName(region));
+            continue;
+          }
           ++scopeIndex;
-          const std::string scopeName = scope.first->getName().getString() +
-                                        " vs " +
-                                        scope.second->getName().getString();
-          SPDLOG_INFO("SEC scope {}/{}: {}", scopeIndex, scopes.size(), scopeName);
+          const auto origin = widenedFrom.find(region);
+          SPDLOG_INFO("SEC scope {}: {}{}", scopeIndex, scopeName(region),
+                      origin == widenedFrom.end()
+                          ? std::string()
+                          : " (widened from " + origin->second + ")");
           KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-              scope.first,
-              scope.second,
+              region.first,
+              region.second,
               solverType,
               secEngine,
               secEncoding,
@@ -3683,21 +3734,68 @@ static int KeplerFormalMainImpl(
           strategy.setInternalRelationOptions(internalRelationOptions);
           strategy.setSimulationSeededSearchOptions(seededSearchOptions);
           auto result = strategy.run(secMaxK);
-          SPDLOG_INFO("SEC scope {}/{}: {} finished with status {}", scopeIndex,
-                      scopes.size(), scopeName, statusName(result.status));
-          result.reason = "scope " + scopeName +
-                          (result.reason.empty() ? "" : ": " + result.reason);
-          if (!worst.has_value() || rank(result.status) > rank(worst->status)) {
-            worst = std::move(result);
-          }
-          if (worst->status ==
-              KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Different) {
+          SPDLOG_INFO("SEC scope {}: {} finished with status {}", scopeIndex,
+                      scopeName(region), statusName(result.status));
+          const bool different =
+              result.status == KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Different;
+          const auto parents = extractor.getParentPairs(region.first, region.second);
+          if (different && scopeRefinement && !parents.empty()) {
+            // The trace drives the scope ports freely; check the difference
+            // where the surrounding logic drives them.
             SPDLOG_INFO(
-                "SEC scope {}: difference found under free scope ports; the "
-                "remaining scopes are not checked",
-                scopeName);
+                "SEC scope {}: difference under free scope ports; widening to {} "
+                "enclosing pair(s)",
+                scopeName(region), parents.size());
+            for (const auto& parent : parents) {
+              widenedFrom.emplace(
+                  parent, origin == widenedFrom.end() ? scopeName(region) : origin->second);
+              pending.insert(parent);
+            }
+            continue;
+          }
+          result.reason = "scope " + scopeName(region) +
+                          (origin == widenedFrom.end()
+                               ? std::string()
+                               : " (widened from " + origin->second + ")") +
+                          (result.reason.empty() ? "" : ": " + result.reason);
+          results.emplace_back(region, std::move(result));
+          if (different) {
+            if (parents.empty()) {
+              SPDLOG_INFO(
+                  "SEC scope {}: difference found at the tops; the remaining scopes "
+                  "are not checked",
+                  scopeName(region));
+            } else {
+              SPDLOG_INFO(
+                  "SEC scope {}: difference found under free scope ports; the "
+                  "remaining scopes are not checked",
+                  scopeName(region));
+            }
             break;
           }
+        }
+        // The verdict combines the outermost verified regions: a region
+        // verified before an enclosing one was widened to is decided by it.
+        std::optional<KEPLER_FORMAL::SEC::SequentialEquivalenceResult> worst;
+        for (const auto& [region, result] : results) {
+          bool inner = false;
+          for (const auto& [other, otherResult] : results) {
+            if (extractor.isBelow(region, other)) {
+              inner = true;
+              break;
+            }
+          }
+          if (!inner && (!worst.has_value() || rank(result.status) > rank(worst->status))) {
+            worst = result;
+          }
+        }
+        if (!worst.has_value()) {
+          // LCOV_EXCL_START
+          KEPLER_FORMAL::SEC::SequentialEquivalenceResult none;
+          none.status = KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Inconclusive;
+          none.reason = "no scope was verified";
+          return emitSecResult(none);
+          // LCOV_EXCL_STOP
         }
         return emitSecResult(*worst);
       }

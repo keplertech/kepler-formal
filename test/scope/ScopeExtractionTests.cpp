@@ -329,6 +329,34 @@ TEST_F(ScopeExtractionUnitTests, ChangedLeafModel_ChildIsTheOnlyScope) {
   EXPECT_EQ(*scopes.begin(), ScopePair(child0, child1));
 }
 
+// The parent pairs lead from a scope through every enclosing pair up to the
+// tops, which have none.
+TEST_F(ScopeExtractionUnitTests, ParentPairsLeadFromScopeToTops) {
+  auto* child0 = createGateModule(side0_.designs, "child", prims0_.and2);
+  auto* child1 = createGateModule(side1_.designs, "child", prims1_.or2);
+  auto* mid0 = createTop(side0_.designs, "mid", child0, prims0_.inv);
+  auto* mid1 = createTop(side1_.designs, "mid", child1, prims1_.inv);
+  auto* top0 = SNLDesign::create(side0_.designs, SNLDesign::Type::Standard, NLName("top"));
+  auto* top1 = SNLDesign::create(side1_.designs, SNLDesign::Type::Standard, NLName("top"));
+  SNLInstance::create(top0, mid0, NLName("u_mid"));
+  SNLInstance::create(top1, mid1, NLName("u_mid"));
+
+  ScopeExtraction extraction(top0, top1);
+  extraction.collectVerificationScopes();
+  const ScopePair child(child0, child1);
+  const ScopePair mid(mid0, mid1);
+  const ScopePair top(top0, top1);
+  ASSERT_EQ(extraction.getScopesToVerify(), std::set<ScopePair>{child});
+  // Two instances of the child, one parent pair.
+  EXPECT_EQ(extraction.getParentPairs(child0, child1), std::set<ScopePair>{mid});
+  EXPECT_EQ(extraction.getParentPairs(mid0, mid1), std::set<ScopePair>{top});
+  EXPECT_TRUE(extraction.getParentPairs(top0, top1).empty());
+  EXPECT_TRUE(extraction.isBelow(child, mid));
+  EXPECT_TRUE(extraction.isBelow(child, top));
+  EXPECT_FALSE(extraction.isBelow(top, child));
+  EXPECT_FALSE(extraction.isBelow(child, child));
+}
+
 // A child with an extra internal net and gate is the scope; the parent stays
 // out because its own connections are unchanged.
 TEST_F(ScopeExtractionUnitTests, ChangedChildBody_ChildIsTheOnlyScope) {

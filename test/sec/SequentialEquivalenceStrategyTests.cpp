@@ -21292,6 +21292,102 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
 }
 
+namespace {
+
+// A 4x4 RTL array with a write port and a registered copy of an asynchronous
+// read: the read register's next state reads the cells through the inlined
+// read formula.
+std::string seededArraySource(const std::string& name, const std::string& readData) {
+  return "module " + name + R"((
+  input  logic       clk,
+  input  logic       we,
+  input  logic [1:0] addr,
+  input  logic [3:0] wdata,
+  output logic [3:0] rdata
+);
+  logic [3:0] mem_q [0:3];
+  logic [3:0] mem_d [0:3];
+  always_comb begin
+    mem_d = mem_q;
+    if (we) begin
+      mem_d[addr] = wdata;
+    end
+  end
+  always_ff @(posedge clk) begin
+    mem_q <= mem_d;
+  end
+  always_ff @(posedge clk) begin
+    rdata <= )" + readData + R"(;
+  end
+endmodule
+)";
+}
+
+// Runs the seeded search alone on two array designs; returns the result and
+// the search's diagnostics.
+std::pair<SequentialEquivalenceResult, std::string> runSeededArraySearch(
+    const std::string& readData0, const std::string& readData1) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library0 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs0"));
+  auto* library1 =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs1"));
+  auto* top0 = loadSystemVerilogTopFromSource(
+      library0, "seed_array_before", seededArraySource("seed_array_before", readData0));
+  auto* top1 = loadSystemVerilogTopFromSource(
+      library1, "seed_array_after", seededArraySource("seed_array_after", readData1));
+  const auto model0 = SequentialDesignModel::extract(top0);
+  EXPECT_EQ(model0.structuredMemories.size(), 1u);
+  EXPECT_FALSE(model0.memoryReadExprByKey.empty());
+
+  SequentialEquivalenceStrategy strategy(
+      top0, top1, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady);
+  SimulationSeededSearchOptions options;
+  options.prefixCycles = 1;
+  options.trials = 4;
+  options.searchDepth = 4;
+  strategy.setSimulationSeededSearchOptions(options);
+  const ScopedEnvVar secDiag("KEPLER_SEC_DIAG", "1");
+  testing::internal::CaptureStdout();
+  auto result = strategy.run(4);
+  return {std::move(result), testing::internal::GetCapturedStdout()};
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchModelsArrayReadsInTheSameCycle) {
+  const auto [result, output] = runSeededArraySearch(
+      "mem_q[addr]", "{mem_q[addr][3:2], mem_q[addr][0], mem_q[addr][1]}");
+
+  // The inlined read is recognized: the array keeps its port model with a
+  // same-cycle read port. The held-input prefix in the reason shows the
+  // seeded search itself found the trace.
+  EXPECT_NE(output.find("memories: 1 same-cycle read ports; 0 memories searched as registers"),
+            std::string::npos)
+      << output;
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_NE(result.reason.find("rdata["), std::string::npos);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SimulationSeededSearchModelsArrayReadOutsideItsPortsAsRegisters) {
+  const auto [result, output] = runSeededArraySearch("mem_q[addr]", "mem_q[~addr]");
+
+  // Design 2 reads another address: its read formula, renamed to design 1's
+  // cells, is not design 1's read, so the predicate reads the cells directly
+  // and the array is searched as registers.
+  EXPECT_NE(output.find("memories: 0 same-cycle read ports; 1 memories searched as registers"),
+            std::string::npos)
+      << output;
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different);
+  EXPECT_NE(result.reason.find("rdata["), std::string::npos);
+  EXPECT_NE(result.reason.find("Held inputs for cycles"), std::string::npos);
+}
+
 TEST_F(SequentialEquivalenceStrategyTests,
        SimulationSeededSearchStructuralEnlargementReachesBeyondDepth) {
   NLUniverse::create();

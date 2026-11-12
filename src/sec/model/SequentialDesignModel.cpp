@@ -4348,6 +4348,12 @@ void substituteMemoryReads(SequentialDesignModel& model) {
       return;
     }
   }
+  for (auto& [key, expr] : model.memoryReadExprByKey) {
+    if (const auto varIt = model.inputVarByKey.find(key);
+        varIt != model.inputVarByKey.end()) {
+      expr = formulas.at(varIt->second);
+    }
+  }
   std::unordered_map<BoolExpr*, BoolExpr*> memo;
   for (auto& [key, expr] : model.nextStateExprByStateKey) {
     if (model.memoryReadExprByKey.find(key) == model.memoryReadExprByKey.end()) {
