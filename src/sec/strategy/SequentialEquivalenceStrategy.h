@@ -12,6 +12,7 @@
 #include "../../utils/DesignBoundary.h"
 #include "export/Btor2ExportOptions.h"
 #include "proof/InternalRelations.h"
+#include "search/SimulationSeededSearchOptions.h"
 
 namespace naja::NL {
 class SNLDesign;
@@ -117,6 +118,9 @@ class SequentialEquivalenceStrategy {
   void setInternalRelationOptions(InternalRelationOptions options) {
     internalRelationOptions_ = options;
   }
+  void setSimulationSeededSearchOptions(SimulationSeededSearchOptions options) {
+    seededSearchOptions_ = options;
+  }
   SequentialEquivalenceResult runExtractedModels(
       const SequentialDesignModel& model0,
       const SequentialDesignModel& model1,
@@ -132,6 +136,7 @@ class SequentialEquivalenceStrategy {
   Btor2ExportOptions exportOptions_;
   BoundaryPairs boundaryPairs_;
   InternalRelationOptions internalRelationOptions_;
+  SimulationSeededSearchOptions seededSearchOptions_;
 };
 
 namespace detail {

@@ -81,13 +81,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
+      "[--report-skipped-pos] [--use-scopes] [--scope-refinement <true|false>] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] [--sec-seed-abstraction-layers <n>] [--sec-seed-abstraction-iterations <n>] [--sec-seed-abstraction-conflicts <n>] [--sec-seed-abstraction-instance <true|false>] [--sec-seed-probe-depth <n>] [--sec-seed-probe-conflicts <n>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
+      "[--report-skipped-pos] [--use-scopes] [--scope-refinement <true|false>] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--sec-seed-cycles <n>] [--sec-seed-trials <n>] [--sec-seed-depth <n>] [--sec-seed-enlarge <n>] [--sec-seed-enlarge-cubes <n>] [--sec-seed-waypoint-hops <n>] [--sec-seed-waypoint-depth <n>] [--sec-seed-waypoint-layers <n>] [--sec-seed-waypoint-conflicts <n>] [--sec-seed-abstraction-layers <n>] [--sec-seed-abstraction-iterations <n>] [--sec-seed-abstraction-conflicts <n>] [--sec-seed-abstraction-instance <true|false>] [--sec-seed-probe-depth <n>] [--sec-seed-probe-conflicts <n>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -495,6 +495,21 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "allow_x_equality_in_internal_relations",
       "binary_relation_round",
       "sec_reset",
+      "sec_seed_cycles",
+      "sec_seed_trials",
+      "sec_seed_depth",
+      "sec_seed_enlarge",
+      "sec_seed_enlarge_cubes",
+      "sec_seed_waypoint_hops",
+      "sec_seed_waypoint_depth",
+      "sec_seed_waypoint_layers",
+      "sec_seed_waypoint_conflicts",
+      "sec_seed_abstraction_layers",
+      "sec_seed_abstraction_iterations",
+      "sec_seed_abstraction_conflicts",
+      "sec_seed_abstraction_instance",
+      "sec_seed_probe_depth",
+      "sec_seed_probe_conflicts",
       "btor2_export",
       "btor2_export_path",
       "dump_only",
@@ -507,6 +522,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "log_level",
       "log_file",
       "use_scopes",
+      "scope_refinement",
       "clean_scopes",
       "cnf_export",
       "cnf_export_path",
@@ -1368,6 +1384,8 @@ static int KeplerFormalMainImpl(
   KEPLER_FORMAL::SEC::InternalRelationOptions internalRelationOptions;
   bool internalRelationOptionsExplicit = false;
   bool secResetExplicit = false;
+  KEPLER_FORMAL::SEC::SimulationSeededSearchOptions seededSearchOptions;
+  bool seededSearchExplicit = false;
   size_t secMaxK = kDefaultSecMaxK;
   bool secMaxKExplicit = false;
   // Basic argument sanity
@@ -1387,6 +1405,7 @@ static int KeplerFormalMainImpl(
   std::string logFileName;
 
   bool useScopes = false;
+  bool scopeRefinement = true;
   bool cleanScopes = false;
   bool dumpCnf = false;
   bool dumpPoCnf = false;
@@ -1573,6 +1592,52 @@ static int KeplerFormalMainImpl(
           secResetExplicit = true;
         }
 
+        const auto parseSeededSearchKey = [&](const char* key, size_t& target) {
+          if (!cfg[key]) {
+            return true;
+          }
+          if (!cfg[key].IsScalar()) {
+            SPDLOG_CRITICAL("{} must be a scalar", key);
+            return false;
+          }
+          std::string seedError;
+          if (!parseNonNegativeSizeToken(
+                  cfg[key].as<std::string>(), key, target, seedError)) {
+            SPDLOG_CRITICAL("Invalid {} in config: {}", key, seedError);
+            return false;
+          }
+          seededSearchExplicit = true;
+          return true;
+        };
+        if (!parseSeededSearchKey("sec_seed_cycles", seededSearchOptions.prefixCycles) ||
+            !parseSeededSearchKey("sec_seed_trials", seededSearchOptions.trials) ||
+            !parseSeededSearchKey("sec_seed_depth", seededSearchOptions.searchDepth) ||
+            !parseSeededSearchKey("sec_seed_enlarge", seededSearchOptions.enlargeSteps) ||
+            !parseSeededSearchKey("sec_seed_enlarge_cubes", seededSearchOptions.enlargeCubes) ||
+            !parseSeededSearchKey("sec_seed_waypoint_hops", seededSearchOptions.waypointHops) ||
+            !parseSeededSearchKey("sec_seed_waypoint_depth", seededSearchOptions.waypointDepth) ||
+            !parseSeededSearchKey("sec_seed_waypoint_layers", seededSearchOptions.waypointLayers) ||
+            !parseSeededSearchKey("sec_seed_waypoint_conflicts", seededSearchOptions.waypointConflicts) ||
+            !parseSeededSearchKey("sec_seed_abstraction_layers", seededSearchOptions.abstractionLayers) ||
+            !parseSeededSearchKey("sec_seed_abstraction_iterations", seededSearchOptions.abstractionIterations) ||
+            !parseSeededSearchKey("sec_seed_abstraction_conflicts", seededSearchOptions.abstractionConflicts) ||
+            !parseSeededSearchKey("sec_seed_probe_depth", seededSearchOptions.probeDepth) ||
+            !parseSeededSearchKey("sec_seed_probe_conflicts", seededSearchOptions.probeConflicts)) {
+          return EXIT_FAILURE;
+        }
+        if (cfg["sec_seed_abstraction_instance"]) {
+          std::string error;
+          if (!cfg["sec_seed_abstraction_instance"].IsScalar() ||
+              !parseBooleanToken(cfg["sec_seed_abstraction_instance"].as<std::string>(),
+                                 "sec_seed_abstraction_instance",
+                                 seededSearchOptions.abstractionByInstance, error)) {
+            SPDLOG_CRITICAL("Invalid sec_seed_abstraction_instance: expected true or false ({})",
+                            error);
+            return EXIT_FAILURE;
+          }
+          seededSearchExplicit = true;
+        }
+
         std::string btor2ExportError;
         if (!btor2ExportConfig.parseYaml(cfg, btor2ExportError)) {
           SPDLOG_CRITICAL("Invalid BTOR2 export config: {}", btor2ExportError);
@@ -1624,6 +1689,11 @@ static int KeplerFormalMainImpl(
           useScopes = cfg["use_scopes"].as<bool>();
         }
         // LCOV_EXCL_STOP
+
+        // scope_refinement (SEC with use_scopes, default true)
+        if (cfg["scope_refinement"] && cfg["scope_refinement"].IsScalar()) {
+          scopeRefinement = cfg["scope_refinement"].as<bool>();
+        }
 
         // clean_scopes
         if (cfg["clean_scopes"] && cfg["clean_scopes"].IsScalar()) {
@@ -1875,13 +1945,15 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--scope-refinement") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction" ? latchAbstraction
+                      : arg == "--data-latch-model"  ? dataLatchModel
+                                                     : scopeRefinement;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -1920,6 +1992,57 @@ static int KeplerFormalMainImpl(
           return EXIT_FAILURE;
         }
         secResetExplicit = true;
+        parseStart += 2;
+        continue;
+      }
+      if (arg == "--sec-seed-abstraction-instance") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string error;
+        if (!parseBooleanToken(argv[parseStart + 1], arg,
+                               seededSearchOptions.abstractionByInstance, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        seededSearchExplicit = true;
+        parseStart += 2;
+        continue;
+      }
+      if (arg == "--sec-seed-cycles" || arg == "--sec-seed-trials" ||
+          arg == "--sec-seed-depth" || arg == "--sec-seed-enlarge" ||
+          arg == "--sec-seed-enlarge-cubes" || arg == "--sec-seed-waypoint-hops" ||
+          arg == "--sec-seed-waypoint-depth" || arg == "--sec-seed-waypoint-layers" ||
+          arg == "--sec-seed-waypoint-conflicts" || arg == "--sec-seed-abstraction-layers" ||
+          arg == "--sec-seed-abstraction-iterations" || arg == "--sec-seed-abstraction-conflicts" ||
+          arg == "--sec-seed-probe-depth" || arg == "--sec-seed-probe-conflicts") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        size_t& target = arg == "--sec-seed-cycles"
+            ? seededSearchOptions.prefixCycles
+            : arg == "--sec-seed-trials" ? seededSearchOptions.trials
+            : arg == "--sec-seed-depth" ? seededSearchOptions.searchDepth
+            : arg == "--sec-seed-enlarge" ? seededSearchOptions.enlargeSteps
+            : arg == "--sec-seed-enlarge-cubes" ? seededSearchOptions.enlargeCubes
+            : arg == "--sec-seed-waypoint-hops" ? seededSearchOptions.waypointHops
+            : arg == "--sec-seed-waypoint-depth" ? seededSearchOptions.waypointDepth
+            : arg == "--sec-seed-waypoint-layers" ? seededSearchOptions.waypointLayers
+            : arg == "--sec-seed-waypoint-conflicts" ? seededSearchOptions.waypointConflicts
+            : arg == "--sec-seed-abstraction-layers" ? seededSearchOptions.abstractionLayers
+            : arg == "--sec-seed-abstraction-iterations" ? seededSearchOptions.abstractionIterations
+            : arg == "--sec-seed-abstraction-conflicts" ? seededSearchOptions.abstractionConflicts
+            : arg == "--sec-seed-probe-depth" ? seededSearchOptions.probeDepth
+                                              : seededSearchOptions.probeConflicts;
+        std::string seedError;
+        if (!parseNonNegativeSizeToken(
+                argv[parseStart + 1], arg.c_str(), target, seedError)) {
+          SPDLOG_CRITICAL("Invalid SEC seeded search option: {}", seedError);
+          return EXIT_FAILURE;
+        }
+        seededSearchExplicit = true;
         parseStart += 2;
         continue;
       }
@@ -2101,13 +2224,15 @@ static int KeplerFormalMainImpl(
         ++i;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--scope-refinement") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction" ? latchAbstraction
+                      : arg == "--data-latch-model"  ? dataLatchModel
+                                                     : scopeRefinement;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2144,6 +2269,54 @@ static int KeplerFormalMainImpl(
           return EXIT_FAILURE;
         }
         secResetExplicit = true;
+        continue;
+      }
+      if (arg == "--sec-seed-abstraction-instance") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing boolean value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string error;
+        if (!parseBooleanToken(argv[++i], arg,
+                               seededSearchOptions.abstractionByInstance, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        seededSearchExplicit = true;
+        continue;
+      }
+      if (arg == "--sec-seed-cycles" || arg == "--sec-seed-trials" ||
+          arg == "--sec-seed-depth" || arg == "--sec-seed-enlarge" ||
+          arg == "--sec-seed-enlarge-cubes" || arg == "--sec-seed-waypoint-hops" ||
+          arg == "--sec-seed-waypoint-depth" || arg == "--sec-seed-waypoint-layers" ||
+          arg == "--sec-seed-waypoint-conflicts" || arg == "--sec-seed-abstraction-layers" ||
+          arg == "--sec-seed-abstraction-iterations" || arg == "--sec-seed-abstraction-conflicts" ||
+          arg == "--sec-seed-probe-depth" || arg == "--sec-seed-probe-conflicts") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing value after {}", arg);
+          return EXIT_FAILURE;
+        }
+        size_t& target = arg == "--sec-seed-cycles"
+            ? seededSearchOptions.prefixCycles
+            : arg == "--sec-seed-trials" ? seededSearchOptions.trials
+            : arg == "--sec-seed-depth" ? seededSearchOptions.searchDepth
+            : arg == "--sec-seed-enlarge" ? seededSearchOptions.enlargeSteps
+            : arg == "--sec-seed-enlarge-cubes" ? seededSearchOptions.enlargeCubes
+            : arg == "--sec-seed-waypoint-hops" ? seededSearchOptions.waypointHops
+            : arg == "--sec-seed-waypoint-depth" ? seededSearchOptions.waypointDepth
+            : arg == "--sec-seed-waypoint-layers" ? seededSearchOptions.waypointLayers
+            : arg == "--sec-seed-waypoint-conflicts" ? seededSearchOptions.waypointConflicts
+            : arg == "--sec-seed-abstraction-layers" ? seededSearchOptions.abstractionLayers
+            : arg == "--sec-seed-abstraction-iterations" ? seededSearchOptions.abstractionIterations
+            : arg == "--sec-seed-abstraction-conflicts" ? seededSearchOptions.abstractionConflicts
+            : arg == "--sec-seed-probe-depth" ? seededSearchOptions.probeDepth
+                                              : seededSearchOptions.probeConflicts;
+        std::string seedError;
+        if (!parseNonNegativeSizeToken(argv[++i], arg.c_str(), target, seedError)) {
+          SPDLOG_CRITICAL("Invalid SEC seeded search option: {}", seedError);
+          return EXIT_FAILURE;
+        }
+        seededSearchExplicit = true;
         continue;
       }
       if (arg == "--allow-boundary-mismatch") {
@@ -2209,6 +2382,10 @@ static int KeplerFormalMainImpl(
         reportSkippedPOs = true;
         continue;
         // LCOV_EXCL_STOP
+      }
+      if (arg == "--use-scopes") {
+        useScopes = true;
+        continue;
       }
       // LCOV_EXCL_START
       if (arg == "--design1_format" || arg == "--design2_format") {
@@ -2532,6 +2709,10 @@ static int KeplerFormalMainImpl(
     SPDLOG_CRITICAL("sec_reset/--sec-reset-* is only supported with SEC verification");
     return EXIT_FAILURE;
   }
+  if (verificationMode == VerificationMode::LEC && seededSearchExplicit) {
+    SPDLOG_CRITICAL("sec_seed_*/--sec-seed-* is only supported with SEC verification");
+    return EXIT_FAILURE;
+  }
   if (!boundaryPairs.empty() && (useScopes || cleanScopes)) {
     SPDLOG_CRITICAL(
         "set_as_boundary/--set-as-boundary cannot be combined with scope extraction or cleaning");
@@ -2545,11 +2726,21 @@ static int KeplerFormalMainImpl(
     }
   }
   if (verificationMode == VerificationMode::SEC) {
-    if (useScopes || cleanScopes) {
+    if (cleanScopes) {
       // LCOV_EXCL_START
-      SPDLOG_CRITICAL("SEC verification does not support scope extraction/cleaning");
+      SPDLOG_CRITICAL("SEC verification does not support scope cleaning");
       return EXIT_FAILURE;
       // LCOV_EXCL_STOP
+    }
+    if (useScopes && compactMode) {
+      SPDLOG_CRITICAL(
+          "use_scopes/--use-scopes needs both designs loaded at once and cannot "
+          "be combined with compact mode");
+      return EXIT_FAILURE;
+    }
+    if (useScopes && btor2ExportConfig.options().enabled()) {
+      SPDLOG_CRITICAL("use_scopes/--use-scopes cannot be combined with BTOR2 export");
+      return EXIT_FAILURE;
     }
     if (dumpCnf) {
       // LCOV_EXCL_START
@@ -3316,6 +3507,7 @@ static int KeplerFormalMainImpl(
               secResetSpec,
               btor2ExportConfig.options());
           strategy.setInternalRelationOptions(internalRelationOptions);
+          strategy.setSimulationSeededSearchOptions(seededSearchOptions);
           return emitSecResult(
               strategy.runExtractedModels(model0, model0, secMaxK));
               // LCOV_EXCL_STOP
@@ -3345,6 +3537,7 @@ static int KeplerFormalMainImpl(
             secResetSpec,
             btor2ExportConfig.options());
         strategy.setInternalRelationOptions(internalRelationOptions);
+        strategy.setSimulationSeededSearchOptions(seededSearchOptions);
         return emitSecResult(
             strategy.runExtractedModels(model0, model1, secMaxK));
       // LCOV_EXCL_START
@@ -3645,6 +3838,185 @@ static int KeplerFormalMainImpl(
   // LCOV_EXCL_STOP
     try {
       // LCOV_EXCL_START
+      if (useScopes) {
+        // Scoped SEC: compare the hierarchies bottom-up and prove only the
+        // module pairs whose own implementation differs, each with its ports
+        // as the environment. Identical environments make a proof of every
+        // scope a proof of the tops. A scope difference holds under free scope
+        // ports only; with scope refinement it is checked again in the pairs
+        // that instantiate the scope, up to the tops, so that a reported
+        // difference is one of the tops (localization refinement: Kurshan
+        // 1994; Clarke, Grumberg, Jha, Lu and Veith, CAV 2000).
+        // Naja may have replaced spdlog's default logger while loading
+        // SystemVerilog; report the scopes through the run logger.
+        if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
+          spdlog::set_default_logger(mainLogger);
+        }
+        ScopeExtraction extractor(top0, top1);
+        extractor.collectVerificationScopes();
+        const auto scopes = extractor.getScopesToVerify();
+        SPDLOG_INFO(
+            "SEC scope extraction: {} model pair(s) compared, {} identical in "
+            "their own implementation, {} scope(s) to verify",
+            extractor.getComparedModelPairCount(),
+            extractor.getIdenticalModelPairCount(),
+            scopes.size());
+        if (scopes.empty()) {
+          KEPLER_FORMAL::SEC::SequentialEquivalenceResult identical;
+          identical.status =
+              KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Equivalent;
+          identical.reason =
+              "the two hierarchies are structurally identical; no scope to prove";
+          SPDLOG_INFO("SEC scope extraction: {}", identical.reason);
+          return emitSecResult(identical);
+        }
+        const auto statusName =
+            [](KEPLER_FORMAL::SEC::SequentialEquivalenceStatus status) {
+              using Status = KEPLER_FORMAL::SEC::SequentialEquivalenceStatus;
+              switch (status) {
+                case Status::Different: return "Different";
+                case Status::Inconclusive: return "Inconclusive";
+                case Status::Unsupported: return "Unsupported";
+                case Status::PartiallyProved: return "PartiallyProved";
+                case Status::Exported: return "Exported";
+                case Status::Equivalent: return "Equivalent";
+              }
+              return "Unknown";
+            };
+        const auto rank =
+            [](KEPLER_FORMAL::SEC::SequentialEquivalenceStatus status) {
+              using Status = KEPLER_FORMAL::SEC::SequentialEquivalenceStatus;
+              switch (status) {
+                case Status::Different: return 5;
+                case Status::Inconclusive: return 4;
+                case Status::Unsupported: return 3;
+                case Status::PartiallyProved: return 2;
+                case Status::Exported: return 1;
+                case Status::Equivalent: return 0;
+              }
+              return 4;
+            };
+        using ScopePair = std::pair<naja::NL::SNLDesign*, naja::NL::SNLDesign*>;
+        const auto scopeName = [](const ScopePair& scope) {
+          return scope.first->getName().getString() + " vs " +
+                 scope.second->getName().getString();
+        };
+        // Regions are verified in name order so that runs are reproducible.
+        const auto byName = [&scopeName](const ScopePair& a, const ScopePair& b) {
+          const auto nameA = scopeName(a);
+          const auto nameB = scopeName(b);
+          return nameA != nameB ? nameA < nameB : a < b;
+        };
+        std::set<ScopePair, decltype(byName)> pending(byName);
+        pending.insert(scopes.begin(), scopes.end());
+        std::map<ScopePair, std::string> widenedFrom;
+        std::vector<std::pair<ScopePair, KEPLER_FORMAL::SEC::SequentialEquivalenceResult>>
+            results;
+        // A region inside a pending or verified region is decided by that one.
+        const auto enclosed = [&](const ScopePair& region) {
+          for (const auto& other : pending) {
+            if (extractor.isBelow(region, other)) {
+              return true;
+            }
+          }
+          for (const auto& [other, result] : results) {
+            if (extractor.isBelow(region, other)) {
+              return true;
+            }
+          }
+          return false;
+        };
+        SPDLOG_INFO("SEC scope refinement: {}", scopeRefinement ? "enabled" : "disabled");
+        size_t scopeIndex = 0;
+        while (!pending.empty()) {
+          const ScopePair region = *pending.begin();
+          pending.erase(pending.begin());
+          if (enclosed(region)) {
+            SPDLOG_INFO("SEC scope {}: decided by an enclosing scope", scopeName(region));
+            continue;
+          }
+          ++scopeIndex;
+          const auto origin = widenedFrom.find(region);
+          SPDLOG_INFO("SEC scope {}: {}{}", scopeIndex, scopeName(region),
+                      origin == widenedFrom.end()
+                          ? std::string()
+                          : " (widened from " + origin->second + ")");
+          KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
+              region.first,
+              region.second,
+              solverType,
+              secEngine,
+              secEncoding,
+              secResetSpec,
+              btor2ExportConfig.options());
+          strategy.setInternalRelationOptions(internalRelationOptions);
+          strategy.setSimulationSeededSearchOptions(seededSearchOptions);
+          auto result = strategy.run(secMaxK);
+          SPDLOG_INFO("SEC scope {}: {} finished with status {}", scopeIndex,
+                      scopeName(region), statusName(result.status));
+          const bool different =
+              result.status == KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Different;
+          const auto parents = extractor.getParentPairs(region.first, region.second);
+          if (different && scopeRefinement && !parents.empty()) {
+            // The trace drives the scope ports freely; check the difference
+            // where the surrounding logic drives them.
+            SPDLOG_INFO(
+                "SEC scope {}: difference under free scope ports; widening to {} "
+                "enclosing pair(s)",
+                scopeName(region), parents.size());
+            for (const auto& parent : parents) {
+              widenedFrom.emplace(
+                  parent, origin == widenedFrom.end() ? scopeName(region) : origin->second);
+              pending.insert(parent);
+            }
+            continue;
+          }
+          result.reason = "scope " + scopeName(region) +
+                          (origin == widenedFrom.end()
+                               ? std::string()
+                               : " (widened from " + origin->second + ")") +
+                          (result.reason.empty() ? "" : ": " + result.reason);
+          results.emplace_back(region, std::move(result));
+          if (different) {
+            if (parents.empty()) {
+              SPDLOG_INFO(
+                  "SEC scope {}: difference found at the tops; the remaining scopes "
+                  "are not checked",
+                  scopeName(region));
+            } else {
+              SPDLOG_INFO(
+                  "SEC scope {}: difference found under free scope ports; the "
+                  "remaining scopes are not checked",
+                  scopeName(region));
+            }
+            break;
+          }
+        }
+        // The verdict combines the outermost verified regions: a region
+        // verified before an enclosing one was widened to is decided by it.
+        std::optional<KEPLER_FORMAL::SEC::SequentialEquivalenceResult> worst;
+        for (const auto& [region, result] : results) {
+          bool inner = false;
+          for (const auto& [other, otherResult] : results) {
+            if (extractor.isBelow(region, other)) {
+              inner = true;
+              break;
+            }
+          }
+          if (!inner && (!worst.has_value() || rank(result.status) > rank(worst->status))) {
+            worst = result;
+          }
+        }
+        if (!worst.has_value()) {
+          // LCOV_EXCL_START
+          KEPLER_FORMAL::SEC::SequentialEquivalenceResult none;
+          none.status = KEPLER_FORMAL::SEC::SequentialEquivalenceStatus::Inconclusive;
+          none.reason = "no scope was verified";
+          return emitSecResult(none);
+          // LCOV_EXCL_STOP
+        }
+        return emitSecResult(*worst);
+      }
       KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
           top0,
           top1,
@@ -3654,6 +4026,7 @@ static int KeplerFormalMainImpl(
           secResetSpec,
           btor2ExportConfig.options());
       strategy.setInternalRelationOptions(internalRelationOptions);
+      strategy.setSimulationSeededSearchOptions(seededSearchOptions);
       strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP

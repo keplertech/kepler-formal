@@ -1062,6 +1062,16 @@ public:
   }
 
   // LCOV_EXCL_START
+  // Incremental bounded search declares new variables after solve calls.
+  // CaDiCaL's variable factoring rejects that, so it is disabled; every other
+  // default stays, because finding a deep satisfying trace is hard SAT work.
+  void configureForSecIncrementalBoundedSearch() {
+    if (solverType_ != KEPLER_FORMAL::Config::SolverType::CADICAL) {
+      return;  // LCOV_EXCL_LINE
+    }
+    setCadicalOptionIfSupported(cadicalSolver_.get(), "factor", 0);
+  }
+
   void configureForSecResetExpressionProof(size_t coneSymbols = 0) {
     if (solverType_ != KEPLER_FORMAL::Config::SolverType::KISSAT) {
       return;  // LCOV_EXCL_LINE
