@@ -34,6 +34,10 @@ struct BoundaryPort {
   // False only for an input pin without a net.  Such a pin has no driving
   // cone: it is skipped when the other side leaves it unconnected too.
   bool connected = true;
+  // True for a pin of a leaf the tool abstracts by itself, such as a paired
+  // memory. Such a pin keeps its hierarchical path key and display name, so
+  // the two designs align it by instance path instead of by a pair index.
+  bool pathKeyed = false;
 };
 
 class BoundarySelection {
@@ -53,10 +57,22 @@ class LeafBoundary {
   using DNLID = naja::DNL::DNLID;
   LeafBoundary(const naja::DNL::DNLFull& dnl,
                const BoundaryPairs& pairs, size_t side);
+  // Also treats each leaf of `abstractedLeaves` as a boundary whose pins are
+  // path keyed. A leaf a user pair already selects is left to that pair. Every
+  // leaf must pass getAbstractedLeafObstacle.
+  LeafBoundary(const naja::DNL::DNLFull& dnl,
+               const BoundaryPairs& pairs, size_t side,
+               const std::vector<DNLID>& abstractedLeaves);
+  // Why this leaf cannot be abstracted as a boundary, or an empty string when
+  // it can: the same pin and connectivity rules as a user-selected leaf.
+  static std::string getAbstractedLeafObstacle(const naja::DNL::DNLFull& dnl,
+                                              DNLID instanceID);
   const std::vector<BoundaryPort>& getPorts() const { return ports_; }
   const std::vector<DNLID>& getInputs() const { return inputs_; }
   const std::vector<DNLID>& getOutputs() const { return outputs_; }
   bool containsInstance(DNLID id) const { return instances_.count(id) != 0; }
+  // True for a leaf taken from `abstractedLeaves` rather than from a user pair.
+  bool isAbstractedLeaf(DNLID id) const { return abstractedLeaves_.count(id) != 0; }
   const BoundaryPort* getPort(DNLID id) const;
   bool isInput(DNLID id) const {
     const auto* port = getPort(id);
@@ -67,6 +83,7 @@ class LeafBoundary {
   std::unordered_map<DNLID, size_t> portIndices_;
   std::vector<DNLID> inputs_, outputs_;
   std::unordered_set<DNLID> instances_;
+  std::unordered_set<DNLID> abstractedLeaves_;
 };
 
 // Check that the two independently selected interfaces expose the same

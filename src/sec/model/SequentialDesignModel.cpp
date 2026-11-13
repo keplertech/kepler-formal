@@ -2474,6 +2474,16 @@ struct ExtractContext {
   // LCOV_EXCL_STOP
   decltype(naja::DNL::get()) dnl = nullptr;
   const LeafBoundary* boundary = nullptr;
+  SequentialExtractOptions options;
+  BoundaryPairs boundaryPairs;
+  size_t boundarySide = 0;
+  // Owns the boundary when abstracted memories join the user-selected leaves.
+  std::unique_ptr<LeafBoundary> memoryBoundary;
+  // Index into model.abstractedMemories by memory instance.
+  std::unordered_map<naja::DNL::DNLID, size_t> abstractedMemoryByInstance;
+  // Why a memory that was to be abstracted keeps its bit-level model.
+  std::unordered_map<naja::DNL::DNLID, std::string>
+      memoryAbstractionObstacleByInstance;
   std::unordered_map<naja::DNL::DNLID, SignalKey> inputKeyByTerm;
   std::unordered_map<naja::DNL::DNLID, SignalKey> topOutputKeyByTerm;
   // LCOV_EXCL_START
@@ -2575,9 +2585,257 @@ void logUnpublishedTransitionSupport(
   std::fflush(stderr);  // LCOV_EXCL_LINE
 }
 
-void collectInitialBuilderBoundary(ExtractContext& ctx) {
+bool supportsStructuredMemoryModel(
+    const naja::NL::SNLDesignModeling::MemoryInterface& interface);
+
+// The bit-level model reads a write enable that is unconnected, undriven or
+// an X or Z constant as a write port that never writes. Compared as a pin,
+// such an enable would be an unknown value instead, which agrees with any
+// enable of the other design.
+bool hasUndefinedWriteEnable(
+    const naja::DNL::DNLFull& dnl,
+    const naja::DNL::DNLInstanceFull& instance,
+    const naja::NL::SNLDesignModeling::MemoryInterface& interface) {
+  for (const auto& writePort : interface.writePorts) {
+    for (auto* enableTerm : writePort.enables) {
+      const auto& term = instance.getTerminalFromBitTerm(enableTerm);
+      if (term.isNull() || term.getIsoID() == naja::DNL::DNLID_MAX) {
+        return true;
+      }
+      const auto& iso = dnl.getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+      if (iso.isConstantX() || iso.isConstantZ() ||
+          (!iso.isConstant() && iso.getDrivers().empty())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Walks from a clock pin back to what drives it. A top-level input reached
+// through combinational cells is a source of the clock; anything else, such
+// as a register, a constant or a net without a single driver, makes the clock
+// internal.
+void collectClockPinSources(naja::DNL::DNLFull* dnl,
+                            const LeafBoundary* boundary,
+                            naja::DNL::DNLID termID,
+                            std::unordered_set<naja::DNL::DNLID>& visited,
+                            MemoryClockSources& sources) {
+  if (termID == naja::DNL::DNLID_MAX) {
+    sources.internalSource = true;
+    return;
+  }
+  if (!visited.insert(termID).second) {
+    return;
+  }
+  const auto& term = dnl->getDNLTerminalFromID(termID);
+  if (term.isNull()) {
+    sources.internalSource = true;  // LCOV_EXCL_LINE
+    return;  // LCOV_EXCL_LINE
+  }
+  const bool isOutput = term.getSnlBitTerm()->getDirection() ==
+                        naja::NL::SNLBitTerm::Direction::Output;
+  if (term.isTopPort()) {
+    if (isOutput) {
+      sources.internalSource = true;  // LCOV_EXCL_LINE
+    } else {
+      sources.topInputs.push_back(getTerminalPathKey(term));
+    }
+    return;
+  }
+  if (!isOutput) {
+    // A pin that reads a net: continue from the driver of that net.
+    const auto isoID = term.getIsoID();
+    if (isoID == naja::DNL::DNLID_MAX) {
+      sources.internalSource = true;
+      return;
+    }
+    const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+    if (iso.isConstant() || iso.getDrivers().size() != 1) {
+      sources.internalSource = true;
+      return;
+    }
+    collectClockPinSources(
+        dnl, boundary, iso.getDrivers().front(), visited, sources);
+    return;
+  }
+  // An output pin of a cell: continue through a combinational cell only.
+  const auto& instance = term.getDNLInstance();
+  const auto* model = instance.getSNLModel();
+  if ((boundary != nullptr && boundary->containsInstance(instance.getID())) ||
+      model == nullptr ||
+      naja::NL::SNLDesignModeling::hasSequentialModel(model) ||
+      naja::NL::SNLDesignModeling::hasMemoryInterface(model)) {
+    sources.internalSource = true;
+    return;
+  }
+  bool hasInput = false;
+  for (auto* inputBitTerm :
+       naja::NL::SNLDesignModeling::getCombinatorialInputs(
+           const_cast<naja::NL::SNLBitTerm*>(term.getSnlBitTerm()))) {
+    const auto& inputTerm = instance.getTerminalFromBitTerm(inputBitTerm);
+    if (inputTerm.isNull()) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    hasInput = true;
+    collectClockPinSources(dnl, boundary, inputTerm.getID(), visited, sources);
+  }
+  if (!hasInput) {
+    sources.internalSource = true;
+  }
+}
+
+// The clock of a memory as the netlist shows it: see MemoryClockSources. The
+// pins are the clock of the interface and the clocks of its write ports.
+MemoryClockSources collectMemoryClockSources(
+    naja::DNL::DNLFull* dnl,
+    const LeafBoundary* boundary,
+    const naja::DNL::DNLInstanceFull& instance,
+    const naja::NL::SNLDesignModeling::MemoryInterface& interface) {
+  std::vector<naja::NL::SNLBitTerm*> clockTerms;
+  const auto addClockTerm = [&](naja::NL::SNLBitTerm* clockTerm) {
+    if (clockTerm != nullptr &&
+        std::find(clockTerms.begin(), clockTerms.end(), clockTerm) ==
+            clockTerms.end()) {
+      clockTerms.push_back(clockTerm);
+    }
+  };
+  addClockTerm(interface.clock);
+  for (const auto& writePort : interface.writePorts) {
+    addClockTerm(writePort.clock);
+  }
+
+  MemoryClockSources sources;
+  sources.internalSource = clockTerms.empty();
+  std::unordered_set<naja::DNL::DNLID> visited;
+  for (auto* clockTerm : clockTerms) {
+    const auto& term = instance.getTerminalFromBitTerm(clockTerm);
+    collectClockPinSources(
+        dnl, boundary, term.isNull() ? naja::DNL::DNLID_MAX : term.getID(),
+        visited, sources);
+  }
+  std::sort(sources.topInputs.begin(), sources.topInputs.end());
+  sources.topInputs.erase(
+      std::unique(sources.topInputs.begin(), sources.topInputs.end()),
+      sources.topInputs.end());
+  return sources;
+}
+
+// The clock domain of a memory: the one clock carrier among the top-level
+// inputs that drive its clock pins, or their only driver when no carrier is
+// among them. Empty when the clock is internal or ambiguous; the memory then
+// takes no part in the clock domain checks.
+std::optional<SignalKey> resolveMemoryClockDomain(
+    const SequentialDesignModel& model,
+    const MemoryClockSources& sources) {
+  std::set<SignalKey, SignalKeyLess> carrierDomains;
+  for (const auto& key : sources.topInputs) {
+    const auto varIt = model.inputVarByKey.find(key);
+    if (varIt == model.inputVarByKey.end()) {
+      continue;
+    }
+    for (const auto& carrier : model.clockCarrierClasses) {
+      if (carrier.varID == varIt->second) {
+        carrierDomains.insert(carrier.domain);
+      }
+    }
+  }
+  if (carrierDomains.size() == 1) {
+    return *carrierDomains.begin();
+  }
+  if (carrierDomains.empty() && !sources.internalSource &&
+      sources.topInputs.size() == 1) {
+    return sources.topInputs.front();
+  }
+  return std::nullopt;
+}
+
+// Selects the structured memories to compare at their interface and makes
+// them boundary leaves next to the user-selected ones. A memory keeps its
+// bit-level model, and the reason is recorded, when its path has an unnamed
+// instance, since the two designs could not align it, when one of its write
+// enables is undefined, or when it breaks a boundary leaf rule.
+void abstractStructuredMemories(ExtractContext& ctx, SequentialDesignModel& model) {
+  auto* dnl = naja::DNL::get();
+  std::vector<naja::DNL::DNLID> memoryLeaves;
+  for (const auto leafID : dnl->getLeaves()) {
+    const auto& instance = dnl->getDNLInstanceFromID(leafID);
+    const auto* snlInstance = instance.getSNLInstance();
+    if (!naja::NL::SNLDesignModeling::hasMemoryInterface(snlInstance->getModel())) {
+      continue;
+    }
+    const auto interface =
+        naja::NL::SNLDesignModeling::getMemoryInterface(snlInstance);
+    if (!supportsStructuredMemoryModel(interface)) {
+      continue;
+    }
+    AbstractedMemory memory;
+    bool named = true;
+    for (const auto& name : instance.getPath().getPathNames()) {
+      named = named && !name.empty();
+      memory.instanceKey.first.push_back(name.getID());
+    }
+    if (ctx.options.abstractOnly.has_value() &&
+        ctx.options.abstractOnly->count(memory.instanceKey) == 0) {
+      continue;
+    }
+    std::string obstacle;
+    if (!named) {
+      obstacle = "an instance on its path is unnamed";
+    } else if (hasUndefinedWriteEnable(*dnl, instance, interface)) {
+      obstacle = "a write enable is unconnected, undriven or an X or Z constant";
+    } else {
+      obstacle = LeafBoundary::getAbstractedLeafObstacle(*dnl, leafID);
+    }
+    if (!obstacle.empty()) {
+      ctx.memoryAbstractionObstacleByInstance.emplace(leafID, std::move(obstacle));
+      continue;
+    }
+    for (const auto& name : instance.getPath().getPathNames()) {
+      memory.displayName +=
+          (memory.displayName.empty() ? "" : "/") + name.getString();
+    }
+    memory.signature = snlInstance->getModel()->getName().getString();
+    for (const auto* parameter : snlInstance->getInstParameters()) {
+      memory.signature +=
+          ";" + parameter->getName().getString() + "=" + parameter->getValue();
+    }
+    memory.width = interface.width;
+    memory.depth = interface.depth;
+    ctx.abstractedMemoryByInstance.emplace(leafID, model.abstractedMemories.size());
+    model.abstractedMemories.push_back(std::move(memory));
+    memoryLeaves.push_back(leafID);
+  }
+  if (memoryLeaves.empty()) {
+    return;
+  }
+  ctx.memoryBoundary = std::make_unique<LeafBoundary>(
+      *dnl, ctx.boundaryPairs, ctx.boundarySide, memoryLeaves);
+  // A memory leaf that a user pair selects stays a user boundary.
+  std::vector<AbstractedMemory> kept;
+  std::unordered_map<naja::DNL::DNLID, size_t> keptByInstance;
+  for (const auto leafID : memoryLeaves) {
+    if (ctx.memoryBoundary->isAbstractedLeaf(leafID)) {
+      keptByInstance.emplace(leafID, kept.size());
+      kept.push_back(std::move(
+          model.abstractedMemories[ctx.abstractedMemoryByInstance.at(leafID)]));
+    }
+  }
+  model.abstractedMemories = std::move(kept);
+  ctx.abstractedMemoryByInstance = std::move(keptByInstance);
+}
+
+void collectInitialBuilderBoundary(ExtractContext& ctx, SequentialDesignModel& model) {
   KEPLER_FORMAL::destroyDnl();
   ctx.universe->setTopDesign(ctx.top);
+  if (ctx.options.abstractMemories) {
+    abstractStructuredMemories(ctx, model);
+  }
+  if (ctx.memoryBoundary != nullptr) {
+    ctx.builder.setLeafBoundary(ctx.memoryBoundary.get());
+  } else {
+    ctx.builder.setBoundaryPairs(ctx.boundaryPairs, ctx.boundarySide);
+  }
 
   // Reuse the existing miter frontend to discover the relevant boundary
   // signals before we ask it to build Boolean formulas.
@@ -2607,6 +2865,29 @@ SignalKey boundaryPortKey(const BoundaryPort& port) {
           {static_cast<naja::NL::NLID::DesignObjectID>(port.bit)}};
 }
 
+// Key and display name of a boundary pin. A user-selected leaf pin is keyed
+// by its pair; a path-keyed pin, of an abstracted memory, by its hierarchy.
+SignalKey boundaryTermKey(const BoundaryPort& port,
+                          const naja::DNL::DNLTerminalFull& term) {
+  return port.pathKeyed ? getTerminalPathKey(term) : boundaryPortKey(port);
+}
+
+std::string boundaryTermDisplayName(const BoundaryPort& port,
+                                    const naja::DNL::DNLTerminalFull& term) {
+  return port.pathKeyed ? getTerminalDisplayName(term)
+                        : port.topTermName + "[0]";
+}
+
+AbstractedMemory* findAbstractedMemory(ExtractContext& ctx,
+                                       SequentialDesignModel& model,
+                                       const naja::DNL::DNLTerminalFull& term) {
+  const auto found =
+      ctx.abstractedMemoryByInstance.find(term.getDNLInstance().getID());
+  return found == ctx.abstractedMemoryByInstance.end()
+             ? nullptr
+             : &model.abstractedMemories[found->second];
+}
+
 void collectTopInterfaceTerms(ExtractContext& ctx, SequentialDesignModel& model) {
   const auto topInstance = ctx.dnl->getTop();
   for (naja::DNL::DNLID termID = topInstance.getTermIndexes().first;
@@ -2627,14 +2908,24 @@ void collectTopInterfaceTerms(ExtractContext& ctx, SequentialDesignModel& model)
   if (ctx.boundary) {
     for (const auto termID : ctx.boundary->getOutputs()) {
       const auto& port = *ctx.boundary->getPort(termID);
-      const auto key = boundaryPortKey(port);
-      model.displayNameByKey.emplace(key, port.topTermName + "[0]");
+      const auto& term = ctx.dnl->getDNLTerminalFromID(termID);
+      const auto key = boundaryTermKey(port, term);
+      model.displayNameByKey.emplace(key, boundaryTermDisplayName(port, term));
       ctx.topOutputKeys.insert(key);
       ctx.topOutputKeyByTerm.emplace(termID, key);
       ctx.allObservedOutputs.insert(key);
+      if (auto* memory = findAbstractedMemory(ctx, model, term)) {
+        memory->interfaceKeys.push_back(key);
+      }
     }
     for (const auto termID : ctx.boundary->getInputs()) {
-      ctx.topInputKeys.insert(boundaryPortKey(*ctx.boundary->getPort(termID)));
+      const auto& port = *ctx.boundary->getPort(termID);
+      const auto& term = ctx.dnl->getDNLTerminalFromID(termID);
+      const auto key = boundaryTermKey(port, term);
+      ctx.topInputKeys.insert(key);
+      if (auto* memory = findAbstractedMemory(ctx, model, term)) {
+        memory->readDataKeys.push_back(key);
+      }
     }
   }
 }
@@ -2727,9 +3018,9 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
     const auto& term = ctx.dnl->getDNLTerminalFromID(inputTermID);
     if (ctx.boundary && ctx.boundary->isInput(inputTermID)) {
       const auto& port = *ctx.boundary->getPort(inputTermID);
-      const auto key = boundaryPortKey(port);
+      const auto key = boundaryTermKey(port, term);
       ctx.inputKeyByTerm.emplace(inputTermID, key);
-      model.displayNameByKey.emplace(key, port.topTermName + "[0]");
+      model.displayNameByKey.emplace(key, boundaryTermDisplayName(port, term));
       ctx.environmentInputs.insert(key);
       continue;
     }
@@ -3091,6 +3382,23 @@ void appendPendingMemoryInstance(
   pending.resetMode = interface.resetMode;
   pending.asynchronousRead = NLDB0::isMemory(instance.getSNLInstance()->getModel());
   const std::string instancePath = instance.getFullPath();
+  std::string memoryName;
+  for (const auto& name : instance.getPath().getPathNames()) {
+    memoryName += (memoryName.empty() ? "" : "/") + name.getString();
+  }
+  std::string abstractionObstacle;
+  if (const auto obstacleIt =
+          ctx.memoryAbstractionObstacleByInstance.find(instance.getID());
+      obstacleIt != ctx.memoryAbstractionObstacleByInstance.end()) {
+    abstractionObstacle = obstacleIt->second;
+  }
+  const size_t memoryIndex = model.bitLevelMemories.size();
+  model.bitLevelMemories.push_back(
+      {std::move(memoryName), interface.width, interface.depth,
+       std::move(abstractionObstacle),
+       collectMemoryClockSources(ctx.dnl, ctx.boundary, instance, interface),
+       makeMemoryCellStateKey(instance, 0, 0).first,
+       {}});
 
   for (size_t cellIndex = 0; cellIndex < interface.depth; ++cellIndex) {
     for (size_t bitIndex = 0; bitIndex < interface.width; ++bitIndex) {
@@ -3141,6 +3449,8 @@ void appendPendingMemoryInstance(
             instancePath + "`");  // LCOV_EXCL_LINE
       }
       pending.readOutputs.push_back({keyIt->second, portIndex, bitIndex});
+      model.bitLevelMemories[memoryIndex].readOutputKeys.push_back(
+          keyIt->second);
       ++bitIndex;
     }
     pending.readPorts.push_back(std::move(pendingReadPort));
@@ -3215,6 +3525,100 @@ void appendPendingMemoryInstance(
   }
 
   ctx.pendingMemoryInstances.push_back(std::move(pending));
+}
+
+// Records what the pins of each abstracted memory mean: its asynchronous read
+// ports, its write enables, and the guards of its write-side pins.
+//
+// A write port changes the memory only while all its enables are 1, and a
+// data bit only while its mask bit is 1 as well, exactly as the bit-level
+// model writes a cell. The address, mask and data pins of an abstracted memory
+// are therefore compared under those pins. A pin whose enable or mask pin is
+// not compared, for example an unconnected one, is compared on every frame.
+void describeAbstractedMemoryPins(ExtractContext& ctx, SequentialDesignModel& model) {
+  for (const auto& [leafID, memoryIndex] : ctx.abstractedMemoryByInstance) {
+    const auto& instance = ctx.dnl->getDNLInstanceFromID(leafID);
+    const auto interface =
+        naja::NL::SNLDesignModeling::getMemoryInterface(instance.getSNLInstance());
+    const auto termIDsByBitTerm = collectInstanceTermIDByBitTerm(instance);
+    model.abstractedMemories[memoryIndex].clockSources =
+        collectMemoryClockSources(ctx.dnl, ctx.boundary, instance, interface);
+    // A DB0 memory reads asynchronously; a memory macro's read output is clocked.
+    if (NLDB0::isMemory(instance.getSNLInstance()->getModel())) {
+      for (const auto& readPort : interface.readPorts) {
+        AbstractedMemory::AsynchronousReadPort port;
+        for (auto* addressTerm : readPort.address) {
+          const auto termIt = termIDsByBitTerm.find(addressTerm);
+          if (termIt == termIDsByBitTerm.end()) {
+            continue;  // LCOV_EXCL_LINE
+          }
+          if (const auto keyIt = ctx.topOutputKeyByTerm.find(termIt->second);
+              keyIt != ctx.topOutputKeyByTerm.end()) {
+            port.addressKeys.push_back(keyIt->second);
+          }
+        }
+        for (auto* dataTerm : readPort.data) {
+          const auto termIt = termIDsByBitTerm.find(dataTerm);
+          if (termIt != termIDsByBitTerm.end() &&
+              ctx.boundary->isInput(termIt->second)) {
+            port.dataKeys.push_back(getTerminalPathKey(
+                ctx.dnl->getDNLTerminalFromID(termIt->second)));
+          }
+        }
+        model.abstractedMemories[memoryIndex].asynchronousReadPorts.push_back(
+            std::move(port));
+      }
+    }
+    const auto comparedKey =
+        [&](const naja::NL::SNLBitTerm* term) -> const SignalKey* {
+      const auto termIt = termIDsByBitTerm.find(term);
+      if (termIt == termIDsByBitTerm.end()) {
+        return nullptr;  // LCOV_EXCL_LINE
+      }
+      const auto keyIt = ctx.topOutputKeyByTerm.find(termIt->second);
+      return keyIt == ctx.topOutputKeyByTerm.end() ? nullptr : &keyIt->second;
+    };
+    for (const auto& writePort : interface.writePorts) {
+      std::vector<SignalKey> enableKeys;
+      bool enablesCompared = !writePort.enables.empty();
+      for (auto* enableTerm : writePort.enables) {
+        const auto* key = comparedKey(enableTerm);
+        enablesCompared = enablesCompared && key != nullptr;
+        if (key != nullptr) {
+          enableKeys.push_back(*key);
+          model.abstractedMemories[memoryIndex].writeEnableKeys.push_back(*key);
+        }
+      }
+      if (!enablesCompared) {
+        continue;
+      }
+      for (const auto* terms : {&writePort.address, &writePort.mask}) {
+        for (auto* term : *terms) {
+          if (const auto* key = comparedKey(term)) {
+            model.observedOutputGuardKeysByKey.emplace(*key, enableKeys);
+          }
+        }
+      }
+      auto maskIt = writePort.mask.begin();
+      for (auto* dataTerm : writePort.data) {
+        const SignalKey* maskKey = nullptr;
+        const bool masked = maskIt != writePort.mask.end();
+        if (masked) {
+          maskKey = comparedKey(*maskIt);
+          ++maskIt;
+        }
+        const auto* key = comparedKey(dataTerm);
+        if (key == nullptr || (masked && maskKey == nullptr)) {
+          continue;
+        }
+        auto guards = enableKeys;
+        if (maskKey != nullptr) {
+          guards.push_back(*maskKey);
+        }
+        model.observedOutputGuardKeysByKey.emplace(*key, std::move(guards));
+      }
+    }
+  }
 }
 
 void appendPendingTransitionsForInstance(
@@ -5003,28 +5407,87 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
 }
 
 struct ClockDomainIndex {
-  std::unordered_map<size_t, SignalKey> domainByStateVarID;
+  static constexpr uint32_t kNoDomain = std::numeric_limits<uint32_t>::max();
+
+  // The clock domains, and for each state variable the index of its domain or
+  // kNoDomain. A register takes the domain of its clock event. The states of
+  // a bit-level memory have no clock event, which describes how a register
+  // updates, but they move with the clock of the memory and take its domain.
+  std::vector<SignalKey> domains;
+  std::vector<uint32_t> domainIndexByStateVarID;
   std::vector<uint8_t> isClockedStateVar;
+
+  bool empty() const { return isClockedStateVar.empty(); }
+
+  uint32_t domainIndexOf(size_t varID) const {
+    return varID < domainIndexByStateVarID.size()
+               ? domainIndexByStateVarID[varID]
+               : kNoDomain;
+  }
 };
 
 ClockDomainIndex buildClockDomainIndex(const SequentialDesignModel& model) {
-  // LCOV_EXCL_START
   ClockDomainIndex index;
-  // LCOV_EXCL_STOP
+  std::map<SignalKey, uint32_t, SignalKeyLess> indexByDomain;
+  const auto domainIndex = [&](const SignalKey& domain) {
+    const auto [position, inserted] = indexByDomain.emplace(
+        domain, static_cast<uint32_t>(index.domains.size()));
+    if (inserted) {
+      index.domains.push_back(domain);
+    }
+    return position->second;
+  };
+
+  std::map<decltype(SignalKey::first), uint32_t> memoryDomainByCellKeyPath;
+  std::unordered_map<SignalKey, uint32_t, SignalKeyHash>
+      memoryDomainByReadOutputKey;
+  for (const auto& memory : model.bitLevelMemories) {
+    const auto clock = resolveMemoryClockDomain(model, memory.clockSources);
+    if (!clock.has_value()) {
+      continue;
+    }
+    const uint32_t memoryDomain = domainIndex(*clock);
+    memoryDomainByCellKeyPath.emplace(memory.cellKeyPath, memoryDomain);
+    for (const auto& key : memory.readOutputKeys) {
+      memoryDomainByReadOutputKey.emplace(key, memoryDomain);
+    }
+  }
+
+  std::vector<std::pair<size_t, uint32_t>> domainByStateVarID;
   size_t maxStateVarID = 0;
   for (const auto& key : model.stateBits) {
     const auto varIt = model.inputVarByKey.find(key);
-    const auto eventIt = model.clockEventByStateKey.find(key);
-    if (varIt == model.inputVarByKey.end() ||
-        eventIt == model.clockEventByStateKey.end()) {
+    if (varIt == model.inputVarByKey.end()) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    uint32_t stateDomain = ClockDomainIndex::kNoDomain;
+    if (const auto eventIt = model.clockEventByStateKey.find(key);
+        eventIt != model.clockEventByStateKey.end()) {
+      stateDomain = domainIndex(eventIt->second.domain);
+    } else if (!memoryDomainByCellKeyPath.empty()) {
+      if (const auto cellIt = memoryDomainByCellKeyPath.find(key.first);
+          cellIt != memoryDomainByCellKeyPath.end()) {
+        stateDomain = cellIt->second;
+      } else if (const auto readIt = memoryDomainByReadOutputKey.find(key);
+                 readIt != memoryDomainByReadOutputKey.end()) {
+        stateDomain = readIt->second;
+      }
+    }
+    if (stateDomain == ClockDomainIndex::kNoDomain) {
       continue;
     }
-    index.domainByStateVarID.emplace(varIt->second, eventIt->second.domain);
+    domainByStateVarID.emplace_back(varIt->second, stateDomain);
     maxStateVarID = std::max(maxStateVarID, varIt->second);
   }
+  if (domainByStateVarID.empty()) {
+    return index;
+  }
 
+  index.domainIndexByStateVarID.assign(
+      maxStateVarID + 1, ClockDomainIndex::kNoDomain);
   index.isClockedStateVar.assign(maxStateVarID + 1, 0);
-  for (const auto& [varID, _] : index.domainByStateVarID) {
+  for (const auto& [varID, stateDomain] : domainByStateVarID) {
+    index.domainIndexByStateVarID[varID] = stateDomain;
     index.isClockedStateVar[varID] = 1;
   }
   return index;
@@ -5060,23 +5523,46 @@ std::string formatClockDomains(
 
 
 // LCOV_EXCL_STOP
-std::set<SignalKey, SignalKeyLess> collectClockDomainsFromExpr(
+void collectClockDomainIndexesFromExpr(
     BoolExpr* expr,
     const ClockDomainIndex& index,
-    CandidateDependencyScratch& scratch) {
-  std::set<SignalKey, SignalKeyLess> domains;
-  if (index.isClockedStateVar.empty()) {
-    return domains;  // LCOV_EXCL_LINE
+    CandidateDependencyScratch& scratch,
+    std::vector<uint32_t>& domainIndexes) {
+  // The domains of the clocked states `expr` reads, each one once, as indexes
+  // into `index.domains`.
+  domainIndexes.clear();
+  if (index.empty()) {
+    return;  // LCOV_EXCL_LINE
   }
   for (const auto stateVarID :
        collectCandidateStateDependenciesFromExpr(
            expr, index.isClockedStateVar, scratch)) {
-    const auto domainIt = index.domainByStateVarID.find(stateVarID);
-    if (domainIt != index.domainByStateVarID.end()) {
-      domains.insert(domainIt->second);
+    const uint32_t stateDomain = index.domainIndexOf(stateVarID);
+    if (stateDomain != ClockDomainIndex::kNoDomain &&
+        std::find(domainIndexes.begin(), domainIndexes.end(), stateDomain) ==
+            domainIndexes.end()) {
+      domainIndexes.push_back(stateDomain);
     }
   }
+}
+
+std::set<SignalKey, SignalKeyLess> clockDomainsFromIndexes(
+    const ClockDomainIndex& index,
+    const std::vector<uint32_t>& domainIndexes) {
+  std::set<SignalKey, SignalKeyLess> domains;
+  for (const uint32_t domainIndex : domainIndexes) {
+    domains.insert(index.domains[domainIndex]);
+  }
   return domains;
+}
+
+std::set<SignalKey, SignalKeyLess> collectClockDomainsFromExpr(
+    BoolExpr* expr,
+    const ClockDomainIndex& index,
+    CandidateDependencyScratch& scratch) {
+  std::vector<uint32_t> domainIndexes;
+  collectClockDomainIndexesFromExpr(expr, index, scratch, domainIndexes);
+  return clockDomainsFromIndexes(index, domainIndexes);
 }
 
 bool containsClockDomainOtherThan(
@@ -5149,38 +5635,45 @@ void composeSameDomainPhaseTransitions(SequentialDesignModel& model) {
 }
 
 void markMultiClockDomainConesAsSkipped(SequentialDesignModel& model) {
-  const ClockDomainIndex index = buildClockDomainIndex(model);
-  if (index.domainByStateVarID.empty()) {
   // LCOV_EXCL_STOP
+  const ClockDomainIndex index = buildClockDomainIndex(model);
+  if (index.empty()) {
     return;
   }
 
   CandidateDependencyScratch scratch;
+  std::vector<uint32_t> domainIndexes;
   for (const auto& key : model.stateBits) {
-    // LCOV_EXCL_START
     if (model.connectivitySkipInfoByKey.find(key) !=
-    // LCOV_EXCL_STOP
         model.connectivitySkipInfoByKey.end()) {
       continue;  // LCOV_EXCL_LINE
     }
-    // LCOV_EXCL_START
-    const auto eventIt = model.clockEventByStateKey.find(key);
-    // LCOV_EXCL_STOP
+    const auto varIt = model.inputVarByKey.find(key);
     const auto nextIt = model.nextStateExprByStateKey.find(key);
-    if (eventIt == model.clockEventByStateKey.end() ||
+    if (varIt == model.inputVarByKey.end() ||
         nextIt == model.nextStateExprByStateKey.end()) {
       continue;
     }
-    const auto domains =
-        collectClockDomainsFromExpr(nextIt->second, index, scratch);
-    if (!containsClockDomainOtherThan(domains, eventIt->second.domain)) {
+    // The state's own domain: its clock event for a register, the clock of
+    // the memory for a memory cell or a clocked read output.
+    const uint32_t ownDomain = index.domainIndexOf(varIt->second);
+    if (ownDomain == ClockDomainIndex::kNoDomain) {
       continue;
     }
-    model.connectivitySkipInfoByKey.emplace(  // LCOV_EXCL_LINE
-        key,  // LCOV_EXCL_LINE
-        makeMultiClockDomainSkip(  // LCOV_EXCL_LINE
-            "State next-state cone crosses clock domains: " +  // LCOV_EXCL_LINE
-            formatClockDomains(model, domains)));  // LCOV_EXCL_LINE
+    collectClockDomainIndexesFromExpr(
+        nextIt->second, index, scratch, domainIndexes);
+    if (std::all_of(
+            domainIndexes.begin(), domainIndexes.end(),
+            [&](uint32_t stateDomain) { return stateDomain == ownDomain; })) {
+      continue;
+    }
+    auto domains = clockDomainsFromIndexes(index, domainIndexes);
+    domains.insert(index.domains[ownDomain]);
+    model.connectivitySkipInfoByKey.emplace(
+        key,
+        makeMultiClockDomainSkip(
+            "State next-state cone crosses clock domains: " +
+            formatClockDomains(model, domains)));
   }
 
   for (const auto& key : model.allObservedOutputs) {
@@ -5194,6 +5687,9 @@ void markMultiClockDomainConesAsSkipped(SequentialDesignModel& model) {
     }
     const auto domains =
         collectClockDomainsFromExpr(exprIt->second, index, scratch);
+    if (domains.size() == 1) {
+      model.clockDomainByObservedOutputKey.emplace(key, *domains.begin());
+    }
     if (domains.size() <= 1) {
       continue;
     }
@@ -5201,6 +5697,167 @@ void markMultiClockDomainConesAsSkipped(SequentialDesignModel& model) {
         key,
         makeMultiClockDomainSkip(
             "Observed output cone spans clock domains: " +
+            formatClockDomains(model, domains)));
+  }
+}
+
+// The read data of an abstracted memory is an input of the model. That hides
+// what the bit-level model shows in the cone of a reader: the registers that
+// address the read, the clock of the memory and the registers that write it.
+// The check above is therefore repeated here with those domains added to
+// every reader of the data, followed through reads that feed other memories.
+//
+// A read port whose data follows its address within the step carries the
+// domains of its address pins. When the clock of the memory is known, every
+// read port also carries that clock and the domains of the other pins: the
+// write side, and the address of a clocked read.
+void markMultiClockDomainReadsOfAbstractedMemories(SequentialDesignModel& model) {
+  struct ReadSource {
+    std::vector<const SignalKey*> pinKeys;
+    std::set<SignalKey, SignalKeyLess> domains;
+    // What the whole memory adds to an asynchronous read port.
+    std::optional<size_t> memorySource;
+  };
+  std::vector<ReadSource> sources;
+  std::unordered_map<size_t, size_t> sourceByDataVar;
+  const auto mapData = [&](const SignalKey& dataKey, size_t source) {
+    if (const auto varIt = model.inputVarByKey.find(dataKey);
+        varIt != model.inputVarByKey.end()) {
+      sourceByDataVar.emplace(varIt->second, source);
+    }
+  };
+  for (const auto& memory : model.abstractedMemories) {
+    std::unordered_set<SignalKey, SignalKeyHash> asynchronousAddressKeys;
+    for (const auto& port : memory.asynchronousReadPorts) {
+      asynchronousAddressKeys.insert(
+          port.addressKeys.begin(), port.addressKeys.end());
+    }
+    std::optional<size_t> memorySource;
+    if (const auto clock =
+            resolveMemoryClockDomain(model, memory.clockSources)) {
+      ReadSource source;
+      source.domains.insert(*clock);
+      for (const auto& pinKey : memory.interfaceKeys) {
+        if (asynchronousAddressKeys.count(pinKey) == 0) {
+          source.pinKeys.push_back(&pinKey);
+        }
+      }
+      memorySource = sources.size();
+      sources.push_back(std::move(source));
+    }
+    for (const auto& port : memory.asynchronousReadPorts) {
+      ReadSource source;
+      for (const auto& addressKey : port.addressKeys) {
+        source.pinKeys.push_back(&addressKey);
+      }
+      source.memorySource = memorySource;
+      for (const auto& dataKey : port.dataKeys) {
+        mapData(dataKey, sources.size());
+      }
+      sources.push_back(std::move(source));
+    }
+    if (memorySource.has_value()) {
+      // The data of the clocked read ports; an asynchronous port keeps the
+      // source it was given above.
+      for (const auto& dataKey : memory.readDataKeys) {
+        mapData(dataKey, *memorySource);
+      }
+    }
+  }
+  if (sourceByDataVar.empty()) {
+    return;
+  }
+  const ClockDomainIndex index = buildClockDomainIndex(model);
+
+  CandidateDependencyScratch scratch;
+  // The clock domains a formula reaches through the reads in its support.
+  const auto domainsThroughReads = [&](BoolExpr* expr) {
+    std::set<SignalKey, SignalKeyLess> domains;
+    for (const auto varID : expr->getSupportVars()) {
+      if (const auto sourceIt = sourceByDataVar.find(varID);
+          sourceIt != sourceByDataVar.end()) {
+        const auto& sourceDomains = sources[sourceIt->second].domains;
+        domains.insert(sourceDomains.begin(), sourceDomains.end());
+      }
+    }
+    return domains;
+  };
+  // A read whose pins depend on another read inherits its domains: iterate
+  // until nothing grows. A loop of reads is reported as unsupported elsewhere.
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (auto& source : sources) {
+      const size_t before = source.domains.size();
+      for (const auto* pinKey : source.pinKeys) {
+        const auto exprIt = model.observedOutputExprByKey.find(*pinKey);
+        if (exprIt == model.observedOutputExprByKey.end() ||
+            exprIt->second == nullptr) {
+          continue;
+        }
+        const auto direct =
+            collectClockDomainsFromExpr(exprIt->second, index, scratch);
+        source.domains.insert(direct.begin(), direct.end());
+        const auto through = domainsThroughReads(exprIt->second);
+        source.domains.insert(through.begin(), through.end());
+      }
+      if (source.memorySource.has_value()) {
+        const auto& shared = sources[*source.memorySource].domains;
+        source.domains.insert(shared.begin(), shared.end());
+      }
+      grew = grew || source.domains.size() != before;
+    }
+  }
+
+  for (const auto& key : model.stateBits) {
+    if (model.connectivitySkipInfoByKey.find(key) !=
+        model.connectivitySkipInfoByKey.end()) {
+      continue;
+    }
+    const auto varIt = model.inputVarByKey.find(key);
+    const auto nextIt = model.nextStateExprByStateKey.find(key);
+    if (varIt == model.inputVarByKey.end() ||
+        nextIt == model.nextStateExprByStateKey.end()) {
+      continue;
+    }
+    const uint32_t ownDomain = index.domainIndexOf(varIt->second);
+    if (ownDomain == ClockDomainIndex::kNoDomain) {
+      continue;
+    }
+    auto domains = domainsThroughReads(nextIt->second);
+    if (!containsClockDomainOtherThan(domains, index.domains[ownDomain])) {
+      continue;
+    }
+    domains.insert(index.domains[ownDomain]);
+    model.connectivitySkipInfoByKey.emplace(
+        key,
+        makeMultiClockDomainSkip(
+            "State next-state cone crosses clock domains through a memory "
+            "read: " +
+            formatClockDomains(model, domains)));
+  }
+  for (const auto& key : model.allObservedOutputs) {
+    if (model.connectivitySkipInfoByKey.find(key) !=
+        model.connectivitySkipInfoByKey.end()) {
+      continue;
+    }
+    const auto exprIt = model.observedOutputExprByKey.find(key);
+    if (exprIt == model.observedOutputExprByKey.end()) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    auto domains = collectClockDomainsFromExpr(exprIt->second, index, scratch);
+    const auto through = domainsThroughReads(exprIt->second);
+    domains.insert(through.begin(), through.end());
+    if (domains.size() == 1) {
+      model.clockDomainByObservedOutputKey.insert_or_assign(
+          key, *domains.begin());
+    }
+    if (domains.size() <= 1) {
+      continue;
+    }
+    model.connectivitySkipInfoByKey.emplace(
+        key,
+        makeMultiClockDomainSkip(
+            "Observed output cone spans clock domains through a memory read: " +
             formatClockDomains(model, domains)));
   }
 }
@@ -5548,6 +6205,152 @@ void validateExtractedModel(SequentialDesignModel& model) {
   }
 }
 
+// The bit-level model reads a write enable whose cone holds an X literal as a
+// port that never writes. A compared pin would carry that X as an unknown
+// value, which agrees with any enable of the other design, so such a memory
+// keeps its cells.
+void markAbstractedMemoriesWithXWriteEnable(SequentialDesignModel& model) {
+  std::unordered_set<size_t> xConstantVars;
+  for (const auto& key : model.stateBits) {
+    if (isXConstantStateKey(key)) {
+      xConstantVars.insert(model.inputVarByKey.at(key));
+    }
+  }
+  if (xConstantVars.empty()) {
+    return;
+  }
+  for (auto& memory : model.abstractedMemories) {
+    for (const auto& enableKey : memory.writeEnableKeys) {
+      const auto exprIt = model.observedOutputExprByKey.find(enableKey);
+      if (exprIt == model.observedOutputExprByKey.end() ||
+          exprIt->second == nullptr) {
+        continue;
+      }
+      const auto support = exprIt->second->getSupportVars();
+      if (std::any_of(support.begin(), support.end(), [&](size_t varID) {
+            return xConstantVars.count(varID) != 0;
+          })) {
+        memory.obstacle = "a write enable depends on an X literal";
+        break;
+      }
+    }
+  }
+}
+
+// A register on the falling clock edge samples after the registers on the
+// rising edge have moved: the bit-level model gives it the cell addressed by
+// their new values. An abstracted memory has one read-data value per step,
+// the one the rising edge samples, so it cannot serve such a register, nor a
+// register it clocks, and keeps its cells.
+void markAbstractedMemoriesReadOffTheRisingEdge(SequentialDesignModel& model) {
+  std::unordered_map<size_t, AbstractedMemory*> memoryByReadDataVar;
+  for (auto& memory : model.abstractedMemories) {
+    for (const auto& dataKey : memory.readDataKeys) {
+      if (const auto varIt = model.inputVarByKey.find(dataKey);
+          varIt != model.inputVarByKey.end()) {
+        memoryByReadDataVar.emplace(varIt->second, &memory);
+      }
+    }
+  }
+  if (memoryByReadDataVar.empty()) {
+    return;
+  }
+  // Read data that clocks a register is no data input of the step either.
+  for (const auto varID : model.clockCarrierVarIDs) {
+    if (const auto memoryIt = memoryByReadDataVar.find(varID);
+        memoryIt != memoryByReadDataVar.end()) {
+      memoryIt->second->obstacle = "its read data drives a clock";  // LCOV_EXCL_LINE
+    }
+  }
+  for (auto& memory : model.abstractedMemories) {
+    for (const auto& dataKey : memory.readDataKeys) {
+      const bool clocks = std::any_of(
+          model.clockEventByStateKey.begin(), model.clockEventByStateKey.end(),
+          [&](const auto& entry) { return entry.second.domain == dataKey; });
+      if (clocks) {
+        memory.obstacle = "its read data drives a clock";
+        break;
+      }
+    }
+  }
+  for (const auto& [key, event] : model.clockEventByStateKey) {
+    if (event.phase == ClockPhase::Pos) {
+      continue;
+    }
+    const auto nextIt = model.nextStateExprByStateKey.find(key);
+    if (nextIt == model.nextStateExprByStateKey.end() ||
+        nextIt->second == nullptr) {
+      continue;  // LCOV_EXCL_LINE
+    }
+    for (const auto varID : nextIt->second->getSupportVars()) {
+      if (const auto memoryIt = memoryByReadDataVar.find(varID);
+          memoryIt != memoryByReadDataVar.end()) {
+        memoryIt->second->obstacle =
+            "its read data is sampled on the falling clock edge";
+      }
+    }
+  }
+}
+
+// The read data of an abstracted memory is an input of the model, so nothing
+// orders a read whose address depends on its own data. The bit-level model
+// rejects such a combinational loop while it resolves the reads; the
+// abstracted one must reject it as well, with the same reason. A memory can
+// be addressed by another port's data, so the ports are followed transitively.
+void rejectAbstractedMemoryReadLoops(SequentialDesignModel& model) {
+  std::vector<const AbstractedMemory::AsynchronousReadPort*> ports;
+  std::unordered_map<size_t, size_t> portByDataVar;
+  for (const auto& memory : model.abstractedMemories) {
+    for (const auto& port : memory.asynchronousReadPorts) {
+      for (const auto& dataKey : port.dataKeys) {
+        if (const auto varIt = model.inputVarByKey.find(dataKey);
+            varIt != model.inputVarByKey.end()) {
+          portByDataVar.emplace(varIt->second, ports.size());
+        }
+      }
+      ports.push_back(&port);
+    }
+  }
+  std::vector<std::vector<size_t>> addressedBy(ports.size());
+  for (size_t portIndex = 0; portIndex < ports.size(); ++portIndex) {
+    for (const auto& addressKey : ports[portIndex]->addressKeys) {
+      const auto exprIt = model.observedOutputExprByKey.find(addressKey);
+      if (exprIt == model.observedOutputExprByKey.end() ||
+          exprIt->second == nullptr) {
+        continue;
+      }
+      for (const auto varID : exprIt->second->getSupportVars()) {
+        if (const auto portIt = portByDataVar.find(varID);
+            portIt != portByDataVar.end()) {
+          addressedBy[portIndex].push_back(portIt->second);
+        }
+      }
+    }
+  }
+  // 0: not visited, 1: on the current path, 2: done.
+  std::vector<uint8_t> state(ports.size(), 0);
+  const std::function<bool(size_t)> hasLoop = [&](size_t portIndex) {
+    if (state[portIndex] != 0) {
+      return state[portIndex] == 1;
+    }
+    state[portIndex] = 1;
+    for (const auto next : addressedBy[portIndex]) {
+      if (hasLoop(next)) {
+        return true;
+      }
+    }
+    state[portIndex] = 2;
+    return false;
+  };
+  for (size_t portIndex = 0; portIndex < ports.size(); ++portIndex) {
+    if (hasLoop(portIndex)) {
+      model.unsupportedReasons.push_back(
+          "Combinational loop through a memory read port");
+      return;
+    }
+  }
+}
+
 void logExtractedModelDebugSummary(const ExtractContext& ctx,
                                    const SequentialDesignModel& model) {
   if (!ctx.secDiagEnabled) {
@@ -5621,7 +6424,8 @@ void logExtractedModelDebugSummary(const ExtractContext& ctx,
 }  // namespace
 
 SequentialDesignModel SequentialDesignModel::extract(
-    naja::NL::SNLDesign* top, const BoundaryPairs& pairs, size_t side) {
+    naja::NL::SNLDesign* top, const BoundaryPairs& pairs, size_t side,
+    const SequentialExtractOptions& options) {
   if (top == nullptr) {
     throw std::invalid_argument("SequentialDesignModel::extract: null top");
   }
@@ -5641,15 +6445,18 @@ SequentialDesignModel SequentialDesignModel::extract(
       .topName = top->getName().getString(),  // LCOV_EXCL_LINE
       .secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr,
   };
+  ctx.options = options;
+  ctx.boundaryPairs = pairs;
+  ctx.boundarySide = side;
   ctx.builder.setRetainDnl(true);
-  ctx.builder.setBoundaryPairs(pairs, side);
   ctx.builder.setModelXConstants(true);
 
   // Phase 1: collect the raw boundary, classify top I/O vs sequential state,
   // and scan leaf sequentials so the later formula build knows what it must
   // reconstruct.
-  collectInitialBuilderBoundary(ctx);
+  collectInitialBuilderBoundary(ctx, model);
   collectTopInterfaceTerms(ctx, model);
+  describeAbstractedMemoryPins(ctx, model);
   classifyBuilderBoundaryTerms(ctx, model);
   collectSequentialTransitions(ctx, model);
 
@@ -5777,13 +6584,19 @@ SequentialDesignModel SequentialDesignModel::extract(
   filterUnsupportedAndUnmappedBoundary(ctx, model);
   substituteTransparentLatches(rebuiltArtifacts, model);
   substituteMemoryReads(model);
+  // Before the phases are composed: a falling-edge register that reads a
+  // rising-edge one would then carry that register's own read.
+  markAbstractedMemoriesReadOffTheRisingEdge(model);
   composeSameDomainPhaseTransitions(model);
   markMultiClockDomainConesAsSkipped(model);
+  markMultiClockDomainReadsOfAbstractedMemories(model);
 
   // Phase 5: propagate connectivity skips, then retain only the outputs whose
   // cones were fully modeled.
   propagateConnectivitySkipsThroughDependencies(model);
   partitionCoveredSignals(model);
+  rejectAbstractedMemoryReadLoops(model);
+  markAbstractedMemoriesWithXWriteEnable(model);
 
   logExtractedModelDebugSummary(ctx, model);
 

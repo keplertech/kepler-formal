@@ -378,7 +378,9 @@ BuildPrimaryOutputClauses::PathKey
 BuildPrimaryOutputClauses::getTerminalPathKey(
     const DNLTerminalFull& terminal) const {
   if (const auto* boundary = getLeafBoundary()) {
-    if (const auto* port = boundary->getPort(terminal.getID())) {
+    // A path-keyed boundary pin keeps the ordinary hierarchical key below.
+    if (const auto* port = boundary->getPort(terminal.getID());
+        port != nullptr && !port->pathKeyed) {
       return {{PathComponentID{1} << 62,
                static_cast<PathComponentID>(port->pairIndex),
                static_cast<PathComponentID>(NLName(port->pinName).getID())},

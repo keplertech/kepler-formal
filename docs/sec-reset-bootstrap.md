@@ -64,6 +64,14 @@ that assumption. If none can, the designs already differ on that frame, and SEC
 reports the difference with a counterexample instead of proving equivalence
 from an assumption that cannot hold.
 
+SEC compares outputs from the first frame after the bootstrap window. The
+window itself is checked for one thing: a memory compared at its pins must not
+be driven differently while reset is asserted, since the two memories would
+then hold different contents when the comparison starts. See
+[Memories](sec-sequential-models.md#memories).
+
 Reset bootstrap is SEC-only. It does not discover internal reset nets, infer
 reset polarity, or relax top-level input matching; every listed reset port must
-exist as an aligned top-level input in both designs.
+exist as an aligned top-level input in both designs. A port that names no
+top-level input of a design is reported right after that design is parsed,
+before any model is built.
