@@ -30,6 +30,8 @@
 
 #include "DNL.h"
 #include "NLUniverse.h"
+#include "SNLBitTerm.h"
+#include "SNLDesign.h"
 #include "SNLPath.h"
 #include "common/BoolExprUtils.h"
 #include "common/AlignedSignals.h"
@@ -1063,6 +1065,28 @@ OutputCoverageSelection selectCoveredObservedOutputs(
       throw std::runtime_error(
           "Missing observed output expression for aligned SEC output `" +
           name + "`");
+    }
+
+    // The model has one step for all clocks. Comparing an output that one
+    // design clocks from `clk` and the other from `clk2` would assume the two
+    // clocks tick together, so such an output is skipped like one whose cone
+    // spans two domains inside a design. Domains are top-level inputs, which
+    // the two designs share by name.
+    const auto domain0 = model0.clockDomainByObservedOutputKey.find(key0);
+    const auto domain1 = model1.clockDomainByObservedOutputKey.find(key1);
+    if (domain0 != model0.clockDomainByObservedOutputKey.end() &&
+        domain1 != model1.clockDomainByObservedOutputKey.end() &&
+        domain0->second != domain1->second) {
+      const std::string skippedOutput =
+          name + ": " +
+          describeConnectivitySkipOrigin(
+              ConnectivitySkipOrigin::MultiClockDomain) +
+          " connectivity: Observed output cone is clocked by " +
+          describeSecSignalKey(model0, domain0->second) + " in design0 and by " +
+          describeSecSignalKey(model1, domain1->second) + " in design1";
+      selection.skippedOutputs.push_back(skippedOutput);
+      selection.multiClockDomainSkippedOutputs.push_back(skippedOutput);
+      continue;
     }
 
     selection.checkedOutputs.names.push_back(name);
@@ -2169,12 +2193,28 @@ void appendExtractedBoundaryReports(
     appendUniqueRole(entry.roles, role);
   };
 
+  // Pins of an abstracted memory are reported under their own roles.
+  std::unordered_set<SignalKey, SignalKeyHash> memoryKeys;
+  for (const auto& memory : model.abstractedMemories) {
+    for (const auto& key : memory.readDataKeys) {
+      addRole(key, "memory_read_data");
+      memoryKeys.insert(key);
+    }
+    for (const auto& key : memory.interfaceKeys) {
+      addRole(key, "memory_interface");
+      memoryKeys.insert(key);
+    }
+  }
   // Boundary terms describe the original top interface for diagnostics.
   for (const auto& key : model.topInputKeys) {
-    addRole(key, "top_input");
+    if (memoryKeys.count(key) == 0) {
+      addRole(key, "top_input");
+    }
   }
   for (const auto& key : model.topOutputKeys) {
-    addRole(key, "top_output");
+    if (memoryKeys.count(key) == 0) {
+      addRole(key, "top_output");
+    }
   }
   reports.reserve(reports.size() + reportsBySignal.size());
   for (auto& [_, entry] : reportsBySignal) {
@@ -2388,6 +2428,27 @@ BoolExpr* remapSecFormulaStrict(
   return memo.at(root);
 }
 
+// The condition under which a guarded observed output matters, in the
+// model's own symbols: all its guard outputs are 1. Null for an unguarded
+// output; the address, data and mask pins of an abstracted memory are guarded
+// by their write enables and mask.
+BoolExpr* buildObservedOutputGuard(const SequentialDesignModel& model,
+                                   const SignalKey& key) {
+  const auto guardsIt = model.observedOutputGuardKeysByKey.find(key);
+  if (guardsIt == model.observedOutputGuardKeysByKey.end()) {
+    return nullptr;
+  }
+  BoolExpr* guard = BoolExpr::createTrue();
+  for (const auto& guardKey : guardsIt->second) {
+    const auto exprIt = model.observedOutputExprByKey.find(guardKey);
+    if (exprIt == model.observedOutputExprByKey.end()) {
+      return nullptr;  // LCOV_EXCL_LINE: a guard is a compared pin
+    }
+    guard = BoolExpr::And(guard, exprIt->second);
+  }
+  return guard;
+}
+
 RemappedSecExpressions remapSecExpressions(
     const SequentialDesignModel& model0,
     const SequentialDesignModel& model1,
@@ -2402,12 +2463,23 @@ RemappedSecExpressions remapSecExpressions(
   for (size_t i = 0; i < alignedOutputs.names.size(); ++i) {
     const auto& key0 = alignedOutputs.keys0[i];
     const auto& key1 = alignedOutputs.keys1[i];
+    BoolExpr* output0 = model0.observedOutputExprByKey.at(key0);
+    BoolExpr* output1 = model1.observedOutputExprByKey.at(key1);
+    // A guarded output is compared only while its guard holds. The guard pins
+    // are compared outputs themselves, so the two guards are equal wherever
+    // the property holds and each side can carry its own.
+    BoolExpr* guard0 = buildObservedOutputGuard(model0, key0);
+    BoolExpr* guard1 = buildObservedOutputGuard(model1, key1);
+    if (guard0 != nullptr && guard1 != nullptr) {
+      output0 = BoolExpr::And(guard0, output0);
+      output1 = BoolExpr::And(guard1, output1);
+    }
     const auto remappedOutput0 = remapSecFormulaStrict(
-        model0.observedOutputExprByKey.at(key0),
+        output0,
         symbolSpace.localToCombined0,
         remapMemo0);
     const auto remappedOutput1 = remapSecFormulaStrict(
-        model1.observedOutputExprByKey.at(key1),
+        output1,
         symbolSpace.localToCombined1,
         remapMemo1);
     problem.observedOutputExprs0.push_back(remappedOutput0);
@@ -2920,8 +2992,23 @@ KInductionProblem buildDualRailSecProblem(
         mapper1,
         memo1);
 
-    const auto outputProperties =
+    auto outputProperties =
         buildDualRailOutputProperties(out0, out1);
+    // A guarded output is compared only while its guard may hold in both
+    // designs. A guard that is X counts as holding: gating the value itself
+    // would let an X guard hide a known difference.
+    BoolExpr* guard0 =
+        buildObservedOutputGuard(model0, alignedOutputs.keys0[i]);
+    BoolExpr* guard1 =
+        buildObservedOutputGuard(model1, alignedOutputs.keys1[i]);
+    if (guard0 != nullptr && guard1 != nullptr) {
+      const auto guardRails0 = buildDualRailBoolExpr(guard0, mapper0, memo0);
+      const auto guardRails1 = buildDualRailBoolExpr(guard1, mapper1, memo1);
+      outputProperties.guardedEquality = BoolExpr::simplify(BoolExpr::Or(
+          outputProperties.guardedEquality,
+          BoolExpr::Not(BoolExpr::And(
+              guardRails0.mayBeOne, guardRails1.mayBeOne))));
+    }
     // LCOV_DISABLED_START
     // Keep batching/reporting aligned to real top outputs.  The rail pair is a
     // single ternary output value, so its may-one and may-zero equalities are
@@ -3212,6 +3299,41 @@ SequentialEquivalenceResult runPdrSecEngine(
           " bound=",
           pdrResult.bound);
     }
+    // PDR reports the depth of an obligation chain that reached the initial
+    // states; the exact bounded query turns it into an input trace, and a
+    // sound chain has one on its frame. The dual-rail encoding, where that
+    // query covers every frame PDR looks at, is held to it: a chain without a
+    // trace on its frame or an earlier one is not reported as a difference,
+    // and the outputs of this batch stay unproved. The binary encoding
+    // assumes its property on the first frame of the bounded query, which
+    // then refutes nothing: the counterexample stands without a trace.
+    std::optional<KInductionResult::CounterexampleWitness> pdrWitness;
+    const char* inconclusiveReason =
+        "dual-rail PDR steady-state proof was inconclusive";
+    if (pdrResult.status == PDRStatus::Different) {
+      pdrWitness = SEC::findBaseCounterexampleAtFrontier(
+          exactBatchProblem, solverType, pdrResult.bound);
+      // LCOV_EXCL_START: a safeguard, no known chain lacks its trace
+      if (!pdrWitness.has_value() && problem.usesDualRailStateEncoding) {
+        pdrWitness = SEC::findBaseCounterexample(
+            exactBatchProblem, solverType, pdrResult.bound);
+        if (pdrWitness.has_value()) {
+          pdrResult.bound = pdrWitness->badFrame;
+        } else {
+          pdrResult.status = PDRStatus::Inconclusive;
+          inconclusiveReason =
+              "PDR reported a counterexample that no input trace reproduces "
+              "within the bound";
+          if (isSecDiagEnabled()) {
+            emitSecDiag(
+                "SEC diag: PDR counterexample at bound=", pdrResult.bound,
+                " has no input trace; output_range=", firstOutput, "..",
+                endOutput, " stays unproved");
+          }
+        }
+      }
+      // LCOV_EXCL_STOP
+    }
     switch (pdrResult.status) {
       case PDRStatus::Equivalent:
         provedBound = std::max(provedBound, pdrResult.bound);
@@ -3222,18 +3344,16 @@ SequentialEquivalenceResult runPdrSecEngine(
             endOutput);
         break;
       case PDRStatus::Different: {
-        auto witness = SEC::findBaseCounterexampleAtFrontier(
-            exactBatchProblem, solverType, pdrResult.bound);
-        KInductionResult witnessResult{
-            KInductionStatus::Different,
-            pdrResult.bound,
-            std::move(witness)};
+        const bool hasTrace = pdrWitness.has_value();
+        const KInductionResult witnessResult{
+            KInductionStatus::Different, pdrResult.bound,
+            std::move(pdrWitness)};
         const std::string reason =
-            witnessResult.witness.has_value()
+            hasTrace
                 ? formatCounterexampleWitness(
                       witnessResult, model0, model1, top0, top1)
-                : "Exact PDR found a defined-value counterexample at k = " +  // LCOV_EXCL_LINE
-                      std::to_string(pdrResult.bound);  // LCOV_EXCL_LINE
+                : "Exact PDR found a defined-value counterexample at k = " +
+                      std::to_string(pdrResult.bound);
         return makeSecResult(
             SequentialEquivalenceStatus::Different,
             pdrResult.bound,
@@ -3260,7 +3380,7 @@ SequentialEquivalenceResult runPdrSecEngine(
               pdrSkippedOutputReasons,
               firstOutput,
               endOutput,
-              "dual-rail PDR steady-state proof was inconclusive");
+              inconclusiveReason);
           break;
         }
         for (size_t outputIndex = 0;
@@ -3610,6 +3730,324 @@ std::unordered_map<size_t, size_t> buildLocalToCombinedMap(
   return localToCombined;
 }
 
+// --- Memory abstraction ------------------------------------------------------
+//
+// A memory found under the same path with the same primitive in both designs
+// is not modeled: its read data is one shared input and its input pins are
+// extra observed outputs. Two identical memories that start alike and are
+// driven alike return the same data, so proving the pins equal on every frame
+// justifies sharing the read data.
+
+// The memories both models abstract in the same way: same instance path, same
+// primitive and parameters, same compared pins, same read-data pins and same
+// clock. Two memories on different clocks cannot stand for one another.
+std::set<SignalKey> matchAbstractedMemories(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1) {
+  const auto sorted = [](std::vector<SignalKey> keys) {
+    std::sort(keys.begin(), keys.end());
+    return keys;
+  };
+  std::map<SignalKey, const AbstractedMemory*> memoryByKey1;
+  for (const auto& memory : model1.abstractedMemories) {
+    memoryByKey1.emplace(memory.instanceKey, &memory);
+  }
+  std::set<SignalKey> matched;
+  for (const auto& memory0 : model0.abstractedMemories) {
+    const auto found = memoryByKey1.find(memory0.instanceKey);
+    if (found == memoryByKey1.end()) {
+      continue;
+    }
+    const auto& memory1 = *found->second;
+    const auto guards = [](const SequentialDesignModel& model,
+                           const SignalKey& key) {
+      const auto guardsIt = model.observedOutputGuardKeysByKey.find(key);
+      return guardsIt == model.observedOutputGuardKeysByKey.end()
+                 ? std::vector<SignalKey>{}
+                 : guardsIt->second;
+    };
+    if (memory0.obstacle.empty() && memory1.obstacle.empty() &&
+        memory0.signature == memory1.signature &&
+        memory0.clockSources == memory1.clockSources &&
+        sorted(memory0.interfaceKeys) == sorted(memory1.interfaceKeys) &&
+        sorted(memory0.readDataKeys) == sorted(memory1.readDataKeys) &&
+        std::all_of(
+            memory0.interfaceKeys.begin(), memory0.interfaceKeys.end(),
+            [&](const SignalKey& key) {
+              return guards(model0, key) == guards(model1, key);
+            })) {
+      matched.insert(memory0.instanceKey);
+    }
+  }
+  return matched;
+}
+
+struct AbstractedMemoryScope {
+  std::vector<std::string> memoryNames;
+  std::unordered_set<SignalKey, SignalKeyHash> interfaceKeys;
+  // Display names of the interface pins, as the proof reports its outputs.
+  std::unordered_set<std::string> interfaceNames;
+
+  bool active() const { return !memoryNames.empty(); }
+};
+
+SequentialEquivalenceResult makeMemoryAbstractionFailure(
+    std::string failure,
+    std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports) {
+  SequentialEquivalenceResult result = makeSecResult(
+      SequentialEquivalenceStatus::Inconclusive,
+      0,
+      "The memory abstraction could not carry the proof: " + failure,
+      OutputCoverageSelection{},
+      std::move(extractedBoundaryReports));
+  result.memoryAbstractionFailure = std::move(failure);
+  return result;
+}
+
+std::string skippedOutputName(const std::string& skippedOutput) {
+  return skippedOutput.substr(0, skippedOutput.find(": "));
+}
+
+// The engines compare outputs from the first frame after the reset prefix, so
+// nothing checks how the memories are driven while the reset ports are
+// asserted. Two designs that write a memory differently during reset start
+// the comparison with different contents. The pins are therefore checked on
+// the prefix itself, on the dual-rail model in either encoding: there the
+// prefix has a defined start, and a pin that is X during reset cannot make a
+// known difference.
+//
+// The binary encoding moreover assumes its whole property, memory pins
+// included, on the first frame it compares when some state has no initial
+// value: the first frame after the prefix, or the very first frame without
+// one. That frame is checked here without the assumption. For the pins the
+// check is strict: every pin that matters must be defined and equal, so the
+// assumption adds nothing about the memories. For the outputs of the designs
+// no binary-defined difference may exist there: the assumption would hide it,
+// while the bit-level model, which looks for defined differences, reports it.
+// Returns why the abstraction cannot be used, or an empty string.
+std::string checkMemoryInterfacesAtStartup(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    const AlignedSignals& alignedInputs,
+    const AlignedSignals& interfaceOutputs,
+    const AlignedSignals& alignedOutputs,
+    const SecResetSpec& resetSpec,
+    SecEncoding encoding,
+    KEPLER_FORMAL::Config::SolverType solverType) {
+  SharedSecSymbolSpace symbolSpace = buildSharedSecSymbolSpace(
+      model0, model1, alignedInputs, interfaceOutputs);
+  if (applyResetBootstrapSpec(
+          resetSpec, alignedInputs, symbolSpace.problem,
+          /*secDiagEnabled=*/false)) {
+    return {};  // LCOV_EXCL_LINE: the caller already resolved the reset ports
+  }
+  KInductionProblem problem = buildDualRailSecProblem(
+      model0, model1, alignedInputs, interfaceOutputs, symbolSpace,
+      /*useLazyTransitionRemapping=*/true, /*secDiagEnabled=*/false);
+  copyResetBootstrapSpec(symbolSpace.problem, problem);
+  const size_t resetFrames = resetSpec.enabled() ? resetSpec.cycles : 0;
+  const auto describe = [](BaseCounterexampleCheckStatus status,
+                           const char* difference) -> std::string {
+    switch (status) {
+      case BaseCounterexampleCheckStatus::NoCounterexample:
+        return {};
+      case BaseCounterexampleCheckStatus::Counterexample:
+        return difference;
+      case BaseCounterexampleCheckStatus::Unknown:
+        break;  // LCOV_EXCL_LINE
+    }
+    return "the memory pins could not be compared at startup";  // LCOV_EXCL_LINE
+  };
+  if (resetFrames != 0) {
+    std::string failure = describe(
+        checkStartupFrames(problem, solverType, 0, resetFrames - 1),
+        "the two designs drive a paired memory differently during the reset "
+        "sequence");
+    if (!failure.empty()) {
+      return failure;
+    }
+  }
+  if (encoding != SecEncoding::Binary) {
+    return {};
+  }
+
+  // A guarded pin matters unless one of its guards is 0 in both designs.
+  std::unordered_map<SignalKey, size_t, SignalKeyHash> outputIndexByKey;
+  for (size_t i = 0; i < interfaceOutputs.keys0.size(); ++i) {
+    outputIndexByKey.emplace(interfaceOutputs.keys0[i], i);
+  }
+  BoolExpr* strictProperty = BoolExpr::createTrue();
+  for (size_t i = 0; i < interfaceOutputs.keys0.size(); ++i) {
+    const auto& rails0 = problem.dualRailObservedOutputs0[i];
+    const auto& rails1 = problem.dualRailObservedOutputs1[i];
+    BoolExpr* definedAndEqual = BoolExpr::And(
+        buildDualRailBinaryDefinedExpr(rails0),
+        BoolExpr::And(
+            makeEqualityExpr(rails0.mayBeOne, rails1.mayBeOne),
+            makeEqualityExpr(rails0.mayBeZero, rails1.mayBeZero)));
+    BoolExpr* guardOff0 = BoolExpr::createFalse();
+    BoolExpr* guardOff1 = BoolExpr::createFalse();
+    if (const auto guardsIt =
+            model0.observedOutputGuardKeysByKey.find(interfaceOutputs.keys0[i]);
+        guardsIt != model0.observedOutputGuardKeysByKey.end()) {
+      for (const auto& guardKey : guardsIt->second) {
+        const auto indexIt = outputIndexByKey.find(guardKey);
+        if (indexIt == outputIndexByKey.end()) {
+          continue;  // LCOV_EXCL_LINE: a guard is a compared pin
+        }
+        guardOff0 = BoolExpr::Or(
+            guardOff0,
+            BoolExpr::Not(
+                problem.dualRailObservedOutputs0[indexIt->second].mayBeOne));
+        guardOff1 = BoolExpr::Or(
+            guardOff1,
+            BoolExpr::Not(
+                problem.dualRailObservedOutputs1[indexIt->second].mayBeOne));
+      }
+    }
+    strictProperty = BoolExpr::And(
+        strictProperty,
+        BoolExpr::Or(BoolExpr::And(guardOff0, guardOff1), definedAndEqual));
+  }
+  problem.property = BoolExpr::simplify(strictProperty);
+  problem.bad = BoolExpr::simplify(BoolExpr::Not(problem.property));
+  std::string failure = describe(
+      checkStartupFrames(problem, solverType, resetFrames, resetFrames),
+      resetFrames != 0
+          ? "a pin of a paired memory is undefined or differs on the first "
+            "cycle after the reset sequence"
+          : "a pin of a paired memory is undefined or differs on the first "
+            "cycle");
+  if (!failure.empty()) {
+    return failure;
+  }
+
+  SharedSecSymbolSpace outputSpace = buildSharedSecSymbolSpace(
+      model0, model1, alignedInputs, alignedOutputs);
+  if (applyResetBootstrapSpec(
+          resetSpec, alignedInputs, outputSpace.problem,
+          /*secDiagEnabled=*/false)) {
+    return {};  // LCOV_EXCL_LINE: the caller already resolved the reset ports
+  }
+  KInductionProblem outputs = buildDualRailSecProblem(
+      model0, model1, alignedInputs, alignedOutputs, outputSpace,
+      /*useLazyTransitionRemapping=*/true, /*secDiagEnabled=*/false);
+  copyResetBootstrapSpec(outputSpace.problem, outputs);
+  return describe(
+      checkStartupFrames(outputs, solverType, resetFrames, resetFrames),
+      resetFrames != 0
+          ? "the designs differ on the first cycle after the reset sequence, "
+            "which the binary encoding assumes away"
+          : "the designs differ on the first cycle, which the binary encoding "
+            "assumes away");
+}
+
+// Decides whether a proof that compared memories at their interface stands.
+// It does when every interface pin was proved; the pins then leave the output
+// counts, which describe the designs' own outputs. Any other outcome is not a
+// verdict on the designs: a counterexample may rely on read data no memory
+// would return.
+SequentialEquivalenceResult concludeMemoryAbstraction(
+    SequentialEquivalenceResult result,
+    const AbstractedMemoryScope& memory) {
+  const auto fail = [&](std::string failure) {
+    return makeMemoryAbstractionFailure(
+        std::move(failure), std::move(result.extractedBoundaryReports));
+  };
+  switch (result.status) {
+    case SequentialEquivalenceStatus::Exported:
+      result.abstractedMemories = memory.memoryNames;
+      return result;
+    case SequentialEquivalenceStatus::Equivalent:
+    case SequentialEquivalenceStatus::PartiallyProved:
+      break;
+    case SequentialEquivalenceStatus::Different:
+      return fail(
+          "the designs differ at k = " + std::to_string(result.bound) +
+          " once the paired memories are compared only at their interface");
+    case SequentialEquivalenceStatus::Inconclusive:
+    case SequentialEquivalenceStatus::Unsupported:
+      return fail(
+          "the proof with the paired memories compared at their interface "
+          "was inconclusive" +
+          (result.reason.empty() ? std::string() : ": " + result.reason));
+  }
+  for (const auto& skipped : result.skippedObservedOutputs) {
+    const std::string name = skippedOutputName(skipped);
+    if (memory.interfaceNames.count(name) != 0) {
+      return fail("memory pin `" + name + "` was not proved equal");
+    }
+  }
+  if (result.proofProgress.has_value()) {
+    for (const auto& unproven : result.proofProgress->unprovenOutputs) {
+      if (memory.interfaceNames.count(unproven.name) != 0) {
+        return fail("memory pin `" + unproven.name + "` was not proved equal");
+      }
+    }
+  }
+
+  const size_t pins = memory.interfaceNames.size();
+  result.abstractedMemories = memory.memoryNames;
+  result.totalOutputs -= std::min(pins, result.totalOutputs);
+  result.coveredOutputs -= std::min(pins, result.coveredOutputs);
+  if (result.proofProgress.has_value()) {
+    auto& progress = *result.proofProgress;
+    progress.totalOutputs -= std::min(pins, progress.totalOutputs);
+    progress.provenOutputs -= std::min(pins, progress.provenOutputs);
+  }
+  if (result.coveredOutputs == 0 && result.totalOutputs != 0) {
+    // Only memory pins were proved, for example when the binary encoding
+    // skipped every output that depends on uninitialized state.
+    result.status = SequentialEquivalenceStatus::Inconclusive;
+    result.reason =
+        "The pins of the paired memories were proved equal, but no output of "
+        "the designs was proved";
+  }
+  return result;
+}
+
+// A binary counterexample is a difference only if both outputs are defined
+// whatever the uninitialized state holds. Each design's unwritten memory
+// cells are independent free values in the binary encoding, so reading one
+// makes two identical designs differ. Asks the dual-rail model, where such a
+// cell is X, for a trace to a binary-defined difference within the bound.
+// A budgeted search may end without an answer: its status is then Unknown.
+BaseCounterexampleCheckResult findBinaryDefinedDifference(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    const AlignedSignals& alignedInputs,
+    const AlignedSignals& alignedOutputs,
+    const SecResetSpec& resetSpec,
+    KEPLER_FORMAL::Config::SolverType solverType,
+    size_t bound,
+    bool budgeted) {
+  BaseCounterexampleCheckResult result;
+  SharedSecSymbolSpace symbolSpace = buildSharedSecSymbolSpace(
+      model0, model1, alignedInputs, alignedOutputs);
+  if (applyResetBootstrapSpec(
+          resetSpec, alignedInputs, symbolSpace.problem,
+          /*secDiagEnabled=*/false)) {
+    return result;  // LCOV_EXCL_LINE: the caller resolved the reset ports
+  }
+  KInductionProblem problem = buildDualRailSecProblem(
+      model0, model1, alignedInputs, alignedOutputs, symbolSpace,
+      /*useLazyTransitionRemapping=*/true, /*secDiagEnabled=*/false);
+  copyResetBootstrapSpec(symbolSpace.problem, problem);
+  if (budgeted) {
+    return checkBaseCounterexampleWithFastValidation(problem, solverType, bound);
+  }
+  result.witness = findBaseCounterexample(problem, solverType, bound);
+  result.status = result.witness.has_value()
+                      ? BaseCounterexampleCheckStatus::Counterexample
+                      : BaseCounterexampleCheckStatus::NoCounterexample;
+  return result;
+}
+
+std::string formatMemoryShape(size_t depth, size_t width) {
+  return std::to_string(depth) + " words x " + std::to_string(width) +
+         " bits";
+}
+
 }  // namespace
 
 namespace detail {
@@ -3680,10 +4118,52 @@ SequentialEquivalenceStrategy::SequentialEquivalenceStrategy(
       secEngine_(secEngine),
       encoding_(encoding),
       resetSpec_(std::move(resetSpec)),
-      exportOptions_(std::move(exportOptions)) {
+      exportOptions_(std::move(exportOptions)),
+      memoryAbstraction_(KEPLER_FORMAL::Config::getSecMemoryAbstraction()) {
   if (exportOptions_.dumpOnly && !exportOptions_.enabled()) {
     throw std::invalid_argument("BTOR2 dump-only requires an export path");
   }
+}
+
+void SequentialEquivalenceStrategy::logProgress(
+    SecProgressLevel level, const std::string& message) const {
+  if (progressLogger_) {
+    progressLogger_(level, message);
+  }
+}
+
+std::optional<std::string> SequentialEquivalenceStrategy::findUnknownResetPort(
+    const naja::NL::SNLDesign* top,
+    const SecResetSpec& resetSpec) {
+  if (top == nullptr || !resetSpec.enabled()) {
+    return std::nullopt;
+  }
+  // Same names the aligned SEC inputs carry: `name[bit]` for every input bit.
+  std::vector<std::string> inputNames;
+  for (const auto* bitTerm : top->getBitTerms()) {
+    if (bitTerm->getDirection() == naja::NL::SNLTerm::Direction::Input) {
+      inputNames.push_back(
+          bitTerm->getName().getString() + "[" +
+          std::to_string(bitTerm->getBit()) + "]");
+    }
+  }
+  for (const auto& port : resetSpec.ports) {
+    // A pin of a user-selected boundary leaf is no port of the top design.
+    if (port.name.rfind("__kepler_boundary_", 0) == 0) {
+      continue;
+    }
+    const bool found = std::any_of(
+        inputNames.begin(), inputNames.end(), [&](const std::string& name) {
+          return name == port.name ||
+                 (port.name.find('[') == std::string::npos &&
+                  isBusBitName(name, port.name));
+        });
+    if (!found) {
+      return "Reset bootstrap port `" + port.name +
+             "` was not found among aligned top-level inputs";
+    }
+  }
+  return std::nullopt;
 }
 
 SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) const {
@@ -3694,28 +4174,198 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::run(size_t maxK) cons
     const BoundarySelection right(top1_, boundaryPairs_, 1);
     validateBoundaryInterfaces(left.getPorts(), right.getPorts());
   }
+  // A mistyped reset port needs no model to be found.
+  for (const auto* top : {top0_, top1_}) {
+    if (auto resetError = findUnknownResetPort(top, resetSpec_)) {
+      return makeSecResult(
+          SequentialEquivalenceStatus::Unsupported,
+          0,
+          *resetError,
+          OutputCoverageSelection{});
+    }
+  }
 
-  // Phase 1: extract both designs into the normalized SEC model used by every
-  // downstream engine. If either side cannot be modeled soundly, stop before we
-  // spend time aligning interfaces or building proof problems.
-  const auto model0 =
-      extractSecDesign(top0_, "SEC diag: extracted design0", secDiagEnabled,
-                       boundaryPairs_, 0);
-  if (model0.hasUnsupportedFeatures()) {
+  return runWithModelExtractor(
+      [&](size_t side, const SequentialExtractOptions& options) {
+        auto model = std::make_shared<const SequentialDesignModel>(
+            SequentialDesignModel::extract(
+                side == 0 ? top0_ : top1_, boundaryPairs_, side, options));
+        logSecDiagLine(
+            secDiagEnabled,
+            side == 0 ? "SEC diag: extracted design0"
+                      : "SEC diag: extracted design1");
+        return model;
+      },
+      maxK);
+}
+
+SequentialEquivalenceResult SequentialEquivalenceStrategy::runWithModelExtractor(
+    const ModelExtractor& extractor,
+    size_t maxK) const {
+  const auto extract = [&](size_t side, const SequentialExtractOptions& options) {
+    const std::string design = "design " + std::to_string(side + 1);
+    logProgress(
+        SecProgressLevel::Info,
+        "SEC: extracting the " + design + " model" +
+            (options.abstractMemories
+                 ? " (memories compared at their interface)"
+                 : ""));
+    auto model = extractor(side, options);
+    // An unsupported model stopped before its formulas were built.
+    if (!model->hasUnsupportedFeatures()) {
+      std::ostringstream summary;
+      summary << "SEC: " << design << " model has " << model->stateBits.size()
+              << " state bits, " << model->environmentInputs.size()
+              << " inputs and " << model->allObservedOutputs.size()
+              << " observed outputs";
+      size_t memoryBits = 0;
+      for (const auto& memory : model->bitLevelMemories) {
+        memoryBits += memory.depth * memory.width;
+      }
+      if (memoryBits != 0) {
+        summary << "; " << model->bitLevelMemories.size()
+                << (model->bitLevelMemories.size() == 1 ? " memory"
+                                                        : " memories")
+                << " modeled bit by bit (" << memoryBits << " state bits)";
+      }
+      logProgress(SecProgressLevel::Info, summary.str());
+    }
+    for (const auto& memory : model->bitLevelMemories) {
+      if (!memory.abstractionObstacle.empty()) {
+        logProgress(
+            SecProgressLevel::Info,
+            "SEC memory abstraction: memory `" + memory.displayName + "` of " +
+                design + " keeps its cells: " + memory.abstractionObstacle);
+      }
+      if (memory.depth * memory.width > kLargeBitLevelMemoryBits) {
+        logProgress(
+            SecProgressLevel::Warning,
+            "SEC: memory `" + memory.displayName + "` of " + design + " (" +
+                formatMemoryShape(memory.depth, memory.width) +
+                ") is modeled with one state bit per memory bit: " +
+                std::to_string(memory.depth * memory.width) +
+                " state bits. Proof time and memory use grow with that "
+                "number.");
+      }
+    }
+    return model;
+  };
+  // Primitive-modeling issues are structural: report them before the second
+  // design is extracted.
+  const auto unsupported = [](const SequentialDesignModel& model) {
     std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
-    appendExtractedBoundaryReports(model0, "design0", extractedBoundaryReports);
+    appendExtractedBoundaryReports(model, "design0", extractedBoundaryReports);
     return makeSecResult(
         SequentialEquivalenceStatus::Unsupported,
         0,
-        joinReasons(model0.unsupportedReasons),
+        joinReasons(model.unsupportedReasons),
         OutputCoverageSelection{},
         extractedBoundaryReports);
+  };
+
+  std::string abstractionFailure;
+  // A BTOR2 export writes the bit-level obligation.
+  if (memoryAbstraction_ && !exportOptions_.enabled()) {
+    SequentialExtractOptions abstracted;
+    abstracted.abstractMemories = true;
+    auto model0 = extract(0, abstracted);
+    const bool bitLevel0 = model0->abstractedMemories.empty();
+    if (bitLevel0 && model0->hasUnsupportedFeatures()) {
+      return unsupported(*model0);
+    }
+    if (!model0->hasUnsupportedFeatures()) {
+      auto model1 = extract(1, abstracted);
+      if (model1->abstractedMemories.empty() &&
+          model1->hasUnsupportedFeatures()) {
+        // Unsupported whatever the memory model: reported without extracting
+        // design 1 a second time.
+        return runExtractedModels(*model0, *model1, maxK);
+      }
+      const auto matched = matchAbstractedMemories(*model0, *model1);
+      // A memory without a twin in the other design keeps its cells.
+      const auto reportUnmatched = [&](const SequentialDesignModel& model,
+                                       const SequentialDesignModel& other,
+                                       size_t side) {
+        for (const auto& memory : model.abstractedMemories) {
+          if (matched.count(memory.instanceKey) != 0) {
+            continue;
+          }
+          const auto twin = std::find_if(
+              other.abstractedMemories.begin(), other.abstractedMemories.end(),
+              [&](const AbstractedMemory& candidate) {
+                return candidate.instanceKey == memory.instanceKey;
+              });
+          std::string why;
+          if (!memory.obstacle.empty()) {
+            why = memory.obstacle;
+          } else if (twin == other.abstractedMemories.end()) {
+            why = "the other design has no such memory under the same path";
+          } else if (!twin->obstacle.empty()) {
+            why = "in the other design, " + twin->obstacle;
+          } else {
+            why = "the memory of the other design under the same path differs "
+                  "in primitive, parameters, connected pins or clock";
+          }
+          logProgress(
+              SecProgressLevel::Info,
+              "SEC memory abstraction: memory `" + memory.displayName +
+                  "` of design " + std::to_string(side + 1) +
+                  " keeps its cells: " + why);
+        }
+      };
+      reportUnmatched(*model0, *model1, 0);
+      reportUnmatched(*model1, *model0, 1);
+      SequentialExtractOptions matchedOnly;
+      matchedOnly.abstractMemories = !matched.empty();
+      matchedOnly.abstractOnly = matched;
+      if (model0->abstractedMemories.size() != matched.size()) {
+        model0.reset();
+        model0 = extract(0, matchedOnly);
+      }
+      if (model1->abstractedMemories.size() != matched.size()) {
+        model1.reset();
+        model1 = extract(1, matchedOnly);
+      }
+      if (model0->abstractedMemories.empty() &&
+          model1->abstractedMemories.empty()) {
+        // Nothing is abstracted: these are the bit-level models.
+        return runExtractedModels(*model0, *model1, maxK);
+      }
+      std::vector<std::string> names;
+      for (const auto& memory : model0->abstractedMemories) {
+        names.push_back(
+            "`" + memory.displayName + "` (" +
+            formatMemoryShape(memory.depth, memory.width) + ")");
+      }
+      logProgress(
+          SecProgressLevel::Info,
+          "SEC memory abstraction: comparing " + std::to_string(names.size()) +
+              (names.size() == 1 ? " paired memory at its interface: "
+                                 : " paired memories at their interface: ") +
+              formatStringList(names, 8));
+      auto result = runExtractedModels(*model0, *model1, maxK);
+      if (result.memoryAbstractionFailure.empty()) {
+        return result;
+      }
+      abstractionFailure = result.memoryAbstractionFailure;
+    } else {
+      abstractionFailure = joinReasons(model0->unsupportedReasons);
+    }
+    logProgress(
+        SecProgressLevel::Warning,
+        "SEC memory abstraction could not carry the proof (" +
+            abstractionFailure + "); modeling the memories bit by bit");
   }
 
-  const auto model1 =
-      extractSecDesign(top1_, "SEC diag: extracted design1", secDiagEnabled,
-                       boundaryPairs_, 1);
-  return runExtractedModels(model0, model1, maxK);
+  const SequentialExtractOptions bitLevel;
+  const auto model0 = extract(0, bitLevel);
+  if (model0->hasUnsupportedFeatures()) {
+    return unsupported(*model0);
+  }
+  const auto model1 = extract(1, bitLevel);
+  auto result = runExtractedModels(*model0, *model1, maxK);
+  result.memoryAbstractionFailure = std::move(abstractionFailure);
+  return result;
 }
 
 SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
@@ -3748,6 +4398,29 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         extractedBoundaryReports);
   }
 
+  // Memories compared at their interface must be the same ones on both sides:
+  // their pins then align by path like the top-level ports.
+  AbstractedMemoryScope memory;
+  if (!model0.abstractedMemories.empty() || !model1.abstractedMemories.empty()) {
+    const auto matched = matchAbstractedMemories(model0, model1);
+    if (matched.size() != model0.abstractedMemories.size() ||
+        matched.size() != model1.abstractedMemories.size()) {
+      return makeMemoryAbstractionFailure(
+          "the two designs do not abstract the same memories",
+          extractedBoundaryReports);
+    }
+    for (const auto& abstracted : model0.abstractedMemories) {
+      memory.memoryNames.push_back(abstracted.displayName);
+      memory.interfaceKeys.insert(
+          abstracted.interfaceKeys.begin(), abstracted.interfaceKeys.end());
+    }
+  }
+  const auto finish = [&](SequentialEquivalenceResult result) {
+    return memory.active()
+               ? concludeMemoryAbstraction(std::move(result), memory)
+               : result;
+  };
+
   // Phase 2: align the externally visible SEC interface, then drop any outputs
   // whose cones were already classified as skipped by extraction.
   // Internal names are candidate hints only; relations are certified below.
@@ -3756,13 +4429,13 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       model1,
       secDiagEnabled);
   if (aligned.outputs.names.empty()) {
-    return makeSecResult(
+    return finish(makeSecResult(
         SequentialEquivalenceStatus::Unsupported,
         0,
         "No aligned observed outputs remain after skipping unverifiable cones, "
         "including opaque internal cells and connectivity failures.",
         aligned.outputCoverage,
-        extractedBoundaryReports);
+        extractedBoundaryReports));
   }
 
   if (secDiagEnabled) {
@@ -3818,15 +4491,52 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         "SEC diag: dual-rail mode keeps reset-unanchored outputs in the "
         "rail-encoded proof");
   }
+  if (memory.active()) {
+    // A memory pin that left the proof surface is a pin nobody compares.
+    AlignedSignals interfaceOutputs;
+    for (size_t i = 0; i < aligned.outputs.names.size(); ++i) {
+      if (memory.interfaceKeys.count(aligned.outputs.keys0[i]) != 0) {
+        interfaceOutputs.names.push_back(aligned.outputs.names[i]);
+        interfaceOutputs.keys0.push_back(aligned.outputs.keys0[i]);
+        interfaceOutputs.keys1.push_back(aligned.outputs.keys1[i]);
+      }
+    }
+    memory.interfaceNames.insert(
+        interfaceOutputs.names.begin(), interfaceOutputs.names.end());
+    if (interfaceOutputs.names.size() != memory.interfaceKeys.size()) {
+      std::string skippedPin = "a memory pin";
+      for (const auto& skipped : aligned.outputCoverage.skippedOutputs) {
+        const std::string name = skippedOutputName(skipped);
+        const bool isMemoryPin = std::any_of(
+            memory.interfaceKeys.begin(), memory.interfaceKeys.end(),
+            [&](const SignalKey& key) {
+              return describeSecSignalKey(model0, key) == name;
+            });
+        if (isMemoryPin) {
+          skippedPin = "memory pin `" + skipped + "`";
+          break;
+        }
+      }
+      return makeMemoryAbstractionFailure(
+          skippedPin + " cannot be compared", extractedBoundaryReports);
+    }
+    if (std::string failure = checkMemoryInterfacesAtStartup(
+            model0, model1, aligned.inputs, interfaceOutputs, aligned.outputs,
+            resetSpec_, encoding_, solverType_);
+        !failure.empty()) {
+      return makeMemoryAbstractionFailure(
+          std::move(failure), extractedBoundaryReports);
+    }
+  }
   symbolSpace.problem.observedOutputNames = aligned.outputs.names;
   if (aligned.outputs.names.empty()) {
-    return makeSecResult(  // LCOV_EXCL_LINE
+    return finish(makeSecResult(  // LCOV_EXCL_LINE
         SequentialEquivalenceStatus::Unsupported,
         0,
         "No aligned observed outputs remain after skipping cones that depend "  // LCOV_EXCL_LINE
         "on reset-unanchored internal state.",
         aligned.outputCoverage,  // LCOV_EXCL_LINE
-        extractedBoundaryReports);  // LCOV_EXCL_LINE
+        extractedBoundaryReports));  // LCOV_EXCL_LINE
   }
   // KI and PDR both work on small COI slices of a potentially huge SEC
   // problem. Keep next-state formulas in their extracted-model symbol space
@@ -3877,6 +4587,14 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     proofProblem = symbolSpace.problem;
   }
   copyResetBootstrapSpec(symbolSpace.problem, proofProblem);
+  if (internalRelationOptions_.learnInternalRelations) {
+    logProgress(
+        SecProgressLevel::Info,
+        "SEC: learning internal register relations over " +
+            std::to_string(proofProblem.state0Symbols.size()) + " + " +
+            std::to_string(proofProblem.state1Symbols.size()) +
+            " state variables");
+  }
   learnInternalStateRelations(model0, model1, proofProblem,
       internalRelationOptions_, solverType_, secDiagEnabled || secSummaryStatsEnabled());
   if (internalRelationOptions_.learnInternalRelations) {
@@ -3887,9 +4605,9 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     exportSecBtor2File(proofProblem, exportOptions_.path,
         {aligned.outputCoverage.totalOutputs, aligned.outputCoverage.skippedOutputs});
     if (exportOptions_.dumpOnly) {
-      return makeSecResult(SequentialEquivalenceStatus::Exported, 0,
+      return finish(makeSecResult(SequentialEquivalenceStatus::Exported, 0,
           "BTOR2 exported to " + exportOptions_.path + "; proof not run",
-          aligned.outputCoverage, extractedBoundaryReports);
+          aligned.outputCoverage, extractedBoundaryReports));
     }
   }
 
@@ -3904,15 +4622,28 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
   if (auto witness = SEC::findResetFrontierMismatch(proofProblem, solverType_)) {
     const KInductionResult mismatch{
         KInductionStatus::Different, 0, std::move(witness)};
-    return makeSecResult(
+    return finish(makeSecResult(
         SequentialEquivalenceStatus::Different,
         0,
         formatCounterexampleWitness(mismatch, model0, model1, top0_, top1_),
         aligned.outputCoverage,
-        extractedBoundaryReports);
+        extractedBoundaryReports));
   }
 
-  return runSelectedSecEngine(
+  {
+    const size_t pins = memory.interfaceNames.size();
+    logProgress(
+        SecProgressLevel::Info,
+        "SEC: running the " + std::string(describeSecEngine(secEngine_)) +
+            " on " + std::to_string(aligned.outputs.names.size() - pins) +
+            " outputs" +
+            (pins == 0 ? std::string()
+                       : " and " + std::to_string(pins) + " memory pins") +
+            " over " + std::to_string(proofProblem.state0Symbols.size()) +
+            " + " + std::to_string(proofProblem.state1Symbols.size()) +
+            " state variables");
+  }
+  auto result = runSelectedSecEngine(
       secEngine_,
       proofProblem,
       maxK,
@@ -3923,6 +4654,59 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
       top1_,
       aligned.outputCoverage,
       extractedBoundaryReports);
+  if (encoding_ == SecEncoding::Binary &&
+      result.status == SequentialEquivalenceStatus::Different &&
+      (!model0.bitLevelMemories.empty() || !model1.bitLevelMemories.empty())) {
+    // The trace of the binary engine may only read unwritten memory cells,
+    // which is no difference between the designs: see the helper above. A
+    // defined difference is looked for within the same bound first, then up
+    // to max_k on a solver budget, and its own trace is the one reported.
+    const size_t binaryBound = result.bound;
+    auto defined = findBinaryDefinedDifference(
+        model0, model1, aligned.inputs, aligned.outputs, resetSpec_,
+        solverType_, binaryBound, /*budgeted=*/false);
+    size_t searchedBound = binaryBound;
+    bool searchedDeeper = false;
+    if (!defined.witness.has_value() && maxK > binaryBound) {
+      logProgress(
+          SecProgressLevel::Info,
+          "SEC: the counterexample at k = " + std::to_string(binaryBound) +
+              " depends on uninitialized state; looking for a binary-defined "
+              "difference up to max_k = " + std::to_string(maxK));
+      defined = findBinaryDefinedDifference(
+          model0, model1, aligned.inputs, aligned.outputs, resetSpec_,
+          solverType_, maxK, /*budgeted=*/true);
+      searchedDeeper = true;
+      if (defined.status != BaseCounterexampleCheckStatus::Unknown) {
+        searchedBound = maxK;
+      }
+    }
+    if (defined.witness.has_value()) {
+      const KInductionResult difference{
+          KInductionStatus::Different, defined.witness->badFrame,
+          std::move(defined.witness)};
+      result.bound = difference.bound;
+      result.reason =
+          formatCounterexampleWitness(difference, model0, model1, top0_, top1_);
+    } else {
+      result.status = SequentialEquivalenceStatus::Inconclusive;
+      result.counterexampleDependsOnUninitializedState = true;
+      result.reason =
+          "The counterexample at k = " + std::to_string(binaryBound) +
+          " depends on uninitialized state such as memory cells that were "
+          "never written: no output differs up to k = " +
+          std::to_string(searchedBound) +
+          " once such state is unknown (X) instead of a free value in each "
+          "design" +
+          (searchedDeeper && searchedBound != maxK
+               ? ", and a budgeted search up to k = " + std::to_string(maxK) +
+                     " found no such difference"
+               : std::string()) +
+          ". Use the dual_rail_steady encoding for a verdict.\n" +
+          result.reason;
+    }
+  }
+  return finish(std::move(result));
 }
 
 }  // namespace KEPLER_FORMAL::SEC

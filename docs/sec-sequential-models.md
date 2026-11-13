@@ -93,13 +93,120 @@ or when it sits in a loop of latches that can be open together. The model is on
 by default and `--data-latch-model false` (`data_latch_model: false`) leaves these
 latches opaque.
 
+## Memories
+
+A memory with write ports is a structured memory: a Naja memory primitive
+inferred from RTL, or a library cell that carries a memory interface. SEC has
+two models for it.
+
+### Bit-level model
+
+Every memory bit is one state bit with no initial value. A write port updates
+a cell when its address matches, all its enables are 1 and, for a masked port,
+the mask bit is 1. A read port selects the addressed cell. The model is exact
+but grows with the memory: a 16,384 x 32 memory is 524,288 state bits per
+design, and proofs stop finishing well before that size. SEC logs a warning
+for each memory above 65,536 bits that it models this way.
+
+The cells update on every step, like the registers of the model. For the
+clock domain checks they belong to the domain of the memory's clock; see
+[sec-clock-handling.md](sec-clock-handling.md#multiple-clock-domains).
+
+In the `binary` encoding the unwritten cells of the two designs are
+independent free values, so a design compared with itself differs as soon as
+it reads a word it never wrote. SEC does not report that as a difference. When
+a binary counterexample is found on a model with bit-level memories, the
+dual-rail model, where an unwritten cell is X, is asked for a binary-defined
+difference: within the bound of that counterexample first, then up to
+`max_k`. If one exists, its trace is the counterexample reported. If none
+exists, the run ends inconclusive, with the first trace and the advice to use
+`dual_rail_steady`. The search up to `max_k` runs on a solver budget, so on a
+large memory it can end without an answer; the message then says so.
+
+### Memory abstraction
+
+A memory found in both designs under the same instance path, with the same
+primitive, the same instance parameters, the same connected pins and the same
+clock, is not modeled. Its read data becomes one input shared by the two designs, and its
+input pins become proof obligations next to the outputs of the designs. Two
+identical memories that hold the same contents and are driven alike return
+the same data, so proving the pins equal on every cycle justifies sharing the
+read data. The proof no longer depends on the memory size.
+
+The pins are compared as follows:
+
+- Write enables, read addresses, clocks and resets are compared on every
+  cycle.
+- The address and mask of a write port are compared only while all the
+  enables of that port are 1, and a data bit only while its mask bit is 1 as
+  well: the same condition under which the bit-level model writes a cell. A
+  write address that differs while nothing is written does not matter.
+- In `dual_rail_steady` a pin differs when it is 0 in one design and 1 in the
+  other; an enable that is X counts as possibly 1. Nothing is assumed about
+  the memory contents: unwritten cells are X in the bit-level model, and equal
+  contents are one of the cases X stands for.
+- In `binary` the two memories are taken to hold the same contents when the
+  comparison starts. This replaces the independent free values of the
+  bit-level model.
+
+With a reset sequence the engines compare from the first cycle after it, so
+SEC separately checks the cycles of the sequence itself: on the dual-rail
+model, in either encoding, no pin may differ while the reset ports are
+asserted. Two designs that write a memory differently during reset are
+therefore not abstracted. The `binary` encoding assumes its property on the
+first cycle it compares when some state has no initial value: the first cycle
+after the sequence, or the very first cycle without one. For the memory pins
+SEC checks that cycle instead, and requires every pin that matters to be
+defined and equal. It also checks that no output of the designs has a
+binary-defined difference on that cycle, which the assumption would hide and
+the bit-level model reports.
+
+The abstraction only ever proves. If a pin is not proved equal, if a check
+above fails, or if the proof finds a counterexample, which could rely on read
+data no memory would return, SEC logs the reason and repeats the run with the
+bit-level model. The verdict is then the bit-level one.
+
+A memory keeps its cells from the start when:
+
+- the other design has no memory under the same path, or it differs in
+  primitive, parameters, connected pins or clock;
+- an instance on its path is unnamed, so the two designs cannot align it;
+- a pin breaks a rule of a boundary leaf, for example a read-data net with a
+  second driver;
+- a write enable is unconnected, undriven or depends on an X literal. The
+  bit-level model reads such an enable as a port that never writes, while a
+  compared pin would treat it as an unknown value;
+- its read data is sampled on the falling clock edge, or drives a clock. The
+  shared read data is one value per cycle, the one the rising edge samples; a
+  falling-edge register reads after the rising-edge registers have moved;
+- the instance is selected with `--set-as-boundary`, which keeps its own
+  meaning.
+
+A read whose address depends on its own data is a combinational loop and is
+reported as unsupported in both models. A register that reads a memory
+addressed from, or written on, another clock domain is skipped as
+`multi-clock-domain` in both models.
+
+The two models differ on one point. An X literal in the cone of a memory
+address, data or mask pin leaves a bit-level memory unmodeled, and the outputs
+that read it are skipped. Compared at its pins, the memory sees such a pin as
+X like any other X literal: under `dual_rail_steady` it does not differ from a
+binary value on the other side, and the outputs are compared.
+
+Proved memory pins are not counted as outputs. The log names the memories
+compared this way and, for each memory that keeps its cells, the reason;
+`boundary_terms.txt` lists the pins of the compared ones under the roles
+`memory_interface` and `memory_read_data`. The abstraction is on by default;
+`--memory-abstraction false` (`memory_abstraction: false`) models every memory
+bit by bit. A BTOR2 export always writes the bit-level model.
+
 ## Read-Only Memories
 
 A memory primitive with read ports but no write port holds no state. SEC keeps
 it out of the structured-memory model and expands each read-data bit as a
 constant table lookup over the address bits, as described in
 [sec-primitive-expansion.md](sec-primitive-expansion.md). Memories with write
-ports keep the structured-memory model.
+ports are handled as described above.
 
 ## X Constant Literals
 

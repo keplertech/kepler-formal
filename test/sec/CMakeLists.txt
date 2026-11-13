@@ -37,6 +37,12 @@ target_link_libraries(BoundaryEquivalenceTests
     kepler_sec kepler_formal_utils GTest::gtest_main)
 GTEST_DISCOVER_TESTS(BoundaryEquivalenceTests)
 
+add_executable(MemoryAbstractionTests MemoryAbstractionTests.cpp)
+target_link_libraries(MemoryAbstractionTests
+    kepler_config kepler_sec kepler_formal_utils naja_nl
+    naja_snl_systemverilog GTest::gtest_main)
+GTEST_DISCOVER_TESTS(MemoryAbstractionTests)
+
 add_executable(SecBtor2ExporterTests
     SecBtor2ExporterTests.cpp
     SecBtor2ExportValidationTests.cpp)

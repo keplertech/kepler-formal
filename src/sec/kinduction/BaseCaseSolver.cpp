@@ -2300,6 +2300,71 @@ findResetFrontierMismatch(const KInductionProblem& problem,
       /*assumeResetFrontierProperty=*/false);
 }
 
+BaseCounterexampleCheckStatus checkStartupFrames(
+    const KInductionProblem& problem,
+    KEPLER_FORMAL::Config::SolverType solverType,
+    size_t firstFrame,
+    size_t lastFrame) {
+  const size_t bootstrapFrames = resetBootstrapFrames(problem);
+  lastFrame = std::min(lastFrame, bootstrapFrames);
+  if (!problem.usesDualRailStateEncoding || firstFrame > lastFrame ||
+      problem.bad == nullptr || problem.bad == BoolExpr::createFalse()) {
+    return BaseCounterexampleCheckStatus::NoCounterexample;
+  }
+  const BaseCaseCoi coi = buildBaseCaseCoi(
+      problem,
+      InitialConstraintMode::None,
+      bootstrapFrames,
+      /*resetBootstrapObservationFrontier=*/false,
+      firstFrame,
+      lastFrame,
+      /*constrainPreviouslySafeFrames=*/false,
+      /*unused=*/false);
+  const TransitionExprResolver transitionByState(problem);
+
+  SATSolverWrapper solver(baseCaseValidationSolverType(problem, solverType));
+  solver.configureForSecPdrQuery(coi.solverSymbols.size());
+  FrameVariableStore variables(solver, coi.solverSymbols, lastFrame + 1);
+  addResetBootstrapConstraints(solver, variables, problem, lastFrame + 1);
+  addInitialStateAssignments(solver, variables, problem, coi.solverSymbolSet);
+  addComplementedStateRelations(
+      solver, variables, problem.complementedStatePairs0, coi.solverSymbolSet,
+      lastFrame + 1);
+  addComplementedStateRelations(
+      solver, variables, problem.complementedStatePairs1, coi.solverSymbolSet,
+      lastFrame + 1);
+  addSameFrameStateEqualities(
+      solver, variables, problem, coi.solverSymbolSet, lastFrame + 1);
+  addDualRailStateValidity(
+      solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet,
+      lastFrame + 1);
+  for (size_t frame = 0; frame < lastFrame; ++frame) {
+    addTransitionRelation(
+        solver, variables, transitionByState,
+        coi.transitionTargetsByFrame[frame], frame);
+  }
+
+  std::vector<int> badClause;
+  badClause.reserve(lastFrame - firstFrame + 1);
+  for (size_t frame = firstFrame; frame <= lastFrame; ++frame) {
+    FrameFormulaEncoder encoder(
+        solver,
+        variables.makeLeafLits(
+            frame, formulaSupportOrThrow(problem.bad, "bad-state formula")));
+    badClause.push_back(encoder.encode(problem.bad));
+  }
+  solver.addClause(badClause);
+
+  switch (solver.solveStatus()) {
+    case SATSolverWrapper::SolveStatus::Unsat:
+      return BaseCounterexampleCheckStatus::NoCounterexample;
+    case SATSolverWrapper::SolveStatus::Sat:
+      return BaseCounterexampleCheckStatus::Counterexample;
+    default:
+      return BaseCounterexampleCheckStatus::Unknown;  // LCOV_EXCL_LINE
+  }
+}
+
 std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexample(
     const KInductionProblem& problem,
     KEPLER_FORMAL::Config::SolverType solverType,

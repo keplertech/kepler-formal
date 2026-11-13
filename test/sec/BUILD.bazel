@@ -14,6 +14,21 @@ cc_test(
 )
 
 cc_test(
+    name = "MemoryAbstractionTests",
+    srcs = ["MemoryAbstractionTests.cpp"],
+    deps = [
+        "//src/config:kepler_config",
+        "//src/sec:kepler_sec",
+        "//src/utils:kepler_formal_utils",
+        "//src/clauses:kepler_clauses",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
+        "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "SecBtor2ExporterTests",
     srcs = [
         "SecBtor2ExporterTests.cpp",

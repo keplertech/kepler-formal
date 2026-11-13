@@ -13,7 +13,9 @@
 #include <iterator>
 #include <memory>
 #include <sstream>
+#include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -8092,6 +8094,357 @@ TEST_F(KeplerFormalCliTests, InternalRelationOptionsReachBothCliParsersAndYaml) 
     EXPECT_EQ(runWithArgs({"kepler-formal", "-verilog", source.string(), source.string(), flag, "false"}), EXIT_FAILURE);
   }
   std::filesystem::remove_all(directory);
+}
+
+namespace {
+
+// A 16 x 8 RAM behind a registered read port, with one reset register.
+std::string cliRamModule(const std::string& writeData) {
+  return "module top(input clk, input rst, input we, input [3:0] waddr,\n"
+         "           input [7:0] wdata, input [3:0] raddr,\n"
+         "           output reg [7:0] rdata, output reg valid);\n"
+         "  reg [7:0] mem [0:15];\n"
+         "  always @(posedge clk) begin\n"
+         "    if (we) mem[waddr] <= " + writeData + ";\n"
+         "    rdata <= mem[raddr];\n"
+         "    if (rst) valid <= 1'b0; else valid <= we;\n"
+         "  end\n"
+         "endmodule\n";
+}
+
+std::string cliRamSecConfig(const std::filesystem::path& design0,
+                            const std::filesystem::path& design1,
+                            const std::filesystem::path& log,
+                            const std::string& encoding,
+                            const std::string& extra = "") {
+  return "format: systemverilog\n"
+         "verification: sec\n"
+         "sec_engine: pdr\n"
+         "sec_encoding: " + encoding + "\n"
+         "max_k: 8\n"
+         "sec_reset:\n"
+         "  cycles: 2\n"
+         "  ports:\n"
+         "    - name: rst\n"
+         "      active_value: 1\n"
+         "input_paths:\n"
+         "  - " + design0.string() + "\n"
+         "  - " + design1.string() + "\n"
+         "log_file: " + log.string() + "\n" + extra;
+}
+
+}  // namespace
+
+TEST_F(KeplerFormalCliTests, MemoryAbstractionOptionReachesTheCliParserAndYaml) {
+  const auto directory = makeUniqueTempDir("kf_memory_abstraction_option");
+  const auto source = directory / "design.v";
+  std::ofstream(source) << "module top(input a, output y); assign y = a; endmodule\n";
+  // A boolean option with a value, accepted before and after the input format.
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "--memory-abstraction",
+                         "false", "-verilog", source.string(), source.string()}),
+            kSecProvedExitCode);
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "-verilog", source.string(),
+                         source.string(), "--memory-abstraction", "1"}),
+            kSecProvedExitCode);
+  // A missing or malformed value is rejected.
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "-verilog", source.string(),
+                         source.string(), "--memory-abstraction"}),
+            EXIT_FAILURE);
+  EXPECT_EQ(runWithArgs({"kepler-formal", "-v", "sec", "--memory-abstraction",
+                         "maybe", "-verilog", source.string(), source.string()}),
+            EXIT_FAILURE);
+  for (const auto* value : {"true", "false"}) {
+    const auto log = directory / (std::string("memory_") + value + ".log");
+    const auto config = writeTempConfig(
+        "format: verilog\nverification: sec\ninput_paths:\n  - " + source.string() +
+        "\n  - " + source.string() + "\nmemory_abstraction: " + value +
+        "\nlog_file: " + log.string() + "\n");
+    EXPECT_EQ(runWithConfigFile(config), kSecProvedExitCode);
+    const std::string contents = readFileContents(log);
+    const std::string state = std::string(value) == "true" ? "enabled" : "disabled";
+    EXPECT_NE(contents.find("SEC memory abstraction: " + state), std::string::npos)
+        << contents;
+    std::filesystem::remove(config);
+  }
+  std::filesystem::remove_all(directory);
+}
+
+// Issue 308: a RAM against itself reads a word it never wrote. The binary
+// encoding used to report that as a counterexample.
+TEST_F(KeplerFormalCliTests, SecRamAgainstItselfIsEquivalentInBothEncodings) {
+  const auto fixture = createEquivalentDesignFixture("sv", cliRamModule("wdata"));
+  for (const auto* encoding : {"binary", "dual_rail_steady"}) {
+    const auto log = fixture.tmpDir / (std::string("ram_") + encoding + ".log");
+    const auto config = writeTempConfig(cliRamSecConfig(
+        fixture.design0Path, fixture.design1Path, log, encoding));
+    const auto run = runStructuredWithConfigFile(config);
+    EXPECT_EQ(run.exitCode, kSecProvedExitCode) << encoding;
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+    // The memory pins are proved, and only the design's outputs are counted.
+    EXPECT_EQ(run.result.totalOutputs, 9u);
+    EXPECT_EQ(run.result.coveredOutputs, 9u);
+    const std::string contents = readFileContents(log);
+    EXPECT_NE(contents.find(
+                  "SEC memory abstraction: 1 paired memory compared at the "
+                  "interface, pins proved equal: mem_mem"),
+              std::string::npos)
+        << contents;
+    EXPECT_NE(contents.find("model has 9 state bits"), std::string::npos)
+        << contents;
+    std::filesystem::remove(config);
+  }
+
+  // Bit by bit, the binary encoding finds a trace that reads unwritten cells:
+  // inconclusive, with the explanation, and not a difference.
+  const auto log = fixture.tmpDir / "ram_bit_level.log";
+  const auto config = writeTempConfig(cliRamSecConfig(
+      fixture.design0Path, fixture.design1Path, log, "binary",
+      "memory_abstraction: false\n"));
+  const auto run = runStructuredWithConfigFile(config);
+  EXPECT_EQ(run.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Inconclusive);
+  const std::string contents = readFileContents(log);
+  EXPECT_NE(contents.find("SEC found no binary-defined difference."),
+            std::string::npos)
+      << contents;
+  EXPECT_NE(contents.find("depends on uninitialized state"), std::string::npos)
+      << contents;
+  EXPECT_NE(contents.find("1 memory modeled bit by bit (128 state bits)"),
+            std::string::npos)
+      << contents;
+  EXPECT_EQ(contents.find("Difference was found"), std::string::npos) << contents;
+  std::filesystem::remove(config);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+// The model has one step for all clocks. A register that one design clocks
+// from `clk` and the other from `clk2` is therefore not compared.
+TEST_F(KeplerFormalCliTests, SecSkipsOutputsClockedDifferentlyInTheTwoDesigns) {
+  const auto module = [](const char* clock) {
+    return std::string(
+               "module top(input clk, input clk2, input rst, input [3:0] d,\n"
+               "           output [3:0] q, output reg valid);\n"
+               "  reg [3:0] r;\n"
+               "  always @(posedge ") +
+           clock +
+           ") r <= d;\n"
+           "  assign q = r;\n"
+           "  always @(posedge clk) if (rst) valid <= 1'b0; else valid <= d[0];\n"
+           "endmodule\n";
+  };
+  const auto directory = makeUniqueTempDir("kf_clock_move");
+  const auto onClk = directory / "on_clk.sv";
+  const auto onClk2 = directory / "on_clk2.sv";
+  std::ofstream(onClk) << module("clk");
+  std::ofstream(onClk2) << module("clk2");
+
+  for (const auto* encoding : {"binary", "dual_rail_steady"}) {
+    const auto log = directory / (std::string("moved_") + encoding + ".log");
+    const auto config =
+        writeTempConfig(cliRamSecConfig(onClk, onClk2, log, encoding));
+    const auto run = runStructuredWithConfigFile(config);
+    EXPECT_EQ(run.exitCode, kSecPartiallyProvedExitCode) << encoding;
+    // `valid` stays on `clk` in both designs and is proved; `q` is skipped.
+    EXPECT_EQ(run.result.totalOutputs, 5u);
+    EXPECT_EQ(run.result.coveredOutputs, 1u);
+    const std::string contents = readFileContents(log);
+    EXPECT_NE(contents.find(
+                  "q[0]: multi-clock-domain connectivity: Observed output cone "
+                  "is clocked by clk[0] in design0 and by clk2[0] in design1"),
+              std::string::npos)
+        << contents;
+    std::filesystem::remove(config);
+  }
+
+  // On the same clock in both designs, whichever it is, `q` is compared.
+  for (const auto& design : {onClk, onClk2}) {
+    const auto log = directory / "same_clock.log";
+    const auto config = writeTempConfig(
+        cliRamSecConfig(design, design, log, "dual_rail_steady"));
+    const auto run = runStructuredWithConfigFile(config);
+    EXPECT_EQ(run.exitCode, kSecProvedExitCode) << design;
+    EXPECT_EQ(run.result.coveredOutputs, 5u);
+    std::filesystem::remove(config);
+  }
+  std::filesystem::remove_all(directory);
+}
+
+// The cells of a memory move with its write clock. A memory that one design
+// writes on `clk` and the other on `clk2` is not compared, and a register on
+// `clk` that reads a memory written on `clk2` crosses domains inside one
+// design. Both hold with the cells modeled and with the memory compared at
+// its pins.
+TEST_F(KeplerFormalCliTests, SecSkipsOutputsThatReadAMemoryOnAnotherClock) {
+  const auto module = [](const char* writeClock) {
+    return std::string(
+               "module top(input clk, input clk2, input rst, input we,\n"
+               "           input [3:0] waddr, input [7:0] wdata,\n"
+               "           input [3:0] raddr, output reg [7:0] rdata,\n"
+               "           output reg valid);\n"
+               "  reg [7:0] mem [0:15];\n"
+               "  always @(posedge ") +
+           writeClock +
+           ") if (we) mem[waddr] <= wdata;\n"
+           "  always @(posedge clk) rdata <= mem[raddr];\n"
+           "  always @(posedge clk) if (rst) valid <= 1'b0; else valid <= we;\n"
+           "endmodule\n";
+  };
+  const auto directory = makeUniqueTempDir("kf_memory_clock_move");
+  const auto onClk = directory / "on_clk.sv";
+  const auto onClk2 = directory / "on_clk2.sv";
+  std::ofstream(onClk) << module("clk");
+  std::ofstream(onClk2) << module("clk2");
+
+  for (const auto* abstraction : {"true", "false"}) {
+    const std::string option =
+        std::string("memory_abstraction: ") + abstraction + "\n";
+    // Moved between the designs, then on `clk2` in both of them.
+    for (const auto* left : {&onClk, &onClk2}) {
+      const auto log = directory / (std::string("moved_") + abstraction + ".log");
+      std::filesystem::remove(log);
+      const auto config = writeTempConfig(
+          cliRamSecConfig(*left, onClk2, log, "dual_rail_steady", option));
+      const auto run = runStructuredWithConfigFile(config);
+      EXPECT_EQ(run.exitCode, kSecPartiallyProvedExitCode)
+          << abstraction << " " << *left;
+      // `valid` does not read the memory and is proved; `rdata` is skipped.
+      EXPECT_EQ(run.result.totalOutputs, 9u);
+      EXPECT_EQ(run.result.coveredOutputs, 1u);
+      const std::string contents = readFileContents(log);
+      EXPECT_NE(contents.find("rdata[0]: "), std::string::npos) << contents;
+      EXPECT_NE(contents.find("multi-clock-domain connectivity"),
+                std::string::npos)
+          << contents;
+      EXPECT_NE(contents.find("clk[0], clk2[0]"), std::string::npos) << contents;
+      std::filesystem::remove(config);
+    }
+    // Written on the clock of its reader in both designs: compared.
+    const auto log = directory / (std::string("same_") + abstraction + ".log");
+    const auto config = writeTempConfig(
+        cliRamSecConfig(onClk, onClk, log, "dual_rail_steady", option));
+    const auto run = runStructuredWithConfigFile(config);
+    EXPECT_EQ(run.exitCode, kSecProvedExitCode) << abstraction;
+    EXPECT_EQ(run.result.coveredOutputs, 9u);
+    std::filesystem::remove(config);
+  }
+  std::filesystem::remove_all(directory);
+}
+
+TEST_F(KeplerFormalCliTests, CompactSecUsesMemoryAbstractionAndItsFallback) {
+  const auto directory = makeUniqueTempDir("kf_compact_memory_abstraction");
+  const auto base = directory / "base.sv";
+  const auto bug = directory / "bug.sv";
+  std::ofstream(base) << cliRamModule("wdata");
+  std::ofstream(bug) << cliRamModule("wdata ^ 8'h01");
+
+  // Identical inputs: one extraction serves both sides.
+  {
+    const auto log = directory / "same.log";
+    const auto config = writeTempConfig(cliRamSecConfig(
+        base, base, log, "dual_rail_steady", "compact_mode: true\n"));
+    EXPECT_EQ(runWithConfigFile(config), kSecProvedExitCode);
+    const std::string contents = readFileContents(log);
+    EXPECT_NE(contents.find("reusing extracted design 1 model"),
+              std::string::npos)
+        << contents;
+    EXPECT_NE(contents.find("1 paired memory compared at the interface"),
+              std::string::npos)
+        << contents;
+    std::filesystem::remove(config);
+  }
+
+  // A write-data bug: the pins differ, both designs are loaded again for the
+  // bit-level model, and that model finds the difference.
+  {
+    const auto log = directory / "bug.log";
+    const auto config = writeTempConfig(cliRamSecConfig(
+        base, bug, log, "dual_rail_steady", "compact_mode: true\n"));
+    EXPECT_EQ(runWithConfigFile(config), kSecCounterexampleExitCode);
+    const std::string contents = readFileContents(log);
+    EXPECT_NE(contents.find("SEC memory abstraction could not carry the proof"),
+              std::string::npos)
+        << contents;
+    EXPECT_NE(contents.find(
+                  "SEC memory abstraction not used, memories modeled bit by bit"),
+              std::string::npos)
+        << contents;
+    EXPECT_NE(contents.find("Difference was found"), std::string::npos)
+        << contents;
+    std::filesystem::remove(config);
+  }
+
+  // A mistyped reset port is reported before any model is built.
+  {
+    const auto log = directory / "reset.log";
+    std::string config_text = cliRamSecConfig(
+        base, bug, log, "dual_rail_steady", "compact_mode: true\n");
+    const std::string port = "    - name: rst\n";
+    config_text.replace(config_text.find(port), port.size(),
+                        "    - name: arst_i\n");
+    const auto config = writeTempConfig(config_text);
+    const auto run = runStructuredWithConfigFile(config);
+    EXPECT_EQ(run.exitCode, kSecInconclusiveExitCode);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+    const std::string contents = readFileContents(log);
+    EXPECT_NE(contents.find("Reset bootstrap port `arst_i` was not found among "
+                            "aligned top-level inputs"),
+              std::string::npos)
+        << contents;
+    EXPECT_EQ(contents.find("model has"), std::string::npos) << contents;
+    std::filesystem::remove(config);
+  }
+  std::filesystem::remove_all(directory);
+}
+
+TEST_F(KeplerFormalCliTests, SecRejectsUnknownResetPortBeforeExtraction) {
+  const auto fixture = createEquivalentDesignFixture("sv", cliRamModule("wdata"));
+  const auto log = fixture.tmpDir / "reset.log";
+  std::string config_text = cliRamSecConfig(
+      fixture.design0Path, fixture.design1Path, log, "dual_rail_steady");
+  const std::string port = "    - name: rst\n";
+  config_text.replace(config_text.find(port), port.size(),
+                      "    - name: arst_i\n");
+  const auto config = writeTempConfig(config_text);
+  const auto run = runStructuredWithConfigFile(config);
+  EXPECT_EQ(run.exitCode, kSecInconclusiveExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Unsupported);
+  EXPECT_NE(run.result.reason.find("arst_i"), std::string::npos);
+  const std::string contents = readFileContents(log);
+  // Nothing was extracted: the port is checked right after parsing.
+  EXPECT_EQ(contents.find("SEC: extracting"), std::string::npos) << contents;
+  std::filesystem::remove(config);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+// Concurrent runs share the temporary directory: each file must be its own.
+TEST_F(KeplerFormalCliTests, TemporaryFilesAreUniqueAcrossConcurrentCallers) {
+  constexpr size_t kThreads = 8;
+  constexpr size_t kFilesPerThread = 16;
+  std::vector<std::filesystem::path> paths(kThreads * kFilesPerThread);
+  std::vector<std::thread> threads;
+  for (size_t thread = 0; thread < kThreads; ++thread) {
+    threads.emplace_back([&paths, thread] {
+      for (size_t file = 0; file < kFilesPerThread; ++file) {
+        paths[thread * kFilesPerThread + file] =
+            createUniqueTemporaryFile("kepler_formal_unit_", ".f");
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  const std::set<std::filesystem::path> distinct(paths.begin(), paths.end());
+  EXPECT_EQ(distinct.size(), paths.size());
+  for (const auto& path : paths) {
+    EXPECT_TRUE(std::filesystem::is_regular_file(path)) << path;
+    EXPECT_EQ(std::filesystem::file_size(path), 0u) << path;
+    EXPECT_TRUE(std::filesystem::equivalent(
+        path.parent_path(), std::filesystem::temp_directory_path()));
+    EXPECT_EQ(path.filename().string().rfind("kepler_formal_unit_", 0), 0u);
+    EXPECT_EQ(path.extension(), ".f");
+    std::filesystem::remove(path);
+  }
 }
 
 TEST_F(KeplerFormalCliTests, LatchOptionsReachTheCliParserAndYaml) {

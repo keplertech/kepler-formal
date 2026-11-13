@@ -1045,7 +1045,8 @@ struct PredecessorAssumptionSolver {
            key.solverSymbols.size() == solverSymbols.size();
   }
 
-  void extendSymbolSurface(const ComplementPartnerIndex& stateRelations,
+  void extendSymbolSurface(const KInductionProblem& problem,
+                           const ComplementPartnerIndex& stateRelations,
                            const std::vector<size_t>& solverSymbols);
 
   const PreparedPredecessorTargetAssumptions& prepareTargetAssumptions(
@@ -1915,7 +1916,8 @@ void addPostBootstrapResetInputConstraints(
     SATSolverWrapper& solver,
     const FrameVariableStore& variables,
     const KInductionProblem& problem,
-    size_t frame);
+    size_t frame,
+    const std::vector<size_t>* addedSymbols = nullptr);
 
 void addFormulaSymbols(BoolExpr* formula,
                        std::unordered_set<size_t>& symbols,
@@ -3601,7 +3603,8 @@ void addPostBootstrapResetInputConstraints(
     SATSolverWrapper& solver,
     const FrameVariableStore& variables,
     const KInductionProblem& problem,
-    size_t frame) {
+    size_t frame,
+    const std::vector<size_t>* addedSymbols) {
   if (problem.resetBootstrapCycles == 0) {
     return;
   }
@@ -3610,7 +3613,16 @@ void addPostBootstrapResetInputConstraints(
   // reset controls are therefore no longer free environment inputs in one-step
   // predecessor queries; they must stay at their deasserted value on every PDR
   // transition, exactly as the concrete base solver constrains them.
+  //
+  // A reset input the solver does not hold yet is skipped here. An incremental
+  // solver that takes it later calls again with `addedSymbols`, the sorted
+  // symbols it just gained, so that only those are constrained.
   for (const auto& [symbol, assertedValue] : problem.resetBootstrapInputs) {
+    if (addedSymbols != nullptr &&
+        !std::binary_search(
+            addedSymbols->begin(), addedSymbols->end(), symbol)) {
+      continue;
+    }
     if (!variables.hasSymbol(symbol)) {
       continue;
     // LCOV_EXCL_START
@@ -4454,6 +4466,7 @@ size_t addNewPredecessorFrameClauses(
 }
 
 void PredecessorAssumptionSolver::extendSymbolSurface(
+    const KInductionProblem& problem,
     const ComplementPartnerIndex& stateRelations,
     const std::vector<size_t>& solverSymbols) {
   std::vector<size_t> addedSymbols;
@@ -4468,6 +4481,12 @@ void PredecessorAssumptionSolver::extendSymbolSurface(
   }
 
   variables->addSymbols(*solver, addedSymbols);
+  // A reset input that joins the solver with this extension was not there
+  // when the solver was created, so nothing holds it deasserted yet. Left
+  // free, it lets a predecessor query assert reset again after the reset
+  // prefix and build an obligation chain no real trace follows.
+  addPostBootstrapResetInputConstraints(
+      *solver, *variables, problem, 0, &addedSymbols);
   querySymbolSet.insert(addedSymbols.begin(), addedSymbols.end());
   for (const size_t symbol : addedSymbols) {
     const int literal = variables->getLiteral(symbol, 0);
@@ -4630,7 +4649,7 @@ PredecessorAssumptionSolver& getOrCreatePredecessorAssumptionSolver(
       *keySolverSymbols};
   if (solver != nullptr && solver->canExtendTo(key)) {
     const size_t previousSymbolCount = solver->key.solverSymbols.size();
-    solver->extendSymbolSurface(stateRelations, key.solverSymbols);
+    solver->extendSymbolSurface(problem, stateRelations, key.solverSymbols);
     const bool surfaceWidened =
         solver->key.solverSymbols.size() != previousSymbolCount;
     if (surfaceWidened && shouldEmitFrequentPdrStats()) {

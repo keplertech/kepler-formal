@@ -433,6 +433,7 @@ bool parseBorrowedOptions(PyObject *object,
       "set_as_boundary", "report_skipped_outputs", "log_file", "log_level",
       "learn_internal_relations", "allow_x_equality_in_internal_relations",
       "binary_relation_round", "latch_abstraction", "data_latch_model",
+      "memory_abstraction",
       "sec_reset_cycles", "sec_reset_ports", "btor2_export_path",
       "btor2_dump_only"};
   Py_ssize_t position = 0;
@@ -478,6 +479,8 @@ bool parseBorrowedOptions(PyObject *object,
                          options.internalRelationOptions.binaryRelationRound) ||
       !dictionaryBoolean(object, "latch_abstraction", options.latchAbstraction) ||
       !dictionaryBoolean(object, "data_latch_model", options.dataLatchModel) ||
+      !dictionaryBoolean(object, "memory_abstraction",
+                         options.memoryAbstraction) ||
       !dictionarySize(object, "sec_reset_cycles", options.secReset.cycles) ||
       !dictionaryResetPorts(object, "sec_reset_ports", options.secReset) ||
       !dictionaryString(object, "btor2_export_path", options.btor2Export.path,
@@ -505,6 +508,11 @@ bool parseBorrowedOptions(PyObject *object,
     if (!options.latchAbstraction || !options.dataLatchModel) {
       PyErr_SetString(PyExc_ValueError,
                       "Latch model options are only supported for SEC");
+      return false;
+    }
+    if (!options.memoryAbstraction) {
+      PyErr_SetString(PyExc_ValueError,
+                      "Memory abstraction is only supported for SEC");
       return false;
     }
     if (resetRequested) {
