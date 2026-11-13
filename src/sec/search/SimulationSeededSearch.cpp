@@ -1411,12 +1411,11 @@ std::vector<std::unordered_set<size_t>> targetConeLayers(
 
 // Optional controls of the bounded search used by the abstraction-guided
 // search: a localized model (only kept states have transitions; the others are
-// free after frame 0), pinned rail values as solver assumptions with the
-// failed subset returned on UNSAT, and per-frame values of chosen symbols.
+// free after frame 0), pinned rail values, and per-frame values of chosen
+// symbols.
 struct BoundedSearchExtras {
   const std::unordered_set<size_t>* keptStates = nullptr;
   const std::vector<std::tuple<size_t, size_t, bool>>* pins = nullptr;  // (symbol, frame, value)
-  std::vector<std::tuple<size_t, size_t, bool>>* failedPinsOut = nullptr;
   const std::vector<size_t>* traceSymbols = nullptr;
   std::vector<std::vector<std::pair<size_t, bool>>>* traceValuesOut = nullptr;  // [frame][(symbol, value)]
   bool forceAssumptionSolver = false;
@@ -2059,24 +2058,14 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     }
   }
 
-  // Pinned rail values: assumptions when the solver supports them (so the
-  // failed subset can be read back), otherwise unit clauses.
-  std::vector<int> pinLiterals;
-  std::unordered_map<int, std::tuple<size_t, size_t, bool>> pinByLiteral;
+  // Pinned rail values.
   if (extras.pins != nullptr) {
-    for (const auto& pin : *extras.pins) {
-      const auto [symbol, frame, value] = pin;
+    for (const auto& [symbol, frame, value] : *extras.pins) {
       if (frame > totalFrames || !variables.hasSymbol(symbol)) {
         continue;
       }
       const int literal = variables.getLiteral(symbol, frame);
-      const int signedLiteral = value ? literal : -literal;
-      if (usesAssumptions) {
-        pinLiterals.push_back(signedLiteral);
-        pinByLiteral.emplace(signedLiteral, pin);
-      } else {
-        solver.addClause({signedLiteral});
-      }
+      solver.addClause({value ? literal : -literal});
     }
   }
   const auto checkPendingTarget = [&](size_t frame) -> std::optional<FrontierBoundedSearchResult> {
@@ -2087,18 +2076,8 @@ std::optional<FrontierBoundedSearchResult> runFrontierBoundedSearch(
     const auto solveStart = std::chrono::steady_clock::now();
     SATSolverWrapper::SolveStatus status = SATSolverWrapper::SolveStatus::Unknown;
     if (usesAssumptions) {
-      std::vector<int> assumptions = pinLiterals;
-      assumptions.push_back(anyTarget);
       status = solver.solveWithAssumptionsStatus(
-          assumptions, conflictLimit == 0 ? -1 : static_cast<int64_t>(conflictLimit));
-      if (status == SATSolverWrapper::SolveStatus::Unsat && extras.failedPinsOut != nullptr) {
-        extras.failedPinsOut->clear();
-        for (const int failed : solver.failedAssumptions()) {
-          if (const auto it = pinByLiteral.find(failed); it != pinByLiteral.end()) {
-            extras.failedPinsOut->push_back(it->second);
-          }
-        }
-      }
+          {anyTarget}, conflictLimit == 0 ? -1 : static_cast<int64_t>(conflictLimit));
     } else {
       solver.addClause({anyTarget});
       status = conflictLimit == 0
@@ -3057,8 +3036,8 @@ runSimulationSeededSearch(
   // few steps of the divergence predicate and leaves every other register
   // free. Its trace pins the kept part's boundary registers frame by frame in
   // the concrete search, which then only has to find inputs that reproduce
-  // them. When the pinned trace is infeasible, the registers whose pins took
-  // part in the refutation join the abstract model, and the loop repeats.
+  // them. When the pinned trace is infeasible, every pinned boundary register
+  // joins the abstract model, and the loop repeats.
   const auto runAbstractionGuided =
       [&](const DivergenceProblem& divergence) -> std::optional<FrontierBoundedSearchResult> {
     const auto abstractionStart = std::chrono::steady_clock::now();
@@ -3385,54 +3364,9 @@ runSimulationSeededSearch(
       }
       logSeeded(diagnostics, "abstraction: abstract trace of %zu frames; %zu pinned rail values",
                 abstractResult->badFrame, pins.size());
-      // Lift the pins to those the abstract model needs: with every pin and
-      // every input of the abstract trace assumed, the negated guide at the
-      // last frame is unsatisfiable, and the failed assumptions are the
-      // relevant ones (minimal assignments by unsatisfiable core: Ravi and
-      // Somenzi, TACAS 2004; Een, Mishchenko and Brayton, FMCAD 2011).
-      {
-        std::vector<std::tuple<size_t, size_t, bool>> fixed = pins;
-        for (size_t frame = 0; frame < abstractResult->inputsByFrame.size(); ++frame) {
-          const auto& inputs = abstractResult->inputsByFrame[frame];
-          for (size_t i = 0; i < inputs.size() && i < abstractProblem.inputSymbols.size(); ++i) {
-            fixed.emplace_back(abstractProblem.inputSymbols[i], frame, inputs[i]);
-          }
-        }
-        KInductionProblem liftProblem = abstractProblem;
-        liftProblem.bad = abstractProblem.property;
-        liftProblem.property = abstractProblem.bad;
-        std::vector<std::tuple<size_t, size_t, bool>> needed;
-        bool liftUnsat = false;
-        BoundedSearchExtras liftExtras;
-        liftExtras.keptStates = &kept;
-        liftExtras.pins = &fixed;
-        liftExtras.failedPinsOut = &needed;
-        liftExtras.forceAssumptionSolver = true;
-        liftExtras.unsatOut = &liftUnsat;
-        runFrontierBoundedSearch(liftProblem, divergence.frontier, {}, abstractResult->badFrame,
-                                 0, noEnlargement, nullptr, solverType, false, nullptr,
-                                 /*targetAtLastFrameOnly=*/true, options.abstractionConflicts,
-                                 heldFor(divergence.problem), liftExtras);
-        if (liftUnsat) {
-          std::vector<std::tuple<size_t, size_t, bool>> lifted;
-          for (const auto& pin : needed) {
-            if (indexByRail.count(std::get<0>(pin)) != 0) {
-              lifted.push_back(pin);
-            }
-          }
-          logSeeded(diagnostics, "abstraction: lifted pins %zu -> %zu", pins.size(),
-                    lifted.size());
-          pins = std::move(lifted);
-        } else {
-          logSeeded(diagnostics, "abstraction: pin lifting inconclusive; keeping every pin");
-        }
-      }
-      std::vector<std::tuple<size_t, size_t, bool>> failed;
       bool unsat = false;
       BoundedSearchExtras concreteExtras;
       concreteExtras.pins = &pins;
-      concreteExtras.failedPinsOut = &failed;
-      concreteExtras.forceAssumptionSolver = true;
       concreteExtras.unsatOut = &unsat;
       const auto concrete = runFrontierBoundedSearch(
           divergence.problem, divergence.frontier, {}, abstractResult->badFrame, 0,
@@ -3450,15 +3384,9 @@ runSimulationSeededSearch(
         }
         continue;
       }
-      // The abstract trace relied on every lifted pin, so the registers behind
-      // all of them join the model, not only those of the failed subset: a
-      // failed core is often a single pin and would refine one register per
-      // round.
+      // The abstract trace relied on its boundary values, so every pinned
+      // boundary register joins the model.
       size_t added = 0;
-      std::unordered_set<size_t> failedFrames;
-      for (const auto& [symbol, frame, value] : failed) {
-        failedFrames.insert(frame);
-      }
       for (const auto& [symbol, frame, value] : pins) {
         if (const auto it = indexByRail.find(symbol); it != indexByRail.end()) {
           if (kept.count(divergence.railsByStateIndex[it->second].mayBeOne) == 0) {
@@ -3468,9 +3396,8 @@ runSimulationSeededSearch(
         }
       }
       logSeeded(diagnostics,
-                "abstraction: pinned trace infeasible; %zu failed pins over %zu frames; the %zu "
-                "lifted pins add %zu registers",
-                failed.size(), failedFrames.size(), pins.size(), added);
+                "abstraction: pinned trace infeasible; the %zu pins add %zu registers",
+                pins.size(), added);
       if (added == 0 && !widen()) {
         break;
       }

@@ -21734,7 +21734,6 @@ endmodule
   EXPECT_NE(stdoutOutput.find("abstraction: iteration=0 kept_registers=5 of 11"),
             std::string::npos)
       << stdoutOutput;
-  EXPECT_NE(stdoutOutput.find("abstraction: lifted pins"), std::string::npos) << stdoutOutput;
   EXPECT_NE(stdoutOutput.find("abstraction: concrete trace found"), std::string::npos)
       << stdoutOutput;
 }
@@ -21836,7 +21835,6 @@ endmodule
   EXPECT_NE(stdoutOutput.find("abstraction: iteration=0 kept_registers=5 of 10"),
             std::string::npos)
       << stdoutOutput;
-  EXPECT_NE(stdoutOutput.find("abstraction: lifted pins"), std::string::npos) << stdoutOutput;
   EXPECT_NE(stdoutOutput.find("abstraction: concrete trace found"), std::string::npos)
       << stdoutOutput;
 }

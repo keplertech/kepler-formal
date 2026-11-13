@@ -206,19 +206,12 @@ the single-copy divergence problem in rounds:
 2. **Abstract trace.** A bounded search of `depth` frames on that model finds
    a divergence quickly; if it finds none, there is none within that depth.
 3. **Concretization.** The values the abstract trace gave the boundary
-   registers (the free registers the kept part reads) are first lifted to the
-   ones the abstract model needs: with every boundary value and every input of
-   the trace assumed, the negated predicate at the last frame is
-   unsatisfiable, and the failed assumptions are the relevant pins (minimal
-   assignments by unsatisfiable core: Ravi and Somenzi, TACAS 2004; Een,
-   Mishchenko and Brayton, FMCAD 2011). The remaining pins are assumed frame
-   by frame in a bounded search on the full design, which then only has to
-   find inputs that reproduce them. A trace found here is a real one.
-4. **Refinement.** When the pinned trace is infeasible, the registers behind
-   the lifted pins join the abstract model (the abstract trace relied on each
-   of them; the failed subset alone is often a single pin and would refine one
-   register per round), and the round repeats; an inconclusive check widens
-   the model by one register step instead.
+   registers (the free registers the kept part reads) are pinned frame by
+   frame in a bounded search on the full design, which then only has to find
+   inputs that reproduce them. A trace found here is a real one.
+4. **Refinement.** When the pinned trace is infeasible, every pinned boundary
+   register joins the abstract model and the round repeats; an inconclusive
+   check widens the model by one register step instead.
 
 ## Diagnostics
 
