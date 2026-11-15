@@ -85,6 +85,7 @@ with a warning that names the cell and counts its instances.
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 | `--latch-abstraction <bool>` | Phase-abstract clock-driven latches. Defaults to `true`; `false` makes every latch output opaque as before, data-enabled latches included. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
 | `--data-latch-model <bool>` | Model data-enabled latches (enable is data logic, not a clock phase) as step-transparent state. Defaults to `true`; `false` leaves such latches opaque. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
+| `--clock-gate-model <bool>` | Read Liberty integrated clock-gating cells as a latch and a gate, so a flop behind one becomes a flop with an enable. Defaults to `true`; `false` leaves the cells opaque. SEC only; see [sec-clock-handling.md](sec-clock-handling.md#integrated-clock-gating-cells). |
 
 ## YAML config flags
 
@@ -121,6 +122,7 @@ with a warning that names the cell and counts its instances.
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `latch_abstraction` | bool | Defaults to `true`. Same as `--latch-abstraction`. |
 | `data_latch_model` | bool | Defaults to `true`. Same as `--data-latch-model`. |
+| `clock_gate_model` | bool | Defaults to `true`. Same as `--clock-gate-model`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |

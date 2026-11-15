@@ -5574,9 +5574,12 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests,
-     SecStatefulClockGateWithoutBehavioralModelIsSkippedAsOpaque) {
-  const auto fixture = createDesignFixture(
+namespace {
+
+// A flop behind a Nangate45 integrated clock gate, a flop on the free clock,
+// and the same registers with the enable as a mux on the data.
+SimpleCliFixture createClockGatedRegisterFixture() {
+  return createDesignFixture(
       "v",
       "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
       "  wire gclk;\n"
@@ -5594,22 +5597,59 @@ TEST_F(KeplerFormalCliTests,
       "  DFFR_X1 u_q(.CK(clk), .D(next_q), .Q(q), .QN(qn), .RN(rst_n));\n"
       "  DFFR_X1 u_pass(.CK(clk), .D(d), .Q(pass), .QN(pass_n), .RN(rst_n));\n"
       "endmodule\n");
-  const auto logPath = fixture.tmpDir / "sec_clockgate_opaque.log";
+}
+
+std::string clockGatedRegisterConfig(const SimpleCliFixture& fixture,
+                                     const std::filesystem::path& logPath,
+                                     const std::string& extra) {
   const auto libertyPath =
       repoRoot() / "examples" / "tinyrocket" /
       "NangateOpenCellLibrary_typical.lib";
+  return "format: verilog\n"
+         "verification: sec\n"
+         "sec_encoding: dual_rail_steady\n"
+         "sec_engine: pdr\n"
+         "max_k: 2\n"
+         "input_paths:\n"
+         "  - " + fixture.design0Path.string() + "\n"
+         "  - " + fixture.design1Path.string() + "\n"
+         "liberty_files:\n"
+         "  - " + libertyPath.string() + "\n"
+         "log_file: " + logPath.string() + "\n" + extra;
+}
+
+}  // namespace
+
+TEST_F(KeplerFormalCliTests, SecStatefulClockGateIsModeledAsAFlopEnable) {
+  // The Liberty statetable of the clock gate is read as a latch and a gate,
+  // which SEC reduces to an enable on the flop: both outputs are proved.
+  const auto fixture = createClockGatedRegisterFixture();
+  const auto logPath = fixture.tmpDir / "sec_clockgate_modeled.log";
+  const auto cfgPath =
+      writeTempConfig(clockGatedRegisterConfig(fixture, logPath, ""));
+
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(run.result.totalOutputs, 2u);
+  EXPECT_EQ(run.result.coveredOutputs, 2u);
+
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC checked-output coverage: 100.00% (2/2"),
+            std::string::npos);
+  EXPECT_EQ(contents.find("opaque-internal"), std::string::npos);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+     SecStatefulClockGateWithoutBehavioralModelIsSkippedAsOpaque) {
+  // With the clock-gate model off the cell is what Naja loaded: no function.
+  const auto fixture = createClockGatedRegisterFixture();
+  const auto logPath = fixture.tmpDir / "sec_clockgate_opaque.log";
   const auto cfgPath = writeTempConfig(
-      "format: verilog\n"
-      "verification: sec\n"
-      "sec_encoding: dual_rail_steady\n"
-      "sec_engine: pdr\n"
-      "max_k: 2\n"
-      "input_paths:\n"
-      "  - " + fixture.design0Path.string() + "\n"
-      "  - " + fixture.design1Path.string() + "\n"
-      "liberty_files:\n"
-      "  - " + libertyPath.string() + "\n"
-      "log_file: " + logPath.string() + "\n");
+      clockGatedRegisterConfig(fixture, logPath, "clock_gate_model: false\n"));
 
   EXPECT_EQ(runWithConfigFile(cfgPath), kSecPartiallyProvedExitCode);
 
@@ -5621,9 +5661,9 @@ TEST_F(KeplerFormalCliTests,
   EXPECT_NE(contents.find("no initialized combinational truth table or usable "
                           "sequential model"),
             std::string::npos);
-  // Liberty `statetable`/`state_function` cells must remain opaque until their
-  // stateful behavior is modeled. In particular, the frontend must not invent
-  // the old zero-input truth table for GCK.
+  // Without a model, Liberty `statetable`/`state_function` cells must remain
+  // opaque. In particular, the frontend must not invent the old zero-input
+  // truth table for GCK.
   EXPECT_EQ(contents.find("combinational truth table arity does not match "
                           "instance inputs"),
             std::string::npos);

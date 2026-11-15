@@ -3373,6 +3373,259 @@ TEST(KeplerCliSubprocessTests, UnknownCellWithConnectionsStillStopsLoading) {
   std::filesystem::remove_all(dir);
 }
 
+// An integrated clock gate as asap7's liberty writes it (a statetable latch
+// and a state_function on the gated clock), a flop, a mux and a tie cell.
+static const char* kClockGateLiberty =
+    "library (cells) {\n"
+    "  cell (ICG) {\n"
+    "    clock_gating_integrated_cell : latch_posedge_precontrol;\n"
+    "    statetable (\"CLK ENA SE\", \"IQ\") {\n"
+    "      table : \"L L L : - : L,\\\n"
+    "               L L H : - : H,\\\n"
+    "               L H L : - : H,\\\n"
+    "               L H H : - : H,\\\n"
+    "               H - - : - : N\";\n"
+    "    }\n"
+    "    pin (IQ) { direction : internal; internal_node : \"IQ\"; }\n"
+    "    pin (GCLK) { direction : output; state_function : \"CLK & IQ\"; }\n"
+    "    pin (CLK) { direction : input; clock : true; }\n"
+    "    pin (ENA) { direction : input; }\n"
+    "    pin (SE) { direction : input; }\n"
+    "  }\n"
+    "  cell (DFF) {\n"
+    "    ff (IQ, IQN) { clocked_on : \"CLK\"; next_state : \"D\"; }\n"
+    "    pin (D) { direction : input; }\n"
+    "    pin (CLK) { direction : input; clock : true; }\n"
+    "    pin (Q) { direction : output; function : \"IQ\"; }\n"
+    "  }\n"
+    "  cell (MUX2) {\n"
+    "    pin (A) { direction : input; }\n"
+    "    pin (B) { direction : input; }\n"
+    "    pin (S) { direction : input; }\n"
+    "    pin (Y) { direction : output; function : \"(S & B) | (!S & A)\"; }\n"
+    "  }\n"
+    "  cell (TIELO) {\n"
+    "    pin (L) { direction : output; function : \"0\"; }\n"
+    "  }\n"
+    "}\n";
+
+// The register of the three designs below, written through the clock gate.
+static const char* kClockGatedRegister =
+    "module top (input clk, input en, input d, output q);\n"
+    "  wire gclk, lo;\n"
+    "  TIELO t (.L(lo));\n"
+    "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+    "  DFF f (.D(d), .CLK(gclk), .Q(q));\n"
+    "endmodule\n";
+
+TEST(KeplerCliSubprocessTests, SecModelsAnIntegratedClockGateAsAFlopEnable) {
+  // A flop behind an ICG holds its value unless the enable was high: the
+  // same register as a flop on the free clock with an enable mux on its data.
+  const auto dir = cliScratchDir("sec_clock_gate");
+  writeText(dir / "cells.lib", kClockGateLiberty);
+  writeText(dir / "icg.v", kClockGatedRegister);
+  writeText(dir / "mux.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(q), .B(d), .S(en), .Y(nd));\n"
+            "  DFF f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+  // Negative control: the enable inverted.
+  writeText(dir / "mux_wrong.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(d), .B(q), .S(en), .Y(nd));\n"
+            "  DFF f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux.v", "icg.v",
+                              "cells.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+  auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("SEC proved equivalence"), std::string::npos) << out;
+  EXPECT_NE(out.find("100.00% (1/1 covered/existing outputs)"),
+            std::string::npos)
+      << out;
+
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_wrong.v", "icg.v",
+                              "cells.lib"}),
+            3)
+      << readText(dir / "kepler.out");
+  out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("SEC found a counterexample"), std::string::npos) << out;
+
+  // Without the model the gated flop is opaque and nothing can be compared.
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "--clock-gate-model",
+                              "false", "mux.v", "icg.v", "cells.lib"}),
+            2)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, SecKeepsAClockGateOpaqueWhereItsLatchIsNotAWire) {
+  // The model reads the clock-gate latch as a wire, which holds only for a
+  // flop capturing on the rising edge of the gated clock. In front of a
+  // falling-edge flop the gate keeps no model and the flop stays opaque:
+  // no verdict rather than a wrong one. Through an inverter the same flop
+  // captures on the rising edge again, and the model applies.
+  const auto dir = cliScratchDir("sec_clock_gate_guard");
+  std::string liberty = kClockGateLiberty;
+  const std::string closing = "}\n";
+  ASSERT_GE(liberty.size(), closing.size());
+  liberty.erase(liberty.size() - closing.size());
+  liberty +=
+      "  cell (DFFN) {\n"
+      "    ff (IQ, IQN) { clocked_on : \"!CLK\"; next_state : \"D\"; }\n"
+      "    pin (D) { direction : input; }\n"
+      "    pin (CLK) { direction : input; clock : true; }\n"
+      "    pin (Q) { direction : output; function : \"IQ\"; }\n"
+      "  }\n"
+      "  cell (INV) {\n"
+      "    pin (A) { direction : input; }\n"
+      "    pin (Y) { direction : output; function : \"!A\"; }\n"
+      "  }\n"
+      // The same latch with the gated clock inverted: its output rises when
+      // the clock falls.
+      "  cell (ICGN) {\n"
+      "    clock_gating_integrated_cell : latch_posedge;\n"
+      "    statetable (\"CLK ENA\", \"IQ\") {\n"
+      "      table : \"L L : - : L, L H : - : H, H - : - : N\";\n"
+      "    }\n"
+      "    pin (IQ) { direction : internal; internal_node : \"IQ\"; }\n"
+      "    pin (GCLKN) { direction : output;\n"
+      "                  state_function : \"!(CLK & IQ)\"; }\n"
+      "    pin (CLK) { direction : input; clock : true; }\n"
+      "    pin (ENA) { direction : input; }\n"
+      "  }\n"
+      "}\n";
+  writeText(dir / "cells.lib", liberty);
+  writeText(dir / "mux_fall.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(q), .B(d), .S(en), .Y(nd));\n"
+            "  DFFN f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+  writeText(dir / "icg_fall.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk, lo;\n"
+            "  TIELO t (.L(lo));\n"
+            "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+            "  DFFN f (.D(d), .CLK(gclk), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_fall.v",
+                              "icg_fall.v", "cells.lib"}),
+            2)
+      << readText(dir / "kepler.out");
+  EXPECT_NE(readText(dir / "kepler.out")
+                .find("captures on the falling edge of its gated clock"),
+            std::string::npos)
+      << readText(dir / "kepler.out");
+
+  writeText(dir / "mux_rise.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(q), .B(d), .S(en), .Y(nd));\n"
+            "  DFF f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+  writeText(dir / "icg_inverted.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk, gclk_n, lo;\n"
+            "  TIELO t (.L(lo));\n"
+            "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+            "  INV i (.A(gclk), .Y(gclk_n));\n"
+            "  DFFN f (.D(d), .CLK(gclk_n), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_rise.v",
+                              "icg_inverted.v", "cells.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+
+  // A cell whose output is not a gated copy of the clock keeps no model.
+  writeText(dir / "icgn.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk_n;\n"
+            "  ICGN g (.CLK(clk), .ENA(en), .GCLKN(gclk_n));\n"
+            "  DFF f (.D(d), .CLK(gclk_n), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_rise.v", "icgn.v",
+                              "cells.lib"}),
+            2)
+      << readText(dir / "kepler.out");
+  EXPECT_NE(readText(dir / "kepler.out")
+                .find("Clock-gating cell ICGN is not modeled"),
+            std::string::npos)
+      << readText(dir / "kepler.out");
+
+  // A clock gate named as a verification boundary stays the cell it is, so
+  // the boundary still resolves.
+  writeText(dir / "icg_rise.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk, lo;\n"
+            "  TIELO t (.L(lo));\n"
+            "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+            "  DFF f (.D(d), .CLK(gclk), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "--set-as-boundary",
+                              "g", "g", "icg_rise.v", "icg_rise.v",
+                              "cells.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+  EXPECT_NE(readText(dir / "kepler.out")
+                .find("it is named as a verification boundary"),
+            std::string::npos)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, SecModelsTheClockGatesOfAFoundryLiberty) {
+  // The same register through the clock gates of the Nangate45 library the
+  // examples use: its statetables are written with line continuations,
+  // unquoted values and timing groups between the pins.
+  const auto library =
+      std::filesystem::absolute(get_test_data_prefix() +
+                                "examples/tinyrocket/"
+                                "NangateOpenCellLibrary_typical.lib");
+  if (!std::filesystem::exists(library)) {
+    GTEST_SKIP() << library << " not found";
+  }
+  const auto dir = cliScratchDir("sec_clock_gate_nangate");
+  writeText(dir / "mux.v",
+            "module top (input clk, input en, input d0, input d1,\n"
+            "            output q0, output q1);\n"
+            "  wire n0, n1;\n"
+            "  MUX2_X1 m0 (.A(q0), .B(d0), .S(en), .Z(n0));\n"
+            "  MUX2_X1 m1 (.A(q1), .B(d1), .S(en), .Z(n1));\n"
+            "  DFF_X1 f0 (.D(n0), .CK(clk), .Q(q0));\n"
+            "  DFF_X1 f1 (.D(n1), .CK(clk), .Q(q1));\n"
+            "endmodule\n");
+  // One flop behind a plain gate, one behind a gate with a test enable and a
+  // clock buffer.
+  writeText(dir / "icg.v",
+            "module top (input clk, input en, input d0, input d1,\n"
+            "            output q0, output q1);\n"
+            "  wire g0, g1, g1_buf, lo;\n"
+            "  LOGIC0_X1 t (.Z(lo));\n"
+            "  CLKGATE_X1 c0 (.CK(clk), .E(en), .GCK(g0));\n"
+            "  CLKGATETST_X2 c1 (.CK(clk), .E(en), .SE(lo), .GCK(g1));\n"
+            "  CLKBUF_X1 b (.A(g1), .Z(g1_buf));\n"
+            "  DFF_X1 f0 (.D(d0), .CK(g0), .Q(q0));\n"
+            "  DFF_X1 f1 (.D(d1), .CK(g1_buf), .Q(q1));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux.v", "icg.v",
+                              library.string()}),
+            0)
+      << readText(dir / "kepler.out");
+  const auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("Expanded 2 integrated clock gate instance(s)"),
+            std::string::npos)
+      << out;
+  EXPECT_NE(out.find("100.00% (2/2 covered/existing outputs)"),
+            std::string::npos)
+      << out;
+  std::filesystem::remove_all(dir);
+}
+
 TEST(KeplerCliSubprocessTests, BinaryExists) {
   std::filesystem::path p(KEPLER_BIN);
   bool exists = std::filesystem::exists(p);

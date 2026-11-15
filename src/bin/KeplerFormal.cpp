@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <cctype>
 #include <stdexcept>
 #include <unordered_map>
@@ -45,6 +46,7 @@
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
 #include "Btor2ExportConfig.h"
+#include "ClockGateModels.h"
 #include "Config.h"
 #include "DesignBoundary.h"
 #include "KeplerFormalDriver.h"
@@ -81,13 +83,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--clock-gate-model <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--clock-gate-model <true|false>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -518,6 +520,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "report_skipped_pos",
       "latch_abstraction",
       "data_latch_model",
+      "clock_gate_model",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1454,6 +1457,7 @@ static int KeplerFormalMainImpl(
   bool reportSkippedPOs = false;
   bool latchAbstraction = true;
   bool dataLatchModel = true;
+  bool clockGateModel = true;
   bool verilogPreprocessing = false;
   bool svSingleUnit = false;
   std::string dumpCnfPath;
@@ -1746,6 +1750,11 @@ static int KeplerFormalMainImpl(
           dataLatchModel = cfg["data_latch_model"].as<bool>();
         }
 
+        // clock_gate_model (SEC, default true)
+        if (cfg["clock_gate_model"] && cfg["clock_gate_model"].IsScalar()) {
+          clockGateModel = cfg["clock_gate_model"].as<bool>();
+        }
+
         // verilog_preprocessing (optional)
         if (cfg["verilog_preprocessing"] && cfg["verilog_preprocessing"].IsScalar()) {
           // LCOV_EXCL_START
@@ -1934,13 +1943,16 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--clock-gate-model") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction"
+                          ? latchAbstraction
+                          : arg == "--data-latch-model" ? dataLatchModel
+                                                        : clockGateModel;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2160,13 +2172,16 @@ static int KeplerFormalMainImpl(
         ++i;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--clock-gate-model") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction"
+                          ? latchAbstraction
+                          : arg == "--data-latch-model" ? dataLatchModel
+                                                        : clockGateModel;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2765,6 +2780,7 @@ static int KeplerFormalMainImpl(
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
   SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
   SPDLOG_INFO("SEC data-enabled latch model: {}", dataLatchModel ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC clock-gate model: {}", clockGateModel ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -2974,6 +2990,33 @@ static int KeplerFormalMainImpl(
     NLDB* db0 = nullptr;
     bool primitivesAreLoaded = false;
 
+    // SEC reads an integrated clock-gating cell as the latch and the gate its
+    // Liberty statetable describes; see ClockGateModels.h.
+    const bool modelClockGates =
+        clockGateModel && verificationMode == VerificationMode::SEC;
+    // An instance named as a verification boundary keeps its cell.
+    std::set<std::string> boundaryInstanceNames;
+    for (const auto& [path0, path1] : boundaryPairs) {
+      for (const auto& path : {path0, path1}) {
+        const auto separator = path.find_last_of('/');
+        boundaryInstanceNames.insert(
+            separator == std::string::npos ? path : path.substr(separator + 1));
+      }
+    }
+    const auto expandLoadedClockGates = [&]() {
+      if (!modelClockGates) {
+        return;
+      }
+      const size_t replaced = KEPLER_FORMAL::expandClockGates(
+          NLUniverse::get(), boundaryInstanceNames);
+      if (replaced > 0) {
+        SPDLOG_INFO(
+            "Expanded {} integrated clock gate instance(s) into a latch and "
+            "a gate",
+            replaced);
+      }
+    };
+
     auto loadLibraries = [&](NLDB* db,
                              std::vector<NLLibrary*>* primitiveLibraries = nullptr) -> bool {
       if (libertyFiles.empty() && pythonFiles.empty()) {
@@ -2993,6 +3036,9 @@ static int KeplerFormalMainImpl(
         SPDLOG_INFO("Loading library file: {}", libraryFile);
         SNLLibertyConstructor constructor(primitivesLibrary);
         constructor.construct(libraryPath);
+        if (modelClockGates) {
+          KEPLER_FORMAL::addClockGateModels(primitivesLibrary, libraryPath);
+        }
       }
       for (const auto& pythonFile : pythonFiles) {
         // LCOV_EXCL_START
@@ -3179,6 +3225,7 @@ static int KeplerFormalMainImpl(
 	        // LCOV_DISABLED_STOP
           // LCOV_EXCL_STOP
 	      }
+      expandLoadedClockGates();
       return db;
     // LCOV_EXCL_START
     };
@@ -3550,6 +3597,7 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_START
     db0->setID(2);  // Increment ID to avoid conflicts
     // LCOV_EXCL_STOP
+    expandLoadedClockGates();
 
     // LCOV_EXCL_START
     NLDB* db1 = nullptr;
@@ -3688,6 +3736,7 @@ static int KeplerFormalMainImpl(
       // LCOV_DISABLED_STOP
       // LCOV_EXCL_STOP
     }
+    expandLoadedClockGates();
   // LCOV_EXCL_START
   } catch (const std::exception& e) {
     SPDLOG_CRITICAL("Netlist loading failed: {}", e.what());

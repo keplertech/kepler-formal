@@ -118,6 +118,60 @@ A clock-gate latch in the gating cone is reduced by the latch abstraction in
 low, it is a wire when the state samples, so the gate's enable becomes the latch
 data input. Latches the abstraction does not cover stay opaque.
 
+### Integrated Clock-Gating Cells
+
+A library clock gate (ICG) is one cell with the latch inside. Liberty marks it
+with `clock_gating_integrated_cell` and describes it with a `statetable` for
+the latch and a `state_function` for the gated clock:
+
+```text
+statetable ("CLK ENA SE", "IQ") { table : "L L L : - : L, ..., H - - : - : N"; }
+pin (GCLK) { direction : output; state_function : "CLK & IQ"; }
+```
+
+Naja keeps no function for such a cell. SEC reads the statetable itself and,
+when it is one latch that is open while its clock pin is low, replaces every
+instance of the cell by that latch and a gate carrying the `state_function`.
+The rules above then apply: the latch becomes a wire, the gate becomes a clock
+enable, and a flop behind the cell takes the form
+
+```text
+next_state = (ENA | SE) ? data_next : current_state
+```
+
+so a clock-gated netlist compares against RTL that writes the enable as a mux
+on the data. The run log reports the cells modeled per Liberty file and the
+number of instances expanded.
+
+The latch is a wire only for state that samples on the rising edge of the
+gated clock. An instance is therefore replaced only when its gated clock
+reaches nothing but clock pins of flops that capture on that edge, through
+buffers and inverters of the same module: a falling-edge flop behind an
+inverter qualifies, a falling-edge flop on the gated clock itself does not.
+Any other instance stays opaque, as does a cell the model does not cover:
+
+- a clock gate for falling-edge flops (its latch is open while the clock is
+  high);
+- an output that is not a gated copy of the clock: one that falls when the
+  clock rises, such as an inverted gated clock, or one that follows the latch
+  while the clock is low;
+- a statetable with edge-triggered rows, several internal nodes, or a next
+  state that depends on the current state;
+- a gated clock that leaves its module, or reaches a latch, a memory or other
+  logic;
+- an instance named in `--set-as-boundary`, which stays the cell it is;
+- a cell from a compressed Liberty file (`.gz`, `.zip`).
+
+The log names each instance or cell left opaque and why. Outputs behind them
+are skipped and reported like those behind any opaque cell.
+
+`--clock-gate-model false` (`clock_gate_model: false`) turns the model off and
+leaves every such cell opaque. Combinational LEC does not use it: a
+clock-gated flop and an enable-mux flop are different there. The model is
+applied by the command-line driver while it loads the Liberty files and the
+designs; designs handed over through the Python API are verified as they were
+loaded.
+
 ## Complex Clock Trees
 
 Routed clock trees can contain many internal clock nets and buffer cells. SEC
