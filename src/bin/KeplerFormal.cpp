@@ -3205,7 +3205,8 @@ static int KeplerFormalMainImpl(
         if (equivalent) {
           SPDLOG_INFO("No difference was found.");
         } else {
-          SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+          SPDLOG_INFO("Difference was found. Please refer to the log({}) for details.",
+                      KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
           // LCOV_EXCL_STOP
           return kLecDifferenceExitCode;
         }
@@ -3710,10 +3711,11 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         } else {
           allScopesEquivalent = false;
-          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log(miter_log_x.txt) for details.",  // LCOV_EXCL_LINE
+          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log({}) for details.",  // LCOV_EXCL_LINE
           // LCOV_EXCL_STOP
                       scopes.first->getName().getString(),
-                      scopes.second->getName().getString());
+                      scopes.second->getName().getString(),
+                      KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
         }
       // LCOV_EXCL_START
       } catch (const std::exception& e) {
@@ -3768,7 +3770,8 @@ static int KeplerFormalMainImpl(
       if (equivalent) {
         SPDLOG_INFO("No difference was found.");
       } else {
-        SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+        SPDLOG_INFO("Difference was found. Please refer to the log({}) for details.",
+                    KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
         // LCOV_EXCL_STOP
         return kLecDifferenceExitCode;
       }

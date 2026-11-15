@@ -3279,6 +3279,22 @@ TEST(KeplerCliSubprocessTests, LecExitStatusTellsADifferenceFromEquivalence) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(KeplerCliSubprocessTests, LecDifferenceNamesTheMiterLogItWrote) {
+  // The verdict points at the miter's log by the name this run gave it.
+  const auto dir = cliScratchDir("lec_log_name");
+  writeText(dir / "same.v", "module top(input a, output y);\n  assign y = a;\nendmodule\n");
+  writeText(dir / "zero.v", "module top(input a, output y);\n  assign y = 1'b0;\nendmodule\n");
+  runKeplerIn(dir, {"-verilog", "same.v", "zero.v"});
+  const auto out = readText(dir / "kepler.out");
+  std::smatch m;
+  ASSERT_TRUE(std::regex_search(
+      out, m, std::regex("Difference was found\\. Please refer to the log\\(([^)]+)\\)")))
+      << out;
+  ASSERT_TRUE(std::filesystem::exists(dir / m[1].str())) << m[1].str();
+  EXPECT_NE(readText(dir / m[1].str()).find("Building miter"), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
 TEST(KeplerCliSubprocessTests, BinaryExists) {
   std::filesystem::path p(KEPLER_BIN);
   bool exists = std::filesystem::exists(p);
