@@ -48,7 +48,7 @@ if(WIN32)
 endif()
 
 option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
-option(KEPLER_USE_PUBLISHED_NAJAEDA "Use the tested NajaEDA 0.7.24 wheel compatibility adapter" OFF)
+option(KEPLER_USE_PUBLISHED_NAJAEDA "Use the tested NajaEDA 0.7.33 wheel compatibility adapter" OFF)
 set(KEPLER_EXTERNAL_PIC_ARG "")
 if(BUILD_KEPLER_PYTHON)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)

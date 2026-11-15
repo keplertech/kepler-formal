@@ -78,7 +78,8 @@ class PythonReleaseTest(unittest.TestCase):
 
     def test_published_preparation_changes_only_pins_and_cmake_option(self):
         release.prepare_project(self.project, published_najaeda=True)
-        expected = METADATA.replace("najaeda==0.7.33", "najaeda==0.7.24").replace(
+        expected = METADATA.replace(
+            release.DEVELOPMENT_REQUIREMENT, release.PUBLISHED_REQUIREMENT).replace(
             'KEPLER_USE_PUBLISHED_NAJAEDA = "OFF"',
             'KEPLER_USE_PUBLISHED_NAJAEDA = "ON"')
         self.assertEqual(expected, self.metadata.read_text(encoding="utf-8"))
@@ -93,7 +94,7 @@ class PythonReleaseTest(unittest.TestCase):
 
     def test_mismatched_or_unsupported_provider_pins_do_not_modify_checkout(self):
         for text in (METADATA.replace("najaeda==0.7.33", "najaeda==0.7.24", 1),
-                     METADATA.replace("najaeda==0.7.33", "najaeda>=0.7.24")):
+                     METADATA.replace("najaeda==0.7.33", "najaeda>=0.7.33")):
             with self.subTest(text=text):
                 self.metadata.write_text(text, encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "supported provider"):
@@ -106,8 +107,15 @@ class PythonReleaseTest(unittest.TestCase):
             release.prepare_project(self.project)
 
     def test_release_requires_matching_published_metadata(self):
+        # Both providers pin the same release, so the CMake option is what an
+        # unprepared checkout lacks; a foreign pin still fails the pin guard.
+        with self.assertRaisesRegex(ValueError, "KEPLER_USE_PUBLISHED_NAJAEDA=ON"):
+            self._validate()
+        self.metadata.write_text(
+            METADATA.replace("najaeda==0.7.33", "najaeda==0.7.24"), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "published NajaEDA"):
             self._validate()
+        self.metadata.write_text(METADATA, encoding="utf-8")
         release.prepare_project(self.project, published_najaeda=True)
         self.assertEqual("0.5.0", self._validate())
         prepared = self.metadata.read_text(encoding="utf-8")

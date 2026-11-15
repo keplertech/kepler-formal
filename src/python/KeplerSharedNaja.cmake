@@ -4,10 +4,10 @@
 # A Python build links the NajaEDA runtime installed in the build interpreter
 # instead of compiling the vendored Naja. The default provider is a wheel built
 # from thirdparty/naja, which ships its headers. KEPLER_USE_PUBLISHED_NAJAEDA
-# selects the unmodified 0.7.24 release; its headers come from the verified
+# selects the unmodified 0.7.33 release; its headers come from the verified
 # source archive. Every runtime target below points to the installed package's
 # own libraries; this build never modifies the provider.
-set(KEPLER_NAJAEDA_SOURCE_ARCHIVE "" CACHE FILEPATH "Optional cached NajaEDA 0.7.24 source archive")
+set(KEPLER_NAJAEDA_SOURCE_ARCHIVE "" CACHE FILEPATH "Optional cached NajaEDA 0.7.33 source archive")
 set(naja_provider_args --cmake --output-dir "${CMAKE_BINARY_DIR}/naja-provider")
 if(KEPLER_USE_PUBLISHED_NAJAEDA)
   list(APPEND naja_provider_args --published)

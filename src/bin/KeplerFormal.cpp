@@ -66,14 +66,18 @@ static const char* kSkippedOpaqueCellPOReport =
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> "
+      "Usage: {} --version | [--config <file>] | [-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python] "
       "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--vhdl_design1_top <name>] [--vhdl_design2_top <name>] "
       "[--python_design1_top <name>] [--python_design2_top <name>] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "<netlist1> <netlist2> [<library-file>...] | "
-      "<-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python> --design1 <file...> --design2 "
+      "[-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python] "
+      "[--design1_format <verilog|systemverilog|vhdl|python|naja_if>] "
+      "[--design2_format <verilog|systemverilog|vhdl|python|naja_if>] "
+      "(without a format flag; default verilog) "
+      "--design1 <file...> --design2 "
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
@@ -526,6 +530,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "vhdl_design2_top",
       "python_design1_top",
       "python_design2_top",
+      "design1_format",
+      "design2_format",
   };
 
   for (auto it = cfg.begin(); it != cfg.end(); ++it) {
@@ -1276,7 +1282,12 @@ static int KeplerFormalMainImpl(
     KEPLER_FORMAL::RunResult* runResult,
     const KEPLER_FORMAL::PrimitiveLibraryLoader& primitiveLoader) {
   using namespace std::chrono;
-  enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, VHDL, PYTHON, NAJA_IF };
+  // PER_DESIGN is the state without an input format when the two designs
+  // name different formats (designFormatOptions). Every other value is one
+  // format, or for SV2V one fixed pair, for both designs.
+  enum class FormatType {
+    VERILOG, SYSTEMVERILOG, SV2V, VHDL, PYTHON, NAJA_IF, PER_DESIGN
+  };
   constexpr size_t kDefaultSecMaxK = 32;
   const auto cleanupNajaState = []() {
     KEPLER_FORMAL::destroyDnl();
@@ -1296,6 +1307,47 @@ static int KeplerFormalMainImpl(
 
   // Default values
   FormatType inputFormatType = FormatType::VERILOG;
+  // Set by an input format flag or by the `format` config key. Without one,
+  // each design is parsed with its own format.
+  bool inputFormatExplicit = false;
+  // --design1_format and --design2_format, or design1_format and
+  // design2_format in the config: Verilog for a design that names none.
+  std::optional<FormatType> designFormatOptions[2];
+  // A format one design can be parsed with on its own. sv2v names a pair of
+  // formats, so it is not accepted for a single design.
+  const auto parseDesignFormatToken =
+      [](const std::string& token) -> std::optional<FormatType> {
+    if (token == "verilog" || token == "v") {
+      return FormatType::VERILOG;
+    }
+    if (token == "systemverilog" || token == "sv") {
+      return FormatType::SYSTEMVERILOG;
+    }
+    if (token == "vhdl" || token == "vhd") {
+      return FormatType::VHDL;
+    }
+    if (token == "python" || token == "py") {
+      return FormatType::PYTHON;
+    }
+    if (token == "naja_if") {
+      return FormatType::NAJA_IF;
+    }
+    return std::nullopt;
+  };
+  const auto designFormatName = [](FormatType format) {
+    switch (format) {
+      case FormatType::SYSTEMVERILOG:
+        return "systemverilog";
+      case FormatType::VHDL:
+        return "vhdl";
+      case FormatType::PYTHON:
+        return "python";
+      case FormatType::NAJA_IF:
+        return "naja_if";
+      default:
+        return "verilog";
+    }
+  };
   DesignInputs designInputs;
   SystemVerilogOptions systemVerilogOptions;
   VerilogTopOptions verilogTopOptions;
@@ -1375,6 +1427,7 @@ static int KeplerFormalMainImpl(
 
         // format
         if (cfg["format"] && cfg["format"].IsScalar()) {
+          inputFormatExplicit = true;
           std::string fmt = cfg["format"].as<std::string>();
           if (fmt == "naja_if") {
             // LCOV_EXCL_START
@@ -1395,6 +1448,22 @@ static int KeplerFormalMainImpl(
             SPDLOG_CRITICAL("Unrecognized format in config: {}", fmt);
             return EXIT_FAILURE;
             // LCOV_EXCL_STOP
+          }
+        }
+
+        // design1_format / design2_format (when there is no format)
+        for (int designIndex = 0; designIndex < 2; ++designIndex) {
+          const char* key =
+              designIndex == 0 ? "design1_format" : "design2_format";
+          if (!cfg[key]) {
+            continue;
+          }
+          const std::string token =
+              cfg[key].IsScalar() ? cfg[key].as<std::string>() : std::string();
+          designFormatOptions[designIndex] = parseDesignFormatToken(token);
+          if (!designFormatOptions[designIndex]) {
+            SPDLOG_CRITICAL("Unrecognized {} in config: {}", key, token);
+            return EXIT_FAILURE;
           }
         }
 
@@ -1917,15 +1986,12 @@ static int KeplerFormalMainImpl(
         formatFound = true;
         break;
       }
-      // LCOV_EXCL_START
-      SPDLOG_CRITICAL("Unrecognized option before input format type: {}", arg);
-      return EXIT_FAILURE;
+      // Not a format flag: the designs are given without an input format, so
+      // each one is parsed with its own (--design1_format, --design2_format).
+      // The arguments from here on are the same as after a format flag.
+      break;
     }
-    if (!formatFound) {
-      SPDLOG_CRITICAL("Missing input format type");
-      return EXIT_FAILURE;
-      // LCOV_EXCL_STOP
-    }
+    inputFormatExplicit = formatFound;
 
     // LCOV_EXCL_START
     bool explicitDesignFlags = false;
@@ -2145,6 +2211,21 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_STOP
       }
       // LCOV_EXCL_START
+      if (arg == "--design1_format" || arg == "--design2_format") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing format after {}", arg);
+          return EXIT_FAILURE;
+        }
+        const std::string token = argv[++i];
+        auto& designFormatOption =
+            designFormatOptions[arg == "--design1_format" ? 0 : 1];
+        designFormatOption = parseDesignFormatToken(token);
+        if (!designFormatOption) {
+          SPDLOG_CRITICAL("Unrecognized format for {}: {}", arg, token);
+          return EXIT_FAILURE;
+        }
+        continue;
+      }
       if (arg == "--sv_design1_flist" || arg == "--sv_design2_flist" ||
           arg == "--verilog_design1_top" || arg == "--verilog_design2_top" ||
           arg == "--vhdl_design1_top" || arg == "--vhdl_design2_top" ||
@@ -2242,6 +2323,41 @@ static int KeplerFormalMainImpl(
       logLevel, verificationMode == VerificationMode::SEC, logFileName);
 
   SPDLOG_INFO("KEPLER FORMAL: Run.");
+  if (inputFormatExplicit) {
+    if (designFormatOptions[0] || designFormatOptions[1]) {
+      SPDLOG_CRITICAL(
+          "A design format (--design1_format, --design2_format, or "
+          "design1_format, design2_format in the config) cannot be combined "
+          "with an input format for both designs");
+      return EXIT_FAILURE;
+    }
+  } else {
+    // No input format: each design is parsed with its own, Verilog unless it
+    // names another. Two designs of one format are that format's own mode.
+    for (auto& designFormatOption : designFormatOptions) {
+      if (!designFormatOption) {
+        designFormatOption = FormatType::VERILOG;
+      }
+    }
+    inputFormatType = designFormatOptions[0] == designFormatOptions[1]
+                          ? *designFormatOptions[0]
+                          : FormatType::PER_DESIGN;
+  }
+  // The format each design is parsed with: the same for both, except in sv2v
+  // (SystemVerilog, then Verilog) and when the designs name different ones.
+  const auto designFormat = [&](int designIndex) {
+    if (inputFormatType == FormatType::PER_DESIGN) {
+      return *designFormatOptions[designIndex];
+    }
+    if (inputFormatType == FormatType::SV2V) {
+      return designIndex == 0 ? FormatType::SYSTEMVERILOG
+                              : FormatType::VERILOG;
+    }
+    return inputFormatType;
+  };
+  const auto anyDesignUses = [&](FormatType format) {
+    return designFormat(0) == format || designFormat(1) == format;
+  };
   std::string inputFormatName = "VERILOG";
   std::string inputFormatToken = "verilog";
   if (inputFormatType == FormatType::NAJA_IF) {
@@ -2268,6 +2384,11 @@ static int KeplerFormalMainImpl(
     inputFormatName = "PYTHON";
     inputFormatToken = "python";
   }
+  if (inputFormatType == FormatType::PER_DESIGN) {
+    inputFormatName = "PER DESIGN";
+    inputFormatToken = std::string(designFormatName(designFormat(0))) + "+" +
+                       designFormatName(designFormat(1));
+  }
   if (runResult != nullptr) {
     runResult->inputFormat = inputFormatToken;
     runResult->svSingleUnit = svSingleUnit;
@@ -2275,8 +2396,11 @@ static int KeplerFormalMainImpl(
     runResult->logFile = runLogFilePath;
   }
   SPDLOG_INFO("Input format: {}", inputFormatName);
-  if (inputFormatType == FormatType::SYSTEMVERILOG ||
-      inputFormatType == FormatType::SV2V) {
+  if (inputFormatType == FormatType::PER_DESIGN) {
+    SPDLOG_INFO("Design 1 format: {}", designFormatName(designFormat(0)));
+    SPDLOG_INFO("Design 2 format: {}", designFormatName(designFormat(1)));
+  }
+  if (anyDesignUses(FormatType::SYSTEMVERILOG)) {
     SPDLOG_INFO("SystemVerilog compilation units: {}",
                 svSingleUnit ? "single" : "one per file");
   }
@@ -2318,6 +2442,29 @@ static int KeplerFormalMainImpl(
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
+  } else if (inputFormatType == FormatType::PER_DESIGN) {
+    for (int designIndex = 0; designIndex < 2; ++designIndex) {
+      const auto& designPaths =
+          designIndex == 0 ? designInputs.design0 : designInputs.design1;
+      const FormatType format = designFormat(designIndex);
+      const bool hasSources =
+          format == FormatType::SYSTEMVERILOG
+              ? hasSystemVerilogSources(
+                    designPaths,
+                    designIndex == 0 ? systemVerilogOptions.design0
+                                     : systemVerilogOptions.design1)
+              : !designPaths.empty();
+      if (!hasSources) {
+        SPDLOG_CRITICAL("Need {} input sources for design {}",
+                        designFormatName(format), designIndex + 1);
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      if (format == FormatType::NAJA_IF && designPaths.size() != 1) {
+        SPDLOG_CRITICAL("SNL input only supports one file per design");
+        return EXIT_FAILURE;
+      }
+    }
   } else if (designInputs.design0.empty() || designInputs.design1.empty()) {
     // LCOV_EXCL_START
     SPDLOG_CRITICAL("Need two input netlist paths (one per design)");
@@ -2343,6 +2490,14 @@ static int KeplerFormalMainImpl(
       verificationMode != VerificationMode::SEC) {
     SPDLOG_CRITICAL(
         "VHDL input format requires SEC verification (-v sec or verification: sec)");
+    return EXIT_FAILURE;
+  }
+  if (inputFormatType == FormatType::PER_DESIGN &&
+      verificationMode != VerificationMode::SEC &&
+      (anyDesignUses(FormatType::SYSTEMVERILOG) ||
+       anyDesignUses(FormatType::VHDL))) {
+    SPDLOG_CRITICAL(
+        "SystemVerilog and VHDL designs require SEC verification (-v sec or verification: sec)");
     return EXIT_FAILURE;
   }
   std::string btor2ExportError;
@@ -2420,6 +2575,7 @@ static int KeplerFormalMainImpl(
   systemVerilogOptions.design1.singleUnit = svSingleUnit;
   if (inputFormatType != FormatType::SYSTEMVERILOG &&
       inputFormatType != FormatType::SV2V &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (svSingleUnit ||
        systemVerilogOptions.design0.flist || systemVerilogOptions.design0.top ||
        systemVerilogOptions.design1.flist || systemVerilogOptions.design1.top)) {
@@ -2438,17 +2594,20 @@ static int KeplerFormalMainImpl(
   }
   if (inputFormatType != FormatType::VERILOG &&
       inputFormatType != FormatType::SV2V &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (verilogTopOptions.design0 || verilogTopOptions.design1)) {
     SPDLOG_CRITICAL(
         "Verilog top options are only valid with -verilog/-sv2v input");
     return EXIT_FAILURE;
   }
   if (inputFormatType != FormatType::VHDL &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (vhdlTopOptions.design0 || vhdlTopOptions.design1)) {
     SPDLOG_CRITICAL("VHDL top options are only valid with -vhdl input");
     return EXIT_FAILURE;
   }
   if (inputFormatType != FormatType::PYTHON &&
+      inputFormatType != FormatType::PER_DESIGN &&
       (pythonTopOptions.design0 || pythonTopOptions.design1)) {
     SPDLOG_CRITICAL("Python top options are only valid with -python input");
     return EXIT_FAILURE;
@@ -2458,6 +2617,46 @@ static int KeplerFormalMainImpl(
         "sv2v format only accepts a Verilog top option for design 2; "
         "design 1 is parsed as SystemVerilog");
     return EXIT_FAILURE;
+  }
+  if (inputFormatType == FormatType::PER_DESIGN) {
+    // A per-format option belongs to one design and needs that design to use
+    // the format.
+    for (int designIndex = 0; designIndex < 2; ++designIndex) {
+      const bool first = designIndex == 0;
+      const auto& svDesignOptions =
+          first ? systemVerilogOptions.design0 : systemVerilogOptions.design1;
+      const struct {
+        bool given;
+        FormatType format;
+      } formatOptions[] = {
+          {svDesignOptions.flist.has_value() || svDesignOptions.top.has_value(),
+           FormatType::SYSTEMVERILOG},
+          {(first ? verilogTopOptions.design0 : verilogTopOptions.design1)
+               .has_value(),
+           FormatType::VERILOG},
+          {(first ? vhdlTopOptions.design0 : vhdlTopOptions.design1)
+               .has_value(),
+           FormatType::VHDL},
+          {(first ? pythonTopOptions.design0 : pythonTopOptions.design1)
+               .has_value(),
+           FormatType::PYTHON},
+      };
+      for (const auto& option : formatOptions) {
+        if (option.given && option.format != designFormat(designIndex)) {
+          SPDLOG_CRITICAL(
+              "A {} option was given for design {}, whose format is {}",
+              designFormatName(option.format),
+              designIndex + 1,
+              designFormatName(designFormat(designIndex)));
+          return EXIT_FAILURE;
+        }
+      }
+    }
+    if (svSingleUnit && !anyDesignUses(FormatType::SYSTEMVERILOG)) {
+      SPDLOG_CRITICAL(
+          "sv_single_unit needs a design whose format is systemverilog");
+      return EXIT_FAILURE;
+    }
   }
   std::string svValidationError;
   if (!validateSystemVerilogOptions(systemVerilogOptions, svValidationError)) {
@@ -2510,7 +2709,7 @@ static int KeplerFormalMainImpl(
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
-  if (!pythonFiles.empty() || inputFormatType == FormatType::PYTHON) {
+  if (!pythonFiles.empty() || anyDesignUses(FormatType::PYTHON)) {
     try {
       primitiveLoader.prepare(argv[0]);
     } catch (const std::exception& error) {
@@ -2746,20 +2945,28 @@ static int KeplerFormalMainImpl(
       return true;
     };
 
-    const auto isHdlFormat = [&]() {
-      return inputFormatType == FormatType::VERILOG ||
-             inputFormatType == FormatType::SYSTEMVERILOG ||
-             inputFormatType == FormatType::SV2V ||
-             inputFormatType == FormatType::VHDL ||
-             inputFormatType == FormatType::PYTHON;
+    const auto isHdlFormat = [&](int designIndex) {
+      return designFormat(designIndex) != FormatType::NAJA_IF;
     };
 
-    const bool useVhdl = inputFormatType == FormatType::VHDL;
-    const bool usePython = inputFormatType == FormatType::PYTHON;
+    const auto designUsesVhdl = [&](int designIndex) {
+      return designFormat(designIndex) == FormatType::VHDL;
+    };
+    const auto designUsesPython = [&](int designIndex) {
+      return designFormat(designIndex) == FormatType::PYTHON;
+    };
 
     const auto designUsesSystemVerilog = [&](int designIndex) {
-      return inputFormatType == FormatType::SYSTEMVERILOG ||
-             (inputFormatType == FormatType::SV2V && designIndex == 0);
+      return designFormat(designIndex) == FormatType::SYSTEMVERILOG;
+    };
+    // A SystemVerilog design compared with a netlist may instantiate the
+    // loaded primitives itself, so it is parsed with generated stubs for
+    // them: design 1 of sv2v, and the SystemVerilog design of a pair with
+    // different formats.
+    const auto designUsesPrimitiveStubs = [&](int designIndex) {
+      return (inputFormatType == FormatType::SV2V && designIndex == 0) ||
+             (inputFormatType == FormatType::PER_DESIGN &&
+              designUsesSystemVerilog(designIndex));
     };
 
     auto loadOneDesign = [&](const std::vector<std::string>& designPaths,
@@ -2780,13 +2987,15 @@ static int KeplerFormalMainImpl(
         }
       }
 
-      if (isHdlFormat()) {
+      if (isHdlFormat(designIndex)) {
         if (!db) {
           // LCOV_EXCL_START
           db = NLDB::create(NLUniverse::get());
         }
         // LCOV_EXCL_STOP
         db->setID(dbID);
+        const bool useVhdl = designUsesVhdl(designIndex);
+        const bool usePython = designUsesPython(designIndex);
         const bool useSystemVerilog = designUsesSystemVerilog(designIndex);
         SPDLOG_INFO("Parsing {} file(s) for design {}",
                     usePython ? "python"
@@ -2816,9 +3025,8 @@ static int KeplerFormalMainImpl(
           std::vector<std::filesystem::path> temporaryFiles;
           // LCOV_EXCL_STOP
           const auto* sv2vPrimitiveLibraries =
-              (inputFormatType == FormatType::SV2V && designIndex == 0)
-                  ? &primitiveLibraries
-                  : nullptr;
+              designUsesPrimitiveStubs(designIndex) ? &primitiveLibraries
+                                                    : nullptr;
           std::filesystem::path generatedStubPath;
           const auto svInputPaths =
               // LCOV_EXCL_START
@@ -3079,13 +3287,14 @@ static int KeplerFormalMainImpl(
             2,
             "design 1",
             boundaryPorts0);
-        if (inputFormatType != FormatType::SV2V &&
+        if (designFormat(0) == designFormat(1) &&
             sameCompactSecDesignSpec(
-                inputFormatType == FormatType::SYSTEMVERILOG,
+                designUsesSystemVerilog(0),
                 designInputs,
                 systemVerilogOptions,
-                usePython ? pythonTopOptions
-                          : useVhdl ? vhdlTopOptions : verilogTopOptions,
+                designUsesPython(0)
+                    ? pythonTopOptions
+                    : designUsesVhdl(0) ? vhdlTopOptions : verilogTopOptions,
                 boundaryPairs)) {
           // CVA6-style smoke runs often compare a design against itself. In
           // compact SEC, extracting that identical second side would require
@@ -3164,11 +3373,13 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_STOP
 
     // LCOV_EXCL_START
-    if (isHdlFormat()) {
+    if (isHdlFormat(0)) {
       if (!db0) {
         db0 = NLDB::create(NLUniverse::get());
       }
       const auto design0Paths = toPathVector(designInputs.design0);
+      const bool useVhdl = designUsesVhdl(0);
+      const bool usePython = designUsesPython(0);
       const bool design0UsesSystemVerilog = designUsesSystemVerilog(0);
       SPDLOG_INFO("Parsing {} file(s) for design 1",
       // LCOV_EXCL_STOP
@@ -3193,7 +3404,7 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            inputFormatType == FormatType::SV2V ? &db0PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(0) ? &db0PrimitiveLibraries : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design0,
@@ -3285,12 +3496,13 @@ static int KeplerFormalMainImpl(
     NLDB* db1 = nullptr;
     // LCOV_EXCL_STOP
 
+    std::vector<NLLibrary*> db1PrimitiveLibraries;
     // Prepare second DB and primitives if needed
     // LCOV_EXCL_START
     if (!libertyFiles.empty() || !pythonFiles.empty()) {
       db1 = NLDB::create(NLUniverse::get());
       db1->setID(1);
-      if (!loadLibraries(db1)) {
+      if (!loadLibraries(db1, &db1PrimitiveLibraries)) {
       // LCOV_EXCL_STOP
         // LCOV_EXCL_START
         // LCOV_DISABLED_START
@@ -3303,11 +3515,13 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_STOP
 
     // LCOV_EXCL_START
-    if (isHdlFormat()) {
+    if (isHdlFormat(1)) {
       if (!db1) {
         db1 = NLDB::create(NLUniverse::get());
       }
       const auto design1Paths = toPathVector(designInputs.design1);
+      const bool useVhdl = designUsesVhdl(1);
+      const bool usePython = designUsesPython(1);
       const bool design1UsesSystemVerilog = designUsesSystemVerilog(1);
       SPDLOG_INFO("Parsing {} file(s) for design 2",
       // LCOV_EXCL_STOP
@@ -3331,12 +3545,23 @@ static int KeplerFormalMainImpl(
       } else if (design1UsesSystemVerilog) {
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
+        const auto* sv2vPrimitiveLibraries =
+            designUsesPrimitiveStubs(1) ? &db1PrimitiveLibraries : nullptr;
+        std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
-            designInputs.design1, systemVerilogOptions.design1, temporaryFiles);
+            designInputs.design1,
+            systemVerilogOptions.design1,
+            temporaryFiles,
+            sv2vPrimitiveLibraries,
+            &generatedStubPath);
             // LCOV_EXCL_STOP
         try {
           // LCOV_EXCL_START
           constructor.construct(svInputPaths);
+          if (sv2vPrimitiveLibraries != nullptr) {
+            reconnectGeneratedPrimitiveStubs(
+                designLibrary, *sv2vPrimitiveLibraries, generatedStubPath);
+          }
         } catch (...) {
           for (const auto& temporaryFile : temporaryFiles) {
             std::error_code ec;

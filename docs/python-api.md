@@ -32,12 +32,12 @@ python -m pip install --no-build-isolation .
 Default wheel CI runs on relevant pull requests, pushes to `main`, `v*` tags, and manual
 runs. It builds and installs a separate local provider wheel for every
 Python/platform combination. Only a manual `publish` request adds a second,
-parallel set of jobs against published NajaEDA `0.7.24` wheels, which ship no
-headers; `KEPLER_USE_PUBLISHED_NAJAEDA` takes them from that release's verified
-source archive instead. Only published-provider jobs must
+parallel set of jobs against the published NajaEDA `0.7.33` wheels from PyPI;
+`KEPLER_USE_PUBLISHED_NAJAEDA` takes the headers from that release's verified
+source archive. Only published-provider jobs must
 pass for publication; development-provider jobs remain independent regression
 checks. Only wheels tested against the published provider are uploaded.
-Those wheels require `najaeda==0.7.24`, which pip installs normally. There is
+Those wheels require `najaeda==0.7.33`, which pip installs normally. There is
 no separate provider checkbox; see [release instructions](python-release.md).
 
 `BUILD_KEPLER_PYTHON=ON` is a Python-only CMake build. Build the standalone

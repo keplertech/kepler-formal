@@ -64,7 +64,7 @@ branch before merging.
 | Run | Build and test providers |
 | --- | --- |
 | Relevant pull request, push to `main`, `v*` tag, or manual run without `publish` | Development provider only. |
-| Manual run with `publish` | Development provider and published NajaEDA `0.7.24`, in parallel. |
+| Manual run with `publish` | Development provider and published NajaEDA `0.7.33`, in parallel. |
 
 There is no separate provider checkbox. The published-provider jobs run only
 as a prerequisite to a requested publication. The [local source
@@ -80,14 +80,14 @@ with the same `pypi` environment and Trusted Publisher configuration.
 The published-provider jobs set `KEPLER_USE_PUBLISHED_NAJAEDA=1`
 for the wheel helpers, including Linux containers. Before building,
 `ci/prepare_python_release.py` updates only those jobs' checkouts: both NajaEDA
-requirements become `najaeda==0.7.24`, and the CMake option
+requirements become `najaeda==0.7.33`, and the CMake option
 `KEPLER_USE_PUBLISHED_NAJAEDA` is enabled. These edits are not committed:
 repository defaults and development jobs stay on the development provider
 with the option off. Build and runtime pins must match, so installations of
 a published-provider Kepler wheel select the same NajaEDA release.
 
-Published NajaEDA `0.7.24` ships no headers, so this path takes them from the
-release's verified source archive and is deliberately pinned to that version.
+This path takes the published NajaEDA `0.7.33` headers from the release's
+verified source archive and is deliberately pinned to that version.
 Both providers are linked the same way, through released native symbols
 including the private DNL cache integration. This is not a general ABI
 guarantee for arbitrary NajaEDA versions; any provider upgrade requires a new
