@@ -219,6 +219,7 @@ build/src/bin/kepler-formal -v sec \
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
+| `--po-progress`, `--po-progress-batch <n>` | Check the LEC outputs a batch at a time and log `checked <k> of <n> outputs` in the miter log, so a long run shows progress. Off by default. |
 
 To intentionally compare designs with different LEC boundaries:
 
@@ -251,6 +252,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
+| `po_progress`, `po_progress_batch` | bool, integer | Same as `--po-progress` and `--po-progress-batch`. |
 
 Yaml file example:
 

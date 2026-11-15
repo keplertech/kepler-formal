@@ -83,6 +83,8 @@ with a warning that names the cell and counts its instances.
 | `--python_design1_top <top>`, `--python_design2_top <top>` | Per-design top modules of Python-built designs. Only valid in `python` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
+| `--po-progress` | Check the LEC outputs a batch at a time, each batch its own SAT problem, instead of one SAT problem over all of them, and log `checked <k> of <n> outputs` with the batch size and solve time after each batch in the miter log. About a hundred batches by default. The verdict is the same; a long run shows how far it is and which outputs are slow. LEC only. |
+| `--po-progress-batch <n>` | Same as `--po-progress`, with `n` outputs a batch; `1` checks one output cone at a time. LEC only. |
 | `--latch-abstraction <bool>` | Phase-abstract clock-driven latches. Defaults to `true`; `false` makes every latch output opaque as before, data-enabled latches included. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
 | `--data-latch-model <bool>` | Model data-enabled latches (enable is data logic, not a clock phase) as step-transparent state. Defaults to `true`; `false` leaves such latches opaque. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
 | `--clock-gate-model <bool>` | Read Liberty integrated clock-gating cells as a latch and a gate, so a flop behind one becomes a flop with an enable. Defaults to `true`; `false` leaves the cells opaque. SEC only; see [sec-clock-handling.md](sec-clock-handling.md#integrated-clock-gating-cells). |
@@ -120,6 +122,8 @@ with a warning that names the cell and counts its instances.
 | `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
+| `po_progress` | bool | Defaults to `false`. Same as `--po-progress`. |
+| `po_progress_batch` | integer | Same as `--po-progress-batch`; a positive number of outputs a batch. Enables `po_progress`. |
 | `latch_abstraction` | bool | Defaults to `true`. Same as `--latch-abstraction`. |
 | `data_latch_model` | bool | Defaults to `true`. Same as `--data-latch-model`. |
 | `clock_gate_model` | bool | Defaults to `true`. Same as `--clock-gate-model`. |

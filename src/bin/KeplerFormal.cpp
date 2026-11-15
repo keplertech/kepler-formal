@@ -83,7 +83,7 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--clock-gate-model <true|false>] | "
+      "[--report-skipped-pos] [--po-progress] [--po-progress-batch <n>] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--clock-gate-model <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
@@ -518,6 +518,8 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf_path",
       "compact_mode",
       "report_skipped_pos",
+      "po_progress",
+      "po_progress_batch",
       "latch_abstraction",
       "data_latch_model",
       "clock_gate_model",
@@ -1455,6 +1457,9 @@ static int KeplerFormalMainImpl(
   bool compactMode = false;
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
+  // LEC: check the outputs a batch at a time and log the count.
+  bool poProgress = false;
+  size_t poProgressBatch = 0;
   bool latchAbstraction = true;
   bool dataLatchModel = true;
   bool clockGateModel = true;
@@ -1739,6 +1744,22 @@ static int KeplerFormalMainImpl(
           reportSkippedPOs = cfg["report_skipped_pos"].as<bool>();
         }
         // LCOV_EXCL_STOP
+
+        // po_progress, po_progress_batch (LEC)
+        if (cfg["po_progress"] && cfg["po_progress"].IsScalar()) {
+          poProgress = cfg["po_progress"].as<bool>();
+        }
+        if (cfg["po_progress_batch"] && cfg["po_progress_batch"].IsScalar()) {
+          std::string error;
+          if (!parseNonNegativeSizeToken(
+                  cfg["po_progress_batch"].as<std::string>(),
+                  "po_progress_batch", poProgressBatch, error) ||
+              poProgressBatch == 0) {
+            SPDLOG_CRITICAL("po_progress_batch must be a positive integer");
+            return EXIT_FAILURE;
+          }
+          poProgress = true;
+        }
 
         // latch_abstraction (SEC, default true)
         if (cfg["latch_abstraction"] && cfg["latch_abstraction"].IsScalar()) {
@@ -2284,6 +2305,23 @@ static int KeplerFormalMainImpl(
         continue;
         // LCOV_EXCL_STOP
       }
+      if (arg == "--po-progress") {
+        poProgress = true;
+        continue;
+      }
+      if (arg == "--po-progress-batch") {
+        std::string error;
+        if (i + 1 >= argc ||
+            !parseNonNegativeSizeToken(argv[i + 1], "--po-progress-batch",
+                                       poProgressBatch, error) ||
+            poProgressBatch == 0) {
+          SPDLOG_CRITICAL("--po-progress-batch needs a positive integer");
+          return EXIT_FAILURE;
+        }
+        poProgress = true;
+        ++i;
+        continue;
+      }
       // LCOV_EXCL_START
       if (arg == "--design1_format" || arg == "--design2_format") {
         if (i + 1 >= argc) {
@@ -2778,6 +2816,14 @@ static int KeplerFormalMainImpl(
   }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
+  if (poProgress && verificationMode != VerificationMode::LEC) {
+    SPDLOG_WARN("Output progress (po_progress) applies to LEC only; ignored");
+  } else if (poProgress) {
+    SPDLOG_INFO("Output progress: enabled, {}",
+                poProgressBatch == 0
+                    ? std::string("about a hundred batches")
+                    : std::to_string(poProgressBatch) + " output(s) a batch");
+  }
   SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
   SPDLOG_INFO("SEC data-enabled latch model: {}", dataLatchModel ? "enabled" : "disabled");
   SPDLOG_INFO("SEC clock-gate model: {}", clockGateModel ? "enabled" : "disabled");
@@ -3302,6 +3348,7 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterS(nullptr, nullptr, logFileName);
         MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
+        MiterS.setPoProgress(poProgress, poProgressBatch);
         if (dumpCnf) {
           const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
           MiterS.setCnfDump(true, outPath);
@@ -3807,6 +3854,7 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterScope(scopes.first, scopes.second, logFileName);
         MiterScope.setAllowBoundaryMismatch(allowBoundaryMismatch);
+        MiterScope.setPoProgress(poProgress, poProgressBatch);
         if (dumpCnf) {
           std::string scopeName = sanitizeFileToken(scopes.first->getName().getString());
           std::string outPath = dumpCnfPath.empty()
@@ -3869,6 +3917,7 @@ static int KeplerFormalMainImpl(
       // LCOV_EXCL_START
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
       MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
+      MiterS.setPoProgress(poProgress, poProgressBatch);
       MiterS.setBoundaryPairs(boundaryPairs);
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;

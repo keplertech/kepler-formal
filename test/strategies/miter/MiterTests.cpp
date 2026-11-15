@@ -3656,6 +3656,67 @@ TEST(KeplerCliSubprocessTests, SvRtlAgainstALibertyGateNetlist) {
   std::filesystem::remove_all(dir);
 }
 
+// The miter logs a run in `dir` wrote, joined.
+static std::string readMiterLogs(const std::filesystem::path& dir) {
+  std::string logs;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    if (entry.path().filename().string().rfind("miter_log", 0) == 0) {
+      logs += readText(entry.path());
+    }
+  }
+  return logs;
+}
+
+TEST(KeplerCliSubprocessTests, LecReportsProgressAcrossOutputs) {
+  // One miter over every output is one SAT call, silent for as long as it
+  // runs. With --po-progress the outputs are checked a batch at a time and
+  // the miter log counts them.
+  const auto dir = cliScratchDir("lec_progress");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "a.v",
+            "module top(input a, input b, output y, output z);\n"
+            "  AND2 u0 (.A(a), .B(b), .Y(y));\n"
+            "  INV u1 (.A(a), .Y(z));\n"
+            "endmodule\n");
+  writeText(dir / "b.v",
+            "module top(input a, input b, output y, output z);\n"
+            "  wire n;\n"
+            "  NAND2 u0 (.A(a), .B(b), .Y(n));\n"
+            "  INV u1 (.A(n), .Y(y));\n"
+            "  INV u2 (.A(a), .Y(z));\n"
+            "endmodule\n");
+  ASSERT_EQ(runKeplerIn(dir, {"-verilog", "a.v", "b.v", "tiny.lib", "--po-progress"}), 0)
+      << readText(dir / "kepler.out");
+  auto logs = readMiterLogs(dir);
+  EXPECT_NE(logs.find("checked 1 of 2 outputs"), std::string::npos) << logs;
+  EXPECT_NE(logs.find("checked 2 of 2 outputs"), std::string::npos) << logs;
+
+  // A batch size groups the outputs: here both in one batch.
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    if (entry.path().filename().string().rfind("miter_log", 0) == 0) {
+      std::filesystem::remove(entry.path());
+    }
+  }
+  ASSERT_EQ(runKeplerIn(dir, {"-verilog", "a.v", "b.v", "tiny.lib",
+                              "--po-progress-batch", "2"}),
+            0)
+      << readText(dir / "kepler.out");
+  logs = readMiterLogs(dir);
+  EXPECT_EQ(logs.find("checked 1 of 2 outputs"), std::string::npos) << logs;
+  EXPECT_NE(logs.find("checked 2 of 2 outputs"), std::string::npos) << logs;
+
+  // The verdict is the one the single miter gives: a difference in one
+  // output is found, and named, with the outputs checked one at a time.
+  writeText(dir / "c.v",
+            "module top(input a, input b, output y, output z);\n"
+            "  AND2 u0 (.A(a), .B(b), .Y(y));\n"
+            "  AND2 u1 (.A(a), .B(b), .Y(z));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "a.v", "c.v", "tiny.lib", "--po-progress"}), 3)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
 TEST(KeplerCliSubprocessTests, BinaryExists) {
   std::filesystem::path p(KEPLER_BIN);
   bool exists = std::filesystem::exists(p);

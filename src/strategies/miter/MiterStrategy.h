@@ -37,6 +37,13 @@ class MiterStrategy {
   void setCnfDump(bool enabled, const std::string& path = "");
   void setPoCnfDump(bool enabled, const std::string& path = "");
   void setAllowBoundaryMismatch(bool allow) { allowBoundaryMismatch_ = allow; }
+  // Check the outputs a batch at a time, each batch its own SAT problem, and
+  // log the count after each one, instead of one SAT problem over all of
+  // them. `batchSize` 0 picks about a hundred batches.
+  void setPoProgress(bool enabled, size_t batchSize = 0) {
+    poProgress_ = enabled;
+    poProgressBatch_ = batchSize;
+  }
   void setBoundaryPairs(const BoundaryPairs& pairs) {
     builder0_.setBoundaryPairs(pairs, 0);
     builder1_.setBoundaryPairs(pairs, 1);
@@ -63,6 +70,9 @@ class MiterStrategy {
  private:
   bool runCompactPOs(const tbb::concurrent_vector<BoolExpr*>& POs0,
                      const tbb::concurrent_vector<BoolExpr*>& POs1);
+  // True when the outputs of some batch differ.
+  bool anyOutputBatchDiffers(const tbb::concurrent_vector<BoolExpr*>& POs0,
+                             const tbb::concurrent_vector<BoolExpr*>& POs1);
   BoolExpr* buildMiter(
       const tbb::concurrent_vector<BoolExpr*>& A,
       const tbb::concurrent_vector<BoolExpr*>& B) const;
@@ -85,6 +95,8 @@ class MiterStrategy {
   bool dumpPoCnf_ = false;
   std::string dumpPoCnfPath_;
   bool allowBoundaryMismatch_ = false;
+  bool poProgress_ = false;
+  size_t poProgressBatch_ = 0;
 };
 
 }  // namespace KEPLER_FORMAL
