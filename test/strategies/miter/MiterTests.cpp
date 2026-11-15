@@ -3329,6 +3329,50 @@ TEST(KeplerCliSubprocessTests, LecLogNamesTheSolverProblemAndItsTime) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(KeplerCliSubprocessTests, LecIgnoresPhysicalOnlyCellsWithoutAFunction) {
+  // A placed netlist carries physical-only cells -- well taps, fillers,
+  // decaps -- with no pins and no logic, and often no liberty entry. The
+  // netlist with one is equivalent to the same netlist without it.
+  const auto dir = cliScratchDir("physical_only_cells");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "plain.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "tapped.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "  TAPCELL u_tap ();\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "plain.v", "tapped.v", "tiny.lib"}), 0)
+      << readText(dir / "kepler.out");
+  const auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("No difference was found"), std::string::npos) << out;
+  // The skipped cell is named, so a typo in a real cell name is not silent.
+  EXPECT_NE(out.find("TAPCELL"), std::string::npos) << out;
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, UnknownCellWithConnectionsStillStopsLoading) {
+  // Only an unknown cell with no connected pin is skipped: one that is wired
+  // into the design has a function the tool does not know, and stays an error.
+  const auto dir = cliScratchDir("unknown_connected_cell");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "plain.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "unknown.v",
+            "module top(input a, input b, output y);\n"
+            "  MYSTERY u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "plain.v", "unknown.v", "tiny.lib"}), 1)
+      << readText(dir / "kepler.out");
+  const auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("MYSTERY cannot be found"), std::string::npos) << out;
+  std::filesystem::remove_all(dir);
+}
+
 TEST(KeplerCliSubprocessTests, BinaryExists) {
   std::filesystem::path p(KEPLER_BIN);
   bool exists = std::filesystem::exists(p);

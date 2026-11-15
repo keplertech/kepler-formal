@@ -861,6 +861,65 @@ static naja::NL::SNLDesign* selectTopDesign(
   return top;
 }
 
+// Placed netlists carry physical-only cells (well taps, fillers, decaps):
+// no pins, no function and often no Liberty entry. Naja loads an instance of
+// a module that nothing defines as an automatic black box; one with no
+// connected pin cannot influence any signal, so it is dropped with a warning.
+// An unknown module that is wired into the design remains an error, as before:
+// its function is not known.
+static void dropUnconnectedUnknownCells(naja::NL::NLLibrary* designLibrary) {
+  auto* unknownLibrary =
+      designLibrary->getLibrary(naja::NL::NLName("AUTO_BLACKBOX"));
+  if (unknownLibrary == nullptr) {
+    return;
+  }
+  std::vector<naja::NL::SNLDesign*> unknownModels;
+  for (auto* model : unknownLibrary->getSNLDesigns()) {
+    unknownModels.push_back(model);
+  }
+  for (auto* model : unknownModels) {
+    std::vector<naja::NL::SNLInstance*> instances;
+    for (auto* instance : model->getSlaveInstances()) {
+      instances.push_back(instance);
+    }
+    for (auto* instance : instances) {
+      for (auto* instTerm : instance->getInstTerms()) {
+        if (instTerm->getNet() != nullptr) {
+          throw std::runtime_error(
+              model->getName().getString() +
+              " cannot be found in SNL while constructing instance " +
+              instance->getName().getString() + " of " +
+              instance->getDesign()->getName().getString() +
+              "; only instances without any connected pin are skipped as "
+              "physical-only cells");
+        }
+      }
+    }
+    SPDLOG_WARN(
+        "Skipping {} instance(s) of unknown cell {}: no library or source "
+        "defines it and none of its pins is connected, so it is treated as a "
+        "physical-only cell",
+        instances.size(), model->getName().getString());
+    for (auto* instance : instances) {
+      instance->destroy();
+    }
+    model->destroy();
+  }
+  unknownLibrary->destroy();
+}
+
+// Loads a gate-level Verilog netlist into `designLibrary`.
+static void constructVerilogDesign(
+    naja::NL::NLLibrary* designLibrary,
+    const std::vector<std::filesystem::path>& designPaths,
+    bool preprocessing) {
+  SNLVRLConstructor constructor(designLibrary);
+  constructor.config_.preprocessEnabled_ = preprocessing;
+  constructor.config_.blackboxUnknownModules_ = true;
+  constructor.construct(designPaths);
+  dropUnconnectedUnknownCells(designLibrary);
+}
+
 // Naja registers every file of a design before elaborating anything, so the
 // files come in any order: packages and instantiated entities resolve from the
 // complete unit index, and a child entity takes the generic actuals of its
@@ -3067,9 +3126,8 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         } else {
         // LCOV_EXCL_STOP
-          SNLVRLConstructor constructor(designLibrary);
-          constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-          constructor.construct(toPathVector(designPaths));
+          constructVerilogDesign(designLibrary, toPathVector(designPaths),
+                                 verilogPreprocessing);
         }
         auto top = useVhdl || usePython
                        ? vhdlTop
@@ -3438,9 +3496,8 @@ static int KeplerFormalMainImpl(
         }
       // LCOV_EXCL_START
       } else {
-        SNLVRLConstructor constructor(designLibrary);
-        constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-        constructor.construct(design0Paths);
+        constructVerilogDesign(designLibrary, design0Paths,
+                               verilogPreprocessing);
       }
       auto top = useVhdl || usePython
                      ? vhdlTop
@@ -3580,9 +3637,8 @@ static int KeplerFormalMainImpl(
         }
       // LCOV_EXCL_START
       } else {
-        SNLVRLConstructor constructor(designLibrary);
-        constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-        constructor.construct(design1Paths);
+        constructVerilogDesign(designLibrary, design1Paths,
+                               verilogPreprocessing);
       }
       auto top = useVhdl || usePython
                      ? vhdlTop

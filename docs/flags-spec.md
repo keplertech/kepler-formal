@@ -23,6 +23,27 @@ The SEC-specific flag surface is documented separately in
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 `verification: sec` in YAML.
 
+## Result codes and log
+
+LEC exits `0` when no difference was found and `3` when one was, the code a
+SEC counterexample has; the SEC codes are listed in
+[sec-flags-spec.md](sec-flags-spec.md). Any other status is a failed run. The
+verdict of a difference names the miter log the run wrote, and that log gives
+the size of each SAT problem and the time it took:
+
+```text
+Starting solver: <v> variables, <c> clauses, <n> outputs compared
+SAT solver finished: UNSAT in <s> s
+```
+
+## Cells without a definition
+
+A Verilog netlist instance of a module that no library and no source defines
+stops loading, with one exception: an instance with no connected pin. Placed
+netlists carry such physical-only cells (well taps, fillers, decaps), often
+without a Liberty entry. They cannot influence any signal, so they are dropped
+with a warning that names the cell and counts its instances.
+
 ## Binary flags
 
 | Flag | Meaning |
