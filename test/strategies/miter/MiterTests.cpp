@@ -3295,6 +3295,40 @@ TEST(KeplerCliSubprocessTests, LecDifferenceNamesTheMiterLogItWrote) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(KeplerCliSubprocessTests, LecLogNamesTheSolverProblemAndItsTime) {
+  // An equivalent pair the miter cannot hash away, so the solver runs: its
+  // start line names the problem it was given, its finish line the time.
+  const auto dir = cliScratchDir("lec_problem_size");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "and.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "nand_inv.v",
+            "module top(input a, input b, output y);\n"
+            "  wire n;\n"
+            "  NAND2 u0 (.A(a), .B(b), .Y(n));\n"
+            "  INV u1 (.A(n), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "cfg.yaml",
+            "format: verilog\n"
+            "verification: lec\n"
+            "input_paths:\n  - and.v\n  - nand_inv.v\n"
+            "liberty_files:\n  - tiny.lib\n"
+            "log_file: miter.log\n");
+  ASSERT_EQ(runKeplerIn(dir, {"--config", "cfg.yaml"}), 0)
+      << readText(dir / "kepler.out");
+  const auto log = readText(dir / "miter.log");
+  EXPECT_TRUE(std::regex_search(
+      log, std::regex("Starting solver: [0-9]+ variables, [0-9]+ clauses, "
+                      "[0-9]+ outputs compared")))
+      << log;
+  EXPECT_TRUE(std::regex_search(
+      log, std::regex("SAT solver finished: UNSAT in [0-9]+\\.[0-9] s")))
+      << log;
+  std::filesystem::remove_all(dir);
+}
+
 TEST(KeplerCliSubprocessTests, BinaryExists) {
   std::filesystem::path p(KEPLER_BIN);
   bool exists = std::filesystem::exists(p);
