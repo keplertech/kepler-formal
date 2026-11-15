@@ -302,7 +302,8 @@ for inconclusive/unsupported, and three for a counterexample, but
 | Field or property | Meaning |
 | --- | --- |
 | `status` | A `VerificationStatus` semantic outcome |
-| `exit_code` | The native return code; do not use it alone as the verdict |
+| `exit_code` | The native return code, as the CLI would exit: `0` for equivalent or proved, `3` for a LEC difference or a SEC counterexample; do not use it alone as the verdict |
+
 | `input_format` | `naja_design` for live-design verification |
 | `verification` | Selected `lec` or `sec` mode |
 | `log_file` | The actual log path selected by the engine, or `None` if no log was created |

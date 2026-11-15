@@ -3207,6 +3207,7 @@ static int KeplerFormalMainImpl(
         } else {
           SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
           // LCOV_EXCL_STOP
+          return kLecDifferenceExitCode;
         }
 	      // LCOV_EXCL_START
 	      // LCOV_DISABLED_START
@@ -3737,6 +3738,9 @@ static int KeplerFormalMainImpl(
                               ? KEPLER_FORMAL::RunStatus::Equivalent
                               : KEPLER_FORMAL::RunStatus::Different;
     }
+    if (!allScopesEquivalent) {
+      return kLecDifferenceExitCode;
+    }
   // LCOV_EXCL_START
   } else {
   // LCOV_EXCL_STOP
@@ -3766,6 +3770,7 @@ static int KeplerFormalMainImpl(
       } else {
         SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
         // LCOV_EXCL_STOP
+        return kLecDifferenceExitCode;
       }
     // LCOV_EXCL_START
     } catch (const std::exception& e) {

@@ -311,7 +311,7 @@ void runTests() {
           "hierarchical LEC failed: " + result.reason);
     checkState();
     mutableSecond.second->setValue("2'h1");
-    check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 0 &&
+    check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 3 &&
               result.status == RunStatus::Different,
           "different LEC verdict/exit code changed: " + result.reason);
     mutableSecond.second->setValue("2'h2");
@@ -338,8 +338,8 @@ void runTests() {
               result.status == RunStatus::Equivalent,
           "self comparison with selected boundary failed: " + result.reason);
     checkState();
-    const int differentExit =
-        mode == BorrowedVerificationMode::SEC ? 3 : 0;
+    // A LEC difference returns the code a SEC counterexample has.
+    const int differentExit = 3;
     check(verifyBorrowedDesigns(opaqueFirst.design, opaqueSecond.design,
                                 options, result) == differentExit &&
               result.status == RunStatus::Different,

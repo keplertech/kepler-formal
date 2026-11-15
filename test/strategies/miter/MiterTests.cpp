@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -3084,7 +3085,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     cfg << "log_file: \"" << differentLog.string() << "\"\n";
   }
   int rc = runKeplerCliWithArgs({"--config", differentCfg.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // a difference: the code a SEC counterexample has
   ASSERT_TRUE(std::filesystem::exists(differentLog));
   std::ifstream miterLogFile(differentLog);
   std::string line;
@@ -3207,6 +3208,75 @@ static int run_kepler_cli_with_args(const std::vector<std::string>& args) {
     return EXIT_FAILURE;
   }
 #endif
+}
+
+// A scratch directory per test, and a shell run of kepler-formal in it with
+// stdout and stderr kept: the subprocess form of a CLI test.
+static std::filesystem::path cliScratchDir(const std::string& name) {
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("kepler_cli_" + name + "_" +
+                    std::to_string(std::chrono::steady_clock::now()
+                                       .time_since_epoch()
+                                       .count()));
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+static void writeText(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream out(path);
+  out << text;
+}
+
+static std::string readText(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::stringstream text;
+  text << in.rdbuf();
+  return text.str();
+}
+
+// AND2, NAND2 and INV, enough for an equivalent pair the miter cannot hash
+// away: AND2 against NAND2 into INV.
+static const char* kTinyLiberty =
+    "library(tiny) {\n"
+    "  cell(AND2) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(B) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"(A&B)\"; }\n"
+    "  }\n"
+    "  cell(NAND2) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(B) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"!(A&B)\"; }\n"
+    "  }\n"
+    "  cell(INV) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"!A\"; }\n"
+    "  }\n"
+    "}\n";
+
+// Runs kepler-formal in `dir`; its output goes to `dir`/kepler.out.
+static int runKeplerIn(const std::filesystem::path& dir,
+                       const std::vector<std::string>& args) {
+  std::string cmd = "cd '" + dir.string() + "' && '" + std::string(KEPLER_BIN) + "'";
+  for (const auto& a : args) {
+    cmd += " '" + a + "'";
+  }
+  cmd += " > kepler.out 2>&1";
+  const int rc = std::system(cmd.c_str());
+  return (rc != -1 && WIFEXITED(rc)) ? WEXITSTATUS(rc) : EXIT_FAILURE;
+}
+
+TEST(KeplerCliSubprocessTests, LecExitStatusTellsADifferenceFromEquivalence) {
+  // Equivalent exits 0; a difference exits 3, the code a SEC
+  // counterexample has, so a caller reads the verdict from the status.
+  const auto dir = cliScratchDir("lec_exit_status");
+  writeText(dir / "same.v", "module top(input a, output y);\n  assign y = a;\nendmodule\n");
+  writeText(dir / "zero.v", "module top(input a, output y);\n  assign y = 1'b0;\nendmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "same.v", "same.v"}), 0)
+      << readText(dir / "kepler.out");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "same.v", "zero.v"}), 3)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
 }
 
 TEST(KeplerCliSubprocessTests, BinaryExists) {
@@ -3787,7 +3857,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRun) {
     config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog_bazel.yaml";
   }
   int rc = run_kepler_cli_with_args({"--config", config});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
@@ -3804,7 +3874,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
                                          pfx + "examples/tinyrocket/fakeram45_64x15.lib",
                                          pfx + "examples/tinyrocket/fakeram45_64x32.lib",
                                          pfx + "examples/tinyrocket/fakeram45_1024x32.lib"});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
@@ -3851,7 +3921,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
   configFile.close();
 
   int rc = run_kepler_cli_with_args({"--config", config.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
   std::filesystem::remove_all(tempDir);
 }
 
@@ -3902,7 +3972,7 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
   }
 
   int rc = run_kepler_cli_with_args({"--config", configPath.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
   ASSERT_TRUE(std::filesystem::exists(logPath));
 
   std::ifstream logFile(logPath);

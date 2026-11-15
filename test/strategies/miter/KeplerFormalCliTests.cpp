@@ -982,6 +982,12 @@ TEST_F(KeplerFormalCliTests, SecResultExitCodesAreStable) {
   EXPECT_EQ(kSecCounterexampleExitCode, 3);
 }
 
+TEST_F(KeplerFormalCliTests, LecResultExitCodesAreStable) {
+  // Equivalent is 0; a difference shares SEC's counterexample code.
+  EXPECT_EQ(kLecDifferenceExitCode, 3);
+  EXPECT_EQ(kLecDifferenceExitCode, kSecCounterexampleExitCode);
+}
+
 TEST_F(KeplerFormalCliTests, InProcessRunStatusNamesAreStable) {
   using KEPLER_FORMAL::RunStatus;
   EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::NoResult), "no_result");
@@ -1080,8 +1086,8 @@ TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {
       "  - " + fixture.design1Path.string() + "\n"
       "log_file: " + differentLog.string() + "\n");
   const auto different = runStructuredWithConfigFile(differentCfg);
-  EXPECT_EQ(different.exitCode, EXIT_SUCCESS);
-  EXPECT_EQ(different.result.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(different.exitCode, kLecDifferenceExitCode);
+  EXPECT_EQ(different.result.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(different.result.status, KEPLER_FORMAL::RunStatus::Different);
   EXPECT_EQ(different.result.logFile, differentLog.string());
   EXPECT_TRUE(std::filesystem::exists(differentLog));
@@ -1421,7 +1427,8 @@ TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   int argc = 3;
 
   int rc = KeplerFormalMain(argc, argv);
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  // The edited design differs: the code a LEC difference exits with.
+  EXPECT_EQ(rc, kLecDifferenceExitCode);
   if (!std::filesystem::exists(cnfPath)) {
     GTEST_SKIP() << "CNF dump file was not produced by the in-process run in this build";
   }
@@ -1703,7 +1710,7 @@ TEST_F(KeplerFormalCliTests, CliSetAsBoundaryExposesDifferentInstanceInputs) {
          "-verilog",
          fixture.design0Path.string(),
          fixture.design1Path.string()});
-    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
     EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
   }
 
@@ -1713,28 +1720,28 @@ TEST_F(KeplerFormalCliTests, CliSetAsBoundaryExposesDifferentInstanceInputs) {
 TEST_F(KeplerFormalCliTests,
        CliSetAsBoundaryDetectsSignalVersusConstantZero) {
   const auto run = runBoundaryInputComparison("a", "1'b0", false);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
 TEST_F(KeplerFormalCliTests,
        CliCompactSetAsBoundaryDetectsSignalVersusConstantZero) {
   const auto run = runBoundaryInputComparison("a", "1'b0", true);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
 TEST_F(KeplerFormalCliTests,
        CliSetAsBoundaryDetectsConstantZeroVersusOne) {
   const auto run = runBoundaryInputComparison("1'b0", "1'b1", false);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
 TEST_F(KeplerFormalCliTests,
        CliCompactSetAsBoundaryDetectsConstantZeroVersusOne) {
   const auto run = runBoundaryInputComparison("1'b0", "1'b1", true);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
@@ -1761,7 +1768,7 @@ TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryAbstractsInstanceOutput) {
        fixture.design0Path.string(),
        fixture.design1Path.string(),
        fixture.libertyPath.string()});
-  EXPECT_EQ(baseline.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(baseline.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(baseline.result.status, KEPLER_FORMAL::RunStatus::Different);
 
   const auto bounded = runStructuredWithConfigFile(cfgPath);
@@ -1956,7 +1963,7 @@ TEST_F(KeplerFormalCliTests, CliCompactSetAsBoundaryUsesEachSidePath) {
          "--set-as-boundary",
          "u_left",
          "u_right"});
-    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
     EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
   }
 
@@ -4603,7 +4610,7 @@ TEST_F(KeplerFormalCliTests, ConfigCompactModeWritesDifferentSummaryAndWarning) 
       "compact_mode: true\n"
       "log_file: " + logPath.string() + "\n");
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_EQ(runWithConfigFile(cfgPath), kLecDifferenceExitCode);
   ASSERT_TRUE(std::filesystem::exists(logPath));
   const auto contents = readFileContents(logPath);
   EXPECT_NE(contents.find("Circuits are DIFFERENT"), std::string::npos);
