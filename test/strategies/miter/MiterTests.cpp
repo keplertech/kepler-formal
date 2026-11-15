@@ -3626,6 +3626,36 @@ TEST(KeplerCliSubprocessTests, SecModelsTheClockGatesOfAFoundryLiberty) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(KeplerCliSubprocessTests, SvRtlAgainstALibertyGateNetlist) {
+  // The check after synthesis: SystemVerilog RTL against the gate netlist
+  // made from it, cells from liberty, in one run with -sv.
+  const auto dir = cliScratchDir("sv_against_gates");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "rtl.sv",
+            "module top(input a, input b, output y);\n"
+            "  assign y = a & b;\n"
+            "endmodule\n");
+  writeText(dir / "gates.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-sv", "-v", "sec", "--design1", "rtl.sv",
+                              "--design2", "gates.v", "--liberty", "tiny.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+  // A wrong netlist is a counterexample, not a pass: the cells carry their
+  // liberty function, they are not black boxes.
+  writeText(dir / "wrong.v",
+            "module top(input a, input b, output y);\n"
+            "  NAND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-sv", "-v", "sec", "--design1", "rtl.sv",
+                              "--design2", "wrong.v", "--liberty", "tiny.lib"}),
+            3)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
 TEST(KeplerCliSubprocessTests, BinaryExists) {
   std::filesystem::path p(KEPLER_BIN);
   bool exists = std::filesystem::exists(p);

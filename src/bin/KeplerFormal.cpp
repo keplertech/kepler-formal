@@ -3067,11 +3067,20 @@ static int KeplerFormalMainImpl(
     // A SystemVerilog design compared with a netlist may instantiate the
     // loaded primitives itself, so it is parsed with generated stubs for
     // them: design 1 of sv2v, and the SystemVerilog design of a pair with
-    // different formats.
-    const auto designUsesPrimitiveStubs = [&](int designIndex) {
-      return (inputFormatType == FormatType::SV2V && designIndex == 0) ||
-             (inputFormatType == FormatType::PER_DESIGN &&
-              designUsesSystemVerilog(designIndex));
+    // different formats. With -sv both designs go through the SystemVerilog
+    // frontend, and either may be a gate netlist of the loaded cells (RTL
+    // against the netlist synthesized from it), so both get the stubs when
+    // a library was given. Without one the parse is as it was.
+    const auto designUsesPrimitiveStubs =
+        [&](int designIndex,
+            const std::vector<NLLibrary*>& primitiveLibraries) {
+      if ((inputFormatType == FormatType::SV2V && designIndex == 0) ||
+          (inputFormatType == FormatType::PER_DESIGN &&
+           designUsesSystemVerilog(designIndex))) {
+        return true;
+      }
+      return inputFormatType == FormatType::SYSTEMVERILOG &&
+             !primitiveLibraries.empty();
     };
 
     auto loadOneDesign = [&](const std::vector<std::string>& designPaths,
@@ -3130,7 +3139,8 @@ static int KeplerFormalMainImpl(
           std::vector<std::filesystem::path> temporaryFiles;
           // LCOV_EXCL_STOP
           const auto* sv2vPrimitiveLibraries =
-              designUsesPrimitiveStubs(designIndex) ? &primitiveLibraries
+              designUsesPrimitiveStubs(designIndex, primitiveLibraries)
+                  ? &primitiveLibraries
                                                     : nullptr;
           std::filesystem::path generatedStubPath;
           const auto svInputPaths =
@@ -3511,7 +3521,9 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            designUsesPrimitiveStubs(0) ? &db0PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(0, db0PrimitiveLibraries)
+                ? &db0PrimitiveLibraries
+                : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design0,
@@ -3653,7 +3665,9 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            designUsesPrimitiveStubs(1) ? &db1PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(1, db1PrimitiveLibraries)
+                ? &db1PrimitiveLibraries
+                : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design1,
