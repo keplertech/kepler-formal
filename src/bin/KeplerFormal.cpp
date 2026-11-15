@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <cctype>
 #include <stdexcept>
 #include <unordered_map>
@@ -45,6 +46,7 @@
 #include "SNLUtils.h"
 #include "ScopeExtraction.h"
 #include "Btor2ExportConfig.h"
+#include "ClockGateModels.h"
 #include "Config.h"
 #include "DesignBoundary.h"
 #include "KeplerFormalDriver.h"
@@ -81,13 +83,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
+      "[--report-skipped-pos] [--po-progress] [--po-progress-batch <n>] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--clock-gate-model <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--clock-gate-model <true|false>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -516,8 +518,11 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "dump_cnf_path",
       "compact_mode",
       "report_skipped_pos",
+      "po_progress",
+      "po_progress_batch",
       "latch_abstraction",
       "data_latch_model",
+      "clock_gate_model",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -859,6 +864,65 @@ static naja::NL::SNLDesign* selectTopDesign(
         std::to_string(designIndex + 1));
   }
   return top;
+}
+
+// Placed netlists carry physical-only cells (well taps, fillers, decaps):
+// no pins, no function and often no Liberty entry. Naja loads an instance of
+// a module that nothing defines as an automatic black box; one with no
+// connected pin cannot influence any signal, so it is dropped with a warning.
+// An unknown module that is wired into the design remains an error, as before:
+// its function is not known.
+static void dropUnconnectedUnknownCells(naja::NL::NLLibrary* designLibrary) {
+  auto* unknownLibrary =
+      designLibrary->getLibrary(naja::NL::NLName("AUTO_BLACKBOX"));
+  if (unknownLibrary == nullptr) {
+    return;
+  }
+  std::vector<naja::NL::SNLDesign*> unknownModels;
+  for (auto* model : unknownLibrary->getSNLDesigns()) {
+    unknownModels.push_back(model);
+  }
+  for (auto* model : unknownModels) {
+    std::vector<naja::NL::SNLInstance*> instances;
+    for (auto* instance : model->getSlaveInstances()) {
+      instances.push_back(instance);
+    }
+    for (auto* instance : instances) {
+      for (auto* instTerm : instance->getInstTerms()) {
+        if (instTerm->getNet() != nullptr) {
+          throw std::runtime_error(
+              model->getName().getString() +
+              " cannot be found in SNL while constructing instance " +
+              instance->getName().getString() + " of " +
+              instance->getDesign()->getName().getString() +
+              "; only instances without any connected pin are skipped as "
+              "physical-only cells");
+        }
+      }
+    }
+    SPDLOG_WARN(
+        "Skipping {} instance(s) of unknown cell {}: no library or source "
+        "defines it and none of its pins is connected, so it is treated as a "
+        "physical-only cell",
+        instances.size(), model->getName().getString());
+    for (auto* instance : instances) {
+      instance->destroy();
+    }
+    model->destroy();
+  }
+  unknownLibrary->destroy();
+}
+
+// Loads a gate-level Verilog netlist into `designLibrary`.
+static void constructVerilogDesign(
+    naja::NL::NLLibrary* designLibrary,
+    const std::vector<std::filesystem::path>& designPaths,
+    bool preprocessing) {
+  SNLVRLConstructor constructor(designLibrary);
+  constructor.config_.preprocessEnabled_ = preprocessing;
+  constructor.config_.blackboxUnknownModules_ = true;
+  constructor.construct(designPaths);
+  dropUnconnectedUnknownCells(designLibrary);
 }
 
 // Naja registers every file of a design before elaborating anything, so the
@@ -1393,8 +1457,12 @@ static int KeplerFormalMainImpl(
   bool compactMode = false;
   bool allowBoundaryMismatch = false;
   bool reportSkippedPOs = false;
+  // LEC: check the outputs a batch at a time and log the count.
+  bool poProgress = false;
+  size_t poProgressBatch = 0;
   bool latchAbstraction = true;
   bool dataLatchModel = true;
+  bool clockGateModel = true;
   bool verilogPreprocessing = false;
   bool svSingleUnit = false;
   std::string dumpCnfPath;
@@ -1677,6 +1745,22 @@ static int KeplerFormalMainImpl(
         }
         // LCOV_EXCL_STOP
 
+        // po_progress, po_progress_batch (LEC)
+        if (cfg["po_progress"] && cfg["po_progress"].IsScalar()) {
+          poProgress = cfg["po_progress"].as<bool>();
+        }
+        if (cfg["po_progress_batch"] && cfg["po_progress_batch"].IsScalar()) {
+          std::string error;
+          if (!parseNonNegativeSizeToken(
+                  cfg["po_progress_batch"].as<std::string>(),
+                  "po_progress_batch", poProgressBatch, error) ||
+              poProgressBatch == 0) {
+            SPDLOG_CRITICAL("po_progress_batch must be a positive integer");
+            return EXIT_FAILURE;
+          }
+          poProgress = true;
+        }
+
         // latch_abstraction (SEC, default true)
         if (cfg["latch_abstraction"] && cfg["latch_abstraction"].IsScalar()) {
           latchAbstraction = cfg["latch_abstraction"].as<bool>();
@@ -1685,6 +1769,11 @@ static int KeplerFormalMainImpl(
         // data_latch_model (SEC, default true)
         if (cfg["data_latch_model"] && cfg["data_latch_model"].IsScalar()) {
           dataLatchModel = cfg["data_latch_model"].as<bool>();
+        }
+
+        // clock_gate_model (SEC, default true)
+        if (cfg["clock_gate_model"] && cfg["clock_gate_model"].IsScalar()) {
+          clockGateModel = cfg["clock_gate_model"].as<bool>();
         }
 
         // verilog_preprocessing (optional)
@@ -1875,13 +1964,16 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--clock-gate-model") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction"
+                          ? latchAbstraction
+                          : arg == "--data-latch-model" ? dataLatchModel
+                                                        : clockGateModel;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2101,13 +2193,16 @@ static int KeplerFormalMainImpl(
         ++i;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--clock-gate-model") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
-        bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+        bool& value = arg == "--latch-abstraction"
+                          ? latchAbstraction
+                          : arg == "--data-latch-model" ? dataLatchModel
+                                                        : clockGateModel;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2209,6 +2304,23 @@ static int KeplerFormalMainImpl(
         reportSkippedPOs = true;
         continue;
         // LCOV_EXCL_STOP
+      }
+      if (arg == "--po-progress") {
+        poProgress = true;
+        continue;
+      }
+      if (arg == "--po-progress-batch") {
+        std::string error;
+        if (i + 1 >= argc ||
+            !parseNonNegativeSizeToken(argv[i + 1], "--po-progress-batch",
+                                       poProgressBatch, error) ||
+            poProgressBatch == 0) {
+          SPDLOG_CRITICAL("--po-progress-batch needs a positive integer");
+          return EXIT_FAILURE;
+        }
+        poProgress = true;
+        ++i;
+        continue;
       }
       // LCOV_EXCL_START
       if (arg == "--design1_format" || arg == "--design2_format") {
@@ -2704,8 +2816,17 @@ static int KeplerFormalMainImpl(
   }
   SPDLOG_INFO("Compact mode: {}", compactMode ? "enabled" : "disabled");
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
+  if (poProgress && verificationMode != VerificationMode::LEC) {
+    SPDLOG_WARN("Output progress (po_progress) applies to LEC only; ignored");
+  } else if (poProgress) {
+    SPDLOG_INFO("Output progress: enabled, {}",
+                poProgressBatch == 0
+                    ? std::string("about a hundred batches")
+                    : std::to_string(poProgressBatch) + " output(s) a batch");
+  }
   SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
   SPDLOG_INFO("SEC data-enabled latch model: {}", dataLatchModel ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC clock-gate model: {}", clockGateModel ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -2915,6 +3036,33 @@ static int KeplerFormalMainImpl(
     NLDB* db0 = nullptr;
     bool primitivesAreLoaded = false;
 
+    // SEC reads an integrated clock-gating cell as the latch and the gate its
+    // Liberty statetable describes; see ClockGateModels.h.
+    const bool modelClockGates =
+        clockGateModel && verificationMode == VerificationMode::SEC;
+    // An instance named as a verification boundary keeps its cell.
+    std::set<std::string> boundaryInstanceNames;
+    for (const auto& [path0, path1] : boundaryPairs) {
+      for (const auto& path : {path0, path1}) {
+        const auto separator = path.find_last_of('/');
+        boundaryInstanceNames.insert(
+            separator == std::string::npos ? path : path.substr(separator + 1));
+      }
+    }
+    const auto expandLoadedClockGates = [&]() {
+      if (!modelClockGates) {
+        return;
+      }
+      const size_t replaced = KEPLER_FORMAL::expandClockGates(
+          NLUniverse::get(), boundaryInstanceNames);
+      if (replaced > 0) {
+        SPDLOG_INFO(
+            "Expanded {} integrated clock gate instance(s) into a latch and "
+            "a gate",
+            replaced);
+      }
+    };
+
     auto loadLibraries = [&](NLDB* db,
                              std::vector<NLLibrary*>* primitiveLibraries = nullptr) -> bool {
       if (libertyFiles.empty() && pythonFiles.empty()) {
@@ -2934,6 +3082,9 @@ static int KeplerFormalMainImpl(
         SPDLOG_INFO("Loading library file: {}", libraryFile);
         SNLLibertyConstructor constructor(primitivesLibrary);
         constructor.construct(libraryPath);
+        if (modelClockGates) {
+          KEPLER_FORMAL::addClockGateModels(primitivesLibrary, libraryPath);
+        }
       }
       for (const auto& pythonFile : pythonFiles) {
         // LCOV_EXCL_START
@@ -2962,11 +3113,20 @@ static int KeplerFormalMainImpl(
     // A SystemVerilog design compared with a netlist may instantiate the
     // loaded primitives itself, so it is parsed with generated stubs for
     // them: design 1 of sv2v, and the SystemVerilog design of a pair with
-    // different formats.
-    const auto designUsesPrimitiveStubs = [&](int designIndex) {
-      return (inputFormatType == FormatType::SV2V && designIndex == 0) ||
-             (inputFormatType == FormatType::PER_DESIGN &&
-              designUsesSystemVerilog(designIndex));
+    // different formats. With -sv both designs go through the SystemVerilog
+    // frontend, and either may be a gate netlist of the loaded cells (RTL
+    // against the netlist synthesized from it), so both get the stubs when
+    // a library was given. Without one the parse is as it was.
+    const auto designUsesPrimitiveStubs =
+        [&](int designIndex,
+            const std::vector<NLLibrary*>& primitiveLibraries) {
+      if ((inputFormatType == FormatType::SV2V && designIndex == 0) ||
+          (inputFormatType == FormatType::PER_DESIGN &&
+           designUsesSystemVerilog(designIndex))) {
+        return true;
+      }
+      return inputFormatType == FormatType::SYSTEMVERILOG &&
+             !primitiveLibraries.empty();
     };
 
     auto loadOneDesign = [&](const std::vector<std::string>& designPaths,
@@ -3025,7 +3185,8 @@ static int KeplerFormalMainImpl(
           std::vector<std::filesystem::path> temporaryFiles;
           // LCOV_EXCL_STOP
           const auto* sv2vPrimitiveLibraries =
-              designUsesPrimitiveStubs(designIndex) ? &primitiveLibraries
+              designUsesPrimitiveStubs(designIndex, primitiveLibraries)
+                  ? &primitiveLibraries
                                                     : nullptr;
           std::filesystem::path generatedStubPath;
           const auto svInputPaths =
@@ -3067,9 +3228,8 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         } else {
         // LCOV_EXCL_STOP
-          SNLVRLConstructor constructor(designLibrary);
-          constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-          constructor.construct(toPathVector(designPaths));
+          constructVerilogDesign(designLibrary, toPathVector(designPaths),
+                                 verilogPreprocessing);
         }
         auto top = useVhdl || usePython
                        ? vhdlTop
@@ -3121,6 +3281,7 @@ static int KeplerFormalMainImpl(
 	        // LCOV_DISABLED_STOP
           // LCOV_EXCL_STOP
 	      }
+      expandLoadedClockGates();
       return db;
     // LCOV_EXCL_START
     };
@@ -3187,6 +3348,7 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterS(nullptr, nullptr, logFileName);
         MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
+        MiterS.setPoProgress(poProgress, poProgressBatch);
         if (dumpCnf) {
           const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
           MiterS.setCnfDump(true, outPath);
@@ -3205,8 +3367,10 @@ static int KeplerFormalMainImpl(
         if (equivalent) {
           SPDLOG_INFO("No difference was found.");
         } else {
-          SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+          SPDLOG_INFO("Difference was found. Please refer to the log({}) for details.",
+                      KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
           // LCOV_EXCL_STOP
+          return kLecDifferenceExitCode;
         }
 	      // LCOV_EXCL_START
 	      // LCOV_DISABLED_START
@@ -3404,7 +3568,9 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            designUsesPrimitiveStubs(0) ? &db0PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(0, db0PrimitiveLibraries)
+                ? &db0PrimitiveLibraries
+                : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design0,
@@ -3436,9 +3602,8 @@ static int KeplerFormalMainImpl(
         }
       // LCOV_EXCL_START
       } else {
-        SNLVRLConstructor constructor(designLibrary);
-        constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-        constructor.construct(design0Paths);
+        constructVerilogDesign(designLibrary, design0Paths,
+                               verilogPreprocessing);
       }
       auto top = useVhdl || usePython
                      ? vhdlTop
@@ -3491,6 +3656,7 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_START
     db0->setID(2);  // Increment ID to avoid conflicts
     // LCOV_EXCL_STOP
+    expandLoadedClockGates();
 
     // LCOV_EXCL_START
     NLDB* db1 = nullptr;
@@ -3546,7 +3712,9 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            designUsesPrimitiveStubs(1) ? &db1PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(1, db1PrimitiveLibraries)
+                ? &db1PrimitiveLibraries
+                : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design1,
@@ -3578,9 +3746,8 @@ static int KeplerFormalMainImpl(
         }
       // LCOV_EXCL_START
       } else {
-        SNLVRLConstructor constructor(designLibrary);
-        constructor.config_.preprocessEnabled_ = verilogPreprocessing;
-        constructor.construct(design1Paths);
+        constructVerilogDesign(designLibrary, design1Paths,
+                               verilogPreprocessing);
       }
       auto top = useVhdl || usePython
                      ? vhdlTop
@@ -3630,6 +3797,7 @@ static int KeplerFormalMainImpl(
       // LCOV_DISABLED_STOP
       // LCOV_EXCL_STOP
     }
+    expandLoadedClockGates();
   // LCOV_EXCL_START
   } catch (const std::exception& e) {
     SPDLOG_CRITICAL("Netlist loading failed: {}", e.what());
@@ -3686,6 +3854,7 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         KEPLER_FORMAL::MiterStrategy MiterScope(scopes.first, scopes.second, logFileName);
         MiterScope.setAllowBoundaryMismatch(allowBoundaryMismatch);
+        MiterScope.setPoProgress(poProgress, poProgressBatch);
         if (dumpCnf) {
           std::string scopeName = sanitizeFileToken(scopes.first->getName().getString());
           std::string outPath = dumpCnfPath.empty()
@@ -3709,10 +3878,11 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         } else {
           allScopesEquivalent = false;
-          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log(miter_log_x.txt) for details.",  // LCOV_EXCL_LINE
+          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log({}) for details.",  // LCOV_EXCL_LINE
           // LCOV_EXCL_STOP
                       scopes.first->getName().getString(),
-                      scopes.second->getName().getString());
+                      scopes.second->getName().getString(),
+                      KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
         }
       // LCOV_EXCL_START
       } catch (const std::exception& e) {
@@ -3737,6 +3907,9 @@ static int KeplerFormalMainImpl(
                               ? KEPLER_FORMAL::RunStatus::Equivalent
                               : KEPLER_FORMAL::RunStatus::Different;
     }
+    if (!allScopesEquivalent) {
+      return kLecDifferenceExitCode;
+    }
   // LCOV_EXCL_START
   } else {
   // LCOV_EXCL_STOP
@@ -3744,6 +3917,7 @@ static int KeplerFormalMainImpl(
       // LCOV_EXCL_START
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
       MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
+      MiterS.setPoProgress(poProgress, poProgressBatch);
       MiterS.setBoundaryPairs(boundaryPairs);
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
@@ -3764,8 +3938,10 @@ static int KeplerFormalMainImpl(
       if (equivalent) {
         SPDLOG_INFO("No difference was found.");
       } else {
-        SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+        SPDLOG_INFO("Difference was found. Please refer to the log({}) for details.",
+                    KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
         // LCOV_EXCL_STOP
+        return kLecDifferenceExitCode;
       }
     // LCOV_EXCL_START
     } catch (const std::exception& e) {

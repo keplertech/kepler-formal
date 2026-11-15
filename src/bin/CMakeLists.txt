@@ -53,7 +53,8 @@ function(configure_kepler_formal_driver target)
   target_link_libraries(${target} PUBLIC ${KEPLER_FORMAL_DRIVER_LIBRARIES})
 endfunction()
 
-add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp)
+add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp
+  ClockGateModels.cpp)
 configure_kepler_formal_driver(kepler_formal_core)
 
 add_library(kepler_formal_driver STATIC CppDriver.cpp)

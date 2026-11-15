@@ -335,9 +335,12 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
       strategy.init();
       result.logFile = MiterStrategy::getActualLogFileName();
       result.status = strategy.run(false) ? RunStatus::Equivalent : RunStatus::Different;
-      // Match the CLI's LEC exit convention: a completed comparison returns 0
-      // even for Different; the structured status carries the verdict.
-      result.exitCode = 0;
+      // Match the CLI's LEC exit convention: 0 for Equivalent, and for
+      // Different the code a SEC counterexample has.
+      result.exitCode = result.status == RunStatus::Different
+                            ? kLecDifferenceExitCode
+                            : 0;
+
     }
   } catch (const std::exception& error) {
     result.status = RunStatus::Error;

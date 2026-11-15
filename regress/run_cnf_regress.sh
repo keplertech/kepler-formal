@@ -5,7 +5,7 @@
 set -euo pipefail
 
 if [[ $# -lt 4 ]]; then
-  echo "Usage: $0 <test-name> <case-dir> <kepler-formal-bin> <config-path> [expect-identical] [po-cnfs]" >&2
+  echo "Usage: $0 <test-name> <case-dir> <kepler-formal-bin> <config-path> [expect-identical|expect-different] [po-cnfs]" >&2
   exit 2
 fi
 
@@ -14,12 +14,16 @@ case_dir="$2"
 kepler_formal_bin="$3"
 config_path="$4"
 expect_identical=""
+expect_different=""
 dump_po_cnfs=""
 
 for option in "${@:5}"; do
   case "${option}" in
     expect-identical)
       expect_identical="1"
+      ;;
+    expect-different)
+      expect_different="1"
       ;;
     po-cnfs)
       dump_po_cnfs="1"
@@ -131,11 +135,27 @@ rm -f "${output_cnf}" "${output_cnf_archive}" "${output_po_cnf_archive}"
     fi
   } >> "${tmp_config}"
 
-  "${kepler_formal_bin}" --config "${tmp_config}"
+  # LEC exits 0 when the designs are equivalent and 3 when they differ; any
+  # other status is a failed run. The CNF dump is compared in both cases.
+  status=0
+  "${kepler_formal_bin}" --config "${tmp_config}" || status=$?
+  if [[ "${status}" -ne 0 && "${status}" -ne 3 ]]; then
+    echo "kepler-formal failed with exit status ${status}" >&2
+    exit "${status}"
+  fi
+  if [[ -n "${expect_identical}" && "${status}" -ne 0 ]]; then
+    echo "Expected equivalent designs, got exit status ${status}" >&2
+    exit 1
+  fi
+  if [[ -n "${expect_different}" && "${status}" -ne 3 ]]; then
+    echo "Expected differing designs, got exit status ${status}" >&2
+    exit 1
+  fi
 
   if [[ -n "${expect_identical}" ]]; then
     grep "Circuits are IDENTICAL" "${output_log}"
   fi
+
 )
 
 if [[ ! -s "${output_cnf}" ]]; then

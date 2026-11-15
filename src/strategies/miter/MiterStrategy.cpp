@@ -1,6 +1,7 @@
 // Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include "MiterStrategy.h"
 #include "BoolExpr.h"
 #include "BuildPrimaryOutputClauses.h"
@@ -1041,22 +1042,30 @@ bool MiterStrategy::run(bool compact) {
     }
   }
 
-  // Now SAT check via Glucose
-  auto backend = KEPLER_FORMAL::Config::getSolverType();
-  SATSolverWrapper solver(backend);
+  bool sat = false;
+  if (poProgress_) {
+    sat = anyOutputBatchDiffers(POs0, POs1);
+  } else {
+    // Now SAT check via Glucose
+    auto backend = KEPLER_FORMAL::Config::getSolverType();
+    SATSolverWrapper solver(backend);
 
-  // mappings for Tseitin encoding
-  std::unordered_map<BoolExpr*, int> node2var;
-  std::unordered_map<std::string, int> varName2idx;
+    // mappings for Tseitin encoding
+    std::unordered_map<BoolExpr*, int> node2var;
+    std::unordered_map<std::string, int> varName2idx;
 
-  // Tseitin-encode & get the literal for the root
-  int rootVar = tseitinEncode(solver, miter, node2var, varName2idx);
-  solver.addClause({rootVar});
+    // Tseitin-encode & get the literal for the root
+    int rootVar = tseitinEncode(solver, miter, node2var, varName2idx);
+    solver.addClause({rootVar});
 
-  // solve with no assumptions
-  logger->info("Starting solver");
-  bool sat = solver.solve();
-  logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
+    // solve with no assumptions
+    logger->info("Starting solver: {} variables, {} clauses, {} outputs compared",
+                 solver.numVariables(), solver.numClauses(), POs0.size());
+    const auto solveStart = std::chrono::steady_clock::now();
+    sat = solver.solve();
+    logger->info("SAT solver finished: {} in {:.1f} s", sat ? "SAT" : "UNSAT",
+                 std::chrono::duration<double>(std::chrono::steady_clock::now() - solveStart).count());
+  }
 
   if (sat) {
     logger->info("Miter found a difference -> moving to analyze individual POs");
@@ -1325,6 +1334,51 @@ bool MiterStrategy::runCompactSnapshots(const CompactSnapshot& snapshot0,
   return runCompactPOs(POs0, POs1);
 }
 
+// The comparison of all outputs is the OR of their differences, so it can be
+// decided a batch of outputs at a time: the designs differ when some batch
+// does. Each batch is a SAT problem of its own over the cones of its outputs,
+// and each one logs how far the comparison is, so a long run shows progress
+// and the batch that is hard.
+bool MiterStrategy::anyOutputBatchDiffers(
+    const tbb::concurrent_vector<BoolExpr*>& POs0,
+    const tbb::concurrent_vector<BoolExpr*>& POs1) {
+  const size_t total = std::min(POs0.size(), POs1.size());
+  const size_t batchSize =
+      poProgressBatch_ != 0 ? poProgressBatch_
+                            : std::max<size_t>(1, total / 100);
+  logger->info("Checking {} outputs in batches of {}", total, batchSize);
+  bool anyDifferent = false;
+  for (size_t begin = 0; begin < total; begin += batchSize) {
+    const size_t end = std::min(total, begin + batchSize);
+    tbb::concurrent_vector<BoolExpr*> batch0;
+    tbb::concurrent_vector<BoolExpr*> batch1;
+    for (size_t i = begin; i < end; ++i) {
+      batch0.push_back(POs0[i]);
+      batch1.push_back(POs1[i]);
+    }
+    SATSolverWrapper solver(KEPLER_FORMAL::Config::getSolverType());
+    std::unordered_map<BoolExpr*, int> node2var;
+    std::unordered_map<std::string, int> varName2idx;
+    const int rootVar =
+        tseitinEncode(solver, buildMiter(batch0, batch1), node2var, varName2idx);
+    solver.addClause({rootVar});
+    const auto solveStart = std::chrono::steady_clock::now();
+    const bool different = solver.solve();
+    anyDifferent = anyDifferent || different;
+    logger->info(
+        "checked {} of {} outputs: {} variables, {} clauses, {} in {:.1f} s",
+        end, total, solver.numVariables(), solver.numClauses(),
+        different ? "SAT" : "UNSAT",
+        std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                      solveStart)
+            .count());
+    if (different) {
+      logger->info("Outputs {} to {} differ", begin, end - 1);
+    }
+  }
+  return anyDifferent;
+}
+
 bool MiterStrategy::runCompactPOs(const tbb::concurrent_vector<BoolExpr*>& POs0,
                                   const tbb::concurrent_vector<BoolExpr*>& POs1) {
   if (POs0.empty() || POs1.empty()) {
@@ -1355,17 +1409,25 @@ bool MiterStrategy::runCompactPOs(const tbb::concurrent_vector<BoolExpr*>& POs0,
     }
   }
 
-  auto backend = KEPLER_FORMAL::Config::getSolverType();
-  SATSolverWrapper solver(backend);
-  std::unordered_map<BoolExpr*, int> node2var;
-  std::unordered_map<std::string, int> varName2idx;
+  bool sat = false;
+  if (poProgress_) {
+    sat = anyOutputBatchDiffers(POs0, POs1);
+  } else {
+    auto backend = KEPLER_FORMAL::Config::getSolverType();
+    SATSolverWrapper solver(backend);
+    std::unordered_map<BoolExpr*, int> node2var;
+    std::unordered_map<std::string, int> varName2idx;
 
-  int rootVar = tseitinEncode(solver, miter, node2var, varName2idx);
-  solver.addClause({rootVar});
+    int rootVar = tseitinEncode(solver, miter, node2var, varName2idx);
+    solver.addClause({rootVar});
 
-  logger->info("Starting solver");
-  const bool sat = solver.solve();
-  logger->info("SAT solver finished: {}", sat ? "SAT" : "UNSAT");
+    logger->info("Starting solver: {} variables, {} clauses, {} outputs compared",
+                 solver.numVariables(), solver.numClauses(), POs0.size());
+    const auto solveStart = std::chrono::steady_clock::now();
+    sat = solver.solve();
+    logger->info("SAT solver finished: {} in {:.1f} s", sat ? "SAT" : "UNSAT",
+                 std::chrono::duration<double>(std::chrono::steady_clock::now() - solveStart).count());
+  }
   logger->info("Circuits are {}", sat ? "DIFFERENT" : "IDENTICAL");
   if (sat) {
     logger->warn("Due to compact mode, per PO analysis is skipped.");

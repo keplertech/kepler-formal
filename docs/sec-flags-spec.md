@@ -124,6 +124,7 @@ liberty_files:
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 | `--latch-abstraction <bool>` | `latch_abstraction: <bool>` | `true` | `true`, `false`, `1`, `0` | Phase-abstract clock-driven latches as described in [sec-latch-support.md](sec-latch-support.md). `false` makes every latch output opaque again, as before, and disables the data-enabled latch model with it. |
 | `--data-latch-model <bool>` | `data_latch_model: <bool>` | `true` | `true`, `false`, `1`, `0` | Model latches whose enable is not a clock phase as step-transparent state, as described in [sec-latch-support.md](sec-latch-support.md). `false` leaves them opaque. |
+| `--clock-gate-model <bool>` | `clock_gate_model: <bool>` | `true` | `true`, `false`, `1`, `0` | Read Liberty integrated clock-gating cells as a latch and a gate, as described in [sec-clock-handling.md](sec-clock-handling.md#integrated-clock-gating-cells). `false` leaves the cells, and the flops behind them, opaque. |
 
 Accepted values for `sec_engine`:
 

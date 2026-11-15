@@ -67,8 +67,10 @@ class PythonApiTest(unittest.TestCase):
         )
         self.assertEqual(VerificationStatus.DIFFERENT, failed.status)
         self.assertFalse(failed.equivalent)
-        # LEC retains its historical process code for both semantic verdicts.
-        self.assertEqual(0, failed.exit_code)
+        # A LEC difference has the process code of a SEC counterexample.
+        self.assertEqual(0, passed.exit_code)
+        self.assertEqual(3, failed.exit_code)
+
 
     def test_repeated_runs_preserve_the_callers_loaded_designs(self):
         top_before = self.universe.getTopDesign()

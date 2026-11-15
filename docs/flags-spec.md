@@ -23,6 +23,27 @@ The SEC-specific flag surface is documented separately in
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 `verification: sec` in YAML.
 
+## Result codes and log
+
+LEC exits `0` when no difference was found and `3` when one was, the code a
+SEC counterexample has; the SEC codes are listed in
+[sec-flags-spec.md](sec-flags-spec.md). Any other status is a failed run. The
+verdict of a difference names the miter log the run wrote, and that log gives
+the size of each SAT problem and the time it took:
+
+```text
+Starting solver: <v> variables, <c> clauses, <n> outputs compared
+SAT solver finished: UNSAT in <s> s
+```
+
+## Cells without a definition
+
+A Verilog netlist instance of a module that no library and no source defines
+stops loading, with one exception: an instance with no connected pin. Placed
+netlists carry such physical-only cells (well taps, fillers, decaps), often
+without a Liberty entry. They cannot influence any signal, so they are dropped
+with a warning that names the cell and counts its instances.
+
 ## Binary flags
 
 | Flag | Meaning |
@@ -62,8 +83,11 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--python_design1_top <top>`, `--python_design2_top <top>` | Per-design top modules of Python-built designs. Only valid in `python` mode. |
 | `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
+| `--po-progress` | Check the LEC outputs a batch at a time, each batch its own SAT problem, instead of one SAT problem over all of them, and log `checked <k> of <n> outputs` with the batch size and solve time after each batch in the miter log. About a hundred batches by default. The verdict is the same; a long run shows how far it is and which outputs are slow. LEC only. |
+| `--po-progress-batch <n>` | Same as `--po-progress`, with `n` outputs a batch; `1` checks one output cone at a time. LEC only. |
 | `--latch-abstraction <bool>` | Phase-abstract clock-driven latches. Defaults to `true`; `false` makes every latch output opaque as before, data-enabled latches included. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
 | `--data-latch-model <bool>` | Model data-enabled latches (enable is data logic, not a clock phase) as step-transparent state. Defaults to `true`; `false` leaves such latches opaque. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
+| `--clock-gate-model <bool>` | Read Liberty integrated clock-gating cells as a latch and a gate, so a flop behind one becomes a flop with an enable. Defaults to `true`; `false` leaves the cells opaque. SEC only; see [sec-clock-handling.md](sec-clock-handling.md#integrated-clock-gating-cells). |
 
 ## YAML config flags
 
@@ -98,8 +122,11 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
+| `po_progress` | bool | Defaults to `false`. Same as `--po-progress`. |
+| `po_progress_batch` | integer | Same as `--po-progress-batch`; a positive number of outputs a batch. Enables `po_progress`. |
 | `latch_abstraction` | bool | Defaults to `true`. Same as `--latch-abstraction`. |
 | `data_latch_model` | bool | Defaults to `true`. Same as `--data-latch-model`. |
+| `clock_gate_model` | bool | Defaults to `true`. Same as `--clock-gate-model`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |
