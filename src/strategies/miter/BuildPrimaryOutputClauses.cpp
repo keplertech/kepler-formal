@@ -261,29 +261,25 @@ BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
 }
 
 // The cone reads X somewhere this encoding cannot hold, like an X literal in
-// a build without X modeling: name the primitive output that reads it.
+// a build without X modeling: name the primitive output that reads it. That
+// output drives the net `isoID`, where its unknown-read variable was recorded.
 BuildPrimaryOutputClauses::SkippedOutputInfo describeUnknownRead(
-    const UnknownValueReadError& error) {
+    DNLID isoID, const std::string& what) {
   std::ostringstream detail;
-  detail << "unsupported X read: " << error.what();
-  const DNLID isoID = error.getIsoID();
-  if (isoID != DNLID_MAX) {
-    const auto* dnl = naja::DNL::get();
-    const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
-    if (!iso.getDrivers().empty()) {
-      const auto& driver = dnl->getDNLTerminalFromID(iso.getDrivers().front());
-      detail << " at ";
-      appendTerminalName(detail, driver);
-      const auto* instTerm = driver.getSnlTerm();
-      const auto* rtlInfos =
-          instTerm ? instTerm->getInstance()->getRTLInfos() : nullptr;
-      if (rtlInfos && rtlInfos->hasSourceLoc()) {
-        const auto& loc = *rtlInfos->getSourceLoc();
-        detail << "; assignment/expression at " << loc.file.getString() << ":"
-               << loc.line;
-        if (loc.column) detail << ":" << loc.column;
-      }
-    }
+  detail << "unsupported X read: " << what << "; this encoding has no X value";
+  const auto* dnl = naja::DNL::get();
+  const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+  const auto& driver = dnl->getDNLTerminalFromID(iso.getDrivers().front());
+  detail << " at ";
+  appendTerminalName(detail, driver);
+  const auto* instTerm = driver.getSnlTerm();
+  const auto* rtlInfos =
+      instTerm ? instTerm->getInstance()->getRTLInfos() : nullptr;
+  if (rtlInfos && rtlInfos->hasSourceLoc()) {
+    const auto& loc = *rtlInfos->getSourceLoc();
+    detail << "; assignment/expression at " << loc.file.getString() << ":"
+           << loc.line;
+    if (loc.column) detail << ":" << loc.column;
   }
   return {BuildPrimaryOutputClauses::SkippedOutputReason::UnknownConstant,
           detail.str()};
@@ -875,11 +871,11 @@ void BuildPrimaryOutputClauses::initVarNames() {
   xConstantVars_.clear();
   unknownReadVars_.clear();
   unknownReadVarBase_.reset();
+  // Number X variables past every terminal: input variables are numbered
+  // from 2 and never exceed the terminal count, so builders with different
+  // input lists still agree on each X variable (the iso set is ordered).
+  size_t nextVar = termDNLID2varID_.size() + 2;
   if (modelXConstants_) {
-    // Number X variables past every terminal: input variables are numbered
-    // from 2 and never exceed the terminal count, so builders with different
-    // input lists still agree on each X variable (the iso set is ordered).
-    size_t nextVar = termDNLID2varID_.size() + 2;
     for (DNLID isoID : naja::DNL::get()->getDNLIsoDB().getConstantXIsos()) {
       const auto& iso = naja::DNL::get()->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
       for (auto termID : iso.getReaders()) {
@@ -894,7 +890,71 @@ void BuildPrimaryOutputClauses::initVarNames() {
     // constant, and again the same in every builder of this DNL.
     unknownReadVarBase_ = nextVar;
   }
-  Tree2BoolExpr::setUnknownReadVarBase(unknownReadVarBase_);
+  // The conversion numbers unknown reads the same way without X modeling;
+  // those variables are not published, and build() skips the outputs that
+  // read one (skipOutputsReadingUnknownValues).
+  Tree2BoolExpr::setUnknownReadVarBase(nextVar);
+}
+
+void BuildPrimaryOutputClauses::skipOutputsReadingUnknownValues(
+    const std::unordered_map<DNLID, std::string>& reasons) {
+  if (unknownReadVars_.empty()) {
+    return;
+  }
+  std::unordered_map<size_t, DNLID> isoByVar;
+  for (const auto& [isoID, var] : unknownReadVars_) {
+    isoByVar.emplace(var, isoID);
+  }
+  // The iso of an unknown read under each expression node, DNLID_MAX for
+  // none. Outputs share expression nodes, so each node is visited once.
+  std::unordered_map<const BoolExpr*, DNLID> readUnder;
+  const auto unknownReadUnder = [&](BoolExpr* root) {
+    std::vector<std::pair<BoolExpr*, bool>> stack{{root, false}};
+    while (!stack.empty()) {
+      const auto [node, childrenDone] = stack.back();
+      stack.pop_back();
+      if (readUnder.find(node) != readUnder.end()) {
+        continue;
+      }
+      if (node->getOp() == Op::VAR) {
+        const auto isoIt = isoByVar.find(node->getId());
+        readUnder.emplace(node,
+                          isoIt == isoByVar.end() ? DNLID_MAX : isoIt->second);
+        continue;
+      }
+      if (!childrenDone) {
+        stack.push_back({node, true});
+        if (node->getRight() != nullptr) {
+          stack.push_back({node->getRight(), false});
+        }
+        stack.push_back({node->getLeft(), false});
+        continue;
+      }
+      DNLID isoID = readUnder.at(node->getLeft());
+      if (isoID == DNLID_MAX && node->getRight() != nullptr) {
+        isoID = readUnder.at(node->getRight());
+      }
+      readUnder.emplace(node, isoID);
+    }
+    return readUnder.at(root);
+  };
+  for (size_t i = 0; i < outputs_.size(); ++i) {
+    if (POs_[i] == nullptr || !POs_[i]->isValid()) {
+      continue;
+    }
+    const DNLID isoID = unknownReadUnder(POs_[i]);
+    if (isoID == DNLID_MAX) {
+      continue;
+    }
+    POs_[i] = BoolExpr::createInvalid();
+    const auto skip = describeUnknownRead(isoID, reasons.at(isoID));
+    skippedOutputs_[outputs_[i]] = skip;
+    reportSkippedPO(
+        get(),
+        get()->getDNLTerminalFromID(outputs_[i]),
+        skip.detail.c_str(),
+        kSkippedNoDriverPOReport);
+  }
 }
 
 void BuildPrimaryOutputClauses::build() {
@@ -1093,21 +1153,7 @@ void BuildPrimaryOutputClauses::build() {
     auto startConv = std::chrono::steady_clock::now();
     #endif
     if (cloud.getTruthTable().isValid() && POs_[i] == nullptr) {
-      try {
-        POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
-      } catch (const UnknownValueReadError& error) {
-        POs_[i] = BoolExpr::createInvalid();
-        const auto skip = describeUnknownRead(error);
-        {
-          std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
-          skippedOutputs_[out] = skip;
-        }
-        reportSkippedPO(
-            get(),
-            get()->getDNLTerminalFromID(out),
-            skip.detail.c_str(),
-            kSkippedNoDriverPOReport);
-      }
+      POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
     } else if (POs_[i] == nullptr) {
       POs_[i] = BoolExpr::createInvalid();
       SkippedOutputReason skipReason = SkippedOutputReason::None;
@@ -1187,7 +1233,14 @@ void BuildPrimaryOutputClauses::build() {
     );
   }
   unknownReadVars_ = Tree2BoolExpr::takeUnknownReadVars();
+  const auto unknownReadReasons = Tree2BoolExpr::takeUnknownReadReasons();
   Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
+  if (!modelXConstants_) {
+    // This encoding has no X value: the outputs that read one are skipped,
+    // and no unknown-read variable is published.
+    skipOutputsReadingUnknownValues(unknownReadReasons);
+    unknownReadVars_.clear();
+  }
   for (size_t i = 0; i < outputs_.size(); ++i) {
     const size_t representative = representativeForOutput[i];
     if (representative == i) {

@@ -1331,10 +1331,10 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorArityMismatchThrows) {
   BoolExprCache::destroy();
 }
 
-// Without an unknown-read variable base the encoding has no X: a select that
-// can read past its vector is refused, naming the output's iso, while one
-// whose every offset hits the vector needs no unknown read at all.
-TEST(Tree2BoolExprGenericCoverageTest, VectorSelectWithoutUnknownReadsIsRefused) {
+// A select whose every offset hits the vector needs no unknown read at all.
+// One that can read past its vector needs the variable base of a clause build
+// and a net on its output: without either, encoding it is an internal error.
+TEST(Tree2BoolExprGenericCoverageTest, VectorSelectUnknownReadNeedsBaseAndNet) {
   std::vector<BoolExpr*> children;
   for (size_t i = 0; i < 6; ++i) {
     children.push_back(BoolExpr::Var(10 + i));
@@ -1351,20 +1351,20 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorSelectWithoutUnknownReadsIsRefused)
   // Width 2 with 2 offset bits: offsets 2 and 3 read past the vector.
   const auto past = SNLTruthTable::VectorSelect(
       {2, 1, 2, 0, false}, SNLTruthTable::fullDependencies(4));
-  try {
-    buildVectorSelectTruthTableExpr(past, 4, 3);
-    FAIL() << "a select reading past its vector was encoded without X";
-  } catch (const UnknownValueReadError& error) {
-    EXPECT_EQ(error.getIsoID(), naja::DNL::DNLID{3});
-    EXPECT_NE(std::string(error.what()).find("reads past its 2-bit vector"),
-              std::string::npos)
-        << error.what();
-  }
+  EXPECT_THROW(buildVectorSelectTruthTableExpr(past, 4, 3), std::logic_error);
   // With a base, the output still needs a net to key its variable.
   Tree2BoolExpr::setUnknownReadVarBase(kUnknownReadVarBase);
   EXPECT_THROW(buildVectorSelectTruthTableExpr(past, 4, naja::DNL::DNLID_MAX),
-               UnknownValueReadError);
+               std::logic_error);
   EXPECT_TRUE(Tree2BoolExpr::takeUnknownReadVars().empty());
+  // With both, the read gets its variable and the reason is recorded with it.
+  EXPECT_NE(buildVectorSelectTruthTableExpr(past, 4, 3), nullptr);
+  const auto reasons = Tree2BoolExpr::takeUnknownReadReasons();
+  ASSERT_EQ(reasons.size(), 1u);
+  EXPECT_NE(reasons.at(naja::DNL::DNLID{3}).find("reads past its 2-bit vector"),
+            std::string::npos)
+      << reasons.at(naja::DNL::DNLID{3});
+  EXPECT_EQ(Tree2BoolExpr::takeUnknownReadVars().size(), 1u);
   Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
 
   clearChildFETS();

@@ -37,27 +37,30 @@ tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> Tree2BoolExpr::iso2bo
     tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*>();
 
 namespace {
-// Set by the clause builder for the duration of one build; the map is filled
-// from the conversion threads and drained by takeUnknownReadVars().
+// Set by the clause builder for the duration of one build; the maps are filled
+// from the conversion threads and drained by takeUnknownReadVars() and
+// takeUnknownReadReasons().
 std::optional<size_t> unknownReadVarBase;
 tbb::concurrent_unordered_map<naja::DNL::DNLID, size_t> unknownReadVars;
+tbb::concurrent_unordered_map<naja::DNL::DNLID, std::string> unknownReadReasons;
 }  // namespace
 
 void Tree2BoolExpr::setUnknownReadVarBase(std::optional<size_t> base) {
   unknownReadVarBase = base;
   unknownReadVars.clear();
+  unknownReadReasons.clear();
 }
 
 size_t Tree2BoolExpr::unknownReadVar(naja::DNL::DNLID isoID,
                                      const std::string& what) {
-  if (!unknownReadVarBase.has_value()) {
-    throw UnknownValueReadError(what + "; this encoding has no X value", isoID);
-  }
-  if (isoID == naja::DNL::DNLID_MAX) {
-    throw UnknownValueReadError(what + "; the output drives no net", isoID);
+  if (!unknownReadVarBase.has_value() || isoID == naja::DNL::DNLID_MAX) {
+    throw std::logic_error(
+        "unknown read outside a clause build or on an output without a net: " +
+        what);
   }
   const size_t var = *unknownReadVarBase + isoID;
   unknownReadVars.insert({isoID, var});
+  unknownReadReasons.insert({isoID, what});
   return var;
 }
 
@@ -68,6 +71,14 @@ Tree2BoolExpr::takeUnknownReadVars() {
   std::sort(vars.begin(), vars.end());
   unknownReadVars.clear();
   return vars;
+}
+
+std::unordered_map<naja::DNL::DNLID, std::string>
+Tree2BoolExpr::takeUnknownReadReasons() {
+  std::unordered_map<naja::DNL::DNLID, std::string> reasons(
+      unknownReadReasons.begin(), unknownReadReasons.end());
+  unknownReadReasons.clear();
+  return reasons;
 }
 
 // Helper typedefs for thread-local containers. Each pair stores a vector

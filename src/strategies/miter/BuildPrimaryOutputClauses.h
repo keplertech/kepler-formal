@@ -156,6 +156,11 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   std::vector<naja::DNL::DNLID> collectOutputs();
   void setOutputs2OutputsIDs();
   void initVarNames();
+  // Without X modeling: skips every output whose expression reads an
+  // unknown-read variable, naming the primitive output that reads X there
+  // (`reasons`, by iso).
+  void skipOutputsReadingUnknownValues(
+      const std::unordered_map<naja::DNL::DNLID, std::string>& reasons);
   BoundaryPairs boundaryPairs_;
   size_t boundarySide_ = 0;
   std::unique_ptr<LeafBoundary> leafBoundary_;
