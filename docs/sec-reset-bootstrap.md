@@ -57,12 +57,20 @@ designs. A scalar top input can be named as `reset` even if the aligned bit name
 is reported as `reset[0]`. For a bus reset, name each reset bit explicitly, such
 as `reset_bus[0]`.
 
-A reset sequence can leave some state uninitialized. In the `binary` encoding
-SEC then assumes that the outputs agree on the first frame after the bootstrap
-window. Before the engine runs, SEC checks that some reset trace can satisfy
-that assumption. If none can, the designs already differ on that frame, and SEC
-reports the difference with a counterexample instead of proving equivalence
-from an assumption that cannot hold.
+A reset sequence can leave some state uninitialized. SEC finds that state by
+propagating the reset values through the next-state logic for the bootstrap
+cycles with every other input unknown, then releasing the reset ports and
+following whatever can still read a register left free. In the `binary`
+encoding, the outputs whose cones read such a register are skipped as
+reset-unanchored, exactly as without a bootstrap, and listed in
+`skipped_reset_unanchored_pos.txt`: the two copies of a free register may hold
+different values, so a mismatch on them would say nothing about the designs.
+For the remaining outputs SEC assumes that they agree on the first frame after
+the bootstrap window. Before the engine runs, SEC checks that some reset trace
+can satisfy that assumption. If none can, the designs already differ on that
+frame, and SEC reports the difference with a counterexample instead of proving
+equivalence from an assumption that cannot hold. The dual-rail encoding keeps
+every output and carries the free state as X instead.
 
 Reset bootstrap is SEC-only. It does not discover internal reset nets, infer
 reset polarity, or relax top-level input matching; every listed reset port must

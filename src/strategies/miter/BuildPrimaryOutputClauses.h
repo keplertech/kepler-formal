@@ -10,6 +10,7 @@
 #include "DNL.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <mutex>
+#include <optional>
 #include "SNLTruthTable.h"
 #include <unordered_map>
 #include <unordered_set>
@@ -107,6 +108,20 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
       const {
     return xConstantVars_;
   }
+  // (iso, variable) pairs for the primitive outputs that read X somewhere,
+  // such as a VECTOR_SELECT whose offset can leave its vector, assigned by
+  // build() when X constants are modeled (Tree2BoolExpr::unknownReadVar).
+  // SEC models them like X constants; without that modeling such outputs are
+  // skipped.
+  const std::vector<std::pair<naja::DNL::DNLID, size_t>>& getUnknownReadVars()
+      const {
+    return unknownReadVars_;
+  }
+  // The base of the unknown-read variables, `base + iso`, when X constants are
+  // modeled: the same in every builder of one DNL.
+  std::optional<size_t> getUnknownReadVarBase() const {
+    return unknownReadVarBase_;
+  }
   const std::unordered_map<PathKey, naja::DNL::DNLID, KeyHash>&
   getInputsMap() const {
     return inputsMap_;
@@ -141,6 +156,11 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   std::vector<naja::DNL::DNLID> collectOutputs();
   void setOutputs2OutputsIDs();
   void initVarNames();
+  // Without X modeling: skips every output whose expression reads an
+  // unknown-read variable, naming the primitive output that reads X there
+  // (`reasons`, by iso).
+  void skipOutputsReadingUnknownValues(
+      const std::unordered_map<naja::DNL::DNLID, std::string>& reasons);
   BoundaryPairs boundaryPairs_;
   size_t boundarySide_ = 0;
   std::unique_ptr<LeafBoundary> leafBoundary_;
@@ -166,6 +186,8 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   bool stopAtOpaqueInternalOutputs_ = false;
   bool modelXConstants_ = false;
   std::vector<std::pair<naja::DNL::DNLID, size_t>> xConstantVars_;
+  std::vector<std::pair<naja::DNL::DNLID, size_t>> unknownReadVars_;
+  std::optional<size_t> unknownReadVarBase_;
   mutable std::mutex skippedOutputsMutex_;
 
   struct hash {
