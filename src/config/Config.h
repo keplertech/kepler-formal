@@ -92,6 +92,18 @@ public:
     return secDataLatchModel_;
   }
 
+  // SEC memory abstraction: a memory found under the same path with the same
+  // primitive in both designs is compared at its interface, and its cells are
+  // modeled only when that comparison does not carry the proof. On by
+  // default; off models every memory with one state bit per memory bit.
+  static void setSecMemoryAbstraction(bool enabled) {
+    secMemoryAbstraction_ = enabled;
+  }
+
+  static bool getSecMemoryAbstraction() {
+    return secMemoryAbstraction_;
+  }
+
 private:
   Config() = default;
   ~Config() = default;
@@ -100,6 +112,7 @@ private:
   inline static bool reportSkippedPOs_ = false;
   inline static bool secLatchAbstraction_ = true;
   inline static bool secDataLatchModel_ = true;
+  inline static bool secMemoryAbstraction_ = true;
   inline static std::atomic<uint64_t> nextVerificationGeneration_{1};
   inline static std::atomic<uint64_t> verificationGeneration_{0};
 };

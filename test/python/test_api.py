@@ -188,6 +188,17 @@ class PythonApiTest(unittest.TestCase):
                                 log_file=self.root / "models.log"))
                         self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
 
+    def test_sec_memory_abstraction_switch(self):
+        for memory_abstraction in (False, True):
+            with self.subTest(memory_abstraction=memory_abstraction):
+                result = verify_designs(
+                    self.reference, self.equivalent,
+                    options=VerificationOptions(
+                        mode=VerificationMode.SEC,
+                        memory_abstraction=memory_abstraction,
+                        log_file=self.root / "memory.log"))
+                self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+
     def test_sec_reset_bootstrap(self):
         result = verify_designs(
             self.reference, self.equivalent,
@@ -229,6 +240,7 @@ class PythonApiTest(unittest.TestCase):
             (ValueError, "SEC", VerificationOptions(binary_relation_round=False)),
             (ValueError, "SEC", VerificationOptions(latch_abstraction=False)),
             (ValueError, "SEC", VerificationOptions(data_latch_model=False)),
+            (ValueError, "SEC", VerificationOptions(memory_abstraction=False)),
             (ValueError, "SEC", VerificationOptions(
                 sec_reset_cycles=1, sec_reset_ports=[("a", True)])),
             (ValueError, "SEC", VerificationOptions(btor2_export_path="x.btor2")),
@@ -238,6 +250,8 @@ class PythonApiTest(unittest.TestCase):
                 mode=sec, latch_abstraction=1)),
             (TypeError, "data_latch_model", VerificationOptions(
                 mode=sec, data_latch_model=None)),
+            (TypeError, "memory_abstraction", VerificationOptions(
+                mode=sec, memory_abstraction="true")),
             (TypeError, "sec_reset_cycles", VerificationOptions(
                 mode=sec, sec_reset_cycles="2", sec_reset_ports=[("a", True)])),
             (ValueError, "positive", VerificationOptions(

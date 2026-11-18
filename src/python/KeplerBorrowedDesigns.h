@@ -27,6 +27,8 @@ struct BorrowedDesignOptions {
   // Config::setSecDataLatchModel. The call restores the caller's settings.
   bool latchAbstraction = true;
   bool dataLatchModel = true;
+  // SEC memory abstraction; see Config::setSecMemoryAbstraction.
+  bool memoryAbstraction = true;
   // SEC reset bootstrap: cycles and ports are given together. A spec with
   // only one of the two is rejected instead of silently ignored.
   SEC::SecResetSpec secReset;

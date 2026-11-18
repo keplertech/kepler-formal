@@ -257,6 +257,61 @@ BoundaryPort describePort(size_t pairIndex, const SNLBitTerm* bitTerm) {
   return port;
 }
 
+// Describes every pin of one boundary leaf and checks the pin directions and
+// connectivity a boundary relies on. Throws std::invalid_argument otherwise.
+std::vector<PinSpec> describeLeafPins(const SNLInstance* target,
+                                      const std::string& path,
+                                      size_t pairIndex) {
+  std::vector<PinSpec> pins;
+  for (SNLInstTerm* instTerm : target->getInstTerms()) {
+    SNLBitTerm* bitTerm = instTerm->getBitTerm();
+    const auto direction = bitTerm->getDirection();
+    if (direction == SNLTerm::Direction::InOut ||
+        direction == SNLTerm::Direction::Undefined) {
+      throw std::invalid_argument(
+          "boundary instance " + quote(path) + " pin " +
+          quote(bitTerm->getName().getString()) +
+          " has unsupported direction " + direction.getString());
+    }
+    if (direction == SNLTerm::Direction::Input) {
+      validateInputConnectivity(path, instTerm);
+    }
+    if (direction == SNLTerm::Direction::Output) {
+      validateOutputConnectivity(path, instTerm);
+    }
+
+    PinSpec pin;
+    pin.port = describePort(pairIndex, bitTerm);
+    pin.port.connected = direction != SNLTerm::Direction::Input ||
+                         instTerm->getNet() != nullptr;
+    pin.term = bitTerm;
+    pins.push_back(std::move(pin));
+  }
+  return pins;
+}
+
+void sortPins(std::vector<PinSpec>& pins) {
+  std::sort(
+      pins.begin(), pins.end(), [](const PinSpec& lhs, const PinSpec& rhs) {
+        return std::tie(lhs.port.pinName, lhs.port.bit, lhs.port.isInput) <
+               std::tie(rhs.port.pinName, rhs.port.bit, rhs.port.isInput);
+      });
+}
+
+// Pins of a leaf the tool abstracts by itself. They are path keyed, so they
+// take no synthetic top term name.
+std::vector<PinSpec> describeAbstractedLeafPins(const SNLInstance* target,
+                                                const std::string& path,
+                                                size_t pairIndex) {
+  auto pins = describeLeafPins(target, path, pairIndex);
+  for (auto& pin : pins) {
+    pin.port.pathKeyed = true;
+    pin.port.topTermName.clear();
+  }
+  sortPins(pins);
+  return pins;
+}
+
 std::vector<BoundarySpec> preflight(SNLDesign* top,
                                     const BoundaryPairs& pairs,
                                     size_t side) {
@@ -308,28 +363,7 @@ std::vector<BoundarySpec> preflight(SNLDesign* top,
           "boundary instance " + quote(spec.path) +
           " is not a leaf: its model contains child instances");
     }
-    for (SNLInstTerm* instTerm : target->getInstTerms()) {
-      SNLBitTerm* bitTerm = instTerm->getBitTerm();
-      const auto direction = bitTerm->getDirection();
-      if (direction == SNLTerm::Direction::InOut ||
-          direction == SNLTerm::Direction::Undefined) {
-        throw std::invalid_argument(
-            "boundary instance " + quote(spec.path) + " pin " +
-            quote(bitTerm->getName().getString()) +
-            " has unsupported direction " + direction.getString());
-      }
-      if (direction == SNLTerm::Direction::Input) {
-        validateInputConnectivity(spec.path, instTerm);
-      }
-      if (direction == SNLTerm::Direction::Output) {
-        validateOutputConnectivity(spec.path, instTerm);
-      }
-
-      PinSpec pin;
-      pin.port = describePort(spec.pairIndex, bitTerm);
-      pin.port.connected = direction != SNLTerm::Direction::Input ||
-                           instTerm->getNet() != nullptr;
-      pin.term = bitTerm;
+    for (auto& pin : describeLeafPins(target, spec.path, spec.pairIndex)) {
       if (!generatedTopNames.insert(pin.port.topTermName).second) {
         throw std::invalid_argument(
             "boundary pins generate duplicate top term " +
@@ -349,11 +383,7 @@ std::vector<BoundarySpec> preflight(SNLDesign* top,
       throw std::invalid_argument(
           "boundary instance " + quote(spec.path) + " has no pins");
     }
-    std::sort(
-        spec.pins.begin(), spec.pins.end(), [](const PinSpec& lhs, const PinSpec& rhs) {
-          return std::tie(lhs.port.pinName, lhs.port.bit, lhs.port.isInput) <
-                 std::tie(rhs.port.pinName, rhs.port.bit, rhs.port.isInput);
-        });
+    sortPins(spec.pins);
   }
   return specs;
 }
@@ -397,9 +427,59 @@ const BoundaryPort* LeafBoundary::getPort(DNLID id) const {
   return found == portIndices_.end() ? nullptr : &ports_[found->second];
 }
 
-LeafBoundary::LeafBoundary(const naja::DNL::DNLFull& dnl,
-                           const BoundaryPairs& pairs, size_t side) {
+namespace {
+
+// Leaf outputs must remain actual drivers in the original flattened DNL.
+// Internal wire aliases or constant nets cannot be overridden by PI flags.
+// An unconnected output needs no iso: it is an unused free input.
+void validateLeafOutputIso(const naja::DNL::DNLFull& dnl,
+                           const naja::DNL::DNLTerminalFull& term,
+                           const std::string& path,
+                           const std::string& pinName) {
   using namespace naja::DNL;
+  if (term.getIsoID() == DNLID_MAX) {
+    return;
+  }
+  const auto& iso = dnl.getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+  if (iso.isConstant() || iso.getDrivers().size() != 1 ||
+      iso.getDrivers().front() != term.getID()) {
+    throw std::invalid_argument(
+        "boundary leaf output " + quote(path + "/" + pinName) +
+        " must be the sole nonconstant driver of its DNL iso");
+  }
+}
+
+}  // namespace
+
+LeafBoundary::LeafBoundary(const naja::DNL::DNLFull& dnl,
+                           const BoundaryPairs& pairs, size_t side)
+    : LeafBoundary(dnl, pairs, side, {}) {}
+
+LeafBoundary::LeafBoundary(const naja::DNL::DNLFull& dnl,
+                           const BoundaryPairs& pairs, size_t side,
+                           const std::vector<DNLID>& abstractedLeaves) {
+  using namespace naja::DNL;
+  const auto addPins = [&](const DNLInstanceFull& instance,
+                           const std::vector<PinSpec>& pins,
+                           const std::string& path) {
+    instances_.insert(instance.getID());
+    for (const auto& pin : pins) {
+      if (!pin.port.connected) {
+        // Kept for interface validation only; no terminal takes part.
+        ports_.push_back(pin.port);
+        continue;
+      }
+      const auto& term = instance.getTerminalFromBitTerm(pin.term);
+      const DNLID id = term.getID();
+      if (!pin.port.isInput) {
+        validateLeafOutputIso(dnl, term, path, pin.port.pinName);
+      }
+      portIndices_.emplace(id, ports_.size());
+      ports_.push_back(pin.port);
+      (pin.port.isInput ? outputs_ : inputs_).push_back(id);
+    }
+  };
+
   const auto specs = preflight(
       const_cast<SNLDesign*>(dnl.getTop().getSNLModel()), pairs, side);
   for (const auto& spec : specs) {
@@ -408,32 +488,42 @@ LeafBoundary::LeafBoundary(const naja::DNL::DNLFull& dnl,
       instance = &instance->getChildInstance(
           instance->getSNLModel()->getInstance(NLName(component)));
     }
-    instances_.insert(instance->getID());
-    for (const auto& pin : spec.pins) {
-      if (!pin.port.connected) {
-        // Kept for interface validation only; no terminal takes part.
-        ports_.push_back(pin.port);
-        continue;
-      }
-      const auto& term = instance->getTerminalFromBitTerm(pin.term);
-      const DNLID id = term.getID();
-      // Leaf outputs must remain actual drivers in the original flattened DNL.
-      // Internal wire aliases or constant nets cannot be overridden by PI flags.
-      // An unconnected output needs no iso: it is an unused free input.
-      if (!pin.port.isInput && term.getIsoID() != DNLID_MAX) {
-        const auto& iso = dnl.getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
-        if (iso.isConstant() || iso.getDrivers().size() != 1 ||
-            iso.getDrivers().front() != id) {
-          throw std::invalid_argument(
-              "boundary leaf output " + quote(spec.path + "/" + pin.port.pinName) +
-              " must be the sole nonconstant driver of its DNL iso");
-        }
-      }
-      portIndices_.emplace(id, ports_.size());
-      ports_.push_back(pin.port);
-      (pin.port.isInput ? outputs_ : inputs_).push_back(id);
-    }
+    addPins(*instance, spec.pins, spec.path);
   }
+
+  size_t pairIndex = pairs.size();
+  for (const DNLID leafID : abstractedLeaves) {
+    if (instances_.count(leafID) != 0) {
+      continue;
+    }
+    const auto& instance = dnl.getDNLInstanceFromID(leafID);
+    const std::string path = instance.getFullPath();
+    addPins(instance,
+            describeAbstractedLeafPins(
+                instance.getSNLInstance(), path, pairIndex++),
+            path);
+    abstractedLeaves_.insert(leafID);
+  }
+}
+
+std::string LeafBoundary::getAbstractedLeafObstacle(
+    const naja::DNL::DNLFull& dnl, DNLID instanceID) {
+  using namespace naja::DNL;
+  const auto& instance = dnl.getDNLInstanceFromID(instanceID);
+  const std::string path = instance.getFullPath();
+  try {
+    for (const auto& pin : describeAbstractedLeafPins(
+             instance.getSNLInstance(), path, 0)) {
+      if (pin.port.connected && !pin.port.isInput) {
+        validateLeafOutputIso(
+            dnl, instance.getTerminalFromBitTerm(pin.term), path,
+            pin.port.pinName);
+      }
+    }
+  } catch (const std::invalid_argument& error) {
+    return error.what();
+  }
+  return {};
 }
 
 void validateBoundaryInterfaces(const std::vector<BoundaryPort>& left,
