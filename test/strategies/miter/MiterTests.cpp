@@ -44,6 +44,8 @@
 #include "SNLPath.h"
 #include "SNLCapnP.h"
 #include "SNLDumpManifest.h"
+#include "SNLUtils.h"
+#include "SNLVRLConstructor.h"
 #include "DNL.h"
 #include "Tree2BoolExpr.h"
 
@@ -4017,6 +4019,88 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
   EXPECT_NE(contents.find("DIFFERENT"), std::string::npos);
 
   std::filesystem::remove_all(tmpDir);
+}
+
+
+SNLDesign* loadNetlist(NLUniverse* universe,
+                       const std::filesystem::path& libPath,
+                       const std::filesystem::path& vPath,
+                       const char* primLibName,
+                       const char* designLibName) {
+  auto* db = NLDB::create(universe);
+  auto* primLib =
+      NLLibrary::create(db, NLLibrary::Type::Primitives, NLName(primLibName));
+  SNLLibertyConstructor libCtor(primLib);
+  libCtor.construct(libPath);
+  auto* designLib = NLLibrary::create(db, NLName(designLibName));
+  SNLVRLConstructor vrlCtor(designLib);
+  vrlCtor.construct(std::vector<std::filesystem::path>{vPath});
+  SNLDesign* top = SNLUtils::findTop(designLib);
+  db->setTopDesign(top);
+  return top;
+}
+
+TEST_F(MiterTests, SingleCommonInputNotRejectedAsUnsupported) {
+  ScopedCurrentPath scopedCurrentPath(tempDir_);
+  const auto libPath = tempDir_ / "mini.lib";
+  const auto d0Path = tempDir_ / "d0.v";
+  const auto d1Path = tempDir_ / "d1.v";
+  {
+    std::ofstream(libPath) << R"(
+library(mini_single_input) {
+  cell(BUF) {
+    area : 1;
+    pin(A) { direction : input; }
+    pin(Y) { direction : output; function : "A"; }
+  }
+  cell(INV) {
+    area : 1;
+    pin(A) { direction : input; }
+    pin(Y) { direction : output; function : "!A"; }
+  }
+}
+)";
+    std::ofstream(d0Path) << R"(
+module top(a, y);
+  input a;
+  output y;
+  BUF u_buf (.A(a), .Y(y));
+endmodule
+)";
+    std::ofstream(d1Path) << R"(
+module top(a, y);
+  input a;
+  output y;
+  INV u_inv (.A(a), .Y(y));
+endmodule
+)";
+  }
+
+  auto* universe = NLUniverse::create();
+  SNLDesign* top0 = loadNetlist(universe, libPath, d0Path, "PRIMS0", "DESIGN0");
+  SNLDesign* top1 = loadNetlist(universe, libPath, d1Path, "PRIMS1", "DESIGN1");
+  ASSERT_NE(top0, nullptr);
+  ASSERT_NE(top1, nullptr);
+
+  KEPLER_FORMAL::MiterStrategy miter(
+      top0, top1, (tempDir_ / "miter.log").string());
+  miter.init();
+  EXPECT_FALSE(miter.run(/*compact=*/false));
+
+  const std::string logPath = KEPLER_FORMAL::MiterStrategy::getActualLogFileName();
+
+  std::ifstream in(logPath);
+  ASSERT_TRUE(in.is_open()) << "Failed to open miter log: " << logPath;
+  std::stringstream buf;
+  buf << in.rdbuf();
+  const std::string logContents = buf.str();
+
+  EXPECT_NE(logContents.find("Found difference for PO: 0"), std::string::npos)
+      << logContents;
+  EXPECT_EQ(
+      logContents.find("skipping output index 0 due to unsupported variable"),
+      std::string::npos)
+      << logContents;
 }
 
 // Required main function for Google Test

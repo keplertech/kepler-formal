@@ -932,7 +932,7 @@ bool MiterStrategy::run(bool compact) {
                   builder1_.getInputsMap());
   builder0_.setLastCommonID(commonSize > 0 ? commonSize + 2 : 1);
   builder1_.setLastCommonID(commonSize > 0 ? commonSize + 2 : 1);
-  lastCommonVarID_ = commonSize -1 > 0 ? (commonSize - 1) + 2/* 0, 1*/ : 1 /* 0, 1*/;
+  lastCommonVarID_ = commonSize > 0 ? (commonSize - 1) + 2/* 0, 1*/ : 1 /* 0, 1*/;
   normalizeOutputs(outputs0sort, outputs1sort, builder0_.getOutputsMap(),
                    builder1_.getOutputsMap());
   
