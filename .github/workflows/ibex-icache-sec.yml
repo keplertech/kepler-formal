@@ -1,0 +1,86 @@
+# Known-inequivalent Ibex instruction-cache change: SEC must find the
+# counterexample, with each SAT solver.
+name: ibex-icache-sec
+
+on:
+  push:
+    branches: [ main, ibex-work ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  ibex-icache-sec:
+    name: ibex icache SEC (${{ matrix.solver }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        solver: [ kissat, cadical ]
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install dependencies
+      timeout-minutes: 10
+      run: |
+        sudo apt-get \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          update
+        sudo apt-get \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          -o DPkg::Lock::Timeout=60 \
+          install -y \
+          libgtest-dev cmake pkg-config libboost-dev libfl-dev \
+          capnproto libcapnp-dev ninja-build libtbb-dev libspdlog-dev \
+          libboost-iostreams-dev zlib1g-dev
+
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+
+    - name: Configure CMake
+      run: |
+        cmake -B ${{github.workspace}}/build \
+          -GNinja \
+          -DPYTHON_INTERFACE=OFF \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=20 \
+          -DCMAKE_CXX_FLAGS="-O3 -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELEASE="-Ofast -ffast-math -flto -DNDEBUG" \
+          -DCMAKE_EXE_LINKER_FLAGS="-flto"
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config Release
+
+    - name: Install kepler-formal
+      run: cmake --install ${{github.workspace}}/build --prefix ${{github.workspace}}/stage
+
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
+    - name: Run Ibex icache SEC
+      timeout-minutes: 45
+      run: |
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+        bash ci/ibex_icache_sec.sh \
+          "${{github.workspace}}/stage/bin/kepler-formal" \
+          "${RUNNER_TEMP}/ibex-icache-sec" \
+          "${{ matrix.solver }}"
+
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ibex-icache-sec-${{ matrix.solver }}
+        path: |
+          ${{ runner.temp }}/ibex-icache-sec/sec.log
+          ${{ runner.temp }}/ibex-icache-sec/run.log
+          ${{ runner.temp }}/ibex-icache-sec/config.yaml
+        if-no-files-found: warn
