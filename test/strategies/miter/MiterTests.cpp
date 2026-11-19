@@ -3445,6 +3445,142 @@ TEST(KeplerCliSubprocessTests, CliNajaIfFormatButMissingFilesReturnsFailure) {
   EXPECT_NE(rc, EXIT_SUCCESS);
 }
 
+namespace {
+
+// A top with one VECTOR_SELECT and one VECTOR_UPDATE on an 8-bit vector, both
+// indexed by the 3-bit `sel`, read as signed or not:
+//   rd = data[sel +: 2]
+//   wr = data, with wr[sel +: 2] = d when en
+// It is dumped as NajaIF and the universe destroyed, so the snapshot is all a
+// later process has to rebuild the two primitives and their models from.
+void dumpVectorPrimitivesTop(bool isSigned,
+                             const std::filesystem::path& dumpPath) {
+  NLUniverse* univ = NLUniverse::create();
+  NLDB* db = NLDB::create(univ);
+  NLLibrary* designs =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  NLDB0::VectorSelectSignature selectSignature;
+  selectSignature.width = 8;
+  selectSignature.selectWidth = 2;
+  selectSignature.abits = 3;
+  selectSignature.isSigned = isSigned;
+  auto* select = NLDB0::getOrCreateVectorSelect(selectSignature);
+  NLDB0::VectorUpdateSignature updateSignature;
+  updateSignature.width = 8;
+  updateSignature.updateWidth = 2;
+  updateSignature.abits = 3;
+  updateSignature.isSigned = isSigned;
+  auto* update = NLDB0::getOrCreateVectorUpdate(updateSignature);
+
+  auto* top =
+      SNLDesign::create(designs, SNLDesign::Type::Standard, NLName("t"));
+  db->setTopDesign(top);
+  const auto bus = [top](const char* name, SNLTerm::Direction direction,
+                         int msb) {
+    auto* term = SNLBusTerm::create(top, direction, msb, 0, NLName(name));
+    auto* net = SNLBusNet::create(top, msb, 0, NLName(name));
+    term->setNet(net);
+    return net;
+  };
+  auto* data = bus("data", SNLTerm::Direction::Input, 7);
+  auto* sel = bus("sel", SNLTerm::Direction::Input, 2);
+  auto* d = bus("d", SNLTerm::Direction::Input, 1);
+  auto* enTerm =
+      SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"));
+  auto* en = SNLScalarNet::create(top, NLName("en"));
+  enTerm->setNet(en);
+  auto* rd = bus("rd", SNLTerm::Direction::Output, 1);
+  auto* wr = bus("wr", SNLTerm::Direction::Output, 7);
+
+  auto* selectInst = SNLInstance::create(top, select, NLName("select0"));
+  selectInst->setTermNet(NLDB0::getVectorSelectData(select), data);
+  selectInst->setTermNet(NLDB0::getVectorSelectOffset(select), sel);
+  selectInst->setTermNet(NLDB0::getVectorSelectOutput(select), rd);
+  auto* updateInst = SNLInstance::create(top, update, NLName("update0"));
+  updateInst->setTermNet(NLDB0::getVectorUpdateBase(update), data);
+  updateInst->setTermNet(NLDB0::getVectorUpdateData(update), d);
+  updateInst->setTermNet(NLDB0::getVectorUpdateOffset(update), sel);
+  updateInst->getInstTerm(NLDB0::getVectorUpdateEnable(update))->setNet(en);
+  updateInst->setTermNet(NLDB0::getVectorUpdateOutput(update), wr);
+
+  SNLCapnP::dump(db, dumpPath);
+  naja::DNL::destroy();
+  univ->destroy();
+}
+
+// The same two functions written with shifts, reading zero past the vector.
+// The signed model pads the vector with four zero bits on each side, so an
+// offset of -4..3 becomes a shift of 0..7.
+void writeVectorShiftModel(bool isSigned, const std::filesystem::path& path) {
+  std::ofstream f(path);
+  f << "module t(input [7:0] data, input [2:0] sel, input [1:0] d, input en,\n"
+       "         output [1:0] rd, output [7:0] wr);\n";
+  if (isSigned) {
+    f << "  wire [2:0] shift = {~sel[2], sel[1:0]};\n"
+         "  wire [15:0] padded = {4'b0, data, 4'b0};\n"
+         "  wire [15:0] shifted = padded >> shift;\n"
+         "  wire [15:0] mask = 16'b11 << shift;\n"
+         "  wire [15:0] placed = {14'b0, d} << shift;\n"
+         "  wire [15:0] merged = (padded & ~mask) | placed;\n"
+         "  assign rd = shifted[1:0];\n"
+         "  assign wr = en ? merged[11:4] : data;\n";
+  } else {
+    f << "  wire [7:0] shifted = data >> sel;\n"
+         "  wire [7:0] mask = 8'b11 << sel;\n"
+         "  wire [7:0] placed = {6'b0, d} << sel;\n"
+         "  assign rd = shifted[1:0];\n"
+         "  assign wr = en ? (data & ~mask) | placed : data;\n";
+  }
+  f << "endmodule\n";
+}
+
+}  // namespace
+
+// VECTOR_SELECT and VECTOR_UPDATE reloaded from NajaIF by a process that never
+// built them. The CLI subprocess gets the primitives, their widths and their
+// signedness from the snapshot alone and must prove them against the shift
+// model of the same signedness. A lost SIGNED parameter, a wrong width or a
+// reversed dependency order would instead match the other model or none, so
+// the model of the other signedness has to give a counterexample.
+TEST(KeplerCliSubprocessTests, VectorPrimitivesReloadFromNajaIfInFreshProcess) {
+  std::filesystem::path p(KEPLER_BIN);
+  if (!std::filesystem::exists(p)) {
+    GTEST_SKIP() << "kepler-formal binary missing";
+  }
+  constexpr int kProved = 0;
+  constexpr int kCounterexample = 3;
+
+  const auto tempDir = makeUniqueTestTempDir();
+  const auto nameOf = [](bool isSigned) {
+    return std::string(isSigned ? "signed" : "unsigned");
+  };
+  for (const bool isSigned : {false, true}) {
+    dumpVectorPrimitivesTop(isSigned, tempDir / (nameOf(isSigned) + ".capnp"));
+    writeVectorShiftModel(isSigned, tempDir / (nameOf(isSigned) + ".sv"));
+  }
+  for (const bool dumpSigned : {false, true}) {
+    for (const bool modelSigned : {false, true}) {
+      SCOPED_TRACE(nameOf(dumpSigned) + " primitives against the " +
+                   nameOf(modelSigned) + " model");
+      const auto config = tempDir / "config.yaml";
+      {
+        std::ofstream cfg(config);
+        cfg << "verification: sec\n"
+               "sec_encoding: dual_rail_steady\n"
+               "design1_format: naja_if\n"
+               "design2_format: systemverilog\n"
+               "input_paths:\n"
+            << "  - " << (tempDir / (nameOf(dumpSigned) + ".capnp")).string()
+            << "\n  - " << (tempDir / (nameOf(modelSigned) + ".sv")).string()
+            << "\nlog_file: " << (tempDir / "miter.log").string() << "\n";
+      }
+      EXPECT_EQ(run_kepler_cli_with_args({"--config", config.string()}),
+                dumpSigned == modelSigned ? kProved : kCounterexample);
+    }
+  }
+  std::filesystem::remove_all(tempDir);
+}
+
 TEST(KeplerCliSubprocessTests, ConfigParsingViaFilesCoversYamlToVectorBehavior) {
   std::filesystem::path p(KEPLER_BIN);
   if (!std::filesystem::exists(p)) {

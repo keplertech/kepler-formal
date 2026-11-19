@@ -1371,6 +1371,286 @@ TEST(Tree2BoolExprGenericCoverageTest, VectorSelectUnknownReadNeedsBaseAndNet) {
   BoolExprCache::destroy();
 }
 
+namespace {
+
+// An OFFSET pattern as a mathematical integer: two's complement when the
+// primitive is signed, plain binary otherwise.
+int64_t vectorOffsetValue(uint32_t pattern, uint32_t addressSize, bool isSigned) {
+  const int64_t value = pattern;
+  if (isSigned && ((pattern >> (addressSize - 1)) & 1) != 0) {
+    return value - (int64_t{1} << addressSize);
+  }
+  return value;
+}
+
+// The VECTOR_UPDATE contract written from its definition rather than taken
+// from naja's evaluator: output bit j is DATA[j - offset] when EN holds and
+// that window bit exists, and BASE[j] otherwise.
+bool referenceVectorUpdate(bool base,
+                           uint32_t data,
+                           uint32_t updateWidth,
+                           int64_t offset,
+                           bool enable,
+                           uint32_t outputBit) {
+  const int64_t k = static_cast<int64_t>(outputBit) - offset;
+  if (enable && k >= 0 && k < static_cast<int64_t>(updateWidth)) {
+    return ((data >> k) & 1) != 0;
+  }
+  return base;
+}
+
+}  // namespace
+
+// A window wider than the vector it reads. Output bit j is DATA[offset + j]
+// while that index is inside the vector and the unknown read everywhere else;
+// the expectation is that contract, not naja's evaluator. An unsigned output
+// bit at or past the vector width has no offset that reaches the data, so it
+// is the unknown read alone; a signed one still reaches it through negative
+// offsets.
+TEST(Tree2BoolExprGenericCoverageTest,
+     VectorSelectOversizedWindowMatchesReference) {
+  constexpr uint32_t width = 2;
+  constexpr uint32_t selectWidth = 5;
+  constexpr uint32_t addressSize = 3;
+  constexpr naja::DNL::DNLID selectIso = 11;
+  constexpr size_t unknownVar = kUnknownReadVarBase + selectIso;
+  Tree2BoolExpr::setUnknownReadVarBase(kUnknownReadVarBase);
+  for (const bool isSigned : {false, true}) {
+    for (uint32_t outputBit = 0; outputBit < selectWidth; ++outputBit) {
+      SCOPED_TRACE(::testing::Message()
+                   << "signed=" << isSigned << " outputBit=" << outputBit);
+      std::vector<BoolExpr*> children;
+      appendBusMsbFirst(children, kVectorDataVarBase, width);
+      appendBusMsbFirst(children, kVectorOffsetVarBase, addressSize);
+      setChildExpressions(children);
+
+      const auto table = SNLTruthTable::VectorSelect(
+          {width, selectWidth, addressSize, outputBit, isSigned},
+          SNLTruthTable::fullDependencies(width + addressSize));
+      auto* expr = buildGenericTruthTableExpr(
+          table, width + addressSize, nullptr, selectIso);
+      ASSERT_NE(expr, nullptr);
+
+      size_t inRange = 0;
+      for (uint32_t data = 0; data < (1u << width); ++data) {
+        for (uint32_t pattern = 0; pattern < (1u << addressSize); ++pattern) {
+          std::unordered_map<size_t, bool> values;
+          for (uint32_t bit = 0; bit < width; ++bit) {
+            values.emplace(kVectorDataVarBase + bit, (data >> bit) & 1);
+          }
+          for (uint32_t bit = 0; bit < addressSize; ++bit) {
+            values.emplace(kVectorOffsetVarBase + bit, (pattern >> bit) & 1);
+          }
+          const int64_t k =
+              vectorOffsetValue(pattern, addressSize, isSigned) + outputBit;
+          const bool hits = k >= 0 && k < static_cast<int64_t>(width);
+          inRange += hits;
+          for (const bool unknown : {false, true}) {
+            values[unknownVar] = unknown;
+            const bool expected = hits ? ((data >> k) & 1) != 0 : unknown;
+            EXPECT_EQ(expr->evaluate(values), expected)
+                << "data=" << data << " offset pattern=" << pattern
+                << " unknown=" << unknown;
+          }
+        }
+      }
+      if (isSigned || outputBit < width) {
+        EXPECT_GT(inRange, 0u);
+      } else {
+        EXPECT_EQ(inRange, 0u);
+      }
+      const auto unknownReads = Tree2BoolExpr::takeUnknownReadVars();
+      ASSERT_EQ(unknownReads.size(), 1u);
+      EXPECT_EQ(unknownReads.front().first, selectIso);
+      EXPECT_EQ(unknownReads.front().second, unknownVar);
+      EXPECT_EQ(Tree2BoolExpr::takeUnknownReadReasons().size(), 1u);
+      clearChildFETS();
+      BoolExprCache::destroy();
+    }
+  }
+  Tree2BoolExpr::setUnknownReadVarBase(std::nullopt);
+}
+
+// Offsets wider than 64 bits. The bits past the value repeat its sign, so an
+// unsigned offset with a high bit set lies far past the vector and writes
+// nothing: it must not alias onto the small offset its low bits spell. An
+// all-ones signed offset is -1 and places DATA[1] at output bit 0.
+TEST(Tree2BoolExprGenericCoverageTest, VectorUpdateDecodesWideOffsets) {
+  constexpr uint32_t width = 4;
+  constexpr uint32_t updateWidth = 2;
+  constexpr uint32_t addressSize = 65;
+  constexpr uint32_t arity = updateWidth + addressSize + 2;
+  const auto evaluate = [&](bool isSigned, uint32_t outputBit,
+                            const std::vector<uint32_t>& setOffsetBits,
+                            bool base, uint32_t data, bool enable) {
+    std::vector<BoolExpr*> children{BoolExpr::Var(kVectorBaseVar)};
+    appendBusMsbFirst(children, kVectorDataVarBase, updateWidth);
+    appendBusMsbFirst(children, kVectorOffsetVarBase, addressSize);
+    children.push_back(BoolExpr::Var(kVectorEnableVar));
+    setChildExpressions(children);
+    const auto table = SNLTruthTable::VectorUpdate(
+        {width, updateWidth, addressSize, outputBit, isSigned},
+        SNLTruthTable::fullDependencies(arity));
+    auto* expr = buildGenericTruthTableExpr(table, arity);
+    std::unordered_map<size_t, bool> values;
+    values.emplace(kVectorBaseVar, base);
+    values.emplace(kVectorEnableVar, enable);
+    for (uint32_t bit = 0; bit < updateWidth; ++bit) {
+      values.emplace(kVectorDataVarBase + bit, (data >> bit) & 1);
+    }
+    for (uint32_t bit = 0; bit < addressSize; ++bit) {
+      values.emplace(kVectorOffsetVarBase + bit, false);
+    }
+    for (const auto bit : setOffsetBits) {
+      values[kVectorOffsetVarBase + bit] = true;
+    }
+    const bool result = expr->evaluate(values);
+    EXPECT_EQ(result,
+              table.evaluateVectorUpdate(inputsFromChildren(children, values)));
+    clearChildFETS();
+    BoolExprCache::destroy();
+    return result;
+  };
+  std::vector<uint32_t> allBits;
+  for (uint32_t bit = 0; bit < addressSize; ++bit) {
+    allBits.push_back(bit);
+  }
+
+  // Offset 0 writes DATA[0] and DATA[1] to output bits 0 and 1; offset 1 moves
+  // the window up by one. data = 2'b01 against a BASE of the other value.
+  EXPECT_TRUE(evaluate(false, 0, {}, false, 0b01, true));
+  EXPECT_FALSE(evaluate(false, 1, {}, true, 0b01, true));
+  EXPECT_TRUE(evaluate(false, 2, {}, true, 0b00, true));
+  EXPECT_TRUE(evaluate(false, 1, {0}, false, 0b01, true));
+  EXPECT_FALSE(evaluate(false, 0, {0}, false, 0b11, true));
+  for (const bool isSigned : {false, true}) {
+    SCOPED_TRACE(isSigned ? "signed" : "unsigned");
+    // Bit 64 alone: 2^64 unsigned, -2^64 signed. No output bit is written.
+    for (uint32_t outputBit = 0; outputBit < width; ++outputBit) {
+      EXPECT_FALSE(evaluate(isSigned, outputBit, {64}, false, 0b11, true));
+      EXPECT_TRUE(evaluate(isSigned, outputBit, {64}, true, 0b00, true));
+    }
+    // Bits 64 and 0: the low bits spell offset 1, the value is not 1.
+    EXPECT_FALSE(evaluate(isSigned, 1, {64, 0}, false, 0b11, true));
+    EXPECT_FALSE(evaluate(isSigned, 2, {64, 0}, false, 0b11, true));
+  }
+  // All 65 bits set: unsigned it is past the vector, signed it is -1, which
+  // puts DATA[1] at output bit 0 and leaves the other output bits alone.
+  EXPECT_FALSE(evaluate(false, 0, allBits, false, 0b10, true));
+  EXPECT_TRUE(evaluate(true, 0, allBits, false, 0b10, true));
+  EXPECT_FALSE(evaluate(true, 0, allBits, true, 0b01, true));
+  EXPECT_FALSE(evaluate(true, 1, allBits, false, 0b11, true));
+  // EN low keeps BASE whatever the offset.
+  EXPECT_FALSE(evaluate(true, 0, allBits, false, 0b10, false));
+  EXPECT_TRUE(evaluate(false, 0, {}, true, 0b00, false));
+}
+
+// Two updates of one vector in source order, the second taking the result of
+// the first as its BASE. Where both windows cover an output bit the later
+// write wins, where only the first does its data shows through the second,
+// and elsewhere BASE passes. Every assignment of both updates is checked
+// against the contract applied twice.
+TEST(Tree2BoolExprGenericCoverageTest,
+     VectorUpdateChainKeepsSourceOrderPriority) {
+  constexpr uint32_t width = 4;
+  constexpr uint32_t updateWidth = 2;
+  constexpr uint32_t addressSize = 3;
+  constexpr uint32_t arity = updateWidth + addressSize + 2;
+  constexpr size_t secondDataVarBase = kVectorDataVarBase + 10;
+  constexpr size_t secondOffsetVarBase = kVectorOffsetVarBase + 10;
+  constexpr size_t secondEnableVar = kVectorEnableVar + 1;
+  constexpr uint32_t assignmentBits = 1 + 2 * (updateWidth + addressSize + 1);
+  for (const bool isSigned : {false, true}) {
+    for (uint32_t outputBit = 0; outputBit < width; ++outputBit) {
+      SCOPED_TRACE(::testing::Message()
+                   << "signed=" << isSigned << " outputBit=" << outputBit);
+      const auto table = SNLTruthTable::VectorUpdate(
+          {width, updateWidth, addressSize, outputBit, isSigned},
+          SNLTruthTable::fullDependencies(arity));
+
+      std::vector<BoolExpr*> first{BoolExpr::Var(kVectorBaseVar)};
+      appendBusMsbFirst(first, kVectorDataVarBase, updateWidth);
+      appendBusMsbFirst(first, kVectorOffsetVarBase, addressSize);
+      first.push_back(BoolExpr::Var(kVectorEnableVar));
+      setChildExpressions(first);
+      auto* firstExpr = buildGenericTruthTableExpr(table, arity);
+      ASSERT_NE(firstExpr, nullptr);
+
+      std::vector<BoolExpr*> second{firstExpr};
+      appendBusMsbFirst(second, secondDataVarBase, updateWidth);
+      appendBusMsbFirst(second, secondOffsetVarBase, addressSize);
+      second.push_back(BoolExpr::Var(secondEnableVar));
+      setChildExpressions(second);
+      auto* chained = buildGenericTruthTableExpr(table, arity);
+      ASSERT_NE(chained, nullptr);
+
+      const auto covers = [&](int64_t offset, bool enable) {
+        const int64_t k = static_cast<int64_t>(outputBit) - offset;
+        return enable && k >= 0 && k < static_cast<int64_t>(updateWidth);
+      };
+      size_t bothWrite = 0;
+      size_t onlyFirstWrites = 0;
+      size_t onlySecondWrites = 0;
+      size_t neitherWrites = 0;
+      for (uint32_t assignment = 0; assignment < (1u << assignmentBits);
+           ++assignment) {
+        uint32_t rest = assignment;
+        const auto take = [&rest](uint32_t bits) {
+          const uint32_t field = rest & ((1u << bits) - 1);
+          rest >>= bits;
+          return field;
+        };
+        const bool base = take(1) != 0;
+        const uint32_t data1 = take(updateWidth);
+        const uint32_t pattern1 = take(addressSize);
+        const bool enable1 = take(1) != 0;
+        const uint32_t data2 = take(updateWidth);
+        const uint32_t pattern2 = take(addressSize);
+        const bool enable2 = take(1) != 0;
+
+        std::unordered_map<size_t, bool> values;
+        values.emplace(kVectorBaseVar, base);
+        values.emplace(kVectorEnableVar, enable1);
+        values.emplace(secondEnableVar, enable2);
+        for (uint32_t bit = 0; bit < updateWidth; ++bit) {
+          values.emplace(kVectorDataVarBase + bit, (data1 >> bit) & 1);
+          values.emplace(secondDataVarBase + bit, (data2 >> bit) & 1);
+        }
+        for (uint32_t bit = 0; bit < addressSize; ++bit) {
+          values.emplace(kVectorOffsetVarBase + bit, (pattern1 >> bit) & 1);
+          values.emplace(secondOffsetVarBase + bit, (pattern2 >> bit) & 1);
+        }
+
+        const int64_t offset1 =
+            vectorOffsetValue(pattern1, addressSize, isSigned);
+        const int64_t offset2 =
+            vectorOffsetValue(pattern2, addressSize, isSigned);
+        const bool afterFirst = referenceVectorUpdate(
+            base, data1, updateWidth, offset1, enable1, outputBit);
+        const bool expected = referenceVectorUpdate(
+            afterFirst, data2, updateWidth, offset2, enable2, outputBit);
+        EXPECT_EQ(chained->evaluate(values), expected)
+            << "base=" << base << " first: data=" << data1 << " offset="
+            << offset1 << " en=" << enable1 << " second: data=" << data2
+            << " offset=" << offset2 << " en=" << enable2;
+
+        const bool firstWrites = covers(offset1, enable1);
+        const bool secondWrites = covers(offset2, enable2);
+        bothWrite += firstWrites && secondWrites;
+        onlyFirstWrites += firstWrites && !secondWrites;
+        onlySecondWrites += !firstWrites && secondWrites;
+        neitherWrites += !firstWrites && !secondWrites;
+      }
+      EXPECT_GT(bothWrite, 0u);
+      EXPECT_GT(onlyFirstWrites, 0u);
+      EXPECT_GT(onlySecondWrites, 0u);
+      EXPECT_GT(neitherWrites, 0u);
+      clearChildFETS();
+      BoolExprCache::destroy();
+    }
+  }
+}
+
 class Tree2BoolExprDivModTest : public ::testing::Test {
  protected:
   void TearDown() override {
