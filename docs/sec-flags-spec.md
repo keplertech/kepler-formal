@@ -120,10 +120,26 @@ liberty_files:
 | `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
 | `--dump-only` | `dump_only: true` | `false` | boolean | Stops after BTOR2 export. Requires export to be enabled. Success is an export result, not a proof verdict. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
+| `--use-scopes` | `use_scopes: true` | `false` | boolean | Scoped SEC: compares the two hierarchies bottom-up and proves only the module pairs whose own implementation differs, each with its ports as the environment; see [Scoped SEC](#scoped-sec). Needs both designs loaded, so it cannot be combined with `--compact`, `--set-as-boundary`, `clean_scopes` or BTOR2 export. |
 | `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative leaf-instance paths | Treats each paired leaf instance as a verification boundary. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 | `--latch-abstraction <bool>` | `latch_abstraction: <bool>` | `true` | `true`, `false`, `1`, `0` | Phase-abstract clock-driven latches as described in [sec-latch-support.md](sec-latch-support.md). `false` makes every latch output opaque again, as before, and disables the data-enabled latch model with it. |
 | `--data-latch-model <bool>` | `data_latch_model: <bool>` | `true` | `true`, `false`, `1`, `0` | Model latches whose enable is not a clock phase as step-transparent state, as described in [sec-latch-support.md](sec-latch-support.md). `false` leaves them opaque. |
+| `--sec-seed-cycles <n>` | `sec_seed_cycles: <n>` | `0` | Non-negative integer | Enables the simulation-seeded counterexample search with a simulated prefix of `n` cycles; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-trials <n>` | `sec_seed_trials: <n>` | `32` | Non-negative integer | Number of held-input simulation prefixes tried by the seeded search. |
+| `--sec-seed-depth <n>` | `sec_seed_depth: <n>` | `40` | Non-negative integer | Bounded search depth after the simulated prefix. |
+| `--sec-seed-enlarge <n>` | `sec_seed_enlarge: <n>` | `0` | Non-negative integer | Target enlargement by `n` cycles in the seeded search; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-enlarge-cubes <n>` | `sec_seed_enlarge_cubes: <n>` | `0` | Non-negative integer | With enlargement, also enumerate up to `n` generalized preimage cubes per step (designs without structured memories). |
+| `--sec-seed-waypoint-hops <n>` | `sec_seed_waypoint_hops: <n>` | `0` | Non-negative integer | Waypoint chaining in the seeded search: up to `n` short searches chained from reached states; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-waypoint-depth <n>` | `sec_seed_waypoint_depth: <n>` | `8` | Non-negative integer | Frames per waypoint hop. |
+| `--sec-seed-waypoint-layers <n>` | `sec_seed_waypoint_layers: <n>` | `1` | Non-negative integer | Register distance from the target within which waypoints are taken first. |
+| `--sec-seed-waypoint-conflicts <n>` | `sec_seed_waypoint_conflicts: <n>` | `300000` | Non-negative integer | Solver conflict budget per waypoint hop; `0` removes the budget. |
+| `--sec-seed-abstraction-layers <n>` | `sec_seed_abstraction_layers: <n>` | `0` | Non-negative integer | Abstraction-guided search in the seeded search, starting from the registers within `n` steps of the divergence predicate; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-abstraction-iterations <n>` | `sec_seed_abstraction_iterations: <n>` | `16` | Non-negative integer | Refinement rounds of the abstraction-guided search. |
+| `--sec-seed-abstraction-conflicts <n>` | `sec_seed_abstraction_conflicts: <n>` | `1000000` | Non-negative integer | Solver conflict budget of one concretization check; `0` removes the budget. |
+| `--sec-seed-abstraction-instance <true\|false>` | `sec_seed_abstraction_instance: <true\|false>` | `false` | boolean | Starts the abstract model from the smallest design instance enclosing the differing registers, with its environment free, instead of the predicate's register support. |
+| `--sec-seed-probe-depth <n>` | `sec_seed_probe_depth: <n>` | `0` | Non-negative integer | Seed screening: a bounded search of `n` frames from every simulated end state in rank order before the deep search; see [sec-seeded-search.md](sec-seeded-search.md). |
+| `--sec-seed-probe-conflicts <n>` | `sec_seed_probe_conflicts: <n>` | `200000` | Non-negative integer | Solver conflict budget of one seed probe (`0`: none). |
 
 Accepted values for `sec_engine`:
 
@@ -212,6 +228,45 @@ reinterpreted.
 
 User-defined boundaries cannot currently be combined with scope extraction or
 scope cleaning.
+
+## Scoped SEC
+
+With `--use-scopes` (YAML `use_scopes: true`) SEC does not compare the two
+tops as a whole. It first pairs the two hierarchies bottom-up:
+
+- Child instances pair by instance name; the anonymous gates, flops and nets
+  the RTL lowering creates pair in creation order, which the lowering fixes
+  per module. Terms and named nets pair by name and bit.
+- A module pair is *identical in its own implementation* when its interface,
+  parameters, instance parameters, leaf models (compared by name, type,
+  interface and parameters, never by model ID) and net connectivity all
+  match. It is *identical* when, in addition, every paired child is identical.
+- Each model pair is compared once, however many instances share it.
+
+The scopes are the topmost pairs whose own implementation differs. A pair whose
+own wiring is identical but holds a differing child is not a scope; the child
+is. A child whose interface changed makes its parent the scope, because the
+parent's connections to it differ. When no pair differs, the run reports
+`Equivalent` without a proof: the hierarchies are structurally identical.
+
+Each scope is then verified as its own SEC problem: the scope's ports are the
+aligned environment inputs and observed outputs, its registers, memories,
+clocks and resets are modeled as for a top, and the usual engines, internal
+relation learning and seeded search apply. Reset ports named by the reset
+bootstrap spec are matched by name inside the scope.
+
+The verdict is composed from the scope verdicts. All scopes `Equivalent` gives
+`Equivalent`, which is sound because the environments of the scopes are
+identical on both sides. A scope `Different` stops the run and is reported as
+`Different` with the scope named in the reason: the trace holds under free
+scope ports and may need the surrounding logic to be reached from the top.
+Otherwise the least conclusive scope status is reported. Identity detection is
+only a shortcut for the proof: a renamed instance or a resynthesized module
+compares as different and is proved by SAT, so names can cost proof time but
+never a wrong verdict.
+
+Flattened netlists have no hierarchy, so the top is the only scope and the run
+behaves as without the flag.
 
 ## Bounds And Results
 

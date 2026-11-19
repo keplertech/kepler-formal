@@ -6,6 +6,7 @@ add_executable(scopeExtractionTests ScopeExtractionTests.cpp)
 target_link_libraries(scopeExtractionTests
   PRIVATE
     scope_extraction
+    naja_snl_systemverilog
     gtest_main
 )
 
