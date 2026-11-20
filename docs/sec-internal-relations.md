@@ -256,6 +256,87 @@ summary line `SEC summary: binary_relation_round candidates=... proved_rail_equa
 reports the pairs it retried, the rail equalities it proved and the outputs it
 discharged.
 
+## 11. Signal correspondence
+
+Sections 1 to 10 relate registers. That is not enough when one design keeps in
+a register a value the other recomputes, for example a register copy of a
+memory word that is read in place of the word while it is valid. The copy has
+no partner. The two memories are equal only while the outputs are, because
+what is written depends on the output, and the outputs only while the
+memories are. No register pair is inductive by itself, and an engine has to
+find the missing fact one state at a time.
+
+Outputs that sections 9 and 10 leave open are therefore tried by signal
+correspondence (van Eijk, TCAD 2000), decided with a SAT solver instead of
+BDDs (Bjesse and Claessen, FMCAD 2000). `proveSignalCorrespondence` in
+`src/sec/proof/SignalCorrespondence.cpp` works on the problem the engines
+receive, shared transitions of section 10 included:
+
+1. **Signals.** The set F of the paper: every register, both cones of every
+   open output (each rail in the dual-rail encoding) and every register's
+   next-state function. Any set is sound; this one is small.
+2. **Start state.** The boot state. With a reset bootstrap it is the state the
+   reset window leaves, found by propagating constants through the window
+   with the reset ports active and every other input unknown. A register
+   that stays unknown is left free, so every state the window can leave is
+   covered. After the window the reset ports are held inactive, as in the
+   engines.
+3. **First partition.** Sequential simulation with random inputs from the
+   start state groups the signals that never differ. Each signal is
+   normalised by its value in the first pattern, so signals that always hold
+   opposite values share a class. In the dual-rail encoding this is how
+   "this register is binary-defined" is stated: its two rails are
+   complements. A run goes on while the partition still refines, because a
+   memory behind an address counter is only reached after many frames.
+4. **Start (eq. 4 of the paper).** Members of a class must be equal in the
+   start state for every input.
+5. **Step (eq. 5).** With every class assumed in one time frame, the members
+   of each class must be equal in the next. The assumed equalities are plain
+   constraints of the current frame, the state compatibility condition of
+   the paper; nothing is merged before it is proved. No register holds the
+   empty rail value, the reset ports rest at their inactive value and the
+   equalities certified by sections 1 to 10 hold: these are constraints of
+   both frames.
+6. **Refinement.** A counterexample is replayed on the logic and splits every
+   class it separates. The step is repeated with a fresh solver until a round
+   splits nothing. The classes are then a signal correspondence relation:
+   their members are equal in every state reachable from the start state.
+
+Classes are asked in groups of 64, one query per group, so a round that changes
+nothing costs a query per group. A group the solver cannot decide in one query
+is halved, down to single classes, which are asked member by member. A class
+proved in a round may be used by the later queries of that round. A signal the
+solver leaves undecided is removed from its class, never assumed.
+
+If outputs are still open and the logic is small enough, the pass is repeated
+with F set to every node of the next-state and output logic.
+
+The result is used twice:
+
+- An output whose two cones are in one class with the same polarity, on both
+  rails in the dual-rail encoding, is discharged like a structurally
+  identical one (section 9).
+- Registers of one class are added to the same-frame equalities, and are then
+  merged like the pairs of sections 1 to 10. A pair is added only as a
+  complete value (both rails, plain or crosswise for a complement) and only
+  if the two registers are also known and equal in every frame before the
+  start state, because the engines read these equalities in the reset window
+  too.
+
+The pass is bounded by engineering limits, not techniques from the papers:
+16384 state symbols, about two million nodes (262144 for all signals), 64
+rounds and a solver budget of a couple of minutes. A query is limited by its
+conflicts and decisions, not by its ticks, because propagation alone costs
+ticks in proportion to the design. When a limit is reached nothing is
+reported and the engines run as before.
+
+It is on by default and switched by `signal_correspondence`
+(`--signal-correspondence <bool>`). It needs learning and the dual-rail
+encoding. Its classes may relate signals that are unknown, X on both sides, so
+it is also left out with `allow_x_equality_in_internal_relations: false`. The
+line `SEC summary: signal_correspondence scope=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=...`
+reports each run.
+
 ## What it does and does not help
 
 - Two designs with the same register names and near-identical logic behind
@@ -279,9 +360,13 @@ discharged.
   versus final netlist) can prove few pairs: one pair the solver leaves
   undecided is dropped, and so is every pair that reads it. One such pair
   keeps only a few percent of its rail equalities this way, while another
-  proves all of them structurally. Mishchenko et
-  al. address the general case with signal correspondence from random
-  simulation, which also relates internal nodes. That is not implemented:
-  sections 8 and 9 merge proved registers and recognize outputs whose cones
-  become identical, and section 10 proves registers and outputs whose
-  functions are equal, but internal nodes whose cones differ are not related.
+  proves all of them structurally. Section 11 relates internal signals found
+  by random simulation, but only within its size limits; a design above them
+  keeps the behavior of sections 8 to 10, which merge proved registers,
+  recognize outputs whose cones become identical and prove registers and
+  outputs whose functions are equal.
+- A design that keeps a register copy of a value the other recomputes, such
+  as a shadow of a memory word, has outputs and registers that only hold
+  together. Section 11 proves them in one induction from the state after
+  reset. Without a reset bootstrap the start state is the boot state, where
+  every register may still be unknown, and less is proved.

@@ -27,6 +27,7 @@ cc_test(
     srcs = [
         "SequentialEquivalenceStrategyTests.cpp",
         "InternalRelationsTests.cpp",
+        "SignalCorrespondenceTests.cpp",
         "Btor2ExportStrategyTests.cpp",
     ],
     data = [

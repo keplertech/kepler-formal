@@ -432,7 +432,8 @@ bool parseBorrowedOptions(PyObject *object,
       "sec_engine",    "sec_encoding",    "allow_boundary_mismatch",
       "set_as_boundary", "report_skipped_outputs", "log_file", "log_level",
       "learn_internal_relations", "allow_x_equality_in_internal_relations",
-      "binary_relation_round", "latch_abstraction", "data_latch_model",
+      "binary_relation_round", "signal_correspondence", "latch_abstraction",
+      "data_latch_model",
       "sec_reset_cycles", "sec_reset_ports", "btor2_export_path",
       "btor2_dump_only"};
   Py_ssize_t position = 0;
@@ -476,6 +477,8 @@ bool parseBorrowedOptions(PyObject *object,
                          options.internalRelationOptions.allowXEqualityInInternalRelations) ||
       !dictionaryBoolean(object, "binary_relation_round",
                          options.internalRelationOptions.binaryRelationRound) ||
+      !dictionaryBoolean(object, "signal_correspondence",
+                         options.internalRelationOptions.signalCorrespondence) ||
       !dictionaryBoolean(object, "latch_abstraction", options.latchAbstraction) ||
       !dictionaryBoolean(object, "data_latch_model", options.dataLatchModel) ||
       !dictionarySize(object, "sec_reset_cycles", options.secReset.cycles) ||
@@ -497,7 +500,8 @@ bool parseBorrowedOptions(PyObject *object,
     options.mode = KEPLER_FORMAL::BorrowedVerificationMode::LEC;
     if (!options.internalRelationOptions.learnInternalRelations ||
         !options.internalRelationOptions.allowXEqualityInInternalRelations ||
-        !options.internalRelationOptions.binaryRelationRound) {
+        !options.internalRelationOptions.binaryRelationRound ||
+        !options.internalRelationOptions.signalCorrespondence) {
       PyErr_SetString(PyExc_ValueError,
                       "Internal relation options are only supported for SEC");
       return false;

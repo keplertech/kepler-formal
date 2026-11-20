@@ -15,6 +15,7 @@ add_library(kepler_sec STATIC
     pdr/PDREngine.cpp
     proof/DualRailEncoding.cpp
     proof/InternalRelations.cpp
+    proof/SignalCorrespondence.cpp
     proof/ProofEngineShared.cpp
     proof/TransitionExprResolver.cpp
     kinduction/BaseCaseSolver.cpp

@@ -14009,6 +14009,11 @@ TEST_F(SequentialEquivalenceStrategyTests,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       SecEngine::KInduction,
       SecEncoding::DualRailSteady);
+  // The outputs are X on both sides in every frame, which signal
+  // correspondence proves before any engine runs; this test is about what the
+  // engine reports when it proves nothing itself.
+  kiStrategy.setInternalRelationOptions(
+      {true, true, true, /*signalCorrespondence=*/false});
   const auto kiResult = kiStrategy.runExtractedModels(model0, model1, 1);
 
   // A dual-rail residual engine that proves no top output must report zero
@@ -14249,6 +14254,10 @@ TEST_F(SequentialEquivalenceStrategyTests,
         KEPLER_FORMAL::Config::SolverType::KISSAT,
         SecEngine::KInduction,
         SecEncoding::DualRailSteady);
+    // Signal correspondence would prove the two residual outputs, X on both
+    // sides, before the engine; this test is about the engine's own coverage.
+    strategy.setInternalRelationOptions(
+        {true, true, true, /*signalCorrespondence=*/false});
     const auto result = strategy.runExtractedModels(model0, model1, 1);
 
     // KI may report partial output coverage only for obligations it proved
@@ -14308,6 +14317,8 @@ TEST_F(SequentialEquivalenceStrategyTests,
         KEPLER_FORMAL::Config::SolverType::KISSAT,
         SecEngine::KInduction,
         SecEncoding::DualRailSteady);
+    strategy.setInternalRelationOptions(
+        {true, true, true, /*signalCorrespondence=*/false});
     const auto result = strategy.runExtractedModels(model0, model1, 1);
     const std::string stdoutOutput = testing::internal::GetCapturedStdout();
     const std::string stderrOutput = testing::internal::GetCapturedStderr();
@@ -21054,4 +21065,92 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_THROW(
       substituteBoolExprVariableExpressions(&invalid, {{2, BoolExpr::Var(9)}}),
       std::runtime_error);
+}
+
+namespace {
+
+// The reproducer of issue 317: a program counter kept on a call stack of 32
+// words. With `shadow` the design also keeps the word on top of the stack in a
+// register and reads the counter from it while it is valid. With
+// `staleAfterPop` that register stays valid across a pop, which is a bug.
+std::string shadowStackSource(const std::string& moduleName, bool shadow,
+                              bool staleAfterPop) {
+  const auto onlyShadow = [shadow](const char* text) { return shadow ? text : ""; };
+  return "module " + moduleName + R"( (
+  input  wire       clk,
+  input  wire       rst,
+  input  wire       push,
+  input  wire       pop,
+  input  wire [3:0] target,
+  output wire [3:0] pc
+);
+  reg [4:0] sp;
+  reg [3:0] mem [0:31];
+  reg       init;
+)" + (shadow ? R"(  reg [3:0] buf_pc;
+  reg       valid;
+  assign pc = init ? 4'b0 : (valid ? buf_pc : mem[sp]);
+)" : R"(  assign pc = init ? 4'b0 : mem[sp];
+)") + R"(  wire [4:0] sp_up = sp + 1'b1;
+  wire [4:0] sp_dn = sp - 1'b1;
+  always @(posedge clk) begin
+    if (rst) begin
+      sp   <= 0;
+      init <= 1'b1;
+)" + onlyShadow("      valid <= 1'b0;\n") + R"(    end else begin
+      init <= 1'b0;
+      if (push) begin
+        mem[sp]    <= pc + 1'b1;
+        mem[sp_up] <= target;
+        sp         <= sp_up;
+)" + onlyShadow("        buf_pc <= target; valid <= 1'b1;\n") + R"(      end else if (pop) begin
+        sp <= sp_dn;
+)" + (shadow && !staleAfterPop ? "        valid <= 1'b0;\n" : "") + R"(      end else begin
+        mem[sp] <= pc + 1'b1;
+)" + onlyShadow("        buf_pc <= pc + 1'b1; valid <= 1'b1;\n") + R"(      end
+    end
+  end
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SignalCorrespondenceProvesRegisterCopyOfMemoryWord) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* reference = loadSystemVerilogTopFromSource(
+      library, "stack_pc", shadowStackSource("stack_pc", false, false));
+  auto* shadowed = loadSystemVerilogTopFromSource(
+      library, "stack_pc_shadow", shadowStackSource("stack_pc_shadow", true, false));
+  auto* stale = loadSystemVerilogTopFromSource(
+      library, "stack_pc_stale", shadowStackSource("stack_pc_stale", true, true));
+
+  const auto run = [&](SNLDesign* other, bool signalCorrespondence, size_t maxK) {
+    SequentialEquivalenceStrategy strategy(
+        reference, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady, SecResetSpec{3, {{"rst", true}}});
+    InternalRelationOptions options;
+    options.signalCorrespondence = signalCorrespondence;
+    strategy.setInternalRelationOptions(options);
+    return strategy.run(maxK);
+  };
+
+  // The memory words and the counter outputs are equal only together, and the
+  // register copy has no partner in the reference: register pairs prove
+  // nothing, signal correspondence proves every output before the engine.
+  const auto proved = run(shadowed, /*signalCorrespondence=*/true, 1);
+  EXPECT_EQ(proved.status, SequentialEquivalenceStatus::Equivalent) << proved.reason;
+  EXPECT_EQ(proved.coveredOutputs, 4u);
+
+  const auto registersOnly = run(shadowed, /*signalCorrespondence=*/false, 1);
+  EXPECT_NE(registersOnly.status, SequentialEquivalenceStatus::Equivalent)
+      << registersOnly.reason;
+
+  // A copy that goes stale is still reported, with the pass enabled.
+  const auto different = run(stale, /*signalCorrespondence=*/true, 4);
+  EXPECT_EQ(different.status, SequentialEquivalenceStatus::Different) << different.reason;
 }
