@@ -19,6 +19,7 @@
 #include "common/SecDiag.h"
 #include "model/SequentialDesignModel.h"
 #include "kinduction/SatEncoding.h"
+#include "proof/SignalCorrespondence.h"
 #include "proof/TransitionExprResolver.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -1106,6 +1107,39 @@ void learnInternalStateRelations(
   }
   problem.sameFrameStateEqualityPairs0.insert(
       problem.sameFrameStateEqualityPairs0.end(), proved.begin(), proved.end());
+  const size_t provedByRegisterLearner = proved.size();
+  // Its classes may relate signals that are X on both sides, so the pass is
+  // left out when X equality is disallowed.
+  if (options.signalCorrespondence && options.allowXEqualityInInternalRelations &&
+      problem.usesDualRailStateEncoding) {
+    // Registers are not enough when one design keeps a value the other
+    // recomputes: the outputs and the registers then only hold together.
+    // Signal correspondence proves them in one induction, from the state the
+    // reset window leaves (van Eijk, TCAD 2000).
+    const auto learned = learnSignalCorrespondence(problem, solverType, diagnostics);
+    const size_t outputs = problem.observedOutputExprs0.size();
+    if (problem.structurallyProvedOutputs.size() != outputs) {
+      problem.structurallyProvedOutputs.assign(outputs, false);
+    }
+    for (size_t i = 0; i < outputs && i < learned.provedOutputs.size(); ++i) {
+      if (!learned.provedOutputs[i] || problem.structurallyProvedOutputs[i]) {
+        continue;
+      }
+      // Discharged like a structurally identical output; the property is
+      // rebuilt by dischargeStructurallyEquivalentOutputs below.
+      problem.observedOutputExprs0[i] = BoolExpr::createTrue();
+      problem.observedOutputExprs1[i] = BoolExpr::createTrue();
+      if (i < problem.dualRailOutputStrictEqualityExprs.size()) {
+        problem.dualRailOutputStrictEqualityExprs[i] = BoolExpr::createTrue();
+      }
+      problem.structurallyProvedOutputs[i] = true;
+    }
+    problem.sameFrameStateEqualityPairs0.insert(
+        problem.sameFrameStateEqualityPairs0.end(), learned.stateEqualities.begin(),
+        learned.stateEqualities.end());
+    proved.insert(proved.end(), learned.stateEqualities.begin(),
+                  learned.stateEqualities.end());
+  }
   // The conjunction costs nodes that are never freed for every relation, and
   // only the exact IMC engine reads it.
   if (!problem.usesLargeDualRailImc()) {
@@ -1120,7 +1154,8 @@ void learnInternalStateRelations(
            "allow_x_equality_in_internal_relations=%d name_candidates=%zu "
            "net_name_candidates=%zu driver_candidates=%zu propagated_candidates=%zu "
            "propagation_rounds=%zu\n",
-           candidates.size(), proved.size(), options.allowXEqualityInInternalRelations,
+           candidates.size(), provedByRegisterLearner,
+           options.allowXEqualityInInternalRelations,
            nameCandidates, netCandidates, driverCandidates, propagatedCandidates,
            propagationRounds);
     printf("SEC summary: binary_relation_round candidates=%zu proved_rail_equalities=%zu "

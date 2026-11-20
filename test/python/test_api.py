@@ -227,6 +227,7 @@ class PythonApiTest(unittest.TestCase):
         sec = VerificationMode.SEC
         invalid_options = (
             (ValueError, "SEC", VerificationOptions(binary_relation_round=False)),
+            (ValueError, "SEC", VerificationOptions(signal_correspondence=False)),
             (ValueError, "SEC", VerificationOptions(latch_abstraction=False)),
             (ValueError, "SEC", VerificationOptions(data_latch_model=False)),
             (ValueError, "SEC", VerificationOptions(
@@ -234,6 +235,8 @@ class PythonApiTest(unittest.TestCase):
             (ValueError, "SEC", VerificationOptions(btor2_export_path="x.btor2")),
             (TypeError, "binary_relation_round", VerificationOptions(
                 mode=sec, binary_relation_round="false")),
+            (TypeError, "signal_correspondence", VerificationOptions(
+                mode=sec, signal_correspondence="false")),
             (TypeError, "latch_abstraction", VerificationOptions(
                 mode=sec, latch_abstraction=1)),
             (TypeError, "data_latch_model", VerificationOptions(

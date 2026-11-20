@@ -72,6 +72,7 @@ class VerificationOptions:
     learn_internal_relations: bool = True
     allow_x_equality_in_internal_relations: bool = True
     binary_relation_round: bool = True
+    signal_correspondence: bool = True
     latch_abstraction: bool = True
     data_latch_model: bool = True
     sec_reset_cycles: int | None = None
@@ -197,6 +198,7 @@ def _build_native_design_options(
         settings.learn_internal_relations is not True
         or settings.allow_x_equality_in_internal_relations is not True
         or settings.binary_relation_round is not True
+        or settings.signal_correspondence is not True
     ):
         raise ValueError("Internal relation options are only supported for SEC")
     if mode == VerificationMode.LEC.value and (
@@ -257,6 +259,8 @@ def _build_native_design_options(
             "allow_x_equality_in_internal_relations"),
         "binary_relation_round": _boolean(
             settings.binary_relation_round, "binary_relation_round"),
+        "signal_correspondence": _boolean(
+            settings.signal_correspondence, "signal_correspondence"),
         "latch_abstraction": _boolean(
             settings.latch_abstraction, "latch_abstraction"),
         "data_latch_model": _boolean(

@@ -17,6 +17,11 @@ struct InternalRelationOptions {
   // common start (van Eijk, TCAD 2000; Savoj et al., FMCAD 2010). Design 2's
   // register then takes design 1's transition in the proof problem.
   bool binaryRelationRound = true;
+  // Outputs still open after the register learner are tried by signal
+  // correspondence, which relates signals and not only registers and starts
+  // from the state the reset window leaves (van Eijk, TCAD 2000). Dual rail
+  // only, and only while X equality is allowed.
+  bool signalCorrespondence = true;
 };
 
 struct SequentialDesignModel;

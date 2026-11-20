@@ -178,6 +178,7 @@ Enum fields accept either the exported enum member or its exact string value.
 | `learn_internal_relations` | `True` | Learn proved internal register equalities for SEC |
 | `allow_x_equality_in_internal_relations` | `True` | Allow internal X/X relations without changing the final output property |
 | `binary_relation_round` | `True` | Retry unproved internal relations in binary semantics and share the proved transitions |
+| `signal_correspondence` | `True` | Try outputs the register relations leave open by signal correspondence |
 | `latch_abstraction` | `True` | Phase-abstract clock-driven latches; `False` keeps every latch output opaque |
 | `data_latch_model` | `True` | Model data-enabled latches as step-transparent state; `False` leaves them opaque |
 | `sec_reset_cycles` | `None` | Hold the listed reset ports asserted for this many SEC cycles |
