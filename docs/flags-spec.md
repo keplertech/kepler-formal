@@ -23,6 +23,16 @@ The SEC-specific flag surface is documented separately in
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 `verification: sec` in YAML.
 
+## Miter log
+
+The verdict of a LEC difference names the miter log the run wrote, and that
+log gives the size of each SAT problem and the time it took:
+
+```text
+Starting solver: <v> variables, <c> clauses, <n> outputs compared
+SAT solver finished: UNSAT in <s> s
+```
+
 ## Binary flags
 
 | Flag | Meaning |
