@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <iterator>
 #include <map>
 #include <random>
@@ -728,68 +729,119 @@ void readModel(const SATSolverWrapper& solver, const FrameFormulaEncoder& frame,
   }
 }
 
-// Equation 4: members of a class are equal in the start state for every
-// input. False when the solver budget ran out.
+// Consecutive time frames of the machine in one solver. Frame 0 is free; a
+// register of every later frame is its next-state function in the frame
+// before it.
+struct Unrolling {
+  std::deque<FrameFormulaEncoder> frames;
+  // Per frame, the literal of every signal of the relation.
+  std::vector<std::vector<int>> literals;
+};
+
+void unroll(SATSolverWrapper& solver, const Machine& machine, const KInductionProblem& problem,
+            const Classes& relation, size_t count, Unrolling& unrolling) {
+  for (size_t f = 0; f < count; ++f) {
+    auto& frame = unrolling.frames.emplace_back(solver, std::unordered_map<size_t, int>{}, true);
+    auto& literals = unrolling.literals.emplace_back(machine.circuit.size(), 0);
+    for (const auto& members : relation.members) {
+      for (const uint32_t node : members) {
+        literals[node] = frame.encode(machine.circuit.expr(node));
+      }
+    }
+    addFrameConstraints(solver, frame, machine, problem);
+  }
+  // Last frame first: tying a frame's registers to the frame before it adds
+  // registers there.
+  for (size_t f = count; f-- > 1;) {
+    const std::vector<std::pair<size_t, int>> leaves(unrolling.frames[f].leafLits().begin(),
+                                                     unrolling.frames[f].leafLits().end());
+    for (const auto& [symbol, literal] : leaves) {
+      if (const auto it = machine.registerBySymbol.find(symbol);
+          it != machine.registerBySymbol.end()) {
+        addLiteralEquivalence(solver, literal,
+                              unrolling.frames[f - 1].encode(
+                                  machine.circuit.expr(machine.registers[it->second].next)));
+      }
+    }
+  }
+}
+
+// The model the solver holds, replayed on the logic from frame 0 to frame
+// `last`. Frame 0 reads its leaves from the model; a leaf that frame never
+// encoded keeps the value it has in `leaves`. A later frame takes its
+// registers from the frame before it and its inputs from the model.
+void replay(const SATSolverWrapper& solver, const Machine& machine, const Unrolling& unrolling,
+            size_t last, std::vector<uint64_t>& leaves, std::vector<uint64_t>& values) {
+  readModel(solver, unrolling.frames[0], machine.circuit, leaves);
+  evaluate(machine.circuit, leaves, values);
+  for (size_t f = 1; f <= last; ++f) {
+    for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
+      leaves[slot] = machine.idleReset[slot] == 1 ? kAllPatterns : 0;
+    }
+    readModel(solver, unrolling.frames[f], machine.circuit, leaves);
+    for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
+      if (const uint32_t owner = machine.registerOfSlot[slot]; owner != kNone) {
+        leaves[slot] = values[machine.registers[owner].next];
+      }
+    }
+    evaluate(machine.circuit, leaves, values);
+  }
+}
+
+// Equation 4, over `frames` time frames: members of a class are equal in the
+// start state and in the frames that follow it, for every input. False when
+// the solver budget ran out.
 bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
-                   const std::vector<uint8_t>& start, Config::SolverType solverType,
-                   const SignalCorrespondenceLimits& limits,
+                   const std::vector<uint8_t>& start, size_t frames,
+                   Config::SolverType solverType, const SignalCorrespondenceLimits& limits,
                    const SATSolverWrapper::CadicalWorkBudget& budget, Classes& relation,
                    size_t& solverCalls) {
   SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
   configureForManyQueries(solver);
-  FrameFormulaEncoder frame(solver, {}, true);
-  std::vector<int> literals(machine.circuit.size(), 0);
-  for (const auto& members : relation.members) {
-    for (const uint32_t node : members) {
-      literals[node] = frame.encode(machine.circuit.expr(node));
-    }
-  }
+  Unrolling unrolling;
+  unroll(solver, machine, problem, relation, frames, unrolling);
   for (size_t i = 0; i < machine.registers.size(); ++i) {
     if (start[i] != kUnknown) {
-      const int literal = frame.encode(BoolExpr::Var(machine.registers[i].symbol));
+      const int literal = unrolling.frames[0].encode(BoolExpr::Var(machine.registers[i].symbol));
       solver.addClause({start[i] != 0 ? literal : -literal});
     }
   }
-  addFrameConstraints(solver, frame, machine, problem);
 
   std::vector<uint64_t> leaves(machine.circuit.symbols().size());
-  const auto replay = [&](std::vector<uint64_t>& values) {
-    // A leaf outside every encoded cone: a register keeps its start value
-    // (unknown reads X, both rails set), an input reads 0.
-    for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
-      const uint32_t owner = machine.registerOfSlot[slot];
-      leaves[slot] = owner != kNone && start[owner] != 0 ? kAllPatterns : 0;
-    }
-    readModel(solver, frame, machine.circuit, leaves);
-    evaluate(machine.circuit, leaves, values);
-  };
-  bool changed = false;
-  return refineClasses(solver, literals, limits, budget, relation, changed, solverCalls, replay,
-                       [](const std::vector<uint32_t>&) {});
-}
-
-// Equation 5, once: with every class assumed in the current time frame, the
-// members of a class are equal in the next. `changed` tells whether a class
-// was split or lost a member, in which case the assumption was too strong and
-// the step is repeated. False when the solver budget ran out.
-bool refineOverOneStep(const Machine& machine, const KInductionProblem& problem,
-                       Config::SolverType solverType, const SignalCorrespondenceLimits& limits,
-                       const SATSolverWrapper::CadicalWorkBudget& budget, Classes& relation,
-                       bool& changed, size_t& solverCalls) {
-  SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
-  configureForManyQueries(solver);
-  FrameFormulaEncoder current(solver, {}, true);
-  FrameFormulaEncoder next(solver, {}, true);
-  std::vector<int> now(machine.circuit.size(), 0);
-  std::vector<int> then(machine.circuit.size(), 0);
-  for (const auto& members : relation.members) {
-    for (const uint32_t node : members) {
-      now[node] = current.encode(machine.circuit.expr(node));
-      then[node] = next.encode(machine.circuit.expr(node));
+  for (size_t f = 0; f < frames; ++f) {
+    const auto replayFrame = [&](std::vector<uint64_t>& values) {
+      // A leaf outside every encoded cone: a register keeps its start value
+      // (unknown reads X, both rails set), an input reads 0.
+      for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
+        const uint32_t owner = machine.registerOfSlot[slot];
+        leaves[slot] = owner != kNone && start[owner] != 0 ? kAllPatterns : 0;
+      }
+      replay(solver, machine, unrolling, f, leaves, values);
+    };
+    bool changed = false;
+    if (!refineClasses(solver, unrolling.literals[f], limits, budget, relation, changed,
+                       solverCalls, replayFrame, [](const std::vector<uint32_t>&) {})) {
+      return false;
     }
   }
+  return true;
+}
+
+// Equation 5, once, over `frames` time frames: with every class assumed in
+// that many consecutive frames, the members of a class are equal in the
+// next. `changed` tells whether a class was split or lost a member, in which
+// case the assumption was too strong and the step is repeated. False when the
+// solver budget ran out.
+bool refineOverSteps(const Machine& machine, const KInductionProblem& problem, size_t frames,
+                     Config::SolverType solverType, const SignalCorrespondenceLimits& limits,
+                     const SATSolverWrapper::CadicalWorkBudget& budget, Classes& relation,
+                     bool& changed, size_t& solverCalls) {
+  SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
+  configureForManyQueries(solver);
+  Unrolling unrolling;
+  unroll(solver, machine, problem, relation, frames + 1, unrolling);
   // The state compatibility condition of the relation: plain equalities of
-  // the current frame. Nothing is merged.
+  // the assumed frames. Nothing is merged.
   const auto assume = [&](const std::vector<int>& literals,
                           const std::vector<uint32_t>& members) {
     const uint32_t first = members.front();
@@ -799,46 +851,22 @@ bool refineOverOneStep(const Machine& machine, const KInductionProblem& problem,
                             samePhase ? literals[first] : -literals[first]);
     }
   };
-  for (const auto& members : relation.members) {
-    assume(now, members);
-  }
-  addFrameConstraints(solver, current, machine, problem);
-  addFrameConstraints(solver, next, machine, problem);
-  // A register of the next frame is its next-state function in the current.
-  const std::vector<std::pair<size_t, int>> nextLeaves(next.leafLits().begin(),
-                                                       next.leafLits().end());
-  for (const auto& [symbol, literal] : nextLeaves) {
-    if (const auto it = machine.registerBySymbol.find(symbol);
-        it != machine.registerBySymbol.end()) {
-      addLiteralEquivalence(
-          solver, literal,
-          current.encode(machine.circuit.expr(machine.registers[it->second].next)));
+  for (size_t f = 0; f < frames; ++f) {
+    for (const auto& members : relation.members) {
+      assume(unrolling.literals[f], members);
     }
   }
 
   std::vector<uint64_t> leaves(machine.circuit.symbols().size());
-  std::vector<uint64_t> nextLeavesValues(leaves.size());
-  // The counterexample replayed: the current frame from the model, then the
-  // next frame from the registers it produces and the model's next inputs.
-  const auto replay = [&](std::vector<uint64_t>& values) {
+  const auto replayStep = [&](std::vector<uint64_t>& values) {
     std::fill(leaves.begin(), leaves.end(), 0);
-    readModel(solver, current, machine.circuit, leaves);
-    evaluate(machine.circuit, leaves, values);
-    for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
-      nextLeavesValues[slot] = machine.idleReset[slot] == 1 ? kAllPatterns : 0;
-    }
-    readModel(solver, next, machine.circuit, nextLeavesValues);
-    for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
-      if (const uint32_t owner = machine.registerOfSlot[slot]; owner != kNone) {
-        nextLeavesValues[slot] = values[machine.registers[owner].next];
-      }
-    }
-    evaluate(machine.circuit, nextLeavesValues, values);
+    replay(solver, machine, unrolling, frames, leaves, values);
   };
   // A class proved under this round's assumption may be used by the queries
   // that follow in the round.
-  return refineClasses(solver, then, limits, budget, relation, changed, solverCalls, replay,
-                       [&](const std::vector<uint32_t>& members) { assume(then, members); });
+  const auto& proved = unrolling.literals[frames];
+  return refineClasses(solver, proved, limits, budget, relation, changed, solverCalls, replayStep,
+                       [&](const std::vector<uint32_t>& members) { assume(proved, members); });
 }
 
 std::vector<uint32_t> selectSignals(const Machine& machine, SignalCorrespondenceScope scope) {
@@ -949,11 +977,16 @@ SignalCorrespondenceResult proveSignalCorrespondence(
     const KInductionProblem& problem,
     SignalCorrespondenceScope scope,
     Config::SolverType solverType,
-    const SignalCorrespondenceLimits& limits) {
+    const SignalCorrespondenceLimits& limits,
+    size_t inductionFrames) {
   SignalCorrespondenceResult result;
   result.provedOutputs.assign(problem.observedOutputExprs0.size(), false);
+  result.differingOutputs.assign(problem.observedOutputExprs0.size(), false);
+  const size_t frames = std::max<size_t>(inductionFrames, 1);
   Machine machine(limits.nodes);
+  // The step encodes one frame more than it assumes.
   if (!buildMachine(problem, limits, machine) ||
+      machine.circuit.size() > limits.nodes / (frames + 1) ||
       (scope == SignalCorrespondenceScope::AllSignals &&
        machine.circuit.size() > limits.allSignalsNodes)) {
     return result;
@@ -966,16 +999,44 @@ SignalCorrespondenceResult proveSignalCorrespondence(
   SATSolverWrapper::CadicalWorkBudget budget(
       limits.budgetConflicts, limits.budgetDecisions, limits.budgetTicks);
   SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
-  bool withinBudget = refineAtStart(machine, problem, states.start, solverType, limits, budget,
-                                    relation, result.solverCalls);
+  // The class of every signal, and the output cones the relation holds
+  // equal, as it stands when indexed.
+  std::vector<uint32_t> classOf;
+  const auto indexClasses = [&]() {
+    classOf.assign(machine.circuit.size(), kNone);
+    for (uint32_t i = 0; i < relation.members.size(); ++i) {
+      for (const uint32_t node : relation.members[i]) {
+        classOf[node] = i;
+      }
+    }
+  };
+  const auto equalOutputs = [&](size_t output) {
+    const auto& pairs = machine.outputs[output];
+    return !pairs.empty() &&
+           std::all_of(pairs.begin(), pairs.end(), [&](const auto& pair) {
+             return pair.first == pair.second ||
+                    (classOf[pair.first] != kNone && classOf[pair.first] == classOf[pair.second] &&
+                     relation.phase[pair.first] == relation.phase[pair.second]);
+           });
+  };
+  bool withinBudget = refineAtStart(machine, problem, states.start, frames, solverType, limits,
+                                    budget, relation, result.solverCalls);
+  indexClasses();
+  for (size_t i = 0; withinBudget && i < machine.outputs.size(); ++i) {
+    // Separated before any induction step: a difference in a reachable state.
+    result.differingOutputs[i] = !machine.outputs[i].empty() && !equalOutputs(i);
+  }
   bool fixedPoint = false;
   while (withinBudget && !fixedPoint && result.rounds < limits.rounds) {
     bool changed = false;
-    withinBudget = refineOverOneStep(machine, problem, solverType, limits, budget, relation,
-                                     changed, result.solverCalls);
+    withinBudget = refineOverSteps(machine, problem, frames, solverType, limits, budget,
+                                   relation, changed, result.solverCalls);
     ++result.rounds;
     fixedPoint = withinBudget && !changed;
   }
+  result.conflicts = budget.conflictsUsed();
+  result.decisions = budget.decisionsUsed();
+  result.ticks = budget.ticksUsed();
   if (!fixedPoint) {
     // An unfinished fixed point is not a certificate for any class.
     return result;
@@ -983,21 +1044,9 @@ SignalCorrespondenceResult proveSignalCorrespondence(
 
   result.completed = true;
   result.classes = relation.members.size();
-  std::vector<uint32_t> classOf(machine.circuit.size(), kNone);
-  for (uint32_t i = 0; i < relation.members.size(); ++i) {
-    for (const uint32_t node : relation.members[i]) {
-      classOf[node] = i;
-    }
-  }
-  const auto equal = [&](uint32_t a, uint32_t b) {
-    return a == b || (classOf[a] != kNone && classOf[a] == classOf[b] &&
-                      relation.phase[a] == relation.phase[b]);
-  };
+  indexClasses();
   for (size_t i = 0; i < machine.outputs.size(); ++i) {
-    const auto& pairs = machine.outputs[i];
-    result.provedOutputs[i] = !pairs.empty() &&
-        std::all_of(pairs.begin(), pairs.end(),
-                    [&](const auto& pair) { return equal(pair.first, pair.second); });
+    result.provedOutputs[i] = equalOutputs(i);
   }
   collectStateEqualities(machine, problem, states, relation, classOf, result);
   return result;
@@ -1006,50 +1055,73 @@ SignalCorrespondenceResult proveSignalCorrespondence(
 SignalCorrespondenceLearning learnSignalCorrespondence(
     const KInductionProblem& problem,
     Config::SolverType solverType,
-    bool diagnostics) {
+    bool diagnostics,
+    SignalCorrespondenceLimits limits) {
   SignalCorrespondenceLearning learned;
   const size_t outputs = problem.observedOutputExprs0.size();
   learned.provedOutputs.assign(outputs, false);
+  // Outputs whose cones differ in a reachable state: no run can prove them.
+  std::vector<bool> differing(outputs, false);
   const auto open = [&]() {
     size_t count = 0;
     for (size_t i = 0; i < outputs; ++i) {
       const bool earlier = i < problem.structurallyProvedOutputs.size() &&
                            problem.structurallyProvedOutputs[i];
-      count += !earlier && !learned.provedOutputs[i] ? 1 : 0;
+      count += !earlier && !learned.provedOutputs[i] && !differing[i] ? 1 : 0;
     }
     return count;
   };
+  // One budget for all the runs: each run gets what the earlier ones left.
+  const auto spend = [](uint64_t& left, uint64_t used) { left = used < left ? left - used : 0; };
+  const auto budgetLeft = [&limits]() {
+    return limits.budgetConflicts != 0 && limits.budgetDecisions != 0 && limits.budgetTicks != 0;
+  };
   for (const auto scope : {SignalCorrespondenceScope::RegistersAndOutputs,
                            SignalCorrespondenceScope::AllSignals}) {
-    const size_t openBefore = open();
-    if (openBefore == 0) {
-      break;
-    }
-    const auto begin = std::chrono::steady_clock::now();
-    const auto result = proveSignalCorrespondence(problem, scope, solverType);
-    for (size_t i = 0; i < outputs; ++i) {
-      learned.provedOutputs[i] = learned.provedOutputs[i] || result.provedOutputs[i];
-    }
-    // The all-signals relation contains the first one.
-    if (!result.stateEqualities.empty()) {
-      learned.stateEqualities = result.stateEqualities;
-    }
-    if (diagnostics) {
-      printf("SEC summary: signal_correspondence scope=%s completed=%d signals=%zu "
-             "classes=%zu rounds=%zu solver_calls=%zu proved_outputs=%zu/%zu "
-             "state_equalities=%zu seconds=%.1f\n",
-             scope == SignalCorrespondenceScope::AllSignals ? "all_signals"
-                                                            : "registers_and_outputs",
-             result.completed, result.signals, result.classes, result.rounds,
-             result.solverCalls, openBefore - open(), openBefore,
-             result.stateEqualities.size(),
-             std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
-      fflush(stdout);
-    }
-    if (!result.completed) {
-      break;
+    // Deeper induction proves more and costs more; a depth that gave up is
+    // not followed by a deeper one.
+    for (size_t frames = 1;
+         frames <= limits.inductionFrames && open() != 0 && budgetLeft(); frames *= 2) {
+      const size_t openBefore = open();
+      const auto begin = std::chrono::steady_clock::now();
+      const auto result = proveSignalCorrespondence(problem, scope, solverType, limits, frames);
+      spend(limits.budgetConflicts, result.conflicts);
+      spend(limits.budgetDecisions, result.decisions);
+      spend(limits.budgetTicks, result.ticks);
+      const size_t provedBefore =
+          std::count(learned.provedOutputs.begin(), learned.provedOutputs.end(), true);
+      for (size_t i = 0; i < outputs; ++i) {
+        learned.provedOutputs[i] = learned.provedOutputs[i] || result.provedOutputs[i];
+        differing[i] = differing[i] || result.differingOutputs[i];
+      }
+      // Every completed run reports invariants; duplicates are harmless.
+      learned.stateEqualities.insert(learned.stateEqualities.end(),
+                                     result.stateEqualities.begin(),
+                                     result.stateEqualities.end());
+      if (diagnostics) {
+        printf("SEC summary: signal_correspondence scope=%s frames=%zu completed=%d signals=%zu "
+               "classes=%zu rounds=%zu solver_calls=%zu proved_outputs=%zu/%zu "
+               "state_equalities=%zu seconds=%.1f\n",
+               scope == SignalCorrespondenceScope::AllSignals ? "all_signals"
+                                                              : "registers_and_outputs",
+               frames, result.completed, result.signals, result.classes, result.rounds,
+               result.solverCalls,
+               static_cast<size_t>(std::count(learned.provedOutputs.begin(),
+                                              learned.provedOutputs.end(), true)) - provedBefore,
+               openBefore,
+               result.stateEqualities.size(),
+               std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
+        fflush(stdout);
+      }
+      if (!result.completed) {
+        break;
+      }
     }
   }
+  std::sort(learned.stateEqualities.begin(), learned.stateEqualities.end());
+  learned.stateEqualities.erase(
+      std::unique(learned.stateEqualities.begin(), learned.stateEqualities.end()),
+      learned.stateEqualities.end());
   return learned;
 }
 

@@ -225,7 +225,7 @@ TEST_F(SignalCorrespondenceTests, LeavesOutputsProvedEarlierAlone) {
   EXPECT_THAT(learned.stateEqualities, IsEmpty());
 }
 
-TEST_F(SignalCorrespondenceTests, LearningTriesAllSignalsWhenOutputsRemain) {
+TEST_F(SignalCorrespondenceTests, LearningStopsWhenNothingMoreCanBeProved) {
   testing::internal::CaptureStdout();
   const auto proved = learnSignalCorrespondence(
       shadowBit(/*staleCopy=*/false, /*resetPort=*/false), Config::SolverType::KISSAT,
@@ -233,17 +233,25 @@ TEST_F(SignalCorrespondenceTests, LearningTriesAllSignalsWhenOutputsRemain) {
   const std::string provedLog = testing::internal::GetCapturedStdout();
   EXPECT_THAT(proved.provedOutputs, testing::ElementsAre(true));
   EXPECT_THAT(proved.stateEqualities, UnorderedElementsAre(std::pair<size_t, size_t>{2, 3}));
-  EXPECT_NE(provedLog.find("scope=registers_and_outputs"), std::string::npos) << provedLog;
-  // Everything was proved on registers and outputs; the second scope is not run.
+  // Everything was proved by the first run; nothing deeper or larger is tried.
+  EXPECT_NE(provedLog.find("scope=registers_and_outputs frames=1"), std::string::npos)
+      << provedLog;
+  EXPECT_EQ(provedLog.find("frames=2"), std::string::npos) << provedLog;
   EXPECT_EQ(provedLog.find("scope=all_signals"), std::string::npos) << provedLog;
 
+  // The stale copy makes the outputs differ in a state simulation reaches.
+  // No depth and no scope can prove such an output, so the learner stops too.
+  const auto stale = shadowBit(/*staleCopy=*/true, /*resetPort=*/false);
+  const auto run = proveSignalCorrespondence(stale, kRegisters, Config::SolverType::KISSAT);
+  EXPECT_THAT(run.differingOutputs, testing::ElementsAre(true));
   testing::internal::CaptureStdout();
-  const auto open = learnSignalCorrespondence(
-      shadowBit(/*staleCopy=*/true, /*resetPort=*/false), Config::SolverType::KISSAT,
-      /*diagnostics=*/true);
+  const auto open =
+      learnSignalCorrespondence(stale, Config::SolverType::KISSAT, /*diagnostics=*/true);
   const std::string openLog = testing::internal::GetCapturedStdout();
   EXPECT_THAT(open.provedOutputs, testing::ElementsAre(false));
-  EXPECT_NE(openLog.find("scope=all_signals"), std::string::npos) << openLog;
+  EXPECT_NE(openLog.find("frames=1"), std::string::npos) << openLog;
+  EXPECT_EQ(openLog.find("frames=2"), std::string::npos) << openLog;
+  EXPECT_EQ(openLog.find("scope=all_signals"), std::string::npos) << openLog;
 }
 
 TEST_F(SignalCorrespondenceTests, GivesUpOnAProblemWithoutUsableCones) {
@@ -401,15 +409,17 @@ TEST_F(SignalCorrespondenceTests, GivesUpAtItsLimitsWithoutReportingAnything) {
   unreadable.observedOutputExprs1 = {&notAFormula};
   EXPECT_FALSE(
       proveSignalCorrespondence(unreadable, kRegisters, Config::SolverType::KISSAT).completed);
-  // Learning stops at a scope that gave up instead of trying the larger one.
+  // Learning reports the run that gave up and proves nothing.
   testing::internal::CaptureStdout();
   const auto learned = learnSignalCorrespondence(unreadable, Config::SolverType::KISSAT,
                                                  /*diagnostics=*/true);
   const std::string log = testing::internal::GetCapturedStdout();
   EXPECT_THAT(learned.provedOutputs, testing::ElementsAre(false));
   EXPECT_THAT(learned.stateEqualities, IsEmpty());
-  EXPECT_NE(log.find("scope=registers_and_outputs completed=0"), std::string::npos) << log;
-  EXPECT_EQ(log.find("scope=all_signals"), std::string::npos) << log;
+  EXPECT_NE(log.find("scope=registers_and_outputs frames=1 completed=0"), std::string::npos)
+      << log;
+  // A depth that gave up is not followed by a deeper one.
+  EXPECT_EQ(log.find("frames=2"), std::string::npos) << log;
 }
 
 TEST_F(SignalCorrespondenceTests, UndecidedSignalsAreDroppedNotAssumed) {
@@ -434,6 +444,106 @@ TEST_F(SignalCorrespondenceTests, UndecidedSignalsAreDroppedNotAssumed) {
       EXPECT_THAT(limited.provedOutputs, testing::ElementsAre(false));
     }
   }
+}
+
+// Two phases per operation. In phase 0 each design outputs its bit and
+// latches it; in phase 1 a write stores the complement of the latched bit.
+// Design 2 also writes a copy `buf` and reads it in place of the bit while
+// `valid` is set. In phase 1 nothing shows whether the copy is right, so the
+// classes are not inductive over one time frame; over two, the frame of
+// phase 0 is always among the assumed ones. With `staleCopy` the copy is
+// never written.
+//   2: phase, 3: m, 4: latch (design 1)
+//   5: phase, 6: m, 7: latch, 8: buf, 9: valid (design 2)   10: write, 11: clear
+KInductionProblem twoPhaseShadowBit(bool staleCopy) {
+  KInductionProblem problem;
+  problem.allSymbols = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+  problem.state0Symbols = {2, 3, 4};
+  problem.state1Symbols = {5, 6, 7, 8, 9};
+  problem.inputSymbols = {10, 11};
+  problem.initialStateAssignments = {{2, false}, {3, false}, {4, false}, {5, false},
+                                     {6, false}, {7, false}, {8, true},  {9, false}};
+  BoolExpr* write = BoolExpr::Var(10);
+  BoolExpr* clear = BoolExpr::Var(11);
+  const auto v = [](size_t symbol) { return BoolExpr::Var(symbol); };
+  BoolExpr* read1 = mux(v(9), v(8), v(6));
+  BoolExpr* writing1 = BoolExpr::And(v(5), write);
+  problem.transitions0 = {
+      {2, BoolExpr::Not(v(2))},
+      {3, mux(BoolExpr::And(v(2), write), BoolExpr::Not(v(4)), v(3))},
+      {4, mux(v(2), v(4), v(3))}};
+  problem.transitions1 = {
+      {5, BoolExpr::Not(v(5))},
+      {6, mux(writing1, BoolExpr::Not(v(7)), v(6))},
+      {7, mux(v(5), v(7), read1)},
+      {8, staleCopy ? v(8) : mux(writing1, BoolExpr::Not(v(7)), v(8))},
+      {9, BoolExpr::Or(writing1,
+                       BoolExpr::And(BoolExpr::Not(BoolExpr::And(v(5), clear)), v(9)))}};
+  problem.observedOutputExprs0 = {BoolExpr::And(BoolExpr::Not(v(2)), v(3))};
+  problem.observedOutputExprs1 = {BoolExpr::And(BoolExpr::Not(v(5)), read1)};
+  return problem;
+}
+
+TEST_F(SignalCorrespondenceTests, RelationOverAMultiPhaseOperationNeedsDeeperInduction) {
+  const auto problem = twoPhaseShadowBit(/*staleCopy=*/false);
+  const auto solver = Config::SolverType::KISSAT;
+  // Registers, outputs and next-state functions say nothing about the copy
+  // in phase 1: one frame proves the phase registers only.
+  const auto oneFrame = proveSignalCorrespondence(problem, kRegisters, solver, {}, 1);
+  ASSERT_TRUE(oneFrame.completed);
+  EXPECT_THAT(oneFrame.provedOutputs, testing::ElementsAre(false));
+  EXPECT_THAT(oneFrame.stateEqualities, UnorderedElementsAre(std::pair<size_t, size_t>{2, 5}));
+
+  for (const size_t frames : {2, 4}) {
+    const auto deeper = proveSignalCorrespondence(problem, kRegisters, solver, {}, frames);
+    ASSERT_TRUE(deeper.completed);
+    EXPECT_THAT(deeper.provedOutputs, testing::ElementsAre(true));
+    EXPECT_THAT(deeper.stateEqualities,
+                UnorderedElementsAre(std::pair<size_t, size_t>{2, 5},
+                                     std::pair<size_t, size_t>{3, 6},
+                                     std::pair<size_t, size_t>{4, 7}));
+  }
+  // Among all signals is the read of design 2 itself, the copy or the bit,
+  // which equals the bit in every phase: one frame is enough there.
+  EXPECT_THAT(proveSignalCorrespondence(problem, kAllSignals, solver, {}, 1).provedOutputs,
+              testing::ElementsAre(true));
+
+  // One frame leaves the output open without showing a difference, so the
+  // learner deepens the induction by itself.
+  EXPECT_THAT(oneFrame.differingOutputs, testing::ElementsAre(false));
+  testing::internal::CaptureStdout();
+  const auto learned = learnSignalCorrespondence(problem, solver, /*diagnostics=*/true);
+  const std::string log = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(learned.provedOutputs, testing::ElementsAre(true));
+  EXPECT_NE(log.find("frames=1 completed=1"), std::string::npos) << log;
+  EXPECT_NE(log.find("frames=2 completed=1"), std::string::npos) << log;
+  EXPECT_EQ(log.find("frames=4"), std::string::npos) << log;
+  EXPECT_EQ(log.find("scope=all_signals"), std::string::npos) << log;
+
+  // Held to one frame, it goes on to all signals, where one frame is enough.
+  SignalCorrespondenceLimits shallow;
+  shallow.inductionFrames = 1;
+  testing::internal::CaptureStdout();
+  const auto wide = learnSignalCorrespondence(problem, solver, /*diagnostics=*/true, shallow);
+  const std::string wideLog = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(wide.provedOutputs, testing::ElementsAre(true));
+  EXPECT_NE(wideLog.find("scope=all_signals frames=1 completed=1"), std::string::npos) << wideLog;
+
+  // A copy that is never written is a real difference at every depth.
+  const auto stale = twoPhaseShadowBit(/*staleCopy=*/true);
+  for (const size_t frames : {1, 2, 4, 8}) {
+    const auto result = proveSignalCorrespondence(stale, kAllSignals, solver, {}, frames);
+    ASSERT_TRUE(result.completed);
+    EXPECT_THAT(result.provedOutputs, testing::ElementsAre(false));
+  }
+  EXPECT_THAT(learnSignalCorrespondence(stale, solver, /*diagnostics=*/false).provedOutputs,
+              testing::ElementsAre(false));
+
+  // The unrolled frames count against the node limit.
+  SignalCorrespondenceLimits small;
+  small.nodes = 100;
+  EXPECT_TRUE(proveSignalCorrespondence(problem, kRegisters, solver, small, 1).completed);
+  EXPECT_FALSE(proveSignalCorrespondence(problem, kRegisters, solver, small, 8).completed);
 }
 
 }  // namespace

@@ -308,8 +308,26 @@ is halved, down to single classes, which are asked member by member. A class
 proved in a round may be used by the later queries of that round. A signal the
 solver leaves undecided is removed from its class, never assumed.
 
-If outputs are still open and the logic is small enough, the pass is repeated
+A relation can fail to be inductive over one time frame although it holds. A
+design that reads a value in one phase and writes it back in a later one, a
+program counter read nibble by nibble and incremented three phases later for
+example, only shows in the reading phase whether a register copy of that value
+is right; in the other phases a state with a wrong copy passes for a state of
+the relation. The step is then taken over several frames (Sheeran, Singh and
+Stalmarck, FMCAD 2000; Bjesse and Claessen combine it with signal
+correspondence): the classes must hold in the first k frames from the start
+state, and, assumed in k consecutive frames, in the next. With k at least the
+length of the operation, the phase that exposes a wrong copy is always among
+the assumed frames. The pass tries k = 1, 2, 4 and 8 while outputs are open.
+
+If outputs are still open and the logic is small enough, the same is repeated
 with F set to every node of the next-state and output logic.
+
+An output whose two cones already take different values in a state the start
+state reaches, in simulation or in the check of the first frames, is not tried
+again: no larger set and no deeper induction proves it. A design that really
+differs therefore costs one run before the engine looks for the
+counterexample.
 
 The result is used twice:
 
@@ -325,8 +343,9 @@ The result is used twice:
 
 The pass is bounded by engineering limits (`SignalCorrespondenceLimits`), not
 techniques from the papers:
-16384 state symbols, about two million nodes (262144 for all signals), 64
-rounds and a solver budget of a couple of minutes. A query is limited by its
+16384 state symbols, about two million nodes counting every unrolled frame
+(262144 for all signals), 64 rounds, 8 induction frames and a solver budget of
+a couple of minutes shared by all the runs. A query is limited by its
 conflicts and decisions, not by its ticks, because propagation alone costs
 ticks in proportion to the design. When a limit is reached nothing is
 reported and the engines run as before.
@@ -335,7 +354,7 @@ It is on by default and switched by `signal_correspondence`
 (`--signal-correspondence <bool>`). It needs learning and the dual-rail
 encoding. Its classes may relate signals that are unknown, X on both sides, so
 it is also left out with `allow_x_equality_in_internal_relations: false`. The
-line `SEC summary: signal_correspondence scope=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=...`
+line `SEC summary: signal_correspondence scope=... frames=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=...`
 reports each run.
 
 ## What it does and does not help

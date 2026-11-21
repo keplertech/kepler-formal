@@ -35,6 +35,8 @@ struct SignalCorrespondenceLimits {
   // Above this many nodes the all-signals scope is not tried.
   size_t allSignalsNodes = size_t{1} << 18;
   size_t rounds = 64;
+  // The deepest induction the learner tries: 1, 2, 4, ... time frames.
+  size_t inductionFrames = 8;
   // Classes asked in one query.
   size_t groupClasses = 64;
   // One query about a group of classes, and one about a single class. A query
@@ -64,10 +66,19 @@ struct SignalCorrespondenceResult {
   // One flag per observed output: its two cones have the same value in every
   // frame from the first compared one on.
   std::vector<bool> provedOutputs;
+  // One flag per observed output: its two cones take different values in a
+  // state the start state reaches, in simulation or in the solver's check of
+  // the first frames. No larger scope and no deeper induction proves such an
+  // output, so a caller need not try again for it.
+  std::vector<bool> differingOutputs;
   size_t signals = 0;
   size_t classes = 0;
   size_t rounds = 0;
   size_t solverCalls = 0;
+  // Solver work spent, for a caller that shares one budget between runs.
+  uint64_t conflicts = 0;
+  uint64_t decisions = 0;
+  uint64_t ticks = 0;
 };
 
 // Signal correspondence (C. A. J. van Eijk, "Sequential equivalence checking
@@ -92,13 +103,21 @@ struct SignalCorrespondenceResult {
 // Assumed equalities are plain constraints of the current frame. Nothing is
 // merged before it is proved.
 //
+// With `inductionFrames` above 1 the induction is over that many time frames
+// (Sheeran, Singh and Stalmarck, FMCAD 2000; Bjesse and Claessen combine it
+// with the method above): the classes must hold in the first frames from the
+// start state, and, assumed in that many consecutive frames, in the next. A
+// relation that only closes over a whole multi-cycle operation, a value read
+// in one phase and written back in a later one, needs it.
+//
 // In the dual-rail encoding a class may relate signals that are unknown, X on
 // both sides. A caller that disallows X equality must not run the pass.
 SignalCorrespondenceResult proveSignalCorrespondence(
     const KInductionProblem& problem,
     SignalCorrespondenceScope scope,
     Config::SolverType solverType,
-    const SignalCorrespondenceLimits& limits = {});
+    const SignalCorrespondenceLimits& limits = {},
+    size_t inductionFrames = 1);
 
 struct SignalCorrespondenceLearning {
   // One flag per observed output.
@@ -106,13 +125,16 @@ struct SignalCorrespondenceLearning {
   std::vector<std::pair<size_t, size_t>> stateEqualities;
 };
 
-// Runs the pass for the outputs no earlier step proved: first on registers
-// and outputs, then on all signals if outputs remain. The problem is not
+// Runs the pass for the outputs no earlier step proved: on registers and
+// outputs with induction over 1, 2, 4, ... time frames, then on all signals
+// the same way, while outputs remain and the budget lasts. An output whose
+// cones differ in a reachable state is not tried again. The problem is not
 // changed; the caller discharges the proved outputs and records the state
 // equalities.
 SignalCorrespondenceLearning learnSignalCorrespondence(
     const KInductionProblem& problem,
     Config::SolverType solverType,
-    bool diagnostics);
+    bool diagnostics,
+    SignalCorrespondenceLimits limits = {});
 
 }  // namespace KEPLER_FORMAL::SEC
