@@ -323,7 +323,8 @@ The result is used twice:
   start state, because the engines read these equalities in the reset window
   too.
 
-The pass is bounded by engineering limits, not techniques from the papers:
+The pass is bounded by engineering limits (`SignalCorrespondenceLimits`), not
+techniques from the papers:
 16384 state symbols, about two million nodes (262144 for all signals), 64
 rounds and a solver budget of a couple of minutes. A query is limited by its
 conflicts and decisions, not by its ticks, because propagation alone costs

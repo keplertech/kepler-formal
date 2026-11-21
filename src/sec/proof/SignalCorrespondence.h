@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,35 @@ enum class SignalCorrespondenceScope {
   RegistersAndOutputs,
   // Every node of the next-state and output logic.
   AllSignals,
+};
+
+// Engineering limits of the pass, not techniques from the papers. It encodes
+// two time frames of both designs, so it is meant for the designs the engines
+// struggle with, not for the very large ones the register learner already
+// handles structurally. The defaults are the limits of a normal run; when one
+// is reached the pass gives up and reports nothing.
+struct SignalCorrespondenceLimits {
+  size_t stateSymbols = size_t{1} << 14;
+  size_t nodes = size_t{1} << 21;
+  // Above this many nodes the all-signals scope is not tried.
+  size_t allSignalsNodes = size_t{1} << 18;
+  size_t rounds = 64;
+  // Classes asked in one query.
+  size_t groupClasses = 64;
+  // One query about a group of classes, and one about a single class. A query
+  // is limited by its conflicts and decisions only: propagation alone costs
+  // ticks in proportion to the design, so a fixed tick limit would leave
+  // every query on a larger design undecided.
+  int64_t groupConflicts = 20000;
+  int64_t groupDecisions = 2000000;
+  int64_t classConflicts = 10000;
+  int64_t classDecisions = 1000000;
+  // The pass as a whole. Each query is small; this only stops a design the
+  // pass does not suit from holding up the engines for more than a couple of
+  // minutes. Ticks are the limit that binds: they follow the time spent.
+  uint64_t budgetConflicts = 1000000;
+  uint64_t budgetDecisions = 1000000000;
+  uint64_t budgetTicks = 6000000000ULL;
 };
 
 struct SignalCorrespondenceResult {
@@ -67,7 +97,8 @@ struct SignalCorrespondenceResult {
 SignalCorrespondenceResult proveSignalCorrespondence(
     const KInductionProblem& problem,
     SignalCorrespondenceScope scope,
-    Config::SolverType solverType);
+    Config::SolverType solverType,
+    const SignalCorrespondenceLimits& limits = {});
 
 struct SignalCorrespondenceLearning {
   // One flag per observed output.

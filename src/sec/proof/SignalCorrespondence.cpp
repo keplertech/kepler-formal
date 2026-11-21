@@ -20,14 +20,6 @@ namespace KEPLER_FORMAL::SEC {
 
 namespace {
 
-// Engineering limits, not techniques from the papers. The pass encodes two
-// time frames of both designs and asks one query per class, so it is meant for
-// the designs the engines struggle with, not for the very large ones the
-// register learner already handles structurally.
-constexpr size_t kStateSymbolLimit = size_t{1} << 14;
-constexpr size_t kNodeLimit = size_t{1} << 21;
-constexpr size_t kAllSignalsNodeLimit = size_t{1} << 18;
-constexpr size_t kRoundLimit = 64;
 // Simulation restarts from the start state this many times. A run goes on
 // until the partition has stopped refining over two looks in a row, each
 // look this many frames after the last, or until a limit is reached.
@@ -36,15 +28,7 @@ constexpr size_t kSimulationLook = 64;
 constexpr size_t kSimulationFrameLimit = size_t{1} << 13;
 // Node evaluations over all runs.
 constexpr uint64_t kSimulationWorkLimit = uint64_t{1} << 31;
-// One query about one class, and one about a group of classes. A query is
-// limited by its conflicts and decisions only: propagation alone costs ticks
-// in proportion to the design, so a fixed tick limit would leave every query
-// on a larger design undecided. The pass as a whole has a tick budget.
-constexpr int64_t kConflictLimit = 10000;
-constexpr int64_t kDecisionLimit = 1000000;
-constexpr size_t kGroupClasses = 64;
-constexpr int64_t kGroupConflictLimit = 20000;
-constexpr int64_t kGroupDecisionLimit = 2000000;
+// A query has no tick limit of its own, see SignalCorrespondenceLimits.
 constexpr int64_t kNoTickLimit = -1;
 
 constexpr uint8_t kUnknown = 2;
@@ -57,6 +41,8 @@ enum class Gate : uint8_t { False, True, Leaf, Not, And, Or, Xor };
 // time frame is evaluated by a single pass over an array, in any value domain.
 class Circuit {
  public:
+  explicit Circuit(size_t nodeLimit) : nodeLimit_(nodeLimit) {}
+
   struct Node {
     Gate gate = Gate::False;
     // Operand nodes; for a leaf, `left` is the slot of its symbol.
@@ -86,12 +72,10 @@ class Circuit {
           node.left = slotOf(symbol);
         }
       } else {
-        if (op != Op::NOT && op != Op::AND && op != Op::OR && op != Op::XOR) {
-          return false;
-        }
         BoolExpr* left = expr->getLeft();
         BoolExpr* right = op == Op::NOT ? nullptr : expr->getRight();
-        if (left == nullptr || (op != Op::NOT && right == nullptr)) {
+        const bool readable = op == Op::NOT || op == Op::AND || op == Op::OR || op == Op::XOR;
+        if (!readable || left == nullptr || (op != Op::NOT && right == nullptr)) {
           return false;
         }
         const auto leftIt = index_.find(left);
@@ -107,7 +91,7 @@ class Circuit {
         node.left = leftIt->second;
         node.right = right == nullptr ? 0 : rightIt->second;
       }
-      if (nodes_.size() >= kNodeLimit) {
+      if (nodes_.size() >= nodeLimit_) {
         return false;
       }
       index_.emplace(expr, static_cast<uint32_t>(nodes_.size()));
@@ -134,6 +118,7 @@ class Circuit {
   }
 
  private:
+  size_t nodeLimit_;
   std::vector<Node> nodes_;
   std::vector<BoolExpr*> exprs_;
   std::unordered_map<BoolExpr*, uint32_t> index_;
@@ -200,6 +185,8 @@ struct Register {
 
 // The product machine of van Eijk, section III.
 struct Machine {
+  explicit Machine(size_t nodeLimit) : circuit(nodeLimit) {}
+
   Circuit circuit;
   std::vector<Register> registers;
   std::unordered_map<size_t, uint32_t> registerBySymbol;
@@ -216,10 +203,11 @@ struct Machine {
   std::vector<std::vector<std::pair<uint32_t, uint32_t>>> outputs;
 };
 
-bool buildMachine(const KInductionProblem& problem, Machine& machine) {
+bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLimits& limits,
+                  Machine& machine) {
   const TransitionExprResolver transitions(problem);
   if (problem.state0Symbols.size() + problem.state1Symbols.size() +
-          problem.auxiliaryStateSymbols.size() > kStateSymbolLimit) {
+          problem.auxiliaryStateSymbols.size() > limits.stateSymbols) {
     return false;
   }
   // Design 2's register of a shared pair reads design 1's transition, as it
@@ -561,7 +549,8 @@ int differenceLiteral(SATSolverWrapper& solver, const std::vector<int>& literals
 // costs a query per group and not one per class.
 SATSolverWrapper::SolveStatus checkGroup(
     SATSolverWrapper& solver, const std::vector<int>& literals, const Classes& relation,
-    const std::vector<std::vector<uint32_t>>& classes, size_t& solverCalls) {
+    const std::vector<std::vector<uint32_t>>& classes, const SignalCorrespondenceLimits& limits,
+    size_t& solverCalls) {
   std::vector<int> clause;
   for (const auto& members : classes) {
     for (size_t i = 1; i < members.size(); ++i) {
@@ -573,7 +562,7 @@ SATSolverWrapper::SolveStatus checkGroup(
   solver.addClause(clause);
   ++solverCalls;
   return solver.solveWithAssumptionsStatus(
-      {anyDifference}, kGroupConflictLimit, kGroupDecisionLimit, kNoTickLimit);
+      {anyDifference}, limits.groupConflicts, limits.groupDecisions, kNoTickLimit);
 }
 
 enum class ClassStatus {
@@ -587,8 +576,8 @@ enum class ClassStatus {
 // frame `literals` describes. Members the solver cannot decide are removed
 // and reported through `dropped`: an undecided signal is not assumed.
 ClassStatus checkClass(SATSolverWrapper& solver, const std::vector<int>& literals,
-                       const Classes& relation, std::vector<uint32_t>& members,
-                       bool& dropped, size_t& solverCalls) {
+                       const Classes& relation, const SignalCorrespondenceLimits& limits,
+                       std::vector<uint32_t>& members, bool& dropped, size_t& solverCalls) {
   const uint32_t first = members.front();
   std::vector<int> differences;
   std::vector<int> clause;
@@ -601,7 +590,7 @@ ClassStatus checkClass(SATSolverWrapper& solver, const std::vector<int>& literal
   solver.addClause(clause);
   ++solverCalls;
   const auto status = solver.solveWithAssumptionsStatus(
-      {anyDifference}, kConflictLimit, kDecisionLimit, kNoTickLimit);
+      {anyDifference}, limits.classConflicts, limits.classDecisions, kNoTickLimit);
   if (status == SATSolverWrapper::SolveStatus::Sat) {
     return ClassStatus::Refuted;
   }
@@ -613,7 +602,7 @@ ClassStatus checkClass(SATSolverWrapper& solver, const std::vector<int>& literal
   for (size_t i = 1; i < members.size(); ++i) {
     ++solverCalls;
     const auto memberStatus = solver.solveWithAssumptionsStatus(
-        {differences[i - 1]}, kConflictLimit, kDecisionLimit, kNoTickLimit);
+        {differences[i - 1]}, limits.classConflicts, limits.classDecisions, kNoTickLimit);
     if (memberStatus == SATSolverWrapper::SolveStatus::Sat) {
       kept.insert(kept.end(), members.begin() + i, members.end());
       members = std::move(kept);
@@ -639,6 +628,7 @@ ClassStatus checkClass(SATSolverWrapper& solver, const std::vector<int>& literal
 // is halved, down to single classes, which are asked member by member.
 template <typename Replay, typename Proved>
 bool refineClasses(SATSolverWrapper& solver, const std::vector<int>& literals,
+                   const SignalCorrespondenceLimits& limits,
                    const SATSolverWrapper::CadicalWorkBudget& budget, Classes& relation,
                    bool& changed, size_t& solverCalls, Replay replay, Proved proved) {
   std::vector<std::vector<uint32_t>> pending = std::move(relation.members);
@@ -654,7 +644,8 @@ bool refineClasses(SATSolverWrapper& solver, const std::vector<int>& literals,
   // One class, member by member if the solver cannot decide it at once.
   const auto single = [&](std::vector<uint32_t>& members) {
     bool dropped = false;
-    const auto status = checkClass(solver, literals, relation, members, dropped, solverCalls);
+    const auto status =
+        checkClass(solver, literals, relation, limits, members, dropped, solverCalls);
     changed |= dropped;
     if (status == ClassStatus::Proved) {
       keep(members);
@@ -669,7 +660,7 @@ bool refineClasses(SATSolverWrapper& solver, const std::vector<int>& literals,
     }
   };
   while (!pending.empty()) {
-    const size_t count = std::min(kGroupClasses, pending.size());
+    const size_t count = std::min(std::max<size_t>(limits.groupClasses, 1), pending.size());
     groups.assign(1, {});
     groups.back().assign(std::make_move_iterator(pending.end() - count),
                          std::make_move_iterator(pending.end()));
@@ -680,7 +671,7 @@ bool refineClasses(SATSolverWrapper& solver, const std::vector<int>& literals,
       if (group.size() == 1) {
         single(group.front());
       } else {
-        const auto status = checkGroup(solver, literals, relation, group, solverCalls);
+        const auto status = checkGroup(solver, literals, relation, group, limits, solverCalls);
         if (status == SATSolverWrapper::SolveStatus::Unsat) {
           for (auto& members : group) {
             keep(members);
@@ -741,6 +732,7 @@ void readModel(const SATSolverWrapper& solver, const FrameFormulaEncoder& frame,
 // input. False when the solver budget ran out.
 bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
                    const std::vector<uint8_t>& start, Config::SolverType solverType,
+                   const SignalCorrespondenceLimits& limits,
                    const SATSolverWrapper::CadicalWorkBudget& budget, Classes& relation,
                    size_t& solverCalls) {
   SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
@@ -772,7 +764,7 @@ bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
     evaluate(machine.circuit, leaves, values);
   };
   bool changed = false;
-  return refineClasses(solver, literals, budget, relation, changed, solverCalls, replay,
+  return refineClasses(solver, literals, limits, budget, relation, changed, solverCalls, replay,
                        [](const std::vector<uint32_t>&) {});
 }
 
@@ -781,7 +773,7 @@ bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
 // was split or lost a member, in which case the assumption was too strong and
 // the step is repeated. False when the solver budget ran out.
 bool refineOverOneStep(const Machine& machine, const KInductionProblem& problem,
-                       Config::SolverType solverType,
+                       Config::SolverType solverType, const SignalCorrespondenceLimits& limits,
                        const SATSolverWrapper::CadicalWorkBudget& budget, Classes& relation,
                        bool& changed, size_t& solverCalls) {
   SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
@@ -845,7 +837,7 @@ bool refineOverOneStep(const Machine& machine, const KInductionProblem& problem,
   };
   // A class proved under this round's assumption may be used by the queries
   // that follow in the round.
-  return refineClasses(solver, then, budget, relation, changed, solverCalls, replay,
+  return refineClasses(solver, then, limits, budget, relation, changed, solverCalls, replay,
                        [&](const std::vector<uint32_t>& members) { assume(then, members); });
 }
 
@@ -956,13 +948,14 @@ void collectStateEqualities(const Machine& machine, const KInductionProblem& pro
 SignalCorrespondenceResult proveSignalCorrespondence(
     const KInductionProblem& problem,
     SignalCorrespondenceScope scope,
-    Config::SolverType solverType) {
+    Config::SolverType solverType,
+    const SignalCorrespondenceLimits& limits) {
   SignalCorrespondenceResult result;
   result.provedOutputs.assign(problem.observedOutputExprs0.size(), false);
-  Machine machine;
-  if (!buildMachine(problem, machine) ||
+  Machine machine(limits.nodes);
+  if (!buildMachine(problem, limits, machine) ||
       (scope == SignalCorrespondenceScope::AllSignals &&
-       machine.circuit.size() > kAllSignalsNodeLimit)) {
+       machine.circuit.size() > limits.allSignalsNodes)) {
     return result;
   }
   const std::vector<uint32_t> signals = selectSignals(machine, scope);
@@ -970,24 +963,18 @@ SignalCorrespondenceResult proveSignalCorrespondence(
   const StartStates states = propagateResetWindow(machine, problem);
   Classes relation = simulate(machine, problem, signals, states.start);
 
-  // Each query is small; the budget only stops a design the pass does not
-  // suit from holding up the engines for more than a couple of minutes. Ticks
-  // are the limit that binds: they follow the time spent.
-  SATSolverWrapper::CadicalWorkBudget budget(1000000, 1000000000, 6000000000ULL);
+  SATSolverWrapper::CadicalWorkBudget budget(
+      limits.budgetConflicts, limits.budgetDecisions, limits.budgetTicks);
   SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
-  if (!refineAtStart(machine, problem, states.start, solverType, budget, relation,
-                     result.solverCalls)) {
-    return result;
-  }
+  bool withinBudget = refineAtStart(machine, problem, states.start, solverType, limits, budget,
+                                    relation, result.solverCalls);
   bool fixedPoint = false;
-  while (!fixedPoint && result.rounds < kRoundLimit) {
+  while (withinBudget && !fixedPoint && result.rounds < limits.rounds) {
     bool changed = false;
-    if (!refineOverOneStep(machine, problem, solverType, budget, relation, changed,
-                           result.solverCalls)) {
-      return result;
-    }
+    withinBudget = refineOverOneStep(machine, problem, solverType, limits, budget, relation,
+                                     changed, result.solverCalls);
     ++result.rounds;
-    fixedPoint = !changed;
+    fixedPoint = withinBudget && !changed;
   }
   if (!fixedPoint) {
     // An unfinished fixed point is not a certificate for any class.

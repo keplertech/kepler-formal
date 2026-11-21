@@ -255,5 +255,186 @@ TEST_F(SignalCorrespondenceTests, GivesUpOnAProblemWithoutUsableCones) {
   EXPECT_THAT(result.stateEqualities, IsEmpty());
 }
 
+TEST_F(SignalCorrespondenceTests, CarriesXorAndConstantsThroughTheResetWindow) {
+  // Each design toggles a register while `enable` is set and clears it on
+  // reset. Design 2 also has `zero`, whose next state is the constant 0 and
+  // which is unknown at boot, and `mark`, the exclusive or of reset and
+  // `zero`; it outputs its register ORed with `zero`.
+  //   2: q (design 1)   3: p, 4: zero, 5: mark (design 2)   6: enable, 7: reset
+  KInductionProblem problem;
+  problem.allSymbols = {2, 3, 4, 5, 6, 7};
+  problem.state0Symbols = {2};
+  problem.state1Symbols = {3, 4, 5};
+  problem.inputSymbols = {6, 7};
+  problem.resetBootstrapCycles = 2;
+  problem.resetBootstrapInputs = {{7, true}};
+  BoolExpr* idle = BoolExpr::Not(BoolExpr::Var(7));
+  const auto toggled = [idle](size_t state) {
+    return BoolExpr::And(idle, BoolExpr::Xor(BoolExpr::Var(state), BoolExpr::Var(6)));
+  };
+  problem.transitions0 = {{2, toggled(2)}};
+  problem.transitions1 = {{3, toggled(3)},
+                          {4, BoolExpr::createFalse()},
+                          {5, BoolExpr::Xor(BoolExpr::Var(7), BoolExpr::Var(4))}};
+  problem.observedOutputExprs0 = {BoolExpr::Var(2)};
+  problem.observedOutputExprs1 = {BoolExpr::Or(BoolExpr::Var(3), BoolExpr::Var(4))};
+
+  // Nothing has a boot value. The window clears both toggles and settles
+  // `zero`, so from the first compared frame on the outputs are equal.
+  const auto result = proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT);
+  ASSERT_TRUE(result.completed);
+  EXPECT_THAT(result.provedOutputs, testing::ElementsAre(true));
+  EXPECT_THAT(result.stateEqualities, IsEmpty());
+
+  // One reset cycle is enough for the toggles and for `zero` as well.
+  problem.resetBootstrapCycles = 1;
+  EXPECT_THAT(proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT)
+                  .provedOutputs,
+              testing::ElementsAre(true));
+  // Without the window `zero` is unknown in the start state, and so are the
+  // toggles.
+  problem.resetBootstrapCycles = 0;
+  problem.resetBootstrapInputs.clear();
+  EXPECT_THAT(proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT)
+                  .provedOutputs,
+              testing::ElementsAre(false));
+}
+
+TEST_F(SignalCorrespondenceTests, UnknownStartRailsAreNotAssumedEqual) {
+  // Dual rail, no reset. Design 1's register has no boot value at all;
+  // design 2's has only its may-be-zero rail set. 90 and 91 are the rails of
+  // a register without a transition, which the pass reads as free inputs.
+  KInductionProblem problem;
+  problem.usesDualRailStateEncoding = true;
+  problem.allSymbols = {2, 3, 4, 5, 90, 91};
+  problem.state0Symbols = {2, 3, 90, 91};
+  problem.state1Symbols = {4, 5};
+  problem.dualRailStatePairs = {{2, 3}, {4, 5}, {90, 91}};
+  problem.initialStateAssignments = {{5, true}};
+  problem.transitions0 = {{2, BoolExpr::Var(2)}, {3, BoolExpr::Var(3)}};
+  problem.transitions1 = {{4, BoolExpr::Var(4)}, {5, BoolExpr::Var(5)}};
+  problem.dualRailObservedOutputs0 = {{BoolExpr::Var(2), BoolExpr::Var(3)}};
+  problem.dualRailObservedOutputs1 = {{BoolExpr::Var(4), BoolExpr::Var(5)}};
+  problem.observedOutputExprs0 = {BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(2), BoolExpr::Var(4)))};
+  problem.observedOutputExprs1 = {BoolExpr::createTrue()};
+
+  for (const auto scope : {kRegisters, kAllSignals}) {
+    const auto result = proveSignalCorrespondence(problem, scope, Config::SolverType::KISSAT);
+    ASSERT_TRUE(result.completed);
+    // Two unknown registers are two different unknowns.
+    EXPECT_THAT(result.provedOutputs, testing::ElementsAre(false));
+    EXPECT_THAT(result.stateEqualities, IsEmpty());
+  }
+}
+
+TEST_F(SignalCorrespondenceTests, CounterexamplesAtTheStartAndInTheStepSplitClasses) {
+  // Design 1's register loads the AND of forty inputs, design 2's stays 0.
+  // Random simulation never sets all forty, so it groups the two registers,
+  // the AND and the constant; only the solver separates them: the AND in the
+  // start state, the registers one step later.
+  //   2: design 1's register   3: design 2's   10..49: inputs
+  KInductionProblem problem;
+  problem.allSymbols = {2, 3};
+  problem.state0Symbols = {2};
+  problem.state1Symbols = {3};
+  problem.initialStateAssignments = {{2, false}, {3, false}};
+  BoolExpr* all = BoolExpr::createTrue();
+  for (size_t input = 10; input < 50; ++input) {
+    problem.allSymbols.push_back(input);
+    problem.inputSymbols.push_back(input);
+    all = BoolExpr::And(all, BoolExpr::Var(input));
+  }
+  problem.transitions0 = {{2, all}};
+  problem.transitions1 = {{3, BoolExpr::createFalse()}};
+  problem.observedOutputExprs0 = {BoolExpr::Var(2)};
+  problem.observedOutputExprs1 = {BoolExpr::Var(3)};
+
+  const auto result = proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT);
+  ASSERT_TRUE(result.completed);
+  EXPECT_THAT(result.provedOutputs, testing::ElementsAre(false));
+  EXPECT_THAT(result.stateEqualities, IsEmpty());
+  // The round that split the registers is followed by one that splits nothing.
+  EXPECT_GE(result.rounds, 2u);
+
+  // Stopped before that second round, the classes are not a certificate.
+  SignalCorrespondenceLimits oneRound;
+  oneRound.rounds = 1;
+  const auto unfinished =
+      proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT, oneRound);
+  EXPECT_FALSE(unfinished.completed);
+  EXPECT_THAT(unfinished.stateEqualities, IsEmpty());
+}
+
+TEST_F(SignalCorrespondenceTests, GivesUpAtItsLimitsWithoutReportingAnything) {
+  const auto problem = shadowBit(/*staleCopy=*/false, /*resetPort=*/false);
+  const auto expectNothing = [&problem](SignalCorrespondenceScope scope,
+                                        const SignalCorrespondenceLimits& limits) {
+    const auto result =
+        proveSignalCorrespondence(problem, scope, Config::SolverType::KISSAT, limits);
+    EXPECT_FALSE(result.completed);
+    EXPECT_THAT(result.provedOutputs, testing::ElementsAre(false));
+    EXPECT_THAT(result.stateEqualities, IsEmpty());
+  };
+  // The problem has four state symbols.
+  SignalCorrespondenceLimits limits;
+  limits.stateSymbols = 3;
+  expectNothing(kRegisters, limits);
+  // Not even the constant fits, then the registers do not.
+  limits = {};
+  limits.nodes = 0;
+  expectNothing(kRegisters, limits);
+  limits.nodes = 4;
+  expectNothing(kRegisters, limits);
+  // Too large for all signals only.
+  limits = {};
+  limits.allSignalsNodes = 1;
+  expectNothing(kAllSignals, limits);
+  EXPECT_TRUE(
+      proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT, limits).completed);
+  // No solver work allowed.
+  limits = {};
+  limits.budgetConflicts = 0;
+  expectNothing(kRegisters, limits);
+  // A cone with an operator the pass does not read.
+  auto unreadable = problem;
+  BoolExpr notAFormula;
+  unreadable.observedOutputExprs1 = {&notAFormula};
+  EXPECT_FALSE(
+      proveSignalCorrespondence(unreadable, kRegisters, Config::SolverType::KISSAT).completed);
+  // Learning stops at a scope that gave up instead of trying the larger one.
+  testing::internal::CaptureStdout();
+  const auto learned = learnSignalCorrespondence(unreadable, Config::SolverType::KISSAT,
+                                                 /*diagnostics=*/true);
+  const std::string log = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(learned.provedOutputs, testing::ElementsAre(false));
+  EXPECT_THAT(learned.stateEqualities, IsEmpty());
+  EXPECT_NE(log.find("scope=registers_and_outputs completed=0"), std::string::npos) << log;
+  EXPECT_EQ(log.find("scope=all_signals"), std::string::npos) << log;
+}
+
+TEST_F(SignalCorrespondenceTests, UndecidedSignalsAreDroppedNotAssumed) {
+  // With no conflict allowed a query is decided by propagation or not at all.
+  SignalCorrespondenceLimits noSearch;
+  noSearch.groupConflicts = 0;
+  noSearch.classConflicts = 0;
+  noSearch.groupClasses = 4;
+  for (const bool staleCopy : {false, true}) {
+    const auto problem = shadowBit(staleCopy, /*resetPort=*/false);
+    const auto full = proveSignalCorrespondence(problem, kAllSignals, Config::SolverType::KISSAT);
+    const auto limited =
+        proveSignalCorrespondence(problem, kAllSignals, Config::SolverType::KISSAT, noSearch);
+    ASSERT_TRUE(full.completed);
+    ASSERT_TRUE(limited.completed);
+    // An undecided signal leaves its class, so the relation can only shrink
+    // and a design that differs stays unproved. Groups are halved and classes
+    // asked member by member on the way, which costs more queries.
+    EXPECT_LE(limited.classes, full.classes);
+    EXPECT_GT(limited.solverCalls, full.solverCalls);
+    if (staleCopy) {
+      EXPECT_THAT(limited.provedOutputs, testing::ElementsAre(false));
+    }
+  }
+}
+
 }  // namespace
 }  // namespace KEPLER_FORMAL::SEC
