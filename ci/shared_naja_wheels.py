@@ -167,9 +167,12 @@ def build_provider(project: Path) -> None:
         environment = os.environ.copy()
         if sys.platform == "win32":
             toolchain = Path(os.environ["USERPROFILE"]) / "vcpkg/scripts/buildsystems/vcpkg.cmake"
+            # fmt adds a C++ module target for any recent Clang, and the CMake
+            # 3.31 of the windows-2022 image cannot scan modules with clang-cl.
+            # Nothing uses that target.
             environment["CMAKE_ARGS"] = (
                 f'-DCMAKE_TOOLCHAIN_FILE="{toolchain.as_posix()}" '
-                '-DPREGENERATED_PARSER_SOURCES=ON')
+                '-DPREGENERATED_PARSER_SOURCES=ON -DFMT_MODULE=OFF')
         else:
             environment["CMAKE_ARGS"] = (
                 environment.get("CMAKE_ARGS", "") + " -DPREGENERATED_PARSER_SOURCES=OFF")
