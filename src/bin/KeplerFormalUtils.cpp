@@ -3,9 +3,14 @@
 
 #include "KeplerFormalUtils.h"
 
+#include <atomic>
 #include <cctype>
+#include <cstdint>
+#include <cstdio>
 #include <fstream>
+#include <random>
 #include <sstream>
+#include <stdexcept>
 
 // LCOV_EXCL_START
 std::string sanitizeFileToken(const std::string& input) {
@@ -26,6 +31,29 @@ std::string sanitizeFileToken(const std::string& input) {
   return out;
 }
 // LCOV_EXCL_STOP
+
+std::filesystem::path createUniqueTemporaryFile(const std::string& prefix,
+                                                const std::string& extension) {
+  static std::atomic<uint64_t> counter{0};
+  const auto directory = std::filesystem::temp_directory_path();
+  std::random_device entropy;
+  for (int attempt = 0; attempt < 64; ++attempt) {
+    std::ostringstream token;
+    token << std::hex << entropy() << entropy() << '_' << counter.fetch_add(1);
+    const auto path = directory / (prefix + token.str() + extension);
+    // "x" makes the creation fail when the name is taken, so a name is never
+    // shared, not even with a run that drew the same token.
+    if (std::FILE* file = std::fopen(path.string().c_str(), "wx")) {
+      std::fclose(file);
+      return path;
+    }
+  }
+  // LCOV_EXCL_START
+  throw std::runtime_error(
+      "Failed to create a temporary file " + prefix + "*" + extension + " in " +
+      directory.string());
+  // LCOV_EXCL_STOP
+}
 
 namespace {
 
@@ -61,7 +89,10 @@ void writeBoundaryTermsReport(
   std::ofstream report(reportPath, std::ios::trunc);
   report << "# SEC boundary terms report\n";
   report << "# Categories:\n";
-  report << "# - top_input / top_output: original top-level interface terms.\n\n";
+  report << "# - top_input / top_output: original top-level interface terms.\n";
+  report << "# - memory_interface / memory_read_data: pins of a memory compared\n";
+  report << "#   at its interface (memory abstraction): input pins proved equal\n";
+  report << "#   across the designs, and read data shared by both designs.\n\n";
   for (size_t i = 0; i < reports.size(); ++i) {
     const auto& entry = reports[i];
     report << "- design: " << entry.design << "\n";

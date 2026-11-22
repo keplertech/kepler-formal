@@ -81,13 +81,13 @@ static void print_usage(const char* prog) {
       "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--memory-abstraction <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
       "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
-      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
+      "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] [--memory-abstraction <true|false>] "
       "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
       prog);
 // LCOV_EXCL_START
@@ -518,6 +518,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "report_skipped_pos",
       "latch_abstraction",
       "data_latch_model",
+      "memory_abstraction",
       "solver",
       "sv_design1_flist",
       "sv_design2_flist",
@@ -1039,11 +1040,7 @@ static std::filesystem::path writeSystemVerilogPrimitiveStubs(
   }
 
   const auto stubPath =
-      std::filesystem::temp_directory_path() /
-      std::filesystem::path(
-          "kepler_formal_sv2v_prims_" +
-          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-          ".sv");
+      createUniqueTemporaryFile("kepler_formal_sv2v_prims_", ".sv");
   std::ofstream stubs(stubPath, std::ios::out | std::ios::trunc);
   if (!stubs) {
     throw std::runtime_error(
@@ -1186,14 +1183,10 @@ static std::vector<std::filesystem::path> buildSystemVerilogInputPaths(
   const bool addDefaultTimescale = primitiveLibraries != nullptr;
   if (designOptions.top || designOptions.singleUnit || addDefaultTimescale) {
   // LCOV_EXCL_STOP
+    // Created exclusively: two runs started together must not share this
+    // file, or one of them would read the other's design.
     const auto temporaryTopFlistPath =
-        // LCOV_EXCL_START
-        std::filesystem::temp_directory_path() /
-        std::filesystem::path(
-            "kepler_formal_sv_top_" +
-            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-            // LCOV_EXCL_STOP
-            ".f");
+        createUniqueTemporaryFile("kepler_formal_sv_top_", ".f");
     // LCOV_EXCL_START
     std::ofstream topFlist(temporaryTopFlistPath, std::ios::out | std::ios::trunc);
     if (!topFlist) {
@@ -1395,6 +1388,7 @@ static int KeplerFormalMainImpl(
   bool reportSkippedPOs = false;
   bool latchAbstraction = true;
   bool dataLatchModel = true;
+  bool memoryAbstraction = true;
   bool verilogPreprocessing = false;
   bool svSingleUnit = false;
   std::string dumpCnfPath;
@@ -1687,6 +1681,11 @@ static int KeplerFormalMainImpl(
           dataLatchModel = cfg["data_latch_model"].as<bool>();
         }
 
+        // memory_abstraction (SEC, default true)
+        if (cfg["memory_abstraction"] && cfg["memory_abstraction"].IsScalar()) {
+          memoryAbstraction = cfg["memory_abstraction"].as<bool>();
+        }
+
         // verilog_preprocessing (optional)
         if (cfg["verilog_preprocessing"] && cfg["verilog_preprocessing"].IsScalar()) {
           // LCOV_EXCL_START
@@ -1875,13 +1874,17 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--memory-abstraction") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
         bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+            arg == "--latch-abstraction"
+                ? latchAbstraction
+                : arg == "--data-latch-model" ? dataLatchModel
+                                              : memoryAbstraction;
         std::string error;
         if (!parseBooleanToken(argv[parseStart + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2101,13 +2104,17 @@ static int KeplerFormalMainImpl(
         ++i;
         continue;
       }
-      if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
+      if (arg == "--latch-abstraction" || arg == "--data-latch-model" ||
+          arg == "--memory-abstraction") {
         if (i + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
           return EXIT_FAILURE;
         }
         bool& value =
-            arg == "--latch-abstraction" ? latchAbstraction : dataLatchModel;
+            arg == "--latch-abstraction"
+                ? latchAbstraction
+                : arg == "--data-latch-model" ? dataLatchModel
+                                              : memoryAbstraction;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
           SPDLOG_CRITICAL("{}", error);
@@ -2674,6 +2681,7 @@ static int KeplerFormalMainImpl(
   KEPLER_FORMAL::Config::setReportSkippedPOs(reportSkippedPOs);
   KEPLER_FORMAL::Config::setSecLatchAbstraction(latchAbstraction);
   KEPLER_FORMAL::Config::setSecDataLatchModel(dataLatchModel);
+  KEPLER_FORMAL::Config::setSecMemoryAbstraction(memoryAbstraction);
   const char* solverName =
       solverType == KEPLER_FORMAL::Config::SolverType::KISSAT
           ? "KISSAT"
@@ -2706,6 +2714,7 @@ static int KeplerFormalMainImpl(
   SPDLOG_INFO("Skipped PO reports: {}", reportSkippedPOs ? "enabled" : "disabled");
   SPDLOG_INFO("SEC latch abstraction: {}", latchAbstraction ? "enabled" : "disabled");
   SPDLOG_INFO("SEC data-enabled latch model: {}", dataLatchModel ? "enabled" : "disabled");
+  SPDLOG_INFO("SEC memory abstraction: {}", memoryAbstraction ? "enabled" : "disabled");
   if (!libertyFiles.empty()) {
     for (const auto& lf : libertyFiles) SPDLOG_INFO("Library: {}", lf);
   }
@@ -2720,6 +2729,25 @@ static int KeplerFormalMainImpl(
     for (const auto& pf : pythonFiles) SPDLOG_INFO("Python library: {}", pf);
   }
   // LCOV_EXCL_STOP
+
+  // Progress lines of the SEC strategy go to the run log like any other line.
+  const auto configureSecStrategy =
+      [&](KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy& strategy) {
+        strategy.setInternalRelationOptions(internalRelationOptions);
+        strategy.setProgressLogger(
+            [](KEPLER_FORMAL::SEC::SecProgressLevel level,
+               const std::string& message) {
+              // Naja may have replaced the default logger while loading.
+              if (auto mainLogger = spdlog::get("kepler_formal_main_logger")) {
+                spdlog::set_default_logger(mainLogger);
+              }
+              if (level == KEPLER_FORMAL::SEC::SecProgressLevel::Warning) {
+                SPDLOG_WARN("{}", message);
+              } else {
+                SPDLOG_INFO("{}", message);
+              }
+            });
+      };
 
   auto emitSecResult =
       [&](const KEPLER_FORMAL::SEC::SequentialEquivalenceResult& result) {
@@ -2756,6 +2784,25 @@ static int KeplerFormalMainImpl(
               result.outputCoveragePercent(),
               result.coveredOutputs,
               result.totalOutputs);
+        }
+        if (!result.abstractedMemories.empty()) {
+          std::ostringstream memories;
+          for (const auto& memory : result.abstractedMemories) {
+            memories << (memories.tellp() == 0 ? "" : ", ") << memory;
+          }
+          SPDLOG_INFO(
+              "SEC memory abstraction: {} compared at the interface, pins "
+              "proved equal: {}",
+              result.abstractedMemories.size() == 1
+                  ? "1 paired memory"
+                  : std::to_string(result.abstractedMemories.size()) +
+                        " paired memories",
+              memories.str());
+        }
+        if (!result.memoryAbstractionFailure.empty()) {
+          SPDLOG_INFO(
+              "SEC memory abstraction not used, memories modeled bit by bit: {}",
+              result.memoryAbstractionFailure);
         }
         if (result.proofProgress.has_value()) {
           const auto& progress = *result.proofProgress;
@@ -2874,7 +2921,10 @@ static int KeplerFormalMainImpl(
               runResult->status = KEPLER_FORMAL::RunStatus::Inconclusive;
             }
             // LCOV_EXCL_START
-            if (secInconclusiveStoppedBeforeMaxK(result.reason)) {
+            if (result.counterexampleDependsOnUninitializedState) {
+              SPDLOG_INFO(
+                  "SEC found no binary-defined difference. {}", result.reason);
+            } else if (secInconclusiveStoppedBeforeMaxK(result.reason)) {
               SPDLOG_INFO(
                   "SEC was inconclusive before completing max_k = {}: {}",
                   secMaxK,
@@ -3242,7 +3292,8 @@ static int KeplerFormalMainImpl(
               int designIndex,
               int dbID,
               const char* designLabel,
-              std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts) {
+              std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts,
+              const KEPLER_FORMAL::SEC::SequentialExtractOptions& options) {
             NLDB* db =
                 loadOneDesign(designPaths, designOptions, designIndex, dbID);
             try {
@@ -3255,12 +3306,21 @@ static int KeplerFormalMainImpl(
                     // LCOV_DISABLED_STOP
                 // LCOV_EXCL_STOP
               }
+              // A mistyped reset port needs no model to be found.
+              if (auto resetError =
+                      KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy::
+                          findUnknownResetPort(top, secResetSpec)) {
+                KEPLER_FORMAL::SEC::SequentialDesignModel rejected;
+                rejected.unsupportedReasons.push_back(*resetError);
+                releaseCompactDb(db);
+                return rejected;
+              }
               if (!boundaryPairs.empty()) {
                 boundaryPorts = KEPLER_FORMAL::BoundarySelection(
                     top, boundaryPairs, static_cast<size_t>(designIndex)).getPorts();
               }
               auto model = KEPLER_FORMAL::SEC::SequentialDesignModel::extract(
-                  top, boundaryPairs, static_cast<size_t>(designIndex));
+                  top, boundaryPairs, static_cast<size_t>(designIndex), options);
               releaseCompactDb(db);
               return model;
             } catch (...) {
@@ -3276,18 +3336,13 @@ static int KeplerFormalMainImpl(
           };
 
       try {
-        SPDLOG_INFO(
-            "SEC compact mode: extracting and releasing design 1 before "
-            "loading design 2");
-        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts0;
-        const auto model0 = extractCompactSecModel(
-            designInputs.design0,
-            systemVerilogOptions.design0,
-            0,
-            2,
-            "design 1",
-            boundaryPorts0);
-        if (designFormat(0) == designFormat(1) &&
+        // CVA6-style smoke runs often compare a design against itself. In
+        // compact SEC, extracting that identical second side would require
+        // holding the already extracted value model while elaborating the
+        // same large SystemVerilog design again. Reusing the immutable model
+        // keeps the formal problem identical and removes that avoidable peak.
+        const bool identicalDesigns =
+            designFormat(0) == designFormat(1) &&
             sameCompactSecDesignSpec(
                 designUsesSystemVerilog(0),
                 designInputs,
@@ -3295,46 +3350,13 @@ static int KeplerFormalMainImpl(
                 designUsesPython(0)
                     ? pythonTopOptions
                     : designUsesVhdl(0) ? vhdlTopOptions : verilogTopOptions,
-                boundaryPairs)) {
-          // CVA6-style smoke runs often compare a design against itself. In
-          // compact SEC, extracting that identical second side would require
-          // holding the already extracted value model while elaborating the
-          // same large SystemVerilog design again. Reusing the immutable model
-          // keeps the formal problem identical and removes that avoidable peak.
-          // LCOV_EXCL_START
-          SPDLOG_INFO(
-          // LCOV_EXCL_STOP
-              "SEC compact mode: reusing extracted design 1 model for "
-              "identical design 2 input");
-          // LCOV_EXCL_START
-          KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
-              nullptr,
-              nullptr,
-              solverType,
-              secEngine,
-              secEncoding,
-              secResetSpec,
-              btor2ExportConfig.options());
-          strategy.setInternalRelationOptions(internalRelationOptions);
-          return emitSecResult(
-              strategy.runExtractedModels(model0, model0, secMaxK));
-              // LCOV_EXCL_STOP
-        }
-        SPDLOG_INFO(
-            "SEC compact mode: extracting and releasing design 2 before "
-            "starting proof");
-        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts1;
-        const auto model1 = extractCompactSecModel(
-            designInputs.design1,
-            systemVerilogOptions.design1,
-            1,
-            1,
-            "design 2",
-            boundaryPorts1);
-        if (!boundaryPairs.empty()) {
-          KEPLER_FORMAL::validateBoundaryInterfaces(
-              boundaryPorts0, boundaryPorts1);
-        }
+                boundaryPairs);
+        using CompactModel =
+            std::shared_ptr<const KEPLER_FORMAL::SEC::SequentialDesignModel>;
+        // Design 1 as last extracted, and the options it was extracted with.
+        CompactModel model0;
+        KEPLER_FORMAL::SEC::SequentialExtractOptions options0;
+        std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts0;
 
         KEPLER_FORMAL::SEC::SequentialEquivalenceStrategy strategy(
             nullptr,
@@ -3344,9 +3366,60 @@ static int KeplerFormalMainImpl(
             secEncoding,
             secResetSpec,
             btor2ExportConfig.options());
-        strategy.setInternalRelationOptions(internalRelationOptions);
-        return emitSecResult(
-            strategy.runExtractedModels(model0, model1, secMaxK));
+        configureSecStrategy(strategy);
+        return emitSecResult(strategy.runWithModelExtractor(
+            [&](size_t side,
+                const KEPLER_FORMAL::SEC::SequentialExtractOptions& options)
+                -> CompactModel {
+              if (side == 0) {
+                SPDLOG_INFO(
+                    "SEC compact mode: extracting and releasing design 1 before "
+                    "loading design 2");
+                model0.reset();
+                boundaryPorts0.clear();
+                options0 = options;
+                model0 = std::make_shared<
+                    const KEPLER_FORMAL::SEC::SequentialDesignModel>(
+                    extractCompactSecModel(
+                        designInputs.design0,
+                        systemVerilogOptions.design0,
+                        0,
+                        2,
+                        "design 1",
+                        boundaryPorts0,
+                        options));
+                return model0;
+              }
+              if (identicalDesigns && model0 != nullptr && options0 == options) {
+                // LCOV_EXCL_START
+                SPDLOG_INFO(
+                // LCOV_EXCL_STOP
+                    "SEC compact mode: reusing extracted design 1 model for "
+                    "identical design 2 input");
+                return model0;
+              }
+              SPDLOG_INFO(
+                  "SEC compact mode: extracting and releasing design 2 before "
+                  "starting proof");
+              std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts1;
+              auto model1 = std::make_shared<
+                  const KEPLER_FORMAL::SEC::SequentialDesignModel>(
+                  extractCompactSecModel(
+                      designInputs.design1,
+                      systemVerilogOptions.design1,
+                      1,
+                      1,
+                      "design 2",
+                      boundaryPorts1,
+                      options));
+              if (!boundaryPairs.empty() &&
+                  !model1->hasUnsupportedFeatures()) {
+                KEPLER_FORMAL::validateBoundaryInterfaces(
+                    boundaryPorts0, boundaryPorts1);
+              }
+              return model1;
+            },
+            secMaxK));
       // LCOV_EXCL_START
       } catch (const std::exception& e) {
         // LCOV_DISABLED_START
@@ -3653,7 +3726,7 @@ static int KeplerFormalMainImpl(
           secEncoding,
           secResetSpec,
           btor2ExportConfig.options());
-      strategy.setInternalRelationOptions(internalRelationOptions);
+      configureSecStrategy(strategy);
       strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP
@@ -3835,6 +3908,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   const bool previousReportSkippedPOs = Config::getReportSkippedPOs();
   const bool previousLatchAbstraction = Config::getSecLatchAbstraction();
   const bool previousDataLatchModel = Config::getSecDataLatchModel();
+  const bool previousMemoryAbstraction = Config::getSecMemoryAbstraction();
   const auto previousDefaultLogger = spdlog::default_logger();
   const auto previousNamedLogger = spdlog::get("kepler_formal_main_logger");
   const auto previousMiterLogger = spdlog::get("miter_logger");
@@ -3845,6 +3919,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
     bool reportSkippedPOs;
     bool latchAbstraction;
     bool dataLatchModel;
+    bool memoryAbstraction;
     std::shared_ptr<spdlog::logger> defaultLogger;
     std::shared_ptr<spdlog::logger> namedLogger;
     std::shared_ptr<spdlog::logger> miterLogger;
@@ -3855,6 +3930,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       Config::setReportSkippedPOs(reportSkippedPOs);
       Config::setSecLatchAbstraction(latchAbstraction);
       Config::setSecDataLatchModel(dataLatchModel);
+      Config::setSecMemoryAbstraction(memoryAbstraction);
       const auto restoreNamedLogger = [](
                                           const char* name,
                                           const std::shared_ptr<spdlog::logger>&
@@ -3876,6 +3952,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
       previousReportSkippedPOs,
       previousLatchAbstraction,
       previousDataLatchModel,
+      previousMemoryAbstraction,
       previousDefaultLogger,
       previousNamedLogger,
       previousMiterLogger,
@@ -3885,6 +3962,7 @@ int runKeplerFormal(int argc, char** argv, RunResult& result,
   Config::setReportSkippedPOs(false);
   Config::setSecLatchAbstraction(true);
   Config::setSecDataLatchModel(true);
+  Config::setSecMemoryAbstraction(true);
   const int rc = runKeplerFormalWorkflow(argc, argv, result, primitiveLoader);
   result.exitCode = rc;
   if (rc != EXIT_SUCCESS && result.status == RunStatus::Error &&

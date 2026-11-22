@@ -60,6 +60,20 @@ std::optional<KInductionResult::CounterexampleWitness>
 findResetFrontierMismatch(const KInductionProblem& problem,
                           KEPLER_FORMAL::Config::SolverType solverType);
 
+// Checks the startup frames themselves, which no engine looks at: asks
+// whether `problem.bad` can hold on one of the frames `firstFrame` to
+// `lastFrame`. Frame 0 is the boot state, frames 0 to resetBootstrapCycles - 1
+// keep the reset ports asserted and frame resetBootstrapCycles is the first
+// one after them; later frames are not asked, so without a reset sequence
+// only frame 0 is. Startup begins at the dual-rail boot state; a binary
+// problem has no defined state there, so it is never asked and reports
+// NoCounterexample.
+BaseCounterexampleCheckStatus checkStartupFrames(
+    const KInductionProblem& problem,
+    KEPLER_FORMAL::Config::SolverType solverType,
+    size_t firstFrame,
+    size_t lastFrame);
+
 // Resource-bounded base proof for localized recovery paths.  A true UNSAT
 // answer is required before an output may be covered; timeout stays Unknown so
 // callers can conservatively split or skip the hard residual.

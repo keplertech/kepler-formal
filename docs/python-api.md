@@ -180,6 +180,7 @@ Enum fields accept either the exported enum member or its exact string value.
 | `binary_relation_round` | `True` | Retry unproved internal relations in binary semantics and share the proved transitions |
 | `latch_abstraction` | `True` | Phase-abstract clock-driven latches; `False` keeps every latch output opaque |
 | `data_latch_model` | `True` | Model data-enabled latches as step-transparent state; `False` leaves them opaque |
+| `memory_abstraction` | `True` | Compare a memory that both designs have under the same path at its pins; `False` models every memory bit by bit |
 | `sec_reset_cycles` | `None` | Hold the listed reset ports asserted for this many SEC cycles |
 | `sec_reset_ports` | `()` | `(name, active_value)` pairs naming top-level reset inputs and their asserted value |
 | `btor2_export_path` | `None` | Write the prepared SEC obligation as BTOR2 to this path before solving |

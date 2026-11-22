@@ -18,8 +18,8 @@ User-driven reset sequences are documented in
 Prepared equivalence-model export is documented in
 [btor2-export.md](btor2-export.md).
 
-Sequential primitive support and latch opacity are documented in
-[sec-sequential-models.md](sec-sequential-models.md), latch handling in
+Sequential primitive support, memory handling and latch opacity are documented
+in [sec-sequential-models.md](sec-sequential-models.md), latch handling in
 [sec-latch-support.md](sec-latch-support.md), and the expansion of
 combinational primitives in
 [sec-primitive-expansion.md](sec-primitive-expansion.md).
@@ -124,6 +124,7 @@ liberty_files:
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 | `--latch-abstraction <bool>` | `latch_abstraction: <bool>` | `true` | `true`, `false`, `1`, `0` | Phase-abstract clock-driven latches as described in [sec-latch-support.md](sec-latch-support.md). `false` makes every latch output opaque again, as before, and disables the data-enabled latch model with it. |
 | `--data-latch-model <bool>` | `data_latch_model: <bool>` | `true` | `true`, `false`, `1`, `0` | Model latches whose enable is not a clock phase as step-transparent state, as described in [sec-latch-support.md](sec-latch-support.md). `false` leaves them opaque. |
+| `--memory-abstraction <bool>` | `memory_abstraction: <bool>` | `true` | `true`, `false`, `1`, `0` | Compare a memory found under the same path with the same primitive in both designs at its pins instead of modeling its cells, and fall back to the bit-level model when that does not carry the proof; see [Memories](sec-sequential-models.md#memories). `false` models every memory bit by bit. |
 
 Accepted values for `sec_engine`:
 
@@ -138,7 +139,7 @@ Accepted values for `sec_encoding`:
 | Encoding | Accepted value | Meaning |
 | --- | --- | --- |
 | Dual-rail steady-state mode | `dual_rail_steady` | Default SEC mode. Tracks value/knownness rails so outputs driven by resetless or reset-unanchored state can be represented without assuming cross-design internal flop equality. |
-| Binary mode | `binary` | Historical concrete 0/1 SEC mode. Outputs whose cones depend on reset-unanchored internal state can be skipped because SEC cannot assume equality between internal flops in different designs. |
+| Binary mode | `binary` | Historical concrete 0/1 SEC mode. Outputs whose cones depend on reset-unanchored internal state can be skipped because SEC cannot assume equality between internal flops in different designs. A memory compared at its pins is taken to hold the same contents in both designs. On bit-level memories a counterexample is reported with a trace to a binary-defined difference; when the only traces read unwritten cells, the run is inconclusive, not different. |
 
 There is no `default` token for `sec_encoding`. To use the default, omit
 `--sec-encoding` or omit `sec_encoding` from YAML. Tests, scripts, and regression
@@ -160,6 +161,14 @@ full YAML shape and CLI examples.
 All engines use the same extracted SEC model: aligned environment inputs,
 state bits, observed outputs, next-state formulas, initial-state information,
 and complemented-state relations.
+
+When PDR ends on a chain of proof obligations that reaches the initial states,
+the exact bounded query turns it into an input trace. In `dual_rail_steady`
+that query covers every frame PDR looks at: if no trace exists on the reported
+frame or an earlier one, the chain was not a counterexample and the outputs
+concerned stay unproved. In `binary` the bounded query assumes the property on
+its first frame, so a counterexample on that frame is reported without a
+trace.
 
 SEC only aligns environment inputs and observed top outputs across the two
 designs. It must not use matching internal instance, net, or flop names as a
@@ -288,7 +297,7 @@ SEC result handling is currently:
 | --- | --- | --- |
 | Proved | `0` | All checked outputs were proved equivalent. |
 | Partially proved | `1` | Some outputs were proved; all remaining outputs are inconclusive. |
-| Inconclusive | `2` | SEC produced neither a proof nor a counterexample. |
+| Inconclusive | `2` | SEC produced neither a proof nor a counterexample. This includes a `binary` run whose only counterexamples depend on unwritten cells of a bit-level memory. |
 | Counterexample found | `3` | SEC found a definitive mismatch. |
 | Unsupported | `2` | The extracted model was incomplete or unsupported for SEC. |
 | Exported (`dump_only`) | `0` | BTOR2 was written; no proof engine ran. The log reports the path and output coverage. |
@@ -301,7 +310,15 @@ SEC engine: <engine>
 SEC encoding: binary|dual_rail_steady
 Compact mode: enabled|disabled
 Skipped PO reports: enabled|disabled
+SEC memory abstraction: enabled|disabled
 ```
+
+While it runs, SEC logs the start of each long phase and the size of what it
+works on: the state bits, inputs and observed outputs of each extracted model,
+the memories compared at their pins or modeled bit by bit, the state variables
+handed to internal relation learning and to the engine. A memory above 65,536
+bits that is modeled bit by bit is logged as a warning, and so is a memory
+abstraction that did not carry the proof, with the reason.
 
 ## Boundary And Skipped Reports
 
@@ -324,6 +341,8 @@ write the following files in the current working directory:
 | --- | --- |
 | `top_input` | Original top-level input term. |
 | `top_output` | Original top-level output term. |
+| `memory_interface` | Input pin of a memory compared at its pins: proved equal across the designs. |
+| `memory_read_data` | Read-data pin of such a memory: an input shared by the two designs. |
 
 Skipped outputs are also summarized in the main run log, including no-driver,
 multi-driver, logical-loop, reset-unanchored, multi-clock-domain, and opaque

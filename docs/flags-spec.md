@@ -64,6 +64,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 | `--latch-abstraction <bool>` | Phase-abstract clock-driven latches. Defaults to `true`; `false` makes every latch output opaque as before, data-enabled latches included. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
 | `--data-latch-model <bool>` | Model data-enabled latches (enable is data logic, not a clock phase) as step-transparent state. Defaults to `true`; `false` leaves such latches opaque. SEC only; see [sec-latch-support.md](sec-latch-support.md). |
+| `--memory-abstraction <bool>` | Compare a memory that both designs have under the same path at its pins instead of modeling its cells. Defaults to `true`; `false` models every memory bit by bit. SEC only; see [sec-sequential-models.md](sec-sequential-models.md#memories). |
 
 ## YAML config flags
 
@@ -100,6 +101,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
 | `latch_abstraction` | bool | Defaults to `true`. Same as `--latch-abstraction`. |
 | `data_latch_model` | bool | Defaults to `true`. Same as `--data-latch-model`. |
+| `memory_abstraction` | bool | Defaults to `true`. Same as `--memory-abstraction`. |
 | `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
 | `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
 | `sv_single_unit` | bool | Same behavior as `--sv_single_unit`. |

@@ -115,6 +115,7 @@ class BorrowedRunState {
         reportSkipped_(Config::getReportSkippedPOs()),
         latchAbstraction_(Config::getSecLatchAbstraction()),
         dataLatchModel_(Config::getSecDataLatchModel()),
+        memoryAbstraction_(Config::getSecMemoryAbstraction()),
         defaultLogger_(spdlog::default_logger()),
         borrowedLogger_(spdlog::get("kepler_formal_borrowed_logger")),
         miterLogger_(spdlog::get("miter_logger")),
@@ -128,6 +129,7 @@ class BorrowedRunState {
     Config::setReportSkippedPOs(reportSkipped_);
     Config::setSecLatchAbstraction(latchAbstraction_);
     Config::setSecDataLatchModel(dataLatchModel_);
+    Config::setSecMemoryAbstraction(memoryAbstraction_);
     restoreLogger("miter_logger", miterLogger_);
     restoreLogger("miter_logger_fallback", fallbackLogger_);
     // set_default_logger also registers its logger by name. Restoring only
@@ -151,6 +153,7 @@ class BorrowedRunState {
   bool reportSkipped_;
   bool latchAbstraction_;
   bool dataLatchModel_;
+  bool memoryAbstraction_;
   std::shared_ptr<spdlog::logger> defaultLogger_;
   std::shared_ptr<spdlog::logger> borrowedLogger_;
   std::shared_ptr<spdlog::logger> miterLogger_;
@@ -301,6 +304,7 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     Config::setReportSkippedPOs(options.reportSkippedOutputs);
     Config::setSecLatchAbstraction(options.latchAbstraction);
     Config::setSecDataLatchModel(options.dataLatchModel);
+    Config::setSecMemoryAbstraction(options.memoryAbstraction);
     configureLogger(options, result);
     if (options.mode == BorrowedVerificationMode::SEC) {
       SEC::SequentialEquivalenceStrategy strategy(
@@ -308,6 +312,14 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
           options.secReset, options.btor2Export);
       strategy.setInternalRelationOptions(options.internalRelationOptions);
       strategy.setBoundaryPairs(options.setAsBoundary);
+      strategy.setProgressLogger(
+          [](SEC::SecProgressLevel level, const std::string& message) {
+            if (level == SEC::SecProgressLevel::Warning) {
+              SPDLOG_WARN("{}", message);
+            } else {
+              SPDLOG_INFO("{}", message);
+            }
+          });
       const auto proof = strategy.run(options.maxK);
       assignSecResult(proof, result);
       if (result.status == RunStatus::Exported) {

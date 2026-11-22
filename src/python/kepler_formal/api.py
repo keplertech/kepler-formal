@@ -74,6 +74,7 @@ class VerificationOptions:
     binary_relation_round: bool = True
     latch_abstraction: bool = True
     data_latch_model: bool = True
+    memory_abstraction: bool = True
     sec_reset_cycles: int | None = None
     sec_reset_ports: (
         list[tuple[str, bool]] | tuple[tuple[str, bool], ...]
@@ -204,6 +205,10 @@ def _build_native_design_options(
         or settings.data_latch_model is not True
     ):
         raise ValueError("Latch model options are only supported for SEC")
+    if mode == VerificationMode.LEC.value and (
+        settings.memory_abstraction is not True
+    ):
+        raise ValueError("Memory abstraction is only supported for SEC")
     sec_reset_cycles = _optional_positive_int(
         settings.sec_reset_cycles, "sec_reset_cycles"
     )
@@ -261,6 +266,8 @@ def _build_native_design_options(
             settings.latch_abstraction, "latch_abstraction"),
         "data_latch_model": _boolean(
             settings.data_latch_model, "data_latch_model"),
+        "memory_abstraction": _boolean(
+            settings.memory_abstraction, "memory_abstraction"),
         "sec_reset_cycles": sec_reset_cycles,
         "sec_reset_ports": sec_reset_ports,
         "btor2_export_path": btor2_export_path,
