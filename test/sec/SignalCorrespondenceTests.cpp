@@ -370,39 +370,51 @@ TEST_F(SignalCorrespondenceTests, CounterexamplesAtTheStartAndInTheStepSplitClas
   const auto unfinished =
       proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT, oneRound);
   EXPECT_FALSE(unfinished.completed);
+  EXPECT_EQ(unfinished.stoppedBy, SignalCorrespondenceStop::Rounds);
   EXPECT_THAT(unfinished.stateEqualities, IsEmpty());
 }
 
 TEST_F(SignalCorrespondenceTests, GivesUpAtItsLimitsWithoutReportingAnything) {
   const auto problem = shadowBit(/*staleCopy=*/false, /*resetPort=*/false);
+  // Every run that gives up names the limit that ended it.
   const auto expectNothing = [&problem](SignalCorrespondenceScope scope,
-                                        const SignalCorrespondenceLimits& limits) {
+                                        const SignalCorrespondenceLimits& limits,
+                                        SignalCorrespondenceStop stoppedBy) {
     const auto result =
         proveSignalCorrespondence(problem, scope, Config::SolverType::KISSAT, limits);
     EXPECT_FALSE(result.completed);
+    EXPECT_EQ(result.stoppedBy, stoppedBy);
     EXPECT_THAT(result.provedOutputs, testing::ElementsAre(false));
     EXPECT_THAT(result.stateEqualities, IsEmpty());
   };
   // The problem has four state symbols.
   SignalCorrespondenceLimits limits;
   limits.stateSymbols = 3;
-  expectNothing(kRegisters, limits);
+  expectNothing(kRegisters, limits, SignalCorrespondenceStop::Model);
   // Not even the constant fits, then the registers do not.
   limits = {};
   limits.nodes = 0;
-  expectNothing(kRegisters, limits);
+  expectNothing(kRegisters, limits, SignalCorrespondenceStop::Model);
   limits.nodes = 4;
-  expectNothing(kRegisters, limits);
+  expectNothing(kRegisters, limits, SignalCorrespondenceStop::Model);
   // Too large for all signals only.
   limits = {};
   limits.allSignalsNodes = 1;
-  expectNothing(kAllSignals, limits);
-  EXPECT_TRUE(
-      proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT, limits).completed);
-  // No solver work allowed.
+  expectNothing(kAllSignals, limits, SignalCorrespondenceStop::Model);
+  const auto fits =
+      proveSignalCorrespondence(problem, kRegisters, Config::SolverType::KISSAT, limits);
+  EXPECT_TRUE(fits.completed);
+  EXPECT_EQ(fits.stoppedBy, SignalCorrespondenceStop::None);
+  // No solver work allowed, by each of the three measures.
   limits = {};
   limits.budgetConflicts = 0;
-  expectNothing(kRegisters, limits);
+  expectNothing(kRegisters, limits, SignalCorrespondenceStop::BudgetConflicts);
+  limits = {};
+  limits.budgetDecisions = 0;
+  expectNothing(kRegisters, limits, SignalCorrespondenceStop::BudgetDecisions);
+  limits = {};
+  limits.budgetTicks = 0;
+  expectNothing(kRegisters, limits, SignalCorrespondenceStop::BudgetTicks);
   // A cone with an operator the pass does not read.
   auto unreadable = problem;
   BoolExpr notAFormula;
@@ -418,6 +430,7 @@ TEST_F(SignalCorrespondenceTests, GivesUpAtItsLimitsWithoutReportingAnything) {
   EXPECT_THAT(learned.stateEqualities, IsEmpty());
   EXPECT_NE(log.find("scope=registers_and_outputs frames=1 completed=0"), std::string::npos)
       << log;
+  EXPECT_NE(log.find("semantics=rails stopped_by=model"), std::string::npos) << log;
   // A depth that gave up is not followed by a deeper one.
   EXPECT_EQ(log.find("frames=2"), std::string::npos) << log;
 }
@@ -544,6 +557,292 @@ TEST_F(SignalCorrespondenceTests, RelationOverAMultiPhaseOperationNeedsDeeperInd
   small.nodes = 100;
   EXPECT_TRUE(proveSignalCorrespondence(problem, kRegisters, solver, small, 1).completed);
   EXPECT_FALSE(proveSignalCorrespondence(problem, kRegisters, solver, small, 8).completed);
+}
+
+
+// The run on the binary functions reads a problem only for its outputs, its
+// reset window and the boot values on the rails. This gives a problem of
+// plain registers that view: every register gets a second rail, and a boot
+// value becomes a binary value on the two.
+struct BinaryView {
+  KInductionProblem problem;
+  BinarySignalCorrespondenceInput input;
+};
+
+BinaryView binaryView(const KInductionProblem& plain) {
+  constexpr size_t kOtherRail = 1000;
+  BinaryView view;
+  view.problem.usesDualRailStateEncoding = true;
+  view.problem.observedOutputExprs0 = plain.observedOutputExprs0;
+  view.problem.observedOutputExprs1 = plain.observedOutputExprs1;
+  view.problem.resetBootstrapCycles = plain.resetBootstrapCycles;
+  view.problem.resetBootstrapInputs = plain.resetBootstrapInputs;
+  for (const auto* transitions : {&plain.transitions0, &plain.transitions1}) {
+    for (const auto& [symbol, next] : *transitions) {
+      view.input.transitions.emplace_back(symbol, next);
+      view.problem.dualRailStatePairs.push_back({symbol, symbol + kOtherRail});
+    }
+  }
+  for (const auto& [symbol, value] : plain.initialStateAssignments) {
+    view.problem.initialStateAssignments.emplace_back(symbol, value);
+    view.problem.initialStateAssignments.emplace_back(symbol + kOtherRail, !value);
+  }
+  for (size_t i = 0; i < plain.observedOutputExprs0.size(); ++i) {
+    view.input.outputs.emplace_back(plain.observedOutputExprs0[i], plain.observedOutputExprs1[i]);
+  }
+  return view;
+}
+
+// One register `m` per design, written from the inputs, and in design 2 a
+// register `k` that nothing writes. Design 1 outputs `m`; design 2 outputs
+// (m and k) or (m and not k), the same function in another shape. On the
+// rails that shape is X whenever `m` is 1 and `k` is unknown.
+//   2, 3: rails of m (design 1)   4, 5: of m, 6, 7: of k (design 2)
+//   8: write, 9: data
+struct ReshapedOutput {
+  KInductionProblem problem;
+  BinarySignalCorrespondenceInput input;
+};
+
+ReshapedOutput reshapedOutput() {
+  ReshapedOutput design;
+  KInductionProblem& problem = design.problem;
+  problem.usesDualRailStateEncoding = true;
+  problem.allSymbols = {2, 3, 4, 5, 6, 7, 8, 9};
+  problem.state0Symbols = {2, 3};
+  problem.state1Symbols = {4, 5, 6, 7};
+  problem.inputSymbols = {8, 9};
+  problem.dualRailStatePairs = {{2, 3}, {4, 5}, {6, 7}};
+  // Every register boots unknown: both rails set.
+  for (size_t rail = 2; rail <= 7; ++rail) {
+    problem.initialStateAssignments.emplace_back(rail, true);
+  }
+  const auto v = [](size_t symbol) { return BoolExpr::Var(symbol); };
+  BoolExpr* write = v(8);
+  BoolExpr* data = v(9);
+  problem.transitions0 = {{2, mux(write, data, v(2))}, {3, mux(write, BoolExpr::Not(data), v(3))}};
+  problem.transitions1 = {{4, mux(write, data, v(4))},
+                          {5, mux(write, BoolExpr::Not(data), v(5))},
+                          {6, v(6)},
+                          {7, v(7)}};
+  // The lifting of the reshaped output, gate by gate: an and may be 1 when
+  // both operands may, 0 when either may; an or the other way round; a
+  // complement exchanges the rails.
+  BoolExpr* mayBeOne = BoolExpr::Or(BoolExpr::And(v(4), v(6)), BoolExpr::And(v(4), v(7)));
+  BoolExpr* mayBeZero = BoolExpr::And(BoolExpr::Or(v(5), v(7)), BoolExpr::Or(v(5), v(6)));
+  problem.dualRailObservedOutputs0 = {{v(2), v(3)}};
+  problem.dualRailObservedOutputs1 = {{mayBeOne, mayBeZero}};
+  // The engines' obligation; the pass reads the cones above or the functions
+  // below.
+  problem.observedOutputExprs0 = {BoolExpr::Not(BoolExpr::And(
+      BoolExpr::And(BoolExpr::Xor(v(2), v(3)), BoolExpr::Xor(mayBeOne, mayBeZero)),
+      BoolExpr::Xor(v(2), mayBeOne)))};
+  problem.observedOutputExprs1 = {BoolExpr::createTrue()};
+
+  // The binary functions: a register by its may-be-one rail.
+  design.input.transitions = {{2, mux(write, data, v(2))}, {4, mux(write, data, v(4))}, {6, v(6)}};
+  design.input.outputs = {
+      {v(2), BoolExpr::Or(BoolExpr::And(v(4), v(6)), BoolExpr::And(v(4), BoolExpr::Not(v(6))))}};
+  design.input.commonStart = {{2, 4}};
+  return design;
+}
+
+TEST_F(SignalCorrespondenceTests, BinaryFunctionsProveWhatTheShapeOfTheLogicHidesOnTheRails) {
+  const auto solver = Config::SolverType::KISSAT;
+  auto design = reshapedOutput();
+  // On the rails the outputs differ as soon as a 1 is written: 1 against X.
+  const auto rails = proveSignalCorrespondence(design.problem, kAllSignals, solver);
+  ASSERT_TRUE(rails.completed);
+  EXPECT_THAT(rails.provedOutputs, testing::ElementsAre(false));
+  EXPECT_THAT(rails.differingOutputs, testing::ElementsAre(true));
+
+  // The binary functions are equal from every boot state in which the two
+  // `m` registers hold one value, whatever `k` holds.
+  const auto binary =
+      proveSignalCorrespondence(design.problem, kRegisters, solver, {}, 1, &design.input);
+  ASSERT_TRUE(binary.completed);
+  EXPECT_THAT(binary.provedOutputs, testing::ElementsAre(true));
+  EXPECT_THAT(binary.differingOutputs, testing::ElementsAre(false));
+  // They hold from the common boot states only, so no register pair is
+  // handed to the engines.
+  EXPECT_THAT(binary.stateEqualities, IsEmpty());
+
+  // The learner reports the run as binary, and leaves all signals to the
+  // rail runs.
+  testing::internal::CaptureStdout();
+  const auto learned =
+      learnSignalCorrespondence(design.problem, solver, /*diagnostics=*/true, {}, &design.input);
+  const std::string log = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(learned.provedOutputs, testing::ElementsAre(true));
+  EXPECT_THAT(learned.stateEqualities, IsEmpty());
+  EXPECT_NE(log.find("frames=1 completed=1"), std::string::npos) << log;
+  EXPECT_NE(log.find("semantics=binary stopped_by=none"), std::string::npos) << log;
+  EXPECT_EQ(log.find("scope=all_signals"), std::string::npos) << log;
+
+  // Without the common start the two registers boot on any two values, and
+  // the outputs differ before anything is written.
+  auto apart = design.input;
+  apart.commonStart.clear();
+  const auto unrelated =
+      proveSignalCorrespondence(design.problem, kRegisters, solver, {}, 1, &apart);
+  ASSERT_TRUE(unrelated.completed);
+  EXPECT_THAT(unrelated.provedOutputs, testing::ElementsAre(false));
+  EXPECT_THAT(unrelated.differingOutputs, testing::ElementsAre(true));
+}
+
+TEST_F(SignalCorrespondenceTests, BinaryRunTakesBootValuesFromTheRails) {
+  const auto solver = Config::SolverType::KISSAT;
+  auto design = reshapedOutput();
+  design.input.commonStart.clear();
+  const auto bootAt = [&design](bool first, bool second) {
+    // A binary value on the rails: exactly one of the two is set.
+    design.problem.initialStateAssignments = {{2, first},  {3, !first}, {4, second},
+                                              {5, !second}, {6, true},  {7, true}};
+  };
+  // Two registers that boot on one known value need no common start.
+  for (const bool value : {false, true}) {
+    bootAt(value, value);
+    const auto same =
+        proveSignalCorrespondence(design.problem, kRegisters, solver, {}, 1, &design.input);
+    ASSERT_TRUE(same.completed);
+    EXPECT_THAT(same.provedOutputs, testing::ElementsAre(true));
+  }
+  // Known and unlike, they differ at boot; a common start does not apply to
+  // a register whose boot value is known.
+  bootAt(false, true);
+  design.input.commonStart = {{2, 4}, {2, 99}};
+  const auto unlike =
+      proveSignalCorrespondence(design.problem, kRegisters, solver, {}, 1, &design.input);
+  ASSERT_TRUE(unlike.completed);
+  EXPECT_THAT(unlike.provedOutputs, testing::ElementsAre(false));
+  EXPECT_THAT(unlike.differingOutputs, testing::ElementsAre(true));
+}
+
+TEST_F(SignalCorrespondenceTests, BinaryRunGoesThroughTheResetWindowBeforeItCompares) {
+  const auto solver = Config::SolverType::KISSAT;
+  // One register per design that the reset loads from an input and that then
+  // toggles on another: what the window leaves depends on the inputs, so no
+  // constant describes it, and the two registers boot on any two values.
+  //   2: design 1, 3: design 2   4: reset, 5: load, 6: toggle
+  KInductionProblem plain;
+  const auto v = [](size_t symbol) { return BoolExpr::Var(symbol); };
+  const auto next = [&v](size_t symbol) {
+    return mux(v(4), v(5), BoolExpr::Xor(v(symbol), v(6)));
+  };
+  plain.transitions0 = {{2, next(2)}};
+  plain.transitions1 = {{3, next(3)}};
+  plain.observedOutputExprs0 = {v(2)};
+  plain.observedOutputExprs1 = {v(3)};
+
+  // With no reset window the registers are compared as they boot.
+  auto unreset = binaryView(plain);
+  const auto atBoot =
+      proveSignalCorrespondence(unreset.problem, kRegisters, solver, {}, 1, &unreset.input);
+  ASSERT_TRUE(atBoot.completed);
+  EXPECT_THAT(atBoot.provedOutputs, testing::ElementsAre(false));
+
+  // After the window both hold the input of its last cycle. The simulation
+  // and the check of the first frames both go through the window, at one
+  // frame and at several.
+  plain.resetBootstrapCycles = 2;
+  plain.resetBootstrapInputs = {{4, true}};
+  auto reset = binaryView(plain);
+  for (const size_t frames : {1, 4}) {
+    const auto afterWindow =
+        proveSignalCorrespondence(reset.problem, kRegisters, solver, {}, frames, &reset.input);
+    ASSERT_TRUE(afterWindow.completed);
+    EXPECT_THAT(afterWindow.provedOutputs, testing::ElementsAre(true));
+  }
+  // A reset port that is active low is held low through the window.
+  plain.resetBootstrapInputs = {{4, false}};
+  plain.transitions0 = {{2, mux(v(4), BoolExpr::Xor(v(2), v(6)), v(5))}};
+  plain.transitions1 = {{3, mux(v(4), BoolExpr::Xor(v(3), v(6)), v(5))}};
+  auto activeLow = binaryView(plain);
+  EXPECT_THAT(proveSignalCorrespondence(activeLow.problem, kRegisters, solver, {}, 1,
+                                        &activeLow.input)
+                  .provedOutputs,
+              testing::ElementsAre(true));
+}
+
+TEST_F(SignalCorrespondenceTests, BinaryLearnerDeepensTheInductionWithinItsOwnLimits) {
+  const auto solver = Config::SolverType::KISSAT;
+  // The two-phase copy needs two frames in binary semantics as on the rails.
+  auto view = binaryView(twoPhaseShadowBit(/*staleCopy=*/false));
+  testing::internal::CaptureStdout();
+  const auto learned =
+      learnSignalCorrespondence(view.problem, solver, /*diagnostics=*/true, {}, &view.input);
+  const std::string log = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(learned.provedOutputs, testing::ElementsAre(true));
+  EXPECT_NE(log.find("frames=2 completed=1"), std::string::npos) << log;
+  EXPECT_EQ(log.find("frames=4"), std::string::npos) << log;
+
+  // The depth and the ticks of the binary runs are limits of their own.
+  SignalCorrespondenceLimits limits;
+  limits.binaryInductionFrames = 1;
+  testing::internal::CaptureStdout();
+  const auto shallow =
+      learnSignalCorrespondence(view.problem, solver, /*diagnostics=*/true, limits, &view.input);
+  const std::string shallowLog = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(shallow.provedOutputs, testing::ElementsAre(false));
+  EXPECT_EQ(shallowLog.find("frames=2"), std::string::npos) << shallowLog;
+  limits = {};
+  limits.binaryBudgetTicks = 1;
+  testing::internal::CaptureStdout();
+  const auto unpaid =
+      learnSignalCorrespondence(view.problem, solver, /*diagnostics=*/true, limits, &view.input);
+  const std::string unpaidLog = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(unpaid.provedOutputs, testing::ElementsAre(false));
+  EXPECT_NE(unpaidLog.find("completed=0"), std::string::npos) << unpaidLog;
+  EXPECT_NE(unpaidLog.find("semantics=binary stopped_by=ticks"), std::string::npos) << unpaidLog;
+
+  // A copy that is never written is a difference in binary semantics too.
+  auto stale = binaryView(twoPhaseShadowBit(/*staleCopy=*/true));
+  EXPECT_THAT(
+      learnSignalCorrespondence(stale.problem, solver, /*diagnostics=*/false, {}, &stale.input)
+          .provedOutputs,
+      testing::ElementsAre(false));
+}
+
+TEST_F(SignalCorrespondenceTests, BinaryRunReadsOnlyWhatItIsGiven) {
+  const auto solver = Config::SolverType::KISSAT;
+  const auto plain = shadowBit(/*staleCopy=*/false, /*resetPort=*/false);
+  const auto run = [solver](const BinaryView& view, const SignalCorrespondenceLimits& limits = {}) {
+    return proveSignalCorrespondence(view.problem, kRegisters, solver, limits, 1, &view.input);
+  };
+  auto view = binaryView(plain);
+  EXPECT_THAT(run(view).provedOutputs, testing::ElementsAre(true));
+
+  // A register listed twice is read once; one without a function is an
+  // input of the machine, and the output that depends on it stays open.
+  auto repeated = view;
+  repeated.input.transitions.push_back(repeated.input.transitions.front());
+  EXPECT_THAT(run(repeated).provedOutputs, testing::ElementsAre(true));
+  auto unowned = view;
+  unowned.input.transitions.front().second = nullptr;
+  const auto open = run(unowned);
+  ASSERT_TRUE(open.completed);
+  EXPECT_THAT(open.provedOutputs, testing::ElementsAre(false));
+
+  // An output without both functions, or proved earlier, is left alone.
+  auto oneSided = view;
+  oneSided.input.outputs.front().second = nullptr;
+  EXPECT_THAT(run(oneSided).provedOutputs, testing::ElementsAre(false));
+  auto earlier = view;
+  earlier.problem.structurallyProvedOutputs = {true};
+  EXPECT_THAT(run(earlier).provedOutputs, testing::ElementsAre(false));
+
+  // Over the limits, or with an operator the pass does not read, the run
+  // gives up and says so.
+  SignalCorrespondenceLimits limits;
+  limits.stateSymbols = 3;
+  EXPECT_EQ(run(view, limits).stoppedBy, SignalCorrespondenceStop::Model);
+  BoolExpr notAFormula;
+  auto unreadableRegister = view;
+  unreadableRegister.input.transitions.front().second = &notAFormula;
+  EXPECT_EQ(run(unreadableRegister).stoppedBy, SignalCorrespondenceStop::Model);
+  auto unreadableOutput = view;
+  unreadableOutput.input.outputs.front().second = &notAFormula;
+  EXPECT_EQ(run(unreadableOutput).stoppedBy, SignalCorrespondenceStop::Model);
 }
 
 }  // namespace

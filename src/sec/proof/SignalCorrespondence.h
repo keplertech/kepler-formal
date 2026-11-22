@@ -37,6 +37,10 @@ struct SignalCorrespondenceLimits {
   size_t rounds = 64;
   // The deepest induction the learner tries: 1, 2, 4, ... time frames.
   size_t inductionFrames = 8;
+  // The same on the binary functions, whose logic is half the size. Sixteen
+  // frames span two machine cycles of eight clock phases, the reach of a
+  // value one instruction stores and the next one reads.
+  size_t binaryInductionFrames = 16;
   // Classes asked in one query.
   size_t groupClasses = 64;
   // One query about a group of classes, and one about a single class. A query
@@ -53,12 +57,40 @@ struct SignalCorrespondenceLimits {
   uint64_t budgetConflicts = 1000000;
   uint64_t budgetDecisions = 1000000000;
   uint64_t budgetTicks = 6000000000ULL;
+  // The ticks of the runs on the binary functions, which go deeper.
+  uint64_t binaryBudgetTicks = 12000000000ULL;
+};
+
+// What ended a run that did not complete.
+enum class SignalCorrespondenceStop {
+  None,
+  // The model is over a size limit or holds an operator the pass does not
+  // read.
+  Model,
+  Rounds,
+  BudgetConflicts,
+  BudgetDecisions,
+  BudgetTicks,
+};
+
+// The binary functions of both designs, for a run in binary semantics.
+struct BinarySignalCorrespondenceInput {
+  // A register, by the symbol the functions read it by, and its next-state
+  // function.
+  std::vector<std::pair<size_t, BoolExpr*>> transitions;
+  // Per observed output, the function of each design; null when a design has
+  // none.
+  std::vector<std::pair<BoolExpr*, BoolExpr*>> outputs;
+  // Register pairs that hold one value at boot when both are unknown there.
+  std::vector<std::pair<size_t, size_t>> commonStart;
 };
 
 struct SignalCorrespondenceResult {
   // False when the pass gave up (size or solver budget, or an operator it does
   // not read); nothing is reported then.
   bool completed = false;
+  // The limit that ended a run that did not complete.
+  SignalCorrespondenceStop stoppedBy = SignalCorrespondenceStop::None;
   // State symbol pairs that are equal in every frame, the boot state and the
   // reset window included, so they can be handed to the engines like the
   // pairs of the register learner.
@@ -112,12 +144,27 @@ struct SignalCorrespondenceResult {
 //
 // In the dual-rail encoding a class may relate signals that are unknown, X on
 // both sides. A caller that disallows X equality must not run the pass.
+//
+// With `binary` the pass reads the binary functions of both designs instead
+// of their rail-valued lifting. The lifting is a shape-dependent
+// over-approximation: two shapes of one function can give X and a defined
+// value for the same unknown inputs, and no class relates the two then. The
+// run starts at boot, where the unknown registers of a `commonStart` pair
+// hold one value (van Eijk's designated initial state; Savoj et al., FMCAD
+// 2010, for the common unknown start), and goes through the reset window
+// before the first frame it compares. An output proved this way has no
+// binary-defined mismatch in the rail model: a defined rail value is the
+// value of every binary completion of the unknown boot state (Seger and
+// Bryant, Formal Methods in System Design 6(2), 1995), the run covers at
+// least one completion, so two defined outputs agree. State equalities are
+// not reported: they hold from the common boot states only.
 SignalCorrespondenceResult proveSignalCorrespondence(
     const KInductionProblem& problem,
     SignalCorrespondenceScope scope,
     Config::SolverType solverType,
     const SignalCorrespondenceLimits& limits = {},
-    size_t inductionFrames = 1);
+    size_t inductionFrames = 1,
+    const BinarySignalCorrespondenceInput* binary = nullptr);
 
 struct SignalCorrespondenceLearning {
   // One flag per observed output.
@@ -130,11 +177,13 @@ struct SignalCorrespondenceLearning {
 // the same way, while outputs remain and the budget lasts. An output whose
 // cones differ in a reachable state is not tried again. The problem is not
 // changed; the caller discharges the proved outputs and records the state
-// equalities.
+// equalities. With `binary` the runs read the binary functions, on registers
+// and outputs only, up to `binaryInductionFrames` within `binaryBudgetTicks`.
 SignalCorrespondenceLearning learnSignalCorrespondence(
     const KInductionProblem& problem,
     Config::SolverType solverType,
     bool diagnostics,
-    SignalCorrespondenceLimits limits = {});
+    SignalCorrespondenceLimits limits = {},
+    const BinarySignalCorrespondenceInput* binary = nullptr);
 
 }  // namespace KEPLER_FORMAL::SEC

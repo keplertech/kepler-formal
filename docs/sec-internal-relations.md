@@ -329,6 +329,50 @@ again: no larger set and no deeper induction proves it. A design that really
 differs therefore costs one run before the engine looks for the
 counterexample.
 
+### On the binary functions
+
+On the rails the relation inherits the weakness section 10 describes for
+register pairs: the lifting is shape dependent, so two shapes of one function
+can hold X and a defined value in the same state. One rewritten adder is
+enough. Every register behind it then differs between the designs in where it
+is unknown, few classes are left, and an output that is X on one side and
+defined on the other is in no class at any induction depth, although nothing
+is wrong with it: the obligation of an output is only that two defined values
+agree.
+
+The pass therefore runs first on the binary functions the lazy store keeps
+before lifting, the functions of the binary round: a register reads by its
+may-be-one rail, an input by its shared symbol, an output by the function of
+each design. The run differs from the one above in three points:
+
+1. **Start state.** The boot state, taken through the reset window. A
+   register is known there when its rails hold a binary value, and the two
+   registers of a candidate pair of section 1 that are both unknown hold one
+   value, the common initial state of section 10. The window is simulated,
+   and unrolled in the solver in front of the first compared frame, with the
+   reset ports active and every other input free. The start state is then
+   exactly what the window leaves, including what it loads from the inputs.
+2. **Signals.** Registers and outputs only, half as many as on the rails, and
+   with induction over 1, 2, 4, 8 and 16 frames: two machine cycles of eight
+   clock phases are what a value stored by one instruction and read by the
+   next one spans.
+3. **Result.** Outputs only. The register classes hold from the common boot
+   states and not from every boot state, so they are not handed to the
+   engines.
+
+An output proved this way is discharged like one proved on the rails. The
+argument is the one of ternary simulation (Seger and Bryant, Formal Methods in
+System Design 6(2), 1995): a rail value that is defined is the value the
+output takes for every binary completion of the unknown boot state. The run
+proves the two binary outputs equal for every completion in which the paired
+registers agree, and at least one such completion exists. Two outputs that
+are both defined on the rails therefore hold the value of that completion in
+both designs, and agree. Any choice of pairs is sound for this reason; the
+pairs of section 1 are the ones that make equivalent designs equal.
+
+The rail runs follow for the outputs that are left: those that are equal
+only because both sides are unknown, which no binary function shows.
+
 The result is used twice:
 
 - An output whose two cones are in one class with the same polarity, on both
@@ -344,18 +388,24 @@ The result is used twice:
 The pass is bounded by engineering limits (`SignalCorrespondenceLimits`), not
 techniques from the papers:
 16384 state symbols, about two million nodes counting every unrolled frame
-(262144 for all signals), 64 rounds, 8 induction frames and a solver budget of
-a couple of minutes shared by all the runs. A query is limited by its
-conflicts and decisions, not by its ticks, because propagation alone costs
-ticks in proportion to the design. When a limit is reached nothing is
+(262144 for all signals), 64 rounds, 8 induction frames on the rails and 16
+on the binary functions, and a solver budget of a couple of minutes shared by
+the runs of one kind, twice the ticks for the binary runs. A query is limited
+by its conflicts and decisions, not by its ticks, because propagation alone
+costs ticks in proportion to the design. When a limit is reached nothing is
 reported and the engines run as before.
 
 It is on by default and switched by `signal_correspondence`
 (`--signal-correspondence <bool>`). It needs learning and the dual-rail
 encoding. Its classes may relate signals that are unknown, X on both sides, so
 it is also left out with `allow_x_equality_in_internal_relations: false`. The
-line `SEC summary: signal_correspondence scope=... frames=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=...`
-reports each run.
+runs on the binary functions need what the binary round needs as well:
+`binary_relation_round` and an engine that keeps the lazy transition store.
+The line `SEC summary: signal_correspondence scope=... frames=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=... semantics=... stopped_by=...`
+reports each run: `semantics` is `binary` or `rails`, and `stopped_by` names
+the limit that ended a run with `completed=0` (`model` for a size limit or an
+operator the pass does not read, `rounds`, or the part of the solver budget
+that ran out: `conflicts`, `decisions` or `ticks`).
 
 ## What it does and does not help
 
@@ -390,3 +440,9 @@ reports each run.
   together. Section 11 proves them in one induction from the state after
   reset. Without a reset bootstrap the start state is the boot state, where
   every register may still be unknown, and less is proved.
+- The same with logic rebuilt beside it, a processor core whose program
+  counter gained a shadow and whose adder became carry-lookahead for example,
+  differs on the rails in where values are unknown, and the rail runs of
+  section 11 prove nothing at any depth. The binary runs prove it, with
+  enough frames for the longest path from a value stored to the same value
+  read.

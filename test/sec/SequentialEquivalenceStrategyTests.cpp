@@ -21073,8 +21073,12 @@ namespace {
 // words. With `shadow` the design also keeps the word on top of the stack in a
 // register and reads the counter from it while it is valid. With
 // `staleAfterPop` that register stays valid across a pop, which is a bug.
+// With `reshaped` the register is read through logic that computes the same
+// value in another shape, around a register `scratch` no reset reaches: on
+// the rails that read is X wherever the copy holds a 1 and `scratch` is
+// unknown.
 std::string shadowStackSource(const std::string& moduleName, bool shadow,
-                              bool staleAfterPop) {
+                              bool staleAfterPop, bool reshaped = false) {
   const auto onlyShadow = [shadow](const char* text) { return shadow ? text : ""; };
   return "module " + moduleName + R"( (
   input  wire       clk,
@@ -21089,7 +21093,11 @@ std::string shadowStackSource(const std::string& moduleName, bool shadow,
   reg       init;
 )" + (shadow ? R"(  reg [3:0] buf_pc;
   reg       valid;
-  assign pc = init ? 4'b0 : (valid ? buf_pc : mem[sp]);
+)" : "") + (reshaped ? R"(  reg       scratch;
+  wire [3:0] copy = (buf_pc & {4{scratch}}) | (buf_pc & ~{4{scratch}});
+  always @(posedge clk) if (pop) scratch <= target[0];
+)" : shadow ? R"(  wire [3:0] copy = buf_pc;
+)" : "") + (shadow ? R"(  assign pc = init ? 4'b0 : (valid ? copy : mem[sp]);
 )" : R"(  assign pc = init ? 4'b0 : mem[sp];
 )") + R"(  wire [4:0] sp_up = sp + 1'b1;
   wire [4:0] sp_dn = sp - 1'b1;
@@ -21152,5 +21160,47 @@ TEST_F(SequentialEquivalenceStrategyTests,
 
   // A copy that goes stale is still reported, with the pass enabled.
   const auto different = run(stale, /*signalCorrespondence=*/true, 4);
+  EXPECT_EQ(different.status, SequentialEquivalenceStatus::Different) << different.reason;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SignalCorrespondenceOnBinaryFunctionsProvesReshapedRegisterCopy) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* reference = loadSystemVerilogTopFromSource(
+      library, "stack_pc", shadowStackSource("stack_pc", false, false));
+  auto* reshaped = loadSystemVerilogTopFromSource(
+      library, "stack_pc_reshaped",
+      shadowStackSource("stack_pc_reshaped", true, false, /*reshaped=*/true));
+  auto* stale = loadSystemVerilogTopFromSource(
+      library, "stack_pc_reshaped_stale",
+      shadowStackSource("stack_pc_reshaped_stale", true, true, /*reshaped=*/true));
+
+  const auto run = [&](SNLDesign* other, bool binaryRelationRound, size_t maxK) {
+    SequentialEquivalenceStrategy strategy(
+        reference, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady, SecResetSpec{3, {{"rst", true}}});
+    InternalRelationOptions options;
+    options.binaryRelationRound = binaryRelationRound;
+    strategy.setInternalRelationOptions(options);
+    return strategy.run(maxK);
+  };
+
+  // The counter of the reshaped design is X on the rails where the
+  // reference holds a value, so no class of rail values relates the two and
+  // the words written from it differ the same way. The binary functions are
+  // equal, and signal correspondence on them proves every output before the
+  // engine.
+  const auto proved = run(reshaped, /*binaryRelationRound=*/true, 1);
+  EXPECT_EQ(proved.status, SequentialEquivalenceStatus::Equivalent) << proved.reason;
+  EXPECT_EQ(proved.coveredOutputs, 4u);
+
+  const auto railsOnly = run(reshaped, /*binaryRelationRound=*/false, 1);
+  EXPECT_NE(railsOnly.status, SequentialEquivalenceStatus::Equivalent) << railsOnly.reason;
+
+  // A copy that goes stale is still reported.
+  const auto different = run(stale, /*binaryRelationRound=*/true, 4);
   EXPECT_EQ(different.status, SequentialEquivalenceStatus::Different) << different.reason;
 }

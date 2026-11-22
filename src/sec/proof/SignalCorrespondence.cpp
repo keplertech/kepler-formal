@@ -202,7 +202,33 @@ struct Machine {
   // Per observed output, the node pairs (design 1, design 2) that must be
   // equal; empty for an output that is already proved.
   std::vector<std::vector<std::pair<uint32_t, uint32_t>>> outputs;
+  // A machine of the binary functions starts at boot: per register its value
+  // there (0, 1 or unknown) and the register it shares that value with.
+  bool binary = false;
+  std::vector<uint8_t> boot;
+  std::vector<uint32_t> commonRoot;
 };
+
+// The leaf slot of every register, and the value the reset ports rest at.
+void indexLeaves(const KInductionProblem& problem, Machine& machine) {
+  const Circuit& circuit = machine.circuit;
+  machine.registerOfSlot.assign(circuit.symbols().size(), kNone);
+  for (uint32_t i = 0; i < machine.registers.size(); ++i) {
+    machine.registerOfSlot[machine.registers[i].slot] = i;
+  }
+  machine.idleReset.assign(circuit.symbols().size(), kUnknown);
+  if (problem.hasResetBootstrap() && problem.resetBootstrapCycles != 0) {
+    machine.resetCycles = problem.resetBootstrapCycles;
+    machine.resetPorts = problem.resetBootstrapInputs;
+    for (uint32_t slot = 0; slot < circuit.symbols().size(); ++slot) {
+      for (const auto& [symbol, active] : machine.resetPorts) {
+        if (circuit.symbols()[slot] == symbol) {
+          machine.idleReset[slot] = active ? 0 : 1;
+        }
+      }
+    }
+  }
+}
 
 bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLimits& limits,
                   Machine& machine) {
@@ -270,21 +296,87 @@ bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLi
       machine.outputs[i].push_back(nodes);
     }
   }
-  machine.registerOfSlot.assign(circuit.symbols().size(), kNone);
-  for (uint32_t i = 0; i < machine.registers.size(); ++i) {
-    machine.registerOfSlot[machine.registers[i].slot] = i;
+  indexLeaves(problem, machine);
+  return true;
+}
+
+// The product machine of the binary functions. A register the input gives no
+// function for is an input of the machine, which only weakens what it proves.
+bool buildBinaryMachine(const KInductionProblem& problem,
+                        const BinarySignalCorrespondenceInput& input,
+                        const SignalCorrespondenceLimits& limits, Machine& machine) {
+  machine.binary = true;
+  Circuit& circuit = machine.circuit;
+  if (input.transitions.size() > limits.stateSymbols ||
+      !circuit.add(BoolExpr::createTrue(), machine.constantTrue)) {
+    return false;
   }
-  machine.idleReset.assign(circuit.symbols().size(), kUnknown);
-  if (problem.hasResetBootstrap() && problem.resetBootstrapCycles != 0) {
-    machine.resetCycles = problem.resetBootstrapCycles;
-    machine.resetPorts = problem.resetBootstrapInputs;
-    for (uint32_t slot = 0; slot < circuit.symbols().size(); ++slot) {
-      for (const auto& [symbol, active] : machine.resetPorts) {
-        if (circuit.symbols()[slot] == symbol) {
-          machine.idleReset[slot] = active ? 0 : 1;
-        }
-      }
+  for (const auto& [symbol, next] : input.transitions) {
+    if (next == nullptr || machine.registerBySymbol.contains(symbol)) {
+      continue;
     }
+    Register added;
+    added.symbol = symbol;
+    if (!circuit.add(BoolExpr::Var(symbol), added.node) || !circuit.add(next, added.next)) {
+      return false;
+    }
+    added.slot = circuit.slotOf(symbol);
+    machine.registerBySymbol.emplace(symbol, static_cast<uint32_t>(machine.registers.size()));
+    machine.registers.push_back(added);
+  }
+  const size_t outputs = problem.observedOutputExprs0.size();
+  machine.outputs.resize(outputs);
+  for (size_t i = 0; i < outputs && i < input.outputs.size(); ++i) {
+    const auto& [function0, function1] = input.outputs[i];
+    if ((i < problem.structurallyProvedOutputs.size() && problem.structurallyProvedOutputs[i]) ||
+        function0 == nullptr || function1 == nullptr) {
+      continue;
+    }
+    std::pair<uint32_t, uint32_t> nodes;
+    if (!circuit.add(function0, nodes.first) || !circuit.add(function1, nodes.second)) {
+      return false;
+    }
+    machine.outputs[i].push_back(nodes);
+  }
+  indexLeaves(problem, machine);
+  // A register is known at boot when its rails hold a binary value there.
+  std::unordered_map<size_t, bool> assigned;
+  for (const auto& [symbol, value] : problem.initialStateAssignments) {
+    assigned[symbol] = value;
+  }
+  machine.boot.assign(machine.registers.size(), kUnknown);
+  for (const auto& rails : problem.dualRailStatePairs) {
+    const auto owner = machine.registerBySymbol.find(rails.mayBeOne);
+    const auto one = assigned.find(rails.mayBeOne);
+    const auto zero = assigned.find(rails.mayBeZero);
+    if (owner != machine.registerBySymbol.end() && one != assigned.end() &&
+        zero != assigned.end() && one->second != zero->second) {
+      machine.boot[owner->second] = one->second ? 1 : 0;
+    }
+  }
+  machine.commonRoot.resize(machine.registers.size());
+  for (uint32_t i = 0; i < machine.commonRoot.size(); ++i) {
+    machine.commonRoot[i] = i;
+  }
+  const auto find = [&machine](uint32_t index) {
+    while (machine.commonRoot[index] != index) {
+      machine.commonRoot[index] = machine.commonRoot[machine.commonRoot[index]];
+      index = machine.commonRoot[index];
+    }
+    return index;
+  };
+  for (const auto& [lhs, rhs] : input.commonStart) {
+    const auto a = machine.registerBySymbol.find(lhs);
+    const auto b = machine.registerBySymbol.find(rhs);
+    if (a != machine.registerBySymbol.end() && b != machine.registerBySymbol.end() &&
+        machine.boot[a->second] == kUnknown && machine.boot[b->second] == kUnknown) {
+      const uint32_t rootA = find(a->second);
+      const uint32_t rootB = find(b->second);
+      machine.commonRoot[std::max(rootA, rootB)] = std::min(rootA, rootB);
+    }
+  }
+  for (uint32_t i = 0; i < machine.commonRoot.size(); ++i) {
+    machine.commonRoot[i] = find(i);
   }
   return true;
 }
@@ -421,11 +513,15 @@ std::vector<uint32_t> equalityRoots(const Machine& machine, const KInductionProb
 // counterexample later, and a deep structure, a memory behind an address
 // counter for example, is only reached after many frames. A run therefore
 // goes on while the partition still refines.
+//
+// A machine of the binary functions starts at boot, with the registers of a
+// common pair on one value, and is taken through the reset window first.
 Classes simulate(const Machine& machine, const KInductionProblem& problem,
                  const std::vector<uint32_t>& signals, const std::vector<uint8_t>& start) {
   Classes relation;
   relation.phase.assign(machine.circuit.size(), 0);
-  const std::vector<uint32_t> root = equalityRoots(machine, problem);
+  const std::vector<uint32_t> root =
+      machine.binary ? machine.commonRoot : equalityRoots(machine, problem);
   std::mt19937_64 random(1);
   std::vector<uint64_t> signature(signals.size(), 0);
   std::vector<uint64_t> sorted;
@@ -461,6 +557,19 @@ Classes simulate(const Machine& machine, const KInductionProblem& problem,
         state[zero->second] |= ~state[one->second];
       } else if (start[one->second] == kUnknown) {
         state[one->second] |= ~state[zero->second];
+      }
+    }
+    for (size_t cycle = 0; machine.binary && cycle < machine.resetCycles; ++cycle) {
+      for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
+        const uint32_t owner = machine.registerOfSlot[slot];
+        leaves[slot] = owner != kNone ? state[owner]
+                     : machine.idleReset[slot] == kUnknown ? random()
+                     : machine.idleReset[slot] != 0 ? 0 : kAllPatterns;
+      }
+      evaluate(machine.circuit, leaves, values);
+      work += machine.circuit.size();
+      for (size_t i = 0; i < state.size(); ++i) {
+        state[i] = values[machine.registers[i].next];
       }
     }
     size_t classesAtLastLook = 0;
@@ -509,12 +618,18 @@ Classes simulate(const Machine& machine, const KInductionProblem& problem,
 
 // What every frame from the first compared one on satisfies in the engines'
 // model: the reset ports rest at their inactive value, no register holds the
-// empty rail value, and the equalities certified earlier hold.
+// empty rail value, and the equalities certified earlier hold. A frame of the
+// reset window holds the reset ports active; the binary functions have no
+// rails, and the certified equalities are rail equalities.
 void addFrameConstraints(SATSolverWrapper& solver, FrameFormulaEncoder& frame,
-                         const Machine& machine, const KInductionProblem& problem) {
+                         const Machine& machine, const KInductionProblem& problem,
+                         bool resetActive) {
   for (const auto& [symbol, active] : machine.resetPorts) {
     const int literal = frame.encode(BoolExpr::Var(symbol));
-    solver.addClause({active ? -literal : literal});
+    solver.addClause({active == resetActive ? literal : -literal});
+  }
+  if (machine.binary) {
+    return;
   }
   for (const auto& rails : problem.dualRailStatePairs) {
     solver.addClause({frame.encode(BoolExpr::Var(rails.mayBeOne)),
@@ -731,7 +846,7 @@ void readModel(const SATSolverWrapper& solver, const FrameFormulaEncoder& frame,
 
 // Consecutive time frames of the machine in one solver. Frame 0 is free; a
 // register of every later frame is its next-state function in the frame
-// before it.
+// before it. The first `resetFrames` frames are frames of the reset window.
 struct Unrolling {
   std::deque<FrameFormulaEncoder> frames;
   // Per frame, the literal of every signal of the relation.
@@ -739,7 +854,8 @@ struct Unrolling {
 };
 
 void unroll(SATSolverWrapper& solver, const Machine& machine, const KInductionProblem& problem,
-            const Classes& relation, size_t count, Unrolling& unrolling) {
+            const Classes& relation, size_t count, Unrolling& unrolling,
+            size_t resetFrames = 0) {
   for (size_t f = 0; f < count; ++f) {
     auto& frame = unrolling.frames.emplace_back(solver, std::unordered_map<size_t, int>{}, true);
     auto& literals = unrolling.literals.emplace_back(machine.circuit.size(), 0);
@@ -748,7 +864,7 @@ void unroll(SATSolverWrapper& solver, const Machine& machine, const KInductionPr
         literals[node] = frame.encode(machine.circuit.expr(node));
       }
     }
-    addFrameConstraints(solver, frame, machine, problem);
+    addFrameConstraints(solver, frame, machine, problem, f < resetFrames);
   }
   // Last frame first: tying a frame's registers to the frame before it adds
   // registers there.
@@ -791,6 +907,10 @@ void replay(const SATSolverWrapper& solver, const Machine& machine, const Unroll
 // Equation 4, over `frames` time frames: members of a class are equal in the
 // start state and in the frames that follow it, for every input. False when
 // the solver budget ran out.
+//
+// A machine of the binary functions is given its boot state: the reset
+// window is unrolled in front of the frames the classes are checked in, so
+// the start state is exactly what the window leaves.
 bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
                    const std::vector<uint8_t>& start, size_t frames,
                    Config::SolverType solverType, const SignalCorrespondenceLimits& limits,
@@ -799,11 +919,17 @@ bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
   SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
   configureForManyQueries(solver);
   Unrolling unrolling;
-  unroll(solver, machine, problem, relation, frames, unrolling);
+  const size_t window = machine.binary ? machine.resetCycles : 0;
+  unroll(solver, machine, problem, relation, window + frames, unrolling, window);
+  const auto bootLiteral = [&](size_t index) {
+    return unrolling.frames[0].encode(BoolExpr::Var(machine.registers[index].symbol));
+  };
   for (size_t i = 0; i < machine.registers.size(); ++i) {
     if (start[i] != kUnknown) {
-      const int literal = unrolling.frames[0].encode(BoolExpr::Var(machine.registers[i].symbol));
+      const int literal = bootLiteral(i);
       solver.addClause({start[i] != 0 ? literal : -literal});
+    } else if (machine.binary && machine.commonRoot[i] != i) {
+      addLiteralEquivalence(solver, bootLiteral(i), bootLiteral(machine.commonRoot[i]));
     }
   }
 
@@ -811,15 +937,16 @@ bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
   for (size_t f = 0; f < frames; ++f) {
     const auto replayFrame = [&](std::vector<uint64_t>& values) {
       // A leaf outside every encoded cone: a register keeps its start value
-      // (unknown reads X, both rails set), an input reads 0.
+      // (unknown reads 1: X when on both rails, and one value for the
+      // registers of a common pair), an input reads 0.
       for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
         const uint32_t owner = machine.registerOfSlot[slot];
         leaves[slot] = owner != kNone && start[owner] != 0 ? kAllPatterns : 0;
       }
-      replay(solver, machine, unrolling, f, leaves, values);
+      replay(solver, machine, unrolling, window + f, leaves, values);
     };
     bool changed = false;
-    if (!refineClasses(solver, unrolling.literals[f], limits, budget, relation, changed,
+    if (!refineClasses(solver, unrolling.literals[window + f], limits, budget, relation, changed,
                        solverCalls, replayFrame, [](const std::vector<uint32_t>&) {})) {
       return false;
     }
@@ -978,22 +1105,26 @@ SignalCorrespondenceResult proveSignalCorrespondence(
     SignalCorrespondenceScope scope,
     Config::SolverType solverType,
     const SignalCorrespondenceLimits& limits,
-    size_t inductionFrames) {
+    size_t inductionFrames,
+    const BinarySignalCorrespondenceInput* binary) {
   SignalCorrespondenceResult result;
   result.provedOutputs.assign(problem.observedOutputExprs0.size(), false);
   result.differingOutputs.assign(problem.observedOutputExprs0.size(), false);
   const size_t frames = std::max<size_t>(inductionFrames, 1);
   Machine machine(limits.nodes);
   // The step encodes one frame more than it assumes.
-  if (!buildMachine(problem, limits, machine) ||
+  if (!(binary != nullptr ? buildBinaryMachine(problem, *binary, limits, machine)
+                          : buildMachine(problem, limits, machine)) ||
       machine.circuit.size() > limits.nodes / (frames + 1) ||
       (scope == SignalCorrespondenceScope::AllSignals &&
        machine.circuit.size() > limits.allSignalsNodes)) {
+    result.stoppedBy = SignalCorrespondenceStop::Model;
     return result;
   }
   const std::vector<uint32_t> signals = selectSignals(machine, scope);
   result.signals = signals.size();
-  const StartStates states = propagateResetWindow(machine, problem);
+  const StartStates states = machine.binary ? StartStates{machine.boot, {}}
+                                            : propagateResetWindow(machine, problem);
   Classes relation = simulate(machine, problem, signals, states.start);
 
   SATSolverWrapper::CadicalWorkBudget budget(
@@ -1039,6 +1170,11 @@ SignalCorrespondenceResult proveSignalCorrespondence(
   result.ticks = budget.ticksUsed();
   if (!fixedPoint) {
     // An unfinished fixed point is not a certificate for any class.
+    result.stoppedBy =
+        withinBudget ? SignalCorrespondenceStop::Rounds
+        : result.ticks >= limits.budgetTicks ? SignalCorrespondenceStop::BudgetTicks
+        : result.conflicts >= limits.budgetConflicts ? SignalCorrespondenceStop::BudgetConflicts
+        : SignalCorrespondenceStop::BudgetDecisions;
     return result;
   }
 
@@ -1048,16 +1184,33 @@ SignalCorrespondenceResult proveSignalCorrespondence(
   for (size_t i = 0; i < machine.outputs.size(); ++i) {
     result.provedOutputs[i] = equalOutputs(i);
   }
-  collectStateEqualities(machine, problem, states, relation, classOf, result);
+  if (!machine.binary) {
+    collectStateEqualities(machine, problem, states, relation, classOf, result);
+  }
   return result;
 }
+
+namespace {
+
+const char* stopName(SignalCorrespondenceStop stop) {
+  static constexpr const char* names[] = {"none", "model", "rounds",
+                                          "conflicts", "decisions", "ticks"};
+  return names[static_cast<size_t>(stop)];
+}
+
+}  // namespace
 
 SignalCorrespondenceLearning learnSignalCorrespondence(
     const KInductionProblem& problem,
     Config::SolverType solverType,
     bool diagnostics,
-    SignalCorrespondenceLimits limits) {
+    SignalCorrespondenceLimits limits,
+    const BinarySignalCorrespondenceInput* binary) {
   SignalCorrespondenceLearning learned;
+  if (binary != nullptr) {
+    limits.inductionFrames = limits.binaryInductionFrames;
+    limits.budgetTicks = limits.binaryBudgetTicks;
+  }
   const size_t outputs = problem.observedOutputExprs0.size();
   learned.provedOutputs.assign(outputs, false);
   // Outputs whose cones differ in a reachable state: no run can prove them.
@@ -1078,13 +1231,17 @@ SignalCorrespondenceLearning learnSignalCorrespondence(
   };
   for (const auto scope : {SignalCorrespondenceScope::RegistersAndOutputs,
                            SignalCorrespondenceScope::AllSignals}) {
+    if (binary != nullptr && scope == SignalCorrespondenceScope::AllSignals) {
+      break;
+    }
     // Deeper induction proves more and costs more; a depth that gave up is
     // not followed by a deeper one.
     for (size_t frames = 1;
          frames <= limits.inductionFrames && open() != 0 && budgetLeft(); frames *= 2) {
       const size_t openBefore = open();
       const auto begin = std::chrono::steady_clock::now();
-      const auto result = proveSignalCorrespondence(problem, scope, solverType, limits, frames);
+      const auto result =
+          proveSignalCorrespondence(problem, scope, solverType, limits, frames, binary);
       spend(limits.budgetConflicts, result.conflicts);
       spend(limits.budgetDecisions, result.decisions);
       spend(limits.budgetTicks, result.ticks);
@@ -1101,7 +1258,7 @@ SignalCorrespondenceLearning learnSignalCorrespondence(
       if (diagnostics) {
         printf("SEC summary: signal_correspondence scope=%s frames=%zu completed=%d signals=%zu "
                "classes=%zu rounds=%zu solver_calls=%zu proved_outputs=%zu/%zu "
-               "state_equalities=%zu seconds=%.1f\n",
+               "state_equalities=%zu seconds=%.1f semantics=%s stopped_by=%s\n",
                scope == SignalCorrespondenceScope::AllSignals ? "all_signals"
                                                               : "registers_and_outputs",
                frames, result.completed, result.signals, result.classes, result.rounds,
@@ -1110,7 +1267,8 @@ SignalCorrespondenceLearning learnSignalCorrespondence(
                                               learned.provedOutputs.end(), true)) - provedBefore,
                openBefore,
                result.stateEqualities.size(),
-               std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
+               std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(),
+               binary != nullptr ? "binary" : "rails", stopName(result.stoppedBy));
         fflush(stdout);
       }
       if (!result.completed) {

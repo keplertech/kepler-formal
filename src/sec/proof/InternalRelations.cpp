@@ -431,6 +431,73 @@ class BinaryFormulas {
   std::unordered_map<size_t, BoolExpr*> transitionBySymbol_;
 };
 
+// The binary function of every observed output in each design; null where a
+// design has none under the output's name.
+std::vector<std::pair<BoolExpr*, BoolExpr*>> binaryOutputFunctions(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    BinaryFormulas& binary,
+    const KInductionProblem& problem) {
+  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
+  std::array<std::unordered_map<std::string, SignalKey>, 2> keyByName;
+  for (size_t design = 0; design < 2; ++design) {
+    for (const auto& key : models[design]->allObservedOutputs) {
+      if (const auto name = models[design]->displayNameByKey.find(key);
+          name != models[design]->displayNameByKey.end()) {
+        keyByName[design].emplace(name->second, key);
+      }
+    }
+  }
+  const size_t count = std::min(problem.observedOutputNames.size(),
+                                problem.observedOutputExprs0.size());
+  std::vector<std::pair<BoolExpr*, BoolExpr*>> functions(count, {nullptr, nullptr});
+  for (size_t i = 0; i < count; ++i) {
+    std::array<BoolExpr*, 2> function{nullptr, nullptr};
+    for (size_t design = 0; design < 2; ++design) {
+      const auto key = keyByName[design].find(problem.observedOutputNames[i]);
+      if (key == keyByName[design].end()) {
+        break;
+      }
+      const auto expr = models[design]->observedOutputExprByKey.find(key->second);
+      if (expr == models[design]->observedOutputExprByKey.end()) {
+        break;
+      }
+      function[design] = binary.remap(design, expr->second);
+    }
+    functions[i] = {function[0], function[1]};
+  }
+  return functions;
+}
+
+// What signal correspondence reads on the binary functions: every register
+// by its may-be-one rail, the outputs, and the candidate pairs as the
+// registers that share their unknown boot value.
+BinarySignalCorrespondenceInput binarySignalCorrespondenceInput(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    const std::vector<InternalRelationCandidate>& candidates,
+    const KInductionProblem& problem) {
+  BinaryFormulas binary(*problem.lazyTransitions);
+  BinarySignalCorrespondenceInput input;
+  for (const auto& [symbol, source] : problem.lazyTransitions->sourceByStateSymbol) {
+    if (source.rail == LazyTransitionRail::DualRailOne) {
+      input.transitions.emplace_back(symbol, binary.transition(symbol));
+    }
+  }
+  // The store is a hash map; the machine is built in symbol order.
+  std::sort(input.transitions.begin(), input.transitions.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+  input.outputs = binaryOutputFunctions(model0, model1, binary, problem);
+  for (const auto& candidate : candidates) {
+    for (const auto& [lhs, rhs] : candidate.equalities) {
+      if (binary.isRailOne(lhs) && binary.isRailOne(rhs)) {
+        input.commonStart.emplace_back(lhs, rhs);
+      }
+    }
+  }
+  return input;
+}
+
 // Outputs whose two functions agree in binary semantics over the merged
 // registers are one Boolean function, so their exact ternary values agree
 // as well; the rail obligation of such an output is discharged.
@@ -458,39 +525,19 @@ size_t dischargeBinaryEqualOutputs(
   for (auto& [_, target] : merged) {
     target = representative(target);
   }
-  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
-  std::array<std::unordered_map<std::string, SignalKey>, 2> keyByName;
-  for (size_t design = 0; design < 2; ++design) {
-    for (const auto& key : models[design]->allObservedOutputs) {
-      if (const auto name = models[design]->displayNameByKey.find(key);
-          name != models[design]->displayNameByKey.end()) {
-        keyByName[design].emplace(name->second, key);
-      }
-    }
-  }
-  const size_t count = std::min(problem.observedOutputNames.size(),
-                                problem.observedOutputExprs0.size());
+  const auto unmerged = binaryOutputFunctions(model0, model1, binary, problem);
+  const size_t count = unmerged.size();
   std::vector<char> discharged(count, 0);
   std::vector<size_t> pending;
   std::vector<std::pair<BoolExpr*, BoolExpr*>> functions(count);
   std::unordered_map<BoolExpr*, BoolExpr*> canonical;
   for (size_t i = 0; i < count; ++i) {
-    std::array<BoolExpr*, 2> function{nullptr, nullptr};
-    for (size_t design = 0; design < 2; ++design) {
-      const auto key = keyByName[design].find(problem.observedOutputNames[i]);
-      if (key == keyByName[design].end()) {
-        break;
-      }
-      const auto expr = models[design]->observedOutputExprByKey.find(key->second);
-      if (expr == models[design]->observedOutputExprByKey.end()) {
-        break;
-      }
-      function[design] =
-          canonicalUnderMerge(binary.remap(design, expr->second), merged, canonical);
-    }
-    if (function[0] == nullptr || function[1] == nullptr) {
+    if (unmerged[i].first == nullptr || unmerged[i].second == nullptr) {
       continue;
     }
+    const std::array<BoolExpr*, 2> function{
+        canonicalUnderMerge(unmerged[i].first, merged, canonical),
+        canonicalUnderMerge(unmerged[i].second, merged, canonical)};
     if (function[0] == function[1]) {
       discharged[i] = 1;
       continue;
@@ -1116,24 +1163,36 @@ void learnInternalStateRelations(
     // recomputes: the outputs and the registers then only hold together.
     // Signal correspondence proves them in one induction, from the state the
     // reset window leaves (van Eijk, TCAD 2000).
-    const auto learned = learnSignalCorrespondence(problem, solverType, diagnostics);
     const size_t outputs = problem.observedOutputExprs0.size();
     if (problem.structurallyProvedOutputs.size() != outputs) {
       problem.structurallyProvedOutputs.assign(outputs, false);
     }
-    for (size_t i = 0; i < outputs && i < learned.provedOutputs.size(); ++i) {
-      if (!learned.provedOutputs[i] || problem.structurallyProvedOutputs[i]) {
-        continue;
+    const auto discharge = [&problem, outputs](const std::vector<bool>& provedOutputs) {
+      for (size_t i = 0; i < outputs && i < provedOutputs.size(); ++i) {
+        if (!provedOutputs[i] || problem.structurallyProvedOutputs[i]) {
+          continue;
+        }
+        // Discharged like a structurally identical output; the property is
+        // rebuilt by dischargeStructurallyEquivalentOutputs below.
+        problem.observedOutputExprs0[i] = BoolExpr::createTrue();
+        problem.observedOutputExprs1[i] = BoolExpr::createTrue();
+        if (i < problem.dualRailOutputStrictEqualityExprs.size()) {
+          problem.dualRailOutputStrictEqualityExprs[i] = BoolExpr::createTrue();
+        }
+        problem.structurallyProvedOutputs[i] = true;
       }
-      // Discharged like a structurally identical output; the property is
-      // rebuilt by dischargeStructurallyEquivalentOutputs below.
-      problem.observedOutputExprs0[i] = BoolExpr::createTrue();
-      problem.observedOutputExprs1[i] = BoolExpr::createTrue();
-      if (i < problem.dualRailOutputStrictEqualityExprs.size()) {
-        problem.dualRailOutputStrictEqualityExprs[i] = BoolExpr::createTrue();
-      }
-      problem.structurallyProvedOutputs[i] = true;
+    };
+    // The binary functions come first, for the reason of the binary round:
+    // two shapes of one function need not agree on the rails, and the binary
+    // logic is half the size. The rail run then takes what is left, outputs
+    // that are equal only because both sides are unknown.
+    if (options.binaryRelationRound && problem.lazyTransitions != nullptr) {
+      const auto input = binarySignalCorrespondenceInput(model0, model1, candidates, problem);
+      discharge(learnSignalCorrespondence(problem, solverType, diagnostics, {}, &input)
+                    .provedOutputs);
     }
+    const auto learned = learnSignalCorrespondence(problem, solverType, diagnostics);
+    discharge(learned.provedOutputs);
     problem.sameFrameStateEqualityPairs0.insert(
         problem.sameFrameStateEqualityPairs0.end(), learned.stateEqualities.begin(),
         learned.stateEqualities.end());
