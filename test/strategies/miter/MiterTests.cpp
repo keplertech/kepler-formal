@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -3192,7 +3193,7 @@ TEST_F(MiterTests, TestMiterAndWithChainedInverter) {
     cfg << "log_file: \"" << differentLog.string() << "\"\n";
   }
   int rc = runKeplerCliWithArgs({"--config", differentCfg.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // a difference: the code a SEC counterexample has
   ASSERT_TRUE(std::filesystem::exists(differentLog));
   std::ifstream miterLogFile(differentLog);
   std::string line;
@@ -3315,6 +3316,513 @@ static int run_kepler_cli_with_args(const std::vector<std::string>& args) {
     return EXIT_FAILURE;
   }
 #endif
+}
+
+// A scratch directory per test, and a shell run of kepler-formal in it with
+// stdout and stderr kept: the subprocess form of a CLI test.
+static std::filesystem::path cliScratchDir(const std::string& name) {
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("kepler_cli_" + name + "_" +
+                    std::to_string(std::chrono::steady_clock::now()
+                                       .time_since_epoch()
+                                       .count()));
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+static void writeText(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream out(path);
+  out << text;
+}
+
+static std::string readText(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  std::stringstream text;
+  text << in.rdbuf();
+  return text.str();
+}
+
+// AND2, NAND2 and INV, enough for an equivalent pair the miter cannot hash
+// away: AND2 against NAND2 into INV.
+static const char* kTinyLiberty =
+    "library(tiny) {\n"
+    "  cell(AND2) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(B) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"(A&B)\"; }\n"
+    "  }\n"
+    "  cell(NAND2) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(B) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"!(A&B)\"; }\n"
+    "  }\n"
+    "  cell(INV) {\n"
+    "    pin(A) { direction : input; }\n"
+    "    pin(Y) { direction : output; function : \"!A\"; }\n"
+    "  }\n"
+    "}\n";
+
+// Runs kepler-formal in `dir`; its output goes to `dir`/kepler.out.
+static int runKeplerIn(const std::filesystem::path& dir,
+                       const std::vector<std::string>& args) {
+  std::string cmd = "cd '" + dir.string() + "' && '" + std::string(KEPLER_BIN) + "'";
+  for (const auto& a : args) {
+    cmd += " '" + a + "'";
+  }
+  cmd += " > kepler.out 2>&1";
+  const int rc = std::system(cmd.c_str());
+  return (rc != -1 && WIFEXITED(rc)) ? WEXITSTATUS(rc) : EXIT_FAILURE;
+}
+
+TEST(KeplerCliSubprocessTests, LecExitStatusTellsADifferenceFromEquivalence) {
+  // Equivalent exits 0; a difference exits 3, the code a SEC
+  // counterexample has, so a caller reads the verdict from the status.
+  const auto dir = cliScratchDir("lec_exit_status");
+  writeText(dir / "same.v", "module top(input a, output y);\n  assign y = a;\nendmodule\n");
+  writeText(dir / "zero.v", "module top(input a, output y);\n  assign y = 1'b0;\nendmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "same.v", "same.v"}), 0)
+      << readText(dir / "kepler.out");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "same.v", "zero.v"}), 3)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, LecDifferenceNamesTheMiterLogItWrote) {
+  // The verdict points at the miter's log by the name this run gave it.
+  const auto dir = cliScratchDir("lec_log_name");
+  writeText(dir / "same.v", "module top(input a, output y);\n  assign y = a;\nendmodule\n");
+  writeText(dir / "zero.v", "module top(input a, output y);\n  assign y = 1'b0;\nendmodule\n");
+  runKeplerIn(dir, {"-verilog", "same.v", "zero.v"});
+  const auto out = readText(dir / "kepler.out");
+  std::smatch m;
+  ASSERT_TRUE(std::regex_search(
+      out, m, std::regex("Difference was found\\. Please refer to the log\\(([^)]+)\\)")))
+      << out;
+  ASSERT_TRUE(std::filesystem::exists(dir / m[1].str())) << m[1].str();
+  EXPECT_NE(readText(dir / m[1].str()).find("Building miter"), std::string::npos);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, LecLogNamesTheSolverProblemAndItsTime) {
+  // An equivalent pair the miter cannot hash away, so the solver runs: its
+  // start line names the problem it was given, its finish line the time.
+  const auto dir = cliScratchDir("lec_problem_size");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "and.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "nand_inv.v",
+            "module top(input a, input b, output y);\n"
+            "  wire n;\n"
+            "  NAND2 u0 (.A(a), .B(b), .Y(n));\n"
+            "  INV u1 (.A(n), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "cfg.yaml",
+            "format: verilog\n"
+            "verification: lec\n"
+            "input_paths:\n  - and.v\n  - nand_inv.v\n"
+            "liberty_files:\n  - tiny.lib\n"
+            "log_file: miter.log\n");
+  ASSERT_EQ(runKeplerIn(dir, {"--config", "cfg.yaml"}), 0)
+      << readText(dir / "kepler.out");
+  const auto log = readText(dir / "miter.log");
+  EXPECT_TRUE(std::regex_search(
+      log, std::regex("Starting solver: [0-9]+ variables, [0-9]+ clauses, "
+                      "[0-9]+ outputs compared")))
+      << log;
+  EXPECT_TRUE(std::regex_search(
+      log, std::regex("SAT solver finished: UNSAT in [0-9]+\\.[0-9] s")))
+      << log;
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, LecIgnoresPhysicalOnlyCellsWithoutAFunction) {
+  // A placed netlist carries physical-only cells -- well taps, fillers,
+  // decaps -- with no pins and no logic, and often no liberty entry. The
+  // netlist with one is equivalent to the same netlist without it.
+  const auto dir = cliScratchDir("physical_only_cells");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "plain.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "tapped.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "  TAPCELL u_tap ();\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "plain.v", "tapped.v", "tiny.lib"}), 0)
+      << readText(dir / "kepler.out");
+  const auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("No difference was found"), std::string::npos) << out;
+  // The skipped cell is named, so a typo in a real cell name is not silent.
+  EXPECT_NE(out.find("TAPCELL"), std::string::npos) << out;
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, UnknownCellWithConnectionsStillStopsLoading) {
+  // Only an unknown cell with no connected pin is skipped: one that is wired
+  // into the design has a function the tool does not know, and stays an error.
+  const auto dir = cliScratchDir("unknown_connected_cell");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "plain.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  writeText(dir / "unknown.v",
+            "module top(input a, input b, output y);\n"
+            "  MYSTERY u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "plain.v", "unknown.v", "tiny.lib"}), 1)
+      << readText(dir / "kepler.out");
+  const auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("MYSTERY cannot be found"), std::string::npos) << out;
+  std::filesystem::remove_all(dir);
+}
+
+// An integrated clock gate as asap7's liberty writes it (a statetable latch
+// and a state_function on the gated clock), a flop, a mux and a tie cell.
+static const char* kClockGateLiberty =
+    "library (cells) {\n"
+    "  cell (ICG) {\n"
+    "    clock_gating_integrated_cell : latch_posedge_precontrol;\n"
+    "    statetable (\"CLK ENA SE\", \"IQ\") {\n"
+    "      table : \"L L L : - : L,\\\n"
+    "               L L H : - : H,\\\n"
+    "               L H L : - : H,\\\n"
+    "               L H H : - : H,\\\n"
+    "               H - - : - : N\";\n"
+    "    }\n"
+    "    pin (IQ) { direction : internal; internal_node : \"IQ\"; }\n"
+    "    pin (GCLK) { direction : output; state_function : \"CLK & IQ\"; }\n"
+    "    pin (CLK) { direction : input; clock : true; }\n"
+    "    pin (ENA) { direction : input; }\n"
+    "    pin (SE) { direction : input; }\n"
+    "  }\n"
+    "  cell (DFF) {\n"
+    "    ff (IQ, IQN) { clocked_on : \"CLK\"; next_state : \"D\"; }\n"
+    "    pin (D) { direction : input; }\n"
+    "    pin (CLK) { direction : input; clock : true; }\n"
+    "    pin (Q) { direction : output; function : \"IQ\"; }\n"
+    "  }\n"
+    "  cell (MUX2) {\n"
+    "    pin (A) { direction : input; }\n"
+    "    pin (B) { direction : input; }\n"
+    "    pin (S) { direction : input; }\n"
+    "    pin (Y) { direction : output; function : \"(S & B) | (!S & A)\"; }\n"
+    "  }\n"
+    "  cell (TIELO) {\n"
+    "    pin (L) { direction : output; function : \"0\"; }\n"
+    "  }\n"
+    "}\n";
+
+// The register of the three designs below, written through the clock gate.
+static const char* kClockGatedRegister =
+    "module top (input clk, input en, input d, output q);\n"
+    "  wire gclk, lo;\n"
+    "  TIELO t (.L(lo));\n"
+    "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+    "  DFF f (.D(d), .CLK(gclk), .Q(q));\n"
+    "endmodule\n";
+
+TEST(KeplerCliSubprocessTests, SecModelsAnIntegratedClockGateAsAFlopEnable) {
+  // A flop behind an ICG holds its value unless the enable was high: the
+  // same register as a flop on the free clock with an enable mux on its data.
+  const auto dir = cliScratchDir("sec_clock_gate");
+  writeText(dir / "cells.lib", kClockGateLiberty);
+  writeText(dir / "icg.v", kClockGatedRegister);
+  writeText(dir / "mux.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(q), .B(d), .S(en), .Y(nd));\n"
+            "  DFF f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+  // Negative control: the enable inverted.
+  writeText(dir / "mux_wrong.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(d), .B(q), .S(en), .Y(nd));\n"
+            "  DFF f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux.v", "icg.v",
+                              "cells.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+  auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("SEC proved equivalence"), std::string::npos) << out;
+  EXPECT_NE(out.find("100.00% (1/1 covered/existing outputs)"),
+            std::string::npos)
+      << out;
+
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_wrong.v", "icg.v",
+                              "cells.lib"}),
+            3)
+      << readText(dir / "kepler.out");
+  out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("SEC found a counterexample"), std::string::npos) << out;
+
+  // Without the model the gated flop is opaque and nothing can be compared.
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "--clock-gate-model",
+                              "false", "mux.v", "icg.v", "cells.lib"}),
+            2)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, SecKeepsAClockGateOpaqueWhereItsLatchIsNotAWire) {
+  // The model reads the clock-gate latch as a wire, which holds only for a
+  // flop capturing on the rising edge of the gated clock. In front of a
+  // falling-edge flop the gate keeps no model and the flop stays opaque:
+  // no verdict rather than a wrong one. Through an inverter the same flop
+  // captures on the rising edge again, and the model applies.
+  const auto dir = cliScratchDir("sec_clock_gate_guard");
+  std::string liberty = kClockGateLiberty;
+  const std::string closing = "}\n";
+  ASSERT_GE(liberty.size(), closing.size());
+  liberty.erase(liberty.size() - closing.size());
+  liberty +=
+      "  cell (DFFN) {\n"
+      "    ff (IQ, IQN) { clocked_on : \"!CLK\"; next_state : \"D\"; }\n"
+      "    pin (D) { direction : input; }\n"
+      "    pin (CLK) { direction : input; clock : true; }\n"
+      "    pin (Q) { direction : output; function : \"IQ\"; }\n"
+      "  }\n"
+      "  cell (INV) {\n"
+      "    pin (A) { direction : input; }\n"
+      "    pin (Y) { direction : output; function : \"!A\"; }\n"
+      "  }\n"
+      // The same latch with the gated clock inverted: its output rises when
+      // the clock falls.
+      "  cell (ICGN) {\n"
+      "    clock_gating_integrated_cell : latch_posedge;\n"
+      "    statetable (\"CLK ENA\", \"IQ\") {\n"
+      "      table : \"L L : - : L, L H : - : H, H - : - : N\";\n"
+      "    }\n"
+      "    pin (IQ) { direction : internal; internal_node : \"IQ\"; }\n"
+      "    pin (GCLKN) { direction : output;\n"
+      "                  state_function : \"!(CLK & IQ)\"; }\n"
+      "    pin (CLK) { direction : input; clock : true; }\n"
+      "    pin (ENA) { direction : input; }\n"
+      "  }\n"
+      "}\n";
+  writeText(dir / "cells.lib", liberty);
+  writeText(dir / "mux_fall.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(q), .B(d), .S(en), .Y(nd));\n"
+            "  DFFN f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+  writeText(dir / "icg_fall.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk, lo;\n"
+            "  TIELO t (.L(lo));\n"
+            "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+            "  DFFN f (.D(d), .CLK(gclk), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_fall.v",
+                              "icg_fall.v", "cells.lib"}),
+            2)
+      << readText(dir / "kepler.out");
+  EXPECT_NE(readText(dir / "kepler.out")
+                .find("captures on the falling edge of its gated clock"),
+            std::string::npos)
+      << readText(dir / "kepler.out");
+
+  writeText(dir / "mux_rise.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire nd;\n"
+            "  MUX2 m (.A(q), .B(d), .S(en), .Y(nd));\n"
+            "  DFF f (.D(nd), .CLK(clk), .Q(q));\n"
+            "endmodule\n");
+  writeText(dir / "icg_inverted.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk, gclk_n, lo;\n"
+            "  TIELO t (.L(lo));\n"
+            "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+            "  INV i (.A(gclk), .Y(gclk_n));\n"
+            "  DFFN f (.D(d), .CLK(gclk_n), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_rise.v",
+                              "icg_inverted.v", "cells.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+
+  // A cell whose output is not a gated copy of the clock keeps no model.
+  writeText(dir / "icgn.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk_n;\n"
+            "  ICGN g (.CLK(clk), .ENA(en), .GCLKN(gclk_n));\n"
+            "  DFF f (.D(d), .CLK(gclk_n), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux_rise.v", "icgn.v",
+                              "cells.lib"}),
+            2)
+      << readText(dir / "kepler.out");
+  EXPECT_NE(readText(dir / "kepler.out")
+                .find("Clock-gating cell ICGN is not modeled"),
+            std::string::npos)
+      << readText(dir / "kepler.out");
+
+  // A clock gate named as a verification boundary stays the cell it is, so
+  // the boundary still resolves.
+  writeText(dir / "icg_rise.v",
+            "module top (input clk, input en, input d, output q);\n"
+            "  wire gclk, lo;\n"
+            "  TIELO t (.L(lo));\n"
+            "  ICG g (.CLK(clk), .ENA(en), .SE(lo), .GCLK(gclk));\n"
+            "  DFF f (.D(d), .CLK(gclk), .Q(q));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "--set-as-boundary",
+                              "g", "g", "icg_rise.v", "icg_rise.v",
+                              "cells.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+  EXPECT_NE(readText(dir / "kepler.out")
+                .find("it is named as a verification boundary"),
+            std::string::npos)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, SecModelsTheClockGatesOfAFoundryLiberty) {
+  // The same register through the clock gates of the Nangate45 library the
+  // examples use: its statetables are written with line continuations,
+  // unquoted values and timing groups between the pins.
+  const auto library =
+      std::filesystem::absolute(get_test_data_prefix() +
+                                "examples/tinyrocket/"
+                                "NangateOpenCellLibrary_typical.lib");
+  if (!std::filesystem::exists(library)) {
+    GTEST_SKIP() << library << " not found";
+  }
+  const auto dir = cliScratchDir("sec_clock_gate_nangate");
+  writeText(dir / "mux.v",
+            "module top (input clk, input en, input d0, input d1,\n"
+            "            output q0, output q1);\n"
+            "  wire n0, n1;\n"
+            "  MUX2_X1 m0 (.A(q0), .B(d0), .S(en), .Z(n0));\n"
+            "  MUX2_X1 m1 (.A(q1), .B(d1), .S(en), .Z(n1));\n"
+            "  DFF_X1 f0 (.D(n0), .CK(clk), .Q(q0));\n"
+            "  DFF_X1 f1 (.D(n1), .CK(clk), .Q(q1));\n"
+            "endmodule\n");
+  // One flop behind a plain gate, one behind a gate with a test enable and a
+  // clock buffer.
+  writeText(dir / "icg.v",
+            "module top (input clk, input en, input d0, input d1,\n"
+            "            output q0, output q1);\n"
+            "  wire g0, g1, g1_buf, lo;\n"
+            "  LOGIC0_X1 t (.Z(lo));\n"
+            "  CLKGATE_X1 c0 (.CK(clk), .E(en), .GCK(g0));\n"
+            "  CLKGATETST_X2 c1 (.CK(clk), .E(en), .SE(lo), .GCK(g1));\n"
+            "  CLKBUF_X1 b (.A(g1), .Z(g1_buf));\n"
+            "  DFF_X1 f0 (.D(d0), .CK(g0), .Q(q0));\n"
+            "  DFF_X1 f1 (.D(d1), .CK(g1_buf), .Q(q1));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "-v", "sec", "mux.v", "icg.v",
+                              library.string()}),
+            0)
+      << readText(dir / "kepler.out");
+  const auto out = readText(dir / "kepler.out");
+  EXPECT_NE(out.find("Expanded 2 integrated clock gate instance(s)"),
+            std::string::npos)
+      << out;
+  EXPECT_NE(out.find("100.00% (2/2 covered/existing outputs)"),
+            std::string::npos)
+      << out;
+  std::filesystem::remove_all(dir);
+}
+
+TEST(KeplerCliSubprocessTests, SvRtlAgainstALibertyGateNetlist) {
+  // The check after synthesis: SystemVerilog RTL against the gate netlist
+  // made from it, cells from liberty, in one run with -sv.
+  const auto dir = cliScratchDir("sv_against_gates");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "rtl.sv",
+            "module top(input a, input b, output y);\n"
+            "  assign y = a & b;\n"
+            "endmodule\n");
+  writeText(dir / "gates.v",
+            "module top(input a, input b, output y);\n"
+            "  AND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-sv", "-v", "sec", "--design1", "rtl.sv",
+                              "--design2", "gates.v", "--liberty", "tiny.lib"}),
+            0)
+      << readText(dir / "kepler.out");
+  // A wrong netlist is a counterexample, not a pass: the cells carry their
+  // liberty function, they are not black boxes.
+  writeText(dir / "wrong.v",
+            "module top(input a, input b, output y);\n"
+            "  NAND2 u (.A(a), .B(b), .Y(y));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-sv", "-v", "sec", "--design1", "rtl.sv",
+                              "--design2", "wrong.v", "--liberty", "tiny.lib"}),
+            3)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
+}
+
+// The miter logs a run in `dir` wrote, joined.
+static std::string readMiterLogs(const std::filesystem::path& dir) {
+  std::string logs;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    if (entry.path().filename().string().rfind("miter_log", 0) == 0) {
+      logs += readText(entry.path());
+    }
+  }
+  return logs;
+}
+
+TEST(KeplerCliSubprocessTests, LecReportsProgressAcrossOutputs) {
+  // One miter over every output is one SAT call, silent for as long as it
+  // runs. With --po-progress the outputs are checked a batch at a time and
+  // the miter log counts them.
+  const auto dir = cliScratchDir("lec_progress");
+  writeText(dir / "tiny.lib", kTinyLiberty);
+  writeText(dir / "a.v",
+            "module top(input a, input b, output y, output z);\n"
+            "  AND2 u0 (.A(a), .B(b), .Y(y));\n"
+            "  INV u1 (.A(a), .Y(z));\n"
+            "endmodule\n");
+  writeText(dir / "b.v",
+            "module top(input a, input b, output y, output z);\n"
+            "  wire n;\n"
+            "  NAND2 u0 (.A(a), .B(b), .Y(n));\n"
+            "  INV u1 (.A(n), .Y(y));\n"
+            "  INV u2 (.A(a), .Y(z));\n"
+            "endmodule\n");
+  ASSERT_EQ(runKeplerIn(dir, {"-verilog", "a.v", "b.v", "tiny.lib", "--po-progress"}), 0)
+      << readText(dir / "kepler.out");
+  auto logs = readMiterLogs(dir);
+  EXPECT_NE(logs.find("checked 1 of 2 outputs"), std::string::npos) << logs;
+  EXPECT_NE(logs.find("checked 2 of 2 outputs"), std::string::npos) << logs;
+
+  // A batch size groups the outputs: here both in one batch.
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    if (entry.path().filename().string().rfind("miter_log", 0) == 0) {
+      std::filesystem::remove(entry.path());
+    }
+  }
+  ASSERT_EQ(runKeplerIn(dir, {"-verilog", "a.v", "b.v", "tiny.lib",
+                              "--po-progress-batch", "2"}),
+            0)
+      << readText(dir / "kepler.out");
+  logs = readMiterLogs(dir);
+  EXPECT_EQ(logs.find("checked 1 of 2 outputs"), std::string::npos) << logs;
+  EXPECT_NE(logs.find("checked 2 of 2 outputs"), std::string::npos) << logs;
+
+  // The verdict is the one the single miter gives: a difference in one
+  // output is found, and named, with the outputs checked one at a time.
+  writeText(dir / "c.v",
+            "module top(input a, input b, output y, output z);\n"
+            "  AND2 u0 (.A(a), .B(b), .Y(y));\n"
+            "  AND2 u1 (.A(a), .B(b), .Y(z));\n"
+            "endmodule\n");
+  EXPECT_EQ(runKeplerIn(dir, {"-verilog", "a.v", "c.v", "tiny.lib", "--po-progress"}), 3)
+      << readText(dir / "kepler.out");
+  std::filesystem::remove_all(dir);
 }
 
 TEST(KeplerCliSubprocessTests, BinaryExists) {
@@ -4031,7 +4539,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRun) {
     config = get_test_data_prefix() + "test/strategies/miter/test_config_verilog_bazel.yaml";
   }
   int rc = run_kepler_cli_with_args({"--config", config});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
@@ -4048,7 +4556,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunCommandLine) {
                                          pfx + "examples/tinyrocket/fakeram45_64x15.lib",
                                          pfx + "examples/tinyrocket/fakeram45_64x32.lib",
                                          pfx + "examples/tinyrocket/fakeram45_1024x32.lib"});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
 }
 
 TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
@@ -4095,7 +4603,7 @@ TEST(KeplerCliSubprocessTests, ExampleTestRunNajaIFWithScopeExtraction) {
   configFile.close();
 
   int rc = run_kepler_cli_with_args({"--config", config.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
   std::filesystem::remove_all(tempDir);
 }
 
@@ -4146,7 +4654,7 @@ TEST(KeplerCliSubprocessTests, ExampleRunWritesConfiguredLogFile) {
   }
 
   int rc = run_kepler_cli_with_args({"--config", configPath.string()});
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  EXPECT_EQ(rc, 3);  // tinyrocket_edited differs: the code a SEC counterexample has
   ASSERT_TRUE(std::filesystem::exists(logPath));
 
   std::ifstream logFile(logPath);

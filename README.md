@@ -27,7 +27,7 @@ This project is supported and funded by NLNet through the [NGI0 Entrust](https:/
 | Gate-level LEC | Post-synthesis or implementation netlists plus Liberty libraries | `lec` |
 | Gate-level SEC | Sequential gate-level netlists plus Liberty libraries | `sec` |
 | RTL-level SEC | RTL Verilog/SystemVerilog sources or SystemVerilog flists | `sec` |
-| RTL to Gate SEC | SystemVerilog design 1 and Verilog design 2, plus Liberty libraries | `sec` |
+| RTL to Gate SEC | SystemVerilog design 1 and Verilog design 2, plus Liberty libraries; with `-sv`, either design can be a netlist of the Liberty cells | `sec` |
 
 LEC is the default verification mode. SEC is selected with
 `verification: sec` in YAML or `-v sec` / `--verification sec` on the command
@@ -146,6 +146,13 @@ YAML `py_tech_files` option. See
 [Custom Python Primitives](docs/python-primitives.md) for setup and deployment
 and the [Xilinx FPGA example](examples/xilinx) for the use model.
 
+### LEC Result Codes
+
+| Result | Exit code | Meaning |
+| --- | ---: | --- |
+| Equivalent | `0` | No difference was found. |
+| Difference found | `3` | A mismatch was found; the same code as a SEC counterexample. |
+
 ### SEC Result Codes
 
 | Result | Exit code | Meaning |
@@ -212,6 +219,7 @@ build/src/bin/kepler-formal -v sec \
 | `-sv`, `-systemverilog` | Use SystemVerilog input mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
+| `--po-progress`, `--po-progress-batch <n>` | Check the LEC outputs a batch at a time and log `checked <k> of <n> outputs` in the miter log, so a long run shows progress. Off by default. |
 
 To intentionally compare designs with different LEC boundaries:
 
@@ -244,6 +252,7 @@ build/src/bin/kepler-formal --config <file.yaml>
 | `verilog_preprocessing` | bool | Enable preprocessing for Verilog inputs. |
 | `solver` | string | `kissat` or `glucose`. Defaults to `kissat`. |
 | `log_file` | string | Path for the miter log file. Default logs are `miter_log_<n>.txt` in the current working directory. |
+| `po_progress`, `po_progress_batch` | bool, integer | Same as `--po-progress` and `--po-progress-batch`. |
 
 Yaml file example:
 

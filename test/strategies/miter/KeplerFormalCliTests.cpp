@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -982,6 +983,12 @@ TEST_F(KeplerFormalCliTests, SecResultExitCodesAreStable) {
   EXPECT_EQ(kSecCounterexampleExitCode, 3);
 }
 
+TEST_F(KeplerFormalCliTests, LecResultExitCodesAreStable) {
+  // Equivalent is 0; a difference shares SEC's counterexample code.
+  EXPECT_EQ(kLecDifferenceExitCode, 3);
+  EXPECT_EQ(kLecDifferenceExitCode, kSecCounterexampleExitCode);
+}
+
 TEST_F(KeplerFormalCliTests, InProcessRunStatusNamesAreStable) {
   using KEPLER_FORMAL::RunStatus;
   EXPECT_STREQ(KEPLER_FORMAL::runStatusName(RunStatus::NoResult), "no_result");
@@ -1034,6 +1041,70 @@ TEST_F(KeplerFormalCliTests, InProcessDriverRejectsAnActiveNajaUniverse) {
   EXPECT_EQ(help.result.status, KEPLER_FORMAL::RunStatus::NoResult);
 }
 
+TEST_F(KeplerFormalCliTests, LecLogNamesTheSolverProblemAndItsTime) {
+  // An equivalent pair the miter cannot hash away, so the solver runs. Its
+  // start line names the problem it was given and its finish line the time:
+  // a long solve can then be told from a hang and compared with a smaller.
+  NamedLoggerGuard loggerGuard("kepler_formal_main_logger");
+  const auto fixture = createDesignFixture(
+      "v",
+      "module top(input a, input b, output y);\n"
+      "  AND2 u (.A(a), .B(b), .Y(y));\n"
+      "endmodule\n",
+      "module top(input a, input b, output y);\n"
+      "  wire n;\n"
+      "  NAND2 u0 (.A(a), .B(b), .Y(n));\n"
+      "  INV u1 (.A(n), .Y(y));\n"
+      "endmodule\n");
+  const auto liberty = fixture.tmpDir / "tiny.lib";
+  {
+    std::ofstream out(liberty);
+    out << "library(tiny) {\n"
+           "  cell(AND2) {\n"
+           "    pin(A) { direction : input; }\n"
+           "    pin(B) { direction : input; }\n"
+           "    pin(Y) { direction : output; function : \"(A&B)\"; }\n"
+           "  }\n"
+           "  cell(NAND2) {\n"
+           "    pin(A) { direction : input; }\n"
+           "    pin(B) { direction : input; }\n"
+           "    pin(Y) { direction : output; function : \"!(A&B)\"; }\n"
+           "  }\n"
+           "  cell(INV) {\n"
+           "    pin(A) { direction : input; }\n"
+           "    pin(Y) { direction : output; function : \"!A\"; }\n"
+           "  }\n"
+           "}\n";
+  }
+  const auto log = fixture.tmpDir / "problem_size.log";
+  const auto cfg = writeTempConfig(
+      "format: verilog\n"
+      "verification: lec\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "liberty_files:\n"
+      "  - " + liberty.string() + "\n"
+      "log_file: " + log.string() + "\n");
+  const auto run = runStructuredWithConfigFile(cfg);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  std::ifstream in(log);
+  std::stringstream text;
+  text << in.rdbuf();
+  EXPECT_TRUE(std::regex_search(
+      text.str(),
+      std::regex("Starting solver: [0-9]+ variables, [0-9]+ clauses, "
+                 "[0-9]+ outputs compared")))
+      << text.str();
+  EXPECT_TRUE(std::regex_search(
+      text.str(),
+      std::regex("SAT solver finished: (SAT|UNSAT) in [0-9]+\\.[0-9] s")))
+      << text.str();
+  std::filesystem::remove(cfg);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {
   SolverGuard solverGuard;
   ReportSkippedPOsGuard reportGuard;
@@ -1080,8 +1151,8 @@ TEST_F(KeplerFormalCliTests, InProcessDriverReturnsStructuredLecResults) {
       "  - " + fixture.design1Path.string() + "\n"
       "log_file: " + differentLog.string() + "\n");
   const auto different = runStructuredWithConfigFile(differentCfg);
-  EXPECT_EQ(different.exitCode, EXIT_SUCCESS);
-  EXPECT_EQ(different.result.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(different.exitCode, kLecDifferenceExitCode);
+  EXPECT_EQ(different.result.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(different.result.status, KEPLER_FORMAL::RunStatus::Different);
   EXPECT_EQ(different.result.logFile, differentLog.string());
   EXPECT_TRUE(std::filesystem::exists(differentLog));
@@ -1487,7 +1558,8 @@ TEST_F(KeplerFormalCliTests, DumpCnfFromConfig) {
   int argc = 3;
 
   int rc = KeplerFormalMain(argc, argv);
-  EXPECT_EQ(rc, EXIT_SUCCESS);
+  // The edited design differs: the code a LEC difference exits with.
+  EXPECT_EQ(rc, kLecDifferenceExitCode);
   if (!std::filesystem::exists(cnfPath)) {
     GTEST_SKIP() << "CNF dump file was not produced by the in-process run in this build";
   }
@@ -1769,7 +1841,7 @@ TEST_F(KeplerFormalCliTests, CliSetAsBoundaryExposesDifferentInstanceInputs) {
          "-verilog",
          fixture.design0Path.string(),
          fixture.design1Path.string()});
-    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
     EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
   }
 
@@ -1779,28 +1851,28 @@ TEST_F(KeplerFormalCliTests, CliSetAsBoundaryExposesDifferentInstanceInputs) {
 TEST_F(KeplerFormalCliTests,
        CliSetAsBoundaryDetectsSignalVersusConstantZero) {
   const auto run = runBoundaryInputComparison("a", "1'b0", false);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
 TEST_F(KeplerFormalCliTests,
        CliCompactSetAsBoundaryDetectsSignalVersusConstantZero) {
   const auto run = runBoundaryInputComparison("a", "1'b0", true);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
 TEST_F(KeplerFormalCliTests,
        CliSetAsBoundaryDetectsConstantZeroVersusOne) {
   const auto run = runBoundaryInputComparison("1'b0", "1'b1", false);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
 TEST_F(KeplerFormalCliTests,
        CliCompactSetAsBoundaryDetectsConstantZeroVersusOne) {
   const auto run = runBoundaryInputComparison("1'b0", "1'b1", true);
-  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
 }
 
@@ -1827,7 +1899,7 @@ TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryAbstractsInstanceOutput) {
        fixture.design0Path.string(),
        fixture.design1Path.string(),
        fixture.libertyPath.string()});
-  EXPECT_EQ(baseline.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(baseline.exitCode, kLecDifferenceExitCode);
   EXPECT_EQ(baseline.result.status, KEPLER_FORMAL::RunStatus::Different);
 
   const auto bounded = runStructuredWithConfigFile(cfgPath);
@@ -2022,7 +2094,7 @@ TEST_F(KeplerFormalCliTests, CliCompactSetAsBoundaryUsesEachSidePath) {
          "--set-as-boundary",
          "u_left",
          "u_right"});
-    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.exitCode, kLecDifferenceExitCode);
     EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
   }
 
@@ -4752,7 +4824,7 @@ TEST_F(KeplerFormalCliTests, ConfigCompactModeWritesDifferentSummaryAndWarning) 
       "compact_mode: true\n"
       "log_file: " + logPath.string() + "\n");
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS);
+  EXPECT_EQ(runWithConfigFile(cfgPath), kLecDifferenceExitCode);
   ASSERT_TRUE(std::filesystem::exists(logPath));
   const auto contents = readFileContents(logPath);
   EXPECT_NE(contents.find("Circuits are DIFFERENT"), std::string::npos);
@@ -5651,9 +5723,12 @@ TEST_F(KeplerFormalCliTests,
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
-TEST_F(KeplerFormalCliTests,
-     SecStatefulClockGateWithoutBehavioralModelIsSkippedAsOpaque) {
-  const auto fixture = createDesignFixture(
+namespace {
+
+// A flop behind a Nangate45 integrated clock gate, a flop on the free clock,
+// and the same registers with the enable as a mux on the data.
+SimpleCliFixture createClockGatedRegisterFixture() {
+  return createDesignFixture(
       "v",
       "module top(input clk, input rst_n, input en, input d, output q, output pass);\n"
       "  wire gclk;\n"
@@ -5671,22 +5746,59 @@ TEST_F(KeplerFormalCliTests,
       "  DFFR_X1 u_q(.CK(clk), .D(next_q), .Q(q), .QN(qn), .RN(rst_n));\n"
       "  DFFR_X1 u_pass(.CK(clk), .D(d), .Q(pass), .QN(pass_n), .RN(rst_n));\n"
       "endmodule\n");
-  const auto logPath = fixture.tmpDir / "sec_clockgate_opaque.log";
+}
+
+std::string clockGatedRegisterConfig(const SimpleCliFixture& fixture,
+                                     const std::filesystem::path& logPath,
+                                     const std::string& extra) {
   const auto libertyPath =
       repoRoot() / "examples" / "tinyrocket" /
       "NangateOpenCellLibrary_typical.lib";
+  return "format: verilog\n"
+         "verification: sec\n"
+         "sec_encoding: dual_rail_steady\n"
+         "sec_engine: pdr\n"
+         "max_k: 2\n"
+         "input_paths:\n"
+         "  - " + fixture.design0Path.string() + "\n"
+         "  - " + fixture.design1Path.string() + "\n"
+         "liberty_files:\n"
+         "  - " + libertyPath.string() + "\n"
+         "log_file: " + logPath.string() + "\n" + extra;
+}
+
+}  // namespace
+
+TEST_F(KeplerFormalCliTests, SecStatefulClockGateIsModeledAsAFlopEnable) {
+  // The Liberty statetable of the clock gate is read as a latch and a gate,
+  // which SEC reduces to an enable on the flop: both outputs are proved.
+  const auto fixture = createClockGatedRegisterFixture();
+  const auto logPath = fixture.tmpDir / "sec_clockgate_modeled.log";
+  const auto cfgPath =
+      writeTempConfig(clockGatedRegisterConfig(fixture, logPath, ""));
+
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+  EXPECT_EQ(run.result.totalOutputs, 2u);
+  EXPECT_EQ(run.result.coveredOutputs, 2u);
+
+  const auto contents = readFileContents(logPath);
+  EXPECT_NE(contents.find("SEC checked-output coverage: 100.00% (2/2"),
+            std::string::npos);
+  EXPECT_EQ(contents.find("opaque-internal"), std::string::npos);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+     SecStatefulClockGateWithoutBehavioralModelIsSkippedAsOpaque) {
+  // With the clock-gate model off the cell is what Naja loaded: no function.
+  const auto fixture = createClockGatedRegisterFixture();
+  const auto logPath = fixture.tmpDir / "sec_clockgate_opaque.log";
   const auto cfgPath = writeTempConfig(
-      "format: verilog\n"
-      "verification: sec\n"
-      "sec_encoding: dual_rail_steady\n"
-      "sec_engine: pdr\n"
-      "max_k: 2\n"
-      "input_paths:\n"
-      "  - " + fixture.design0Path.string() + "\n"
-      "  - " + fixture.design1Path.string() + "\n"
-      "liberty_files:\n"
-      "  - " + libertyPath.string() + "\n"
-      "log_file: " + logPath.string() + "\n");
+      clockGatedRegisterConfig(fixture, logPath, "clock_gate_model: false\n"));
 
   EXPECT_EQ(runWithConfigFile(cfgPath), kSecPartiallyProvedExitCode);
 
@@ -5698,9 +5810,9 @@ TEST_F(KeplerFormalCliTests,
   EXPECT_NE(contents.find("no initialized combinational truth table or usable "
                           "sequential model"),
             std::string::npos);
-  // Liberty `statetable`/`state_function` cells must remain opaque until their
-  // stateful behavior is modeled. In particular, the frontend must not invent
-  // the old zero-input truth table for GCK.
+  // Without a model, Liberty `statetable`/`state_function` cells must remain
+  // opaque. In particular, the frontend must not invent the old zero-input
+  // truth table for GCK.
   EXPECT_EQ(contents.find("combinational truth table arity does not match "
                           "instance inputs"),
             std::string::npos);

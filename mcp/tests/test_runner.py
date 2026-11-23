@@ -29,6 +29,14 @@ class VerdictTests(unittest.TestCase):
         )
         self.assertEqual(status, ResultStatus.CHECK_FAILED)
 
+    def test_lec_difference_exit_code_three_is_a_check_failure(self):
+        # A LEC difference exits 3; binaries that predate that exit 0.
+        status, _ = classify_verdict(
+            CheckKind.GATE_LEC, 3, "Difference was found. Please refer to the log", ""
+        )
+        self.assertEqual(status, ResultStatus.CHECK_FAILED)
+
+
     def test_sec_stable_codes_are_distinct(self):
         self.assertEqual(
             classify_verdict(CheckKind.GATE_SEC, 0, "", "")[0],

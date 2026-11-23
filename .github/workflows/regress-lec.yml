@@ -186,7 +186,8 @@ jobs:
           tinyrocket_naja_if_edited \
           "${{github.workspace}}" \
           "${{github.workspace}}/build/src/bin/kepler-formal" \
-          regress/tinyrocket_naja_if_edited/config.yaml
+          regress/tinyrocket_naja_if_edited/config.yaml \
+          expect-different
 
     - name: Run on verilog edited
       working-directory: ${{github.workspace}}
@@ -195,4 +196,6 @@ jobs:
           tinyrocket_verilog_edited \
           "${{github.workspace}}" \
           "${{github.workspace}}/build/src/bin/kepler-formal" \
-          regress/tinyrocket_verilog_edited/config.yaml
+          regress/tinyrocket_verilog_edited/config.yaml \
+          expect-different
+
