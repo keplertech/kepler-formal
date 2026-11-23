@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-2022]
         include:
           - os: ubuntu-24.04
             platform: manylinux_2_28
@@ -38,7 +38,10 @@ jobs:
           - os: macos-latest
             platform: macOS
             arch: arm64
-          - os: windows-latest
+          # The C++ library of Visual Studio 2026 on windows-latest (toolset
+          # 14.52) rejects the LLVM 20 clang-cl of the same image.  The
+          # windows-2022 image pairs that LLVM with toolset 14.44.
+          - os: windows-2022
             platform: Windows
             arch: AMD64
     runs-on: ${{ matrix.os }}

@@ -2962,11 +2962,20 @@ static int KeplerFormalMainImpl(
     // A SystemVerilog design compared with a netlist may instantiate the
     // loaded primitives itself, so it is parsed with generated stubs for
     // them: design 1 of sv2v, and the SystemVerilog design of a pair with
-    // different formats.
-    const auto designUsesPrimitiveStubs = [&](int designIndex) {
-      return (inputFormatType == FormatType::SV2V && designIndex == 0) ||
-             (inputFormatType == FormatType::PER_DESIGN &&
-              designUsesSystemVerilog(designIndex));
+    // different formats. With -sv both designs go through the SystemVerilog
+    // frontend, and either may be a gate netlist of the loaded cells (RTL
+    // against the netlist synthesized from it), so both get the stubs when
+    // a library was given. Without one the parse is as it was.
+    const auto designUsesPrimitiveStubs =
+        [&](int designIndex,
+            const std::vector<NLLibrary*>& primitiveLibraries) {
+      if ((inputFormatType == FormatType::SV2V && designIndex == 0) ||
+          (inputFormatType == FormatType::PER_DESIGN &&
+           designUsesSystemVerilog(designIndex))) {
+        return true;
+      }
+      return inputFormatType == FormatType::SYSTEMVERILOG &&
+             !primitiveLibraries.empty();
     };
 
     auto loadOneDesign = [&](const std::vector<std::string>& designPaths,
@@ -3025,7 +3034,8 @@ static int KeplerFormalMainImpl(
           std::vector<std::filesystem::path> temporaryFiles;
           // LCOV_EXCL_STOP
           const auto* sv2vPrimitiveLibraries =
-              designUsesPrimitiveStubs(designIndex) ? &primitiveLibraries
+              designUsesPrimitiveStubs(designIndex, primitiveLibraries)
+                  ? &primitiveLibraries
                                                     : nullptr;
           std::filesystem::path generatedStubPath;
           const auto svInputPaths =
@@ -3205,7 +3215,8 @@ static int KeplerFormalMainImpl(
         if (equivalent) {
           SPDLOG_INFO("No difference was found.");
         } else {
-          SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+          SPDLOG_INFO("Difference was found. Please refer to the log({}) for details.",
+                      KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
           // LCOV_EXCL_STOP
         }
 	      // LCOV_EXCL_START
@@ -3404,7 +3415,9 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            designUsesPrimitiveStubs(0) ? &db0PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(0, db0PrimitiveLibraries)
+                ? &db0PrimitiveLibraries
+                : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design0,
@@ -3546,7 +3559,9 @@ static int KeplerFormalMainImpl(
         SNLSVConstructor constructor(designLibrary);
         std::vector<std::filesystem::path> temporaryFiles;
         const auto* sv2vPrimitiveLibraries =
-            designUsesPrimitiveStubs(1) ? &db1PrimitiveLibraries : nullptr;
+            designUsesPrimitiveStubs(1, db1PrimitiveLibraries)
+                ? &db1PrimitiveLibraries
+                : nullptr;
         std::filesystem::path generatedStubPath;
         const auto svInputPaths = buildSystemVerilogInputPaths(
             designInputs.design1,
@@ -3709,10 +3724,11 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         } else {
           allScopesEquivalent = false;
-          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log(miter_log_x.txt) for details.",  // LCOV_EXCL_LINE
+          SPDLOG_INFO("Difference was found for scope: {} , {}. Please refer to the log({}) for details.",  // LCOV_EXCL_LINE
           // LCOV_EXCL_STOP
                       scopes.first->getName().getString(),
-                      scopes.second->getName().getString());
+                      scopes.second->getName().getString(),
+                      KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
         }
       // LCOV_EXCL_START
       } catch (const std::exception& e) {
@@ -3764,7 +3780,8 @@ static int KeplerFormalMainImpl(
       if (equivalent) {
         SPDLOG_INFO("No difference was found.");
       } else {
-        SPDLOG_INFO("Difference was found. Please refer to the log(miter_log_x.txt) for details.");
+        SPDLOG_INFO("Difference was found. Please refer to the log({}) for details.",
+                    KEPLER_FORMAL::MiterStrategy::getActualLogFileName());
         // LCOV_EXCL_STOP
       }
     // LCOV_EXCL_START

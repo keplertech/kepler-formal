@@ -124,6 +124,22 @@ Only design 1 accepts SystemVerilog options:
 
 Design 2 is parsed as Verilog. Use `verilog_design2_top` to select its top.
 
+## Library cells in SystemVerilog designs
+
+With `-sv` both designs go through the SystemVerilog frontend. When Liberty
+or Python primitive libraries are given, each design is parsed together with
+generated declarations of the library cells, and every instance of such a
+cell is bound to the library cell, with its function. Either design can then
+be a gate-level netlist of those cells, so RTL is compared with the netlist
+synthesized from it in one run:
+
+```bash
+kepler-formal -sv -v sec --design1 rtl.sv --design2 gates.v --liberty cells.lib
+```
+
+A module the design sources define themselves takes precedence over a library
+cell of the same name. Without a library the parse is unchanged.
+
 ## YAML examples
 
 Multi-file SystemVerilog example:
