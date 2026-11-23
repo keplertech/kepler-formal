@@ -21293,3 +21293,65 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_FALSE(binary.leavesUnknownState());
   EXPECT_FALSE(binary.binaryPasses);
 }
+
+namespace {
+
+// `r` is set to 1 by the reset and is 0 from the next cycle on. The redundant
+// design computes that 0 from `m`, which no reset reaches: the value does not
+// depend on `m`, but the rails of `r` show X. Its output `o` is the constant
+// 1. The plain design writes the 0 directly and drives `o` from `r`. The two
+// agree on the first cycle after the reset and differ on `o` from the second.
+std::string unknownReadSource(const std::string& name, bool redundant) {
+  return "module " + name + R"((input logic clk, input logic rst, input logic d,
+    output logic o, output logic p);
+  logic m;
+  logic r;
+  logic x;
+  assign x = (m & d) | (m & ~d);
+  always_ff @(posedge clk) begin
+    m <= m ^ d;
+    if (rst) r <= 1'b1;
+)" + (redundant ? "    else r <= x ^ m;\n" : "    else r <= 1'b0;\n") + R"(  end
+)" + (redundant ? "  assign o = 1'b1;\n" : "  assign o = r;\n") + R"(  assign p = r;
+endmodule
+)";
+}
+
+SequentialEquivalenceResult runUnknownReadPair(bool binaryRelationRound) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* redundant = loadSystemVerilogTopFromSource(
+      library, "unknown_read_redundant",
+      unknownReadSource("unknown_read_redundant", /*redundant=*/true));
+  auto* plain = loadSystemVerilogTopFromSource(
+      library, "unknown_read_plain",
+      unknownReadSource("unknown_read_plain", /*redundant=*/false));
+  SequentialEquivalenceStrategy strategy(
+      redundant, plain, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady, SecResetSpec{2, {{"rst", true}}});
+  InternalRelationOptions options;
+  options.binaryRelationRound = binaryRelationRound;
+  strategy.setInternalRelationOptions(options);
+  return strategy.run(40);
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       RedundantUnknownReadDiffersWithoutTheBinaryPasses) {
+  // On the rails alone the plain `r` is a known 0 against the constant 1.
+  const auto result = runUnknownReadPair(/*binaryRelationRound=*/false);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
+}
+
+// Known failure, kept until it is fixed; enable the test with the fix. The
+// binary round proves the two `r` equal, which they are, and the plain `r`
+// then takes the transition of the redundant one. Its rails show X from then
+// on, `o` compares 1 against X, and the run reports the designs equivalent.
+TEST_F(SequentialEquivalenceStrategyTests,
+       DISABLED_BinaryRoundMergeKeepsADifferenceVisible) {
+  const auto result = runUnknownReadPair(/*binaryRelationRound=*/true);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
+}
