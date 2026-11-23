@@ -72,6 +72,39 @@ frame, and SEC reports the difference with a counterexample instead of proving
 equivalence from an assumption that cannot hold. The dual-rail encoding keeps
 every output and carries the free state as X instead.
 
+## Incomplete reset warning
+
+In the dual-rail encoding SEC reports a reset that does not initialise every
+state bit. It takes each state bit at its boot value, X where the design gives
+none, holds the reset ports active for the bootstrap cycles with every other
+input a 0 or a 1, and counts the bits X can still reach. Without a reset
+bootstrap the count is the state without a boot value. When the count is not
+zero the log carries a warning next to the verdict, with the first eight names
+of each design:
+
+```text
+SEC reset is incomplete: after the reset window of 3 cycle(s), 128 of 134 state bits of design 1 and 132 of 139 state bits of design 2 can still be unknown (X). Design 1: ..., and 120 more. Design 2: ..., and 124 more.
+```
+
+A second line follows when the binary passes may run:
+
+```text
+SEC binary passes are on: they start matched unknown registers of the two designs from the same value. Set binary_relation_round to false (--binary-relation-round false) to switch them off.
+```
+
+The binary passes are the binary round and signal correspondence on the binary
+functions, sections 10 and 11 of
+[sec-internal-relations.md](sec-internal-relations.md). One switch covers
+both: `binary_relation_round` (`--binary-relation-round <bool>`), on by
+default. With a complete reset no state is unknown when the comparison starts,
+so the common start value of unknown registers plays no part in what is
+compared, and there is no warning. A longer window, or reset logic that
+reaches the listed state, removes the warning.
+
+With `KEPLER_SEC_DIAG=1` or `KEPLER_SEC_SUMMARY_STATS=1` the counts are also
+printed before the proof starts, as
+`SEC summary: reset_unknown_state reset_cycles=... design0=.../... design1=.../...`.
+
 Reset bootstrap is SEC-only. It does not discover internal reset nets, infer
 reset polarity, or relax top-level input matching; every listed reset port must
 exist as an aligned top-level input in both designs.

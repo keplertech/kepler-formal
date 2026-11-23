@@ -145,3 +145,45 @@ void writeOpaqueCellSkippedOutputsReport(
     report << "- " << skippedOutput << "\n";
   }
 }
+
+std::vector<std::string> secIncompleteResetWarnings(
+    const KEPLER_FORMAL::SEC::SequentialEquivalenceResetReport& report) {
+  if (!report.leavesUnknownState()) {
+    return {};
+  }
+  std::ostringstream fact;
+  fact << "SEC reset is incomplete: ";
+  if (report.resetCycles != 0) {
+    fact << "after the reset window of " << report.resetCycles << " cycle(s), ";
+  } else {
+    fact << "no reset window is given, and ";
+  }
+  for (size_t design = 0; design < report.unknownState.size(); ++design) {
+    const auto& unknown = report.unknownState[design];
+    fact << (design == 0 ? "" : " and ") << unknown.unknownBits << " of "
+         << unknown.stateBits << " state bits of design " << design + 1;
+  }
+  fact << " can still be unknown (X).";
+  for (size_t design = 0; design < report.unknownState.size(); ++design) {
+    const auto& unknown = report.unknownState[design];
+    if (unknown.examples.empty()) {
+      continue;
+    }
+    fact << " Design " << design + 1 << ":";
+    for (size_t i = 0; i < unknown.examples.size(); ++i) {
+      fact << (i == 0 ? " " : ", ") << unknown.examples[i];
+    }
+    if (unknown.unknownBits > unknown.examples.size()) {
+      fact << ", and " << unknown.unknownBits - unknown.examples.size() << " more";
+    }
+    fact << ".";
+  }
+  std::vector<std::string> warnings{fact.str()};
+  if (report.binaryPasses) {
+    warnings.emplace_back(
+        "SEC binary passes are on: they start matched unknown registers of the "
+        "two designs from the same value. Set binary_relation_round to false "
+        "(--binary-relation-round false) to switch them off.");
+  }
+  return warnings;
+}

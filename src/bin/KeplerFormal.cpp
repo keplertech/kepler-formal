@@ -2768,6 +2768,9 @@ static int KeplerFormalMainImpl(
               result.coveredOutputs,
               result.totalOutputs);
         }
+        for (const auto& warning : secIncompleteResetWarnings(result.resetReport)) {
+          SPDLOG_WARN("{}", warning);
+        }
         if (result.proofProgress.has_value()) {
           const auto& progress = *result.proofProgress;
           SPDLOG_INFO(

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -72,6 +73,32 @@ struct SequentialEquivalenceProofProgress { // LCOV_EXCL_LINE
   std::vector<SequentialEquivalenceUnprovenOutput> unprovenOutputs;
 };
 
+// The state bits of one design that a dual-rail proof may still hold as X when
+// the outputs are first compared.
+struct SequentialEquivalenceUnknownState {  // LCOV_EXCL_LINE
+  size_t unknownBits = 0;
+  size_t stateBits = 0;
+  // The first few of them, by name.
+  std::vector<std::string> examples;
+};
+
+// What a dual-rail proof starts from. The proof takes every state bit at its
+// boot value, X where the design gives none, through the reset window; a bit
+// the window cannot reach with a value stays X. Empty in the binary encoding,
+// which skips the outputs reading such state.
+struct SequentialEquivalenceResetReport {  // LCOV_EXCL_LINE
+  // Zero when no reset window was given.
+  size_t resetCycles = 0;
+  // The binary passes (binary_relation_round) were allowed to run. They start
+  // matched unknown registers of the two designs from one common value.
+  bool binaryPasses = false;
+  std::array<SequentialEquivalenceUnknownState, 2> unknownState;
+
+  bool leavesUnknownState() const {
+    return unknownState[0].unknownBits != 0 || unknownState[1].unknownBits != 0;
+  }
+};
+
 struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
   SequentialEquivalenceStatus status = SequentialEquivalenceStatus::Unsupported;
   size_t bound = 0;
@@ -84,6 +111,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
   std::vector<std::string> multiClockDomainSkippedOutputs;
   std::vector<std::string> opaqueCellSkippedOutputs;
   std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
+  SequentialEquivalenceResetReport resetReport;
 
   double outputCoveragePercent() const {
     if (totalOutputs == 0) {

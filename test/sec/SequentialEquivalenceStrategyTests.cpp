@@ -21204,3 +21204,92 @@ TEST_F(SequentialEquivalenceStrategyTests,
   const auto different = run(stale, /*binaryRelationRound=*/true, 4);
   EXPECT_EQ(different.status, SequentialEquivalenceStatus::Different) << different.reason;
 }
+
+namespace {
+
+// `a` is cleared by the reset. `b` follows `a` one cycle later, or keeps a
+// value of its own that no reset reaches.
+std::string resetReachSource(const std::string& name, bool followsReset) {
+  return "module " + name + R"((input logic clk, input logic rst, input logic d,
+    output logic q, output logic r);
+  logic a;
+  logic b;
+  always_ff @(posedge clk) begin
+    if (rst) a <= 1'b0;
+    else a <= d;
+)" + (followsReset ? "    b <= a;\n" : "    b <= b ^ d;\n") + R"(  end
+  assign q = a;
+  assign r = b;
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       ResetReportCountsTheStateTheResetLeavesUnknown) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* kept0 = loadSystemVerilogTopFromSource(
+      library, "kept0", resetReachSource("kept0", /*followsReset=*/false));
+  auto* kept1 = loadSystemVerilogTopFromSource(
+      library, "kept1", resetReachSource("kept1", /*followsReset=*/false));
+  auto* chain0 = loadSystemVerilogTopFromSource(
+      library, "chain0", resetReachSource("chain0", /*followsReset=*/true));
+  auto* chain1 = loadSystemVerilogTopFromSource(
+      library, "chain1", resetReachSource("chain1", /*followsReset=*/true));
+
+  const auto run = [&](SNLDesign* design0, SNLDesign* design1, SecEncoding encoding,
+                       SecResetSpec reset, bool binaryRelationRound = true,
+                       SecEngine engine = SecEngine::Pdr) {
+    SequentialEquivalenceStrategy strategy(
+        design0, design1, KEPLER_FORMAL::Config::SolverType::KISSAT, engine,
+        encoding, std::move(reset));
+    InternalRelationOptions options;
+    options.binaryRelationRound = binaryRelationRound;
+    strategy.setInternalRelationOptions(options);
+    return strategy.run(2).resetReport;
+  };
+  const SecResetSpec oneCycle{1, {{"rst", true}}};
+  const SecResetSpec twoCycles{2, {{"rst", true}}};
+
+  // No reset reaches `b`: it is X after any window, in both designs.
+  const auto kept = run(kept0, kept1, SecEncoding::DualRailSteady, twoCycles);
+  EXPECT_TRUE(kept.leavesUnknownState());
+  EXPECT_EQ(kept.resetCycles, 2u);
+  EXPECT_TRUE(kept.binaryPasses);
+  for (const auto& unknown : kept.unknownState) {
+    EXPECT_EQ(unknown.unknownBits, 1u);
+    EXPECT_EQ(unknown.stateBits, 2u);
+    ASSERT_EQ(unknown.examples.size(), 1u);
+    EXPECT_FALSE(unknown.examples.front().empty());
+  }
+
+  // The switch of the binary passes and an engine without them are reported.
+  EXPECT_FALSE(run(kept0, kept1, SecEncoding::DualRailSteady, twoCycles,
+                   /*binaryRelationRound=*/false).binaryPasses);
+  EXPECT_FALSE(run(kept0, kept1, SecEncoding::DualRailSteady, twoCycles,
+                   /*binaryRelationRound=*/true, SecEngine::Imc).binaryPasses);
+
+  // `b` takes the reset value of `a` one cycle later: one cycle leaves it X,
+  // two cycles reach it.
+  const auto shortWindow = run(chain0, chain1, SecEncoding::DualRailSteady, oneCycle);
+  EXPECT_EQ(shortWindow.unknownState[0].unknownBits, 1u);
+  EXPECT_EQ(shortWindow.unknownState[1].unknownBits, 1u);
+  const auto fullWindow = run(chain0, chain1, SecEncoding::DualRailSteady, twoCycles);
+  EXPECT_FALSE(fullWindow.leavesUnknownState());
+  EXPECT_EQ(fullWindow.unknownState[0].stateBits, 2u);
+
+  // Without a reset window every register without a boot value is X.
+  const auto noReset = run(chain0, chain1, SecEncoding::DualRailSteady, {});
+  EXPECT_EQ(noReset.resetCycles, 0u);
+  EXPECT_EQ(noReset.unknownState[0].unknownBits, 2u);
+  EXPECT_EQ(noReset.unknownState[1].unknownBits, 2u);
+
+  // The binary encoding has no X: it skips the outputs reading such state.
+  const auto binary = run(kept0, kept1, SecEncoding::Binary, twoCycles);
+  EXPECT_FALSE(binary.leavesUnknownState());
+  EXPECT_FALSE(binary.binaryPasses);
+}

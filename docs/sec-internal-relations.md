@@ -254,7 +254,11 @@ The round is on by default and switched by `binary_relation_round`
 and an engine that keeps the lazy transition store (k-induction or PDR). The
 summary line `SEC summary: binary_relation_round candidates=... proved_rail_equalities=... discharged_outputs=...`
 reports the pairs it retried, the rail equalities it proved and the outputs it
-discharged.
+discharged. The same switch covers the run of section 11 on the binary
+functions. The common initial state matters only for state that is unknown
+when the comparison starts: a run whose reset leaves such state says so in the
+log, and says that these passes are on (see
+[sec-reset-bootstrap.md](sec-reset-bootstrap.md)).
 
 ## 11. Signal correspondence
 
