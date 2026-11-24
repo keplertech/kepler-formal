@@ -6,7 +6,14 @@ Markdown table in that run's GitHub Actions summary and saves it as the
 each pull request gets the table for its own regression: it is listed in the
 pull request's checks and opens from there, the same way as for a push to
 `main`. This includes unsuccessful or cancelled runs, and covers the regular,
-SV2V, and SV2V negative matrix jobs.
+SV2V, SV2V negative, and ORFS global SEC matrix jobs.
+
+The ORFS global SEC jobs (`pdr-dual-rail / orfs_<case>`) run the global SEC
+check that OpenROAD-flow-scripts runs in its final stage, one case per design
+and hardened sub-block that has the check enabled there. The cases live in
+`orfs_global_sec/` of the kepler-formal-regress repository. Each runs PDR with
+the dual-rail encoding, as ORFS does, and must prove equivalence with full
+checked-output coverage.
 
 Each row shows the case, flow (engine and encoding), CLI runtime, SEC verdict,
 checked-output coverage (percentage and covered/total counts), and CI status.
