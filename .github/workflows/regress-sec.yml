@@ -807,6 +807,141 @@ jobs:
         retention-days: 7
         if-no-files-found: ignore
 
+  # The global SEC check ORFS runs in its final stage (synthesis netlist against
+  # the final netlist), one case per design and hardened sub-block that has the
+  # check enabled in ORFS CI. Each case runs the check the way ORFS does, PDR
+  # with the dual-rail encoding, and must prove equivalence with full
+  # checked-output coverage.
+  run-orfs-global-sec-regress:
+    name: ${{ matrix.flow.name }} / orfs_${{ matrix.case }}
+    runs-on: ubuntu-22.04
+    needs: build-sec-regress
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        flow:
+        - name: pdr-dual-rail
+          engine: pdr
+          sec_encoding: dual_rail_steady
+        case:
+        - asap7_aes
+        - asap7_aes-block
+        - asap7_aes-block_aes_rcon
+        - asap7_aes-block_aes_sbox
+        - asap7_aes-mbff
+        - asap7_aes_lvt
+        - asap7_cva6
+        - asap7_gcd
+        - asap7_gcd-ccs
+        - asap7_ibex
+        - asap7_jpeg
+        - asap7_jpeg_lvt
+        - asap7_mock-alu
+        - asap7_riscv32i
+        - asap7_riscv32i-mock-sram
+        - asap7_riscv32i-mock-sram_fakeram7_256x32
+        - asap7_uart
+        - gf180_aes
+        - gf180_aes-hybrid
+        - gf180_ibex
+        - gf180_jpeg
+        - gf180_riscv32i
+        - gf180_uart-blocks
+        - gf180_uart-blocks_uart_rx
+        - gt2n_aes
+        - gt2n_gcd
+        - gt2n_jpeg
+        - ihp-sg13g2_aes
+        - ihp-sg13g2_gcd
+        - ihp-sg13g2_i2c-gpio-expander_I2cDeviceCtrl
+        - ihp-sg13g2_ibex
+        - ihp-sg13g2_jpeg
+        - ihp-sg13g2_riscv32i
+        - ihp-sg13g2_spi
+        - nangate45_aes
+        - nangate45_ariane133
+        - nangate45_ariane136
+        - nangate45_black_parrot
+        - nangate45_bp_be_top
+        - nangate45_bp_fe_top
+        - nangate45_bp_multi_top
+        - nangate45_cva6
+        - nangate45_dynamic_node
+        - nangate45_gcd
+        - nangate45_ibex
+        - nangate45_jpeg
+        - nangate45_tinyRocket
+        - sky130hd_aes
+        - sky130hd_gcd
+        - sky130hd_ibex
+        - sky130hd_jpeg
+        - sky130hd_riscv32i
+        - sky130hs_aes
+        - sky130hs_gcd
+        - sky130hs_ibex
+        - sky130hs_jpeg
+        - sky130hs_riscv32i
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download SEC runtime
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.SEC_RUNTIME_ARTIFACT }}
+        path: ${{github.workspace}}/stage
+
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
+    # Only this case's directory is checked out from the regression repository.
+    - name: Clone regression inputs
+      working-directory: ${{github.workspace}}
+      env:
+        CASE: ${{ matrix.case }}
+      run: |
+        git clone --depth 1 --filter=blob:none --sparse https://github.com/keplertech/kepler-formal-regress
+        git -C kepler-formal-regress sparse-checkout set "orfs_global_sec/${CASE}"
+
+    - name: Run SEC regression
+      working-directory: ${{github.workspace}}
+      env:
+        CASE: ${{ matrix.case }}
+        SEC_ENGINE: ${{ matrix.flow.engine }}
+        SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
+      run: |
+        set -euo pipefail
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+        bash regress/run_sec_strategies_regress.sh \
+          "orfs_${CASE}" \
+          "${{github.workspace}}/kepler-formal-regress/orfs_global_sec/${CASE}" \
+          "${{github.workspace}}/stage/bin/kepler-formal" \
+          6_final_sec_test.yml \
+          expect-full-coverage \
+          "engine=${SEC_ENGINE}" \
+          "sec-encoding=${SEC_ENCODING}"
+
+    - name: Upload regression results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-results-${{ github.run_attempt }}-${{ matrix.flow.name }}-orfs_${{ matrix.case }}
+        path: |
+          ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}/sec/*.stdout
+          ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}/sec/*.seconds
+        retention-days: 7
+        if-no-files-found: ignore
+
+    - name: Upload regression logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-logs-${{ matrix.flow.name }}-orfs_${{ matrix.case }}
+        path: ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}/sec
+        retention-days: 7
+        if-no-files-found: ignore
+
   # Runs inside the triggering run, so a pull request gets the table for its
   # own regression: in its checks, on this run's summary page, and as an
   # artifact. Results and the main baseline are read as data, never executed.
@@ -818,6 +953,7 @@ jobs:
     - run-sec-regress
     - run-sv2v-sec-regress
     - run-sv2v-sec-negative-regress
+    - run-orfs-global-sec-regress
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:

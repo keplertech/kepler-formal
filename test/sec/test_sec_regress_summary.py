@@ -124,6 +124,14 @@ SEC partially proved equivalence at k = 2: 2/4 outputs proved.
         self.assertEqual(report.count("| Proved |"), 3)
         self.assertLess(report.index("| alpha |"), report.index("| beta |"))
 
+    def test_orfs_global_sec_job_reads_its_artifact(self):
+        job = self.job("pdr-dual-rail / orfs_asap7_aes-block_aes_rcon")
+        self.artifact(job, "SEC checked-output coverage: 100.00% (18/18 covered/existing outputs).\n"
+                           "SEC proved equivalence at k = 1.")
+        report = SUMMARY.summarize([job], self.root)
+        self.assertIn("| orfs\\_asap7\\_aes-block\\_aes\\_rcon | pdr-dual-rail | 1.23 s | Proved "
+                      "| 100.00% (18/18) | success |", report)
+
     def test_invalid_and_missing_runtime_are_not_zero(self):
         job = self.job()
         for seconds in (None, "garbage", "nan", "inf", "-1"):
