@@ -687,6 +687,8 @@ void addSameFrameStateEqualities(
       problem.sameFrameStateEqualityPairs1,
       solverSymbols,
       numFrames);
+  // The weaker certified relations go with them.
+  addSameFrameStateClauses(solver, variables, problem, numFrames);
 }
 
 void addTransitionRelation(SATSolverWrapper& solver,

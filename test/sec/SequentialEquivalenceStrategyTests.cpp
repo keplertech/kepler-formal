@@ -21346,12 +21346,12 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
 }
 
-// Known failure, kept until it is fixed; enable the test with the fix. The
-// binary round proves the two `r` equal, which they are, and the plain `r`
-// then takes the transition of the redundant one. Its rails show X from then
-// on, `o` compares 1 against X, and the run reports the designs equivalent.
+// The binary round proves the two `r` equal, which they are. Merging them
+// would put the X of the redundant `r` on the plain one, `o` would compare 1
+// against X and the difference would be lost; the pair is constrained on the
+// rails and never merged.
 TEST_F(SequentialEquivalenceStrategyTests,
-       DISABLED_BinaryRoundMergeKeepsADifferenceVisible) {
+       BinaryRoundKeepsADifferenceVisible) {
   const auto result = runUnknownReadPair(/*binaryRelationRound=*/true);
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
 }

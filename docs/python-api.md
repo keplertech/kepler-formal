@@ -177,7 +177,7 @@ Enum fields accept either the exported enum member or its exact string value.
 | `sec_encoding` | native default (`dual_rail_steady`) | `dual_rail_steady` or `binary` |
 | `learn_internal_relations` | `True` | Learn proved internal register equalities for SEC |
 | `allow_x_equality_in_internal_relations` | `True` | Allow internal X/X relations without changing the final output property |
-| `binary_relation_round` | `True` | Switch for the binary passes of dual-rail SEC: retry unproved internal relations in binary semantics and share the proved transitions, and run signal correspondence on the binary functions |
+| `binary_relation_round` | `True` | Switch for the binary passes of dual-rail SEC: retry unproved internal relations in binary semantics and constrain the proved pairs on the rails, and run signal correspondence on the binary functions |
 | `signal_correspondence` | `True` | Try outputs the register relations leave open by signal correspondence |
 | `latch_abstraction` | `True` | Phase-abstract clock-driven latches; `False` keeps every latch output opaque |
 | `data_latch_model` | `True` | Model data-enabled latches as step-transparent state; `False` leaves them opaque |

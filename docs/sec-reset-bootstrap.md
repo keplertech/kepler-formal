@@ -93,8 +93,8 @@ SEC binary passes are on: they start matched unknown registers of the two design
 ```
 
 The binary passes are the binary round and signal correspondence on the binary
-functions, sections 10 and 11 of
-[sec-internal-relations.md](sec-internal-relations.md). One switch covers
+functions, described in
+[sec-dual-rail-binary-passes.md](sec-dual-rail-binary-passes.md). One switch covers
 both: `binary_relation_round` (`--binary-relation-round <bool>`), on by
 default. With a complete reset no state is unknown when the comparison starts,
 so the common start value of unknown registers plays no part in what is

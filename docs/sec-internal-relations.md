@@ -219,7 +219,7 @@ to the engine as before.
 With `KEPLER_SEC_DIAG` set, the pass prints the number of outputs discharged
 and the number of symbols merged.
 
-## 10. Binary round and shared transitions
+## 10. Binary round
 
 The rail check compares the ternary values that the per-gate dual-rail
 lifting computes, and that lifting is a shape-dependent over-approximation of
@@ -238,23 +238,22 @@ solves, so it is allowed a hundred times the rail check's budget. A pair
 proved this way is equal from every common initial state (van Eijk, TCAD
 2000; Savoj et al., FMCAD 2010, Theorem 1).
 
-A proved pair is recorded as a shared transition: when the problem is merged
-(section 8), design 2's register takes design 1's transition formula. The
-exact ternary extension of a Boolean function depends only on the function,
-so the replacement does not change design 2's exact behavior; it removes the
-shape dependence of the lifting, and the rail equality of the pair is
-inductive by construction. Outputs get the same treatment: an output whose
-two functions agree in binary semantics over the merged registers is
-discharged like a structurally identical one (section 9), since one Boolean
-function has one exact ternary value. Every
+A proved pair is not merged on the rails, where one of its registers can be
+X while the other is known. It gets the strongest rule that is proved on the
+rails, one register at least as known as the other or the two never showing
+opposite known values, and the rule is added to the engines' queries as
+clauses. An output whose two functions agree in binary semantics once the
+proved pairs are read as one is discharged like a structurally identical one
+(section 9). Each step, and the article behind it, is in
+[sec-dual-rail-binary-passes.md](sec-dual-rail-binary-passes.md). Every
 other pair and output stays with the dual-rail engines unchanged.
 
 The round is on by default and switched by `binary_relation_round`
 (`--binary-relation-round <bool>`). It needs learning, the dual-rail encoding
 and an engine that keeps the lazy transition store (k-induction or PDR). The
-summary line `SEC summary: binary_relation_round candidates=... proved_rail_equalities=... discharged_outputs=...`
-reports the pairs it retried, the rail equalities it proved and the outputs it
-discharged. The same switch covers the run of section 11 on the binary
+summary line `SEC summary: binary_relation_round candidates=... binary_pairs=... covering_clauses=... compatible_clauses=... discharged_outputs=...`
+reports the pairs it retried, the pairs it proved, the clauses of the rules
+proved for them and the outputs it discharged. The same switch covers the run of section 11 on the binary
 functions. The common initial state matters only for state that is unknown
 when the comparison starts: a run whose reset leaves such state says so in the
 log, and says that these passes are on (see
@@ -274,7 +273,7 @@ Outputs that sections 9 and 10 leave open are therefore tried by signal
 correspondence (van Eijk, TCAD 2000), decided with a SAT solver instead of
 BDDs (Bjesse and Claessen, FMCAD 2000). `proveSignalCorrespondence` in
 `src/sec/proof/SignalCorrespondence.cpp` works on the problem the engines
-receive, shared transitions of section 10 included:
+receive, the rules of section 10 included:
 
 1. **Signals.** The set F of the paper: every register, both cones of every
    open output (each rail in the dual-rail encoding) and every register's

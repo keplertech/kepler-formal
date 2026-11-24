@@ -14,8 +14,9 @@ struct InternalRelationOptions {
   // Dual-rail candidates the rail check refutes are retried on the binary
   // next-state functions: a pair equal in the common initial state (the same
   // value, or unknown on both sides) and inductive there is equal from every
-  // common start (van Eijk, TCAD 2000; Savoj et al., FMCAD 2010). Design 2's
-  // register then takes design 1's transition in the proof problem.
+  // common start (van Eijk, TCAD 2000; Savoj et al., FMCAD 2010). Such a pair
+  // is not merged on the rails; it gets the rule proved there, see
+  // docs/sec-dual-rail-binary-passes.md.
   bool binaryRelationRound = true;
   // Outputs still open after the register learner are tried by signal
   // correspondence, which relates signals and not only registers and starts

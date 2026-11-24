@@ -237,14 +237,6 @@ bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLi
           problem.auxiliaryStateSymbols.size() > limits.stateSymbols) {
     return false;
   }
-  // Design 2's register of a shared pair reads design 1's transition, as it
-  // does in the problem the engines receive.
-  std::unordered_map<size_t, size_t> sharedSource;
-  for (const auto& [lhs, rhs] : problem.sharedTransitionPairs) {
-    if (transitions.contains(lhs)) {
-      sharedSource.emplace(rhs, lhs);
-    }
-  }
   Circuit& circuit = machine.circuit;
   if (!circuit.add(BoolExpr::createTrue(), machine.constantTrue)) {
     return false;
@@ -255,12 +247,10 @@ bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLi
       if (!transitions.contains(symbol) || machine.registerBySymbol.contains(symbol)) {
         continue;
       }
-      const auto source = sharedSource.find(symbol);
       Register added;
       added.symbol = symbol;
       if (!circuit.add(BoolExpr::Var(symbol), added.node) ||
-          !circuit.add(transitions.at(source == sharedSource.end() ? symbol : source->second),
-                       added.next)) {
+          !circuit.add(transitions.at(symbol), added.next)) {
         return false;
       }
       added.slot = circuit.slotOf(symbol);
@@ -641,6 +631,14 @@ void addFrameConstraints(SATSolverWrapper& solver, FrameFormulaEncoder& frame,
       addLiteralEquivalence(solver, frame.encode(BoolExpr::Var(lhs)),
                             frame.encode(BoolExpr::Var(rhs)));
     }
+  }
+  for (const auto& [first, second] : problem.sameFrameStateImplicationPairs) {
+    solver.addClause({-frame.encode(BoolExpr::Var(first)),
+                      frame.encode(BoolExpr::Var(second))});
+  }
+  for (const auto& [first, second] : problem.sameFrameStateDisjunctionPairs) {
+    solver.addClause({frame.encode(BoolExpr::Var(first)),
+                      frame.encode(BoolExpr::Var(second))});
   }
 }
 
