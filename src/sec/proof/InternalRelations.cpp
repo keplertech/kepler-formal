@@ -14,11 +14,13 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "common/BoolExprUtils.h"
 #include "common/SecDiag.h"
 #include "model/SequentialDesignModel.h"
 #include "kinduction/SatEncoding.h"
+#include "proof/SignalCorrespondence.h"
 #include "proof/TransitionExprResolver.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -430,6 +432,73 @@ class BinaryFormulas {
   std::unordered_map<size_t, BoolExpr*> transitionBySymbol_;
 };
 
+// The binary function of every observed output in each design; null where a
+// design has none under the output's name.
+std::vector<std::pair<BoolExpr*, BoolExpr*>> binaryOutputFunctions(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    BinaryFormulas& binary,
+    const KInductionProblem& problem) {
+  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
+  std::array<std::unordered_map<std::string, SignalKey>, 2> keyByName;
+  for (size_t design = 0; design < 2; ++design) {
+    for (const auto& key : models[design]->allObservedOutputs) {
+      if (const auto name = models[design]->displayNameByKey.find(key);
+          name != models[design]->displayNameByKey.end()) {
+        keyByName[design].emplace(name->second, key);
+      }
+    }
+  }
+  const size_t count = std::min(problem.observedOutputNames.size(),
+                                problem.observedOutputExprs0.size());
+  std::vector<std::pair<BoolExpr*, BoolExpr*>> functions(count, {nullptr, nullptr});
+  for (size_t i = 0; i < count; ++i) {
+    std::array<BoolExpr*, 2> function{nullptr, nullptr};
+    for (size_t design = 0; design < 2; ++design) {
+      const auto key = keyByName[design].find(problem.observedOutputNames[i]);
+      if (key == keyByName[design].end()) {
+        break;
+      }
+      const auto expr = models[design]->observedOutputExprByKey.find(key->second);
+      if (expr == models[design]->observedOutputExprByKey.end()) {
+        break;
+      }
+      function[design] = binary.remap(design, expr->second);
+    }
+    functions[i] = {function[0], function[1]};
+  }
+  return functions;
+}
+
+// What signal correspondence reads on the binary functions: every register
+// by its may-be-one rail, the outputs, and the candidate pairs as the
+// registers that share their unknown boot value.
+BinarySignalCorrespondenceInput binarySignalCorrespondenceInput(
+    const SequentialDesignModel& model0,
+    const SequentialDesignModel& model1,
+    const std::vector<InternalRelationCandidate>& candidates,
+    const KInductionProblem& problem) {
+  BinaryFormulas binary(*problem.lazyTransitions);
+  BinarySignalCorrespondenceInput input;
+  for (const auto& [symbol, source] : problem.lazyTransitions->sourceByStateSymbol) {
+    if (source.rail == LazyTransitionRail::DualRailOne) {
+      input.transitions.emplace_back(symbol, binary.transition(symbol));
+    }
+  }
+  // The store is a hash map; the machine is built in symbol order.
+  std::sort(input.transitions.begin(), input.transitions.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+  input.outputs = binaryOutputFunctions(model0, model1, binary, problem);
+  for (const auto& candidate : candidates) {
+    for (const auto& [lhs, rhs] : candidate.equalities) {
+      if (binary.isRailOne(lhs) && binary.isRailOne(rhs)) {
+        input.commonStart.emplace_back(lhs, rhs);
+      }
+    }
+  }
+  return input;
+}
+
 // Outputs whose two functions agree in binary semantics over the merged
 // registers are one Boolean function, so their exact ternary values agree
 // as well; the rail obligation of such an output is discharged.
@@ -457,39 +526,19 @@ size_t dischargeBinaryEqualOutputs(
   for (auto& [_, target] : merged) {
     target = representative(target);
   }
-  const std::array<const SequentialDesignModel*, 2> models{&model0, &model1};
-  std::array<std::unordered_map<std::string, SignalKey>, 2> keyByName;
-  for (size_t design = 0; design < 2; ++design) {
-    for (const auto& key : models[design]->allObservedOutputs) {
-      if (const auto name = models[design]->displayNameByKey.find(key);
-          name != models[design]->displayNameByKey.end()) {
-        keyByName[design].emplace(name->second, key);
-      }
-    }
-  }
-  const size_t count = std::min(problem.observedOutputNames.size(),
-                                problem.observedOutputExprs0.size());
+  const auto unmerged = binaryOutputFunctions(model0, model1, binary, problem);
+  const size_t count = unmerged.size();
   std::vector<char> discharged(count, 0);
   std::vector<size_t> pending;
   std::vector<std::pair<BoolExpr*, BoolExpr*>> functions(count);
   std::unordered_map<BoolExpr*, BoolExpr*> canonical;
   for (size_t i = 0; i < count; ++i) {
-    std::array<BoolExpr*, 2> function{nullptr, nullptr};
-    for (size_t design = 0; design < 2; ++design) {
-      const auto key = keyByName[design].find(problem.observedOutputNames[i]);
-      if (key == keyByName[design].end()) {
-        break;
-      }
-      const auto expr = models[design]->observedOutputExprByKey.find(key->second);
-      if (expr == models[design]->observedOutputExprByKey.end()) {
-        break;
-      }
-      function[design] =
-          canonicalUnderMerge(binary.remap(design, expr->second), merged, canonical);
-    }
-    if (function[0] == nullptr || function[1] == nullptr) {
+    if (unmerged[i].first == nullptr || unmerged[i].second == nullptr) {
       continue;
     }
+    const std::array<BoolExpr*, 2> function{
+        canonicalUnderMerge(unmerged[i].first, merged, canonical),
+        canonicalUnderMerge(unmerged[i].second, merged, canonical)};
     if (function[0] == function[1]) {
       discharged[i] = 1;
       continue;
@@ -556,6 +605,145 @@ size_t dischargeBinaryEqualOutputs(
     problem.inductionBad = problem.bad;
   }
   return dischargedCount;
+}
+
+// A rule on the rails of two registers, weaker than their equality: two
+// clauses, each "first implies second" or "first or second".
+struct RailRule {
+  size_t pair = 0;
+  bool implication = false;
+  std::array<std::pair<size_t, size_t>, 2> clauses;
+};
+
+// What holds on the rails between the two registers of each pair, a register
+// of design 1 and one of design 2 that are equal in 0/1 but not on the rails.
+// Such a pair is not merged: in three-valued logic that would exclude a
+// register showing X where the other shows a value (Huang, Cheng and Chen,
+// ACM TODAES 2001, section 5; Wang et al., ICCAD 2021, section V). It gets
+// the strongest rule that is proved: one register is at least as known as
+// the other (their covering relation), or else the two never show opposite
+// known values (the steady-state equivalence of Khasidashvili and Hanna,
+// ENTCS 2003, section 6.1, on the pair). The rules are proved together by
+// induction from the boot state, with the certified equalities as
+// hypotheses (van Eijk, TCAD 2000).
+void proveRailRules(
+    const std::vector<std::pair<DualRailSymbolPair, DualRailSymbolPair>>& pairs,
+    const std::vector<std::pair<size_t, size_t>>& equalities,
+    Config::SolverType solverType,
+    KInductionProblem& problem) {
+  const std::unordered_map<size_t, bool> initial(
+      problem.initialStateAssignments.begin(), problem.initialStateAssignments.end());
+  const TransitionExprResolver transitions(problem);
+  // Both registers of a certified equality share one current-frame literal.
+  std::unordered_map<size_t, size_t> merged;
+  for (size_t symbol : problem.allSymbols) {
+    merged.emplace(symbol, symbol);
+  }
+  const auto find = [&merged](size_t symbol) {
+    while (merged.at(symbol) != symbol) {
+      symbol = merged.at(symbol);
+    }
+    return symbol;
+  };
+  for (const auto* list : {&equalities,
+                           &std::as_const(problem.sameFrameStateEqualityPairs0),
+                           &std::as_const(problem.sameFrameStateEqualityPairs1)}) {
+    for (const auto& [lhs, rhs] : *list) {
+      const size_t a = find(lhs);
+      const size_t b = find(rhs);
+      merged[std::max(a, b)] = std::min(a, b);
+    }
+  }
+  for (auto& [symbol, representative] : merged) {
+    representative = find(symbol);
+  }
+  const auto holds = [](const RailRule& rule, const auto& value) {
+    BoolExpr* all = BoolExpr::createTrue();
+    for (const auto& [first, second] : rule.clauses) {
+      BoolExpr* head = value(first);
+      all = BoolExpr::And(all, BoolExpr::Or(
+          rule.implication ? BoolExpr::Not(head) : head, value(second)));
+    }
+    return all;
+  };
+  // The rules that hold at boot, strongest first for each pair.
+  std::vector<RailRule> active;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const auto& [a, b] = pairs[i];
+    for (const RailRule& rule : {
+             RailRule{i, true, {{{b.mayBeOne, a.mayBeOne}, {b.mayBeZero, a.mayBeZero}}}},
+             RailRule{i, true, {{{a.mayBeOne, b.mayBeOne}, {a.mayBeZero, b.mayBeZero}}}},
+             RailRule{i, false, {{{a.mayBeZero, b.mayBeOne}, {a.mayBeOne, b.mayBeZero}}}}}) {
+      bool base = true;
+      for (const auto& [first, second] : rule.clauses) {
+        base &= transitions.contains(first) && transitions.contains(second) &&
+                initial.contains(first) && initial.contains(second) &&
+                ((rule.implication ? !initial.at(first) : initial.at(first)) ||
+                 initial.at(second));
+      }
+      if (base) {
+        active.push_back(rule);
+      }
+    }
+  }
+  bool certified = false;
+  for (size_t round = 0; round < 64 && !active.empty() && !certified; ++round) {
+    SATSolverWrapper::CadicalWorkBudget budget(100000, 10000000, 100000000);
+    SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
+    SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
+    FrameFormulaEncoder current(solver, {}, &merged, true, 0);
+    std::vector<int> conclusions;
+    std::vector<int> badClause;
+    for (const RailRule& rule : active) {
+      solver.addClause({current.encode(
+          holds(rule, [](size_t symbol) { return BoolExpr::Var(symbol); }))});
+      conclusions.push_back(current.encode(
+          holds(rule, [&](size_t symbol) { return transitions.at(symbol); })));
+      badClause.push_back(-conclusions.back());
+    }
+    for (const auto& value : problem.dualRailStatePairs) {
+      if (current.leafLits().contains(merged.at(value.mayBeOne)) ||
+          current.leafLits().contains(merged.at(value.mayBeZero))) {
+        solver.addClause({current.encode(BoolExpr::Var(value.mayBeOne)),
+                          current.encode(BoolExpr::Var(value.mayBeZero))});
+      }
+    }
+    const int anyFails = solver.newVar() + 2;
+    badClause.push_back(-anyFails);
+    solver.addClause(badClause);
+    const auto status =
+        solver.solveWithAssumptionsStatus({anyFails}, 10000, 1000000, 10000000);
+    // A rule is dropped when the next frame can break it, or when the solver
+    // cannot tell. The rest is a certificate once a round drops nothing.
+    std::vector<RailRule> kept;
+    for (size_t i = 0; i < active.size(); ++i) {
+      const bool dropped =
+          status == SATSolverWrapper::SolveStatus::Sat
+              ? !solver.getLiteralValue(conclusions[i])
+              : status == SATSolverWrapper::SolveStatus::Unknown &&
+                    solver.solveWithAssumptionsStatus({-conclusions[i]}, 1000, 100000,
+                                                      1000000) !=
+                        SATSolverWrapper::SolveStatus::Unsat;
+      if (!dropped) {
+        kept.push_back(active[i]);
+      }
+    }
+    certified = kept.size() == active.size();
+    active = std::move(kept);
+  }
+  // The compatibility rule follows from a covering rule of the same pair.
+  std::unordered_set<size_t> covered;
+  for (const RailRule& rule : active) {
+    if (!certified || (!rule.implication && covered.contains(rule.pair))) {
+      continue;
+    }
+    if (rule.implication) {
+      covered.insert(rule.pair);
+    }
+    auto& target = rule.implication ? problem.sameFrameStateImplicationPairs
+                                    : problem.sameFrameStateDisjunctionPairs;
+    target.insert(target.end(), rule.clauses.begin(), rule.clauses.end());
+  }
 }
 
 }  // namespace
@@ -1048,8 +1236,9 @@ void learnInternalStateRelations(
       problem.lazyTransitions != nullptr) {
     // Shapes of one function propagate X differently, so a true register
     // pair can fail the rail check. Retry those pairs in binary semantics,
-    // which proves equality from any common initial state; design 2's
-    // register then takes design 1's transition in the proof problem.
+    // which proves equality from any common initial state. Such a pair
+    // closes the outputs that are equal in 0/1 with it; on the rails it only
+    // gets the rule that is proved there, see proveRailRules.
     // A pair is already proved when the rail-proved equalities put its two
     // symbols in one class (van Eijk, TCAD 2000). Appearing in some rail pair
     // is not enough: a register's Q and QN rails are proved complementary
@@ -1092,20 +1281,74 @@ void learnInternalStateRelations(
     }
     const auto provedBinary =
         proveInternalRelations(problem, candidates, options, solverType, true);
+    BinaryFormulas binary(*problem.lazyTransitions);
+    std::unordered_map<size_t, size_t> zeroRail;
+    for (const auto& rails : problem.dualRailStatePairs) {
+      zeroRail.emplace(rails.mayBeOne, rails.mayBeZero);
+    }
+    auto binaryEqual = proved;
+    std::vector<std::pair<DualRailSymbolPair, DualRailSymbolPair>> binaryOnly;
     for (const auto& [lhs, rhs] : provedBinary) {
       if (railProved(lhs, rhs)) {
         continue;
       }
-      problem.sharedTransitionPairs.emplace_back(lhs, rhs);
-      proved.push_back({lhs, rhs});
-      ++binaryRoundProved;
+      binaryEqual.push_back({lhs, rhs});
+      if (binary.isRailOne(lhs) && binary.isRailOne(rhs)) {
+        binaryOnly.push_back({{lhs, zeroRail.at(lhs)}, {rhs, zeroRail.at(rhs)}});
+      }
     }
-    BinaryFormulas binary(*problem.lazyTransitions);
+    binaryRoundProved = binaryOnly.size();
+    proveRailRules(binaryOnly, proved, solverType, problem);
     dischargedOutputs = dischargeBinaryEqualOutputs(
-        model0, model1, proved, binary, solverType, problem);
+        model0, model1, binaryEqual, binary, solverType, problem);
   }
   problem.sameFrameStateEqualityPairs0.insert(
       problem.sameFrameStateEqualityPairs0.end(), proved.begin(), proved.end());
+  const size_t provedByRegisterLearner = proved.size();
+  // Its classes may relate signals that are X on both sides, so the pass is
+  // left out when X equality is disallowed.
+  if (options.signalCorrespondence && options.allowXEqualityInInternalRelations &&
+      problem.usesDualRailStateEncoding) {
+    // Registers are not enough when one design keeps a value the other
+    // recomputes: the outputs and the registers then only hold together.
+    // Signal correspondence proves them in one induction, from the state the
+    // reset window leaves (van Eijk, TCAD 2000).
+    const size_t outputs = problem.observedOutputExprs0.size();
+    if (problem.structurallyProvedOutputs.size() != outputs) {
+      problem.structurallyProvedOutputs.assign(outputs, false);
+    }
+    const auto discharge = [&problem, outputs](const std::vector<bool>& provedOutputs) {
+      for (size_t i = 0; i < outputs && i < provedOutputs.size(); ++i) {
+        if (!provedOutputs[i] || problem.structurallyProvedOutputs[i]) {
+          continue;
+        }
+        // Discharged like a structurally identical output; the property is
+        // rebuilt by dischargeStructurallyEquivalentOutputs below.
+        problem.observedOutputExprs0[i] = BoolExpr::createTrue();
+        problem.observedOutputExprs1[i] = BoolExpr::createTrue();
+        if (i < problem.dualRailOutputStrictEqualityExprs.size()) {
+          problem.dualRailOutputStrictEqualityExprs[i] = BoolExpr::createTrue();
+        }
+        problem.structurallyProvedOutputs[i] = true;
+      }
+    };
+    // The binary functions come first, for the reason of the binary round:
+    // two shapes of one function need not agree on the rails, and the binary
+    // logic is half the size. The rail run then takes what is left, outputs
+    // that are equal only because both sides are unknown.
+    if (options.binaryRelationRound && problem.lazyTransitions != nullptr) {
+      const auto input = binarySignalCorrespondenceInput(model0, model1, candidates, problem);
+      discharge(learnSignalCorrespondence(problem, solverType, diagnostics, {}, &input)
+                    .provedOutputs);
+    }
+    const auto learned = learnSignalCorrespondence(problem, solverType, diagnostics);
+    discharge(learned.provedOutputs);
+    problem.sameFrameStateEqualityPairs0.insert(
+        problem.sameFrameStateEqualityPairs0.end(), learned.stateEqualities.begin(),
+        learned.stateEqualities.end());
+    proved.insert(proved.end(), learned.stateEqualities.begin(),
+                  learned.stateEqualities.end());
+  }
   // The conjunction costs nodes that are never freed for every relation, and
   // only the exact IMC engine reads it.
   if (!problem.usesLargeDualRailImc()) {
@@ -1120,12 +1363,15 @@ void learnInternalStateRelations(
            "allow_x_equality_in_internal_relations=%d name_candidates=%zu "
            "net_name_candidates=%zu driver_candidates=%zu propagated_candidates=%zu "
            "propagation_rounds=%zu\n",
-           candidates.size(), proved.size(), options.allowXEqualityInInternalRelations,
+           candidates.size(), provedByRegisterLearner,
+           options.allowXEqualityInInternalRelations,
            nameCandidates, netCandidates, driverCandidates, propagatedCandidates,
            propagationRounds);
-    printf("SEC summary: binary_relation_round candidates=%zu proved_rail_equalities=%zu "
-           "discharged_outputs=%zu/%zu\n",
-           binaryRoundCandidates, binaryRoundProved, dischargedOutputs,
+    printf("SEC summary: binary_relation_round candidates=%zu binary_pairs=%zu "
+           "covering_clauses=%zu compatible_clauses=%zu discharged_outputs=%zu/%zu\n",
+           binaryRoundCandidates, binaryRoundProved,
+           problem.sameFrameStateImplicationPairs.size(),
+           problem.sameFrameStateDisjunctionPairs.size(), dischargedOutputs,
            problem.observedOutputExprs0.size());
     fflush(stdout);
   }
@@ -1307,23 +1553,6 @@ void mergeProvedStateRelations(KInductionProblem& problem, bool diagnostics) {
     }
     for (auto& memo : store.dualRailRemapMemoByDesign) {
       memo.clear();
-    }
-  }
-  if (!problem.sharedTransitionPairs.empty()) {
-    std::unordered_map<size_t, BoolExpr*> transition0BySymbol;
-    for (const auto& [symbol, expr] : problem.transitions0) {
-      transition0BySymbol.emplace(symbol, expr);
-    }
-    std::unordered_map<size_t, BoolExpr*> sharedBySymbol;
-    for (const auto& [lhs, rhs] : problem.sharedTransitionPairs) {
-      if (const auto it = transition0BySymbol.find(lhs); it != transition0BySymbol.end()) {
-        sharedBySymbol.emplace(rhs, it->second);
-      }
-    }
-    for (auto& [symbol, expr] : problem.transitions1) {
-      if (const auto it = sharedBySymbol.find(symbol); it != sharedBySymbol.end()) {
-        expr = it->second;
-      }
     }
   }
   std::unordered_map<BoolExpr*, BoolExpr*> canonical;

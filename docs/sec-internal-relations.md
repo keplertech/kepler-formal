@@ -219,7 +219,7 @@ to the engine as before.
 With `KEPLER_SEC_DIAG` set, the pass prints the number of outputs discharged
 and the number of symbols merged.
 
-## 10. Binary round and shared transitions
+## 10. Binary round
 
 The rail check compares the ternary values that the per-gate dual-rail
 lifting computes, and that lifting is a shape-dependent over-approximation of
@@ -238,23 +238,177 @@ solves, so it is allowed a hundred times the rail check's budget. A pair
 proved this way is equal from every common initial state (van Eijk, TCAD
 2000; Savoj et al., FMCAD 2010, Theorem 1).
 
-A proved pair is recorded as a shared transition: when the problem is merged
-(section 8), design 2's register takes design 1's transition formula. The
-exact ternary extension of a Boolean function depends only on the function,
-so the replacement does not change design 2's exact behavior; it removes the
-shape dependence of the lifting, and the rail equality of the pair is
-inductive by construction. Outputs get the same treatment: an output whose
-two functions agree in binary semantics over the merged registers is
-discharged like a structurally identical one (section 9), since one Boolean
-function has one exact ternary value. Every
+A proved pair is not merged on the rails, where one of its registers can be
+X while the other is known. It gets the strongest rule that is proved on the
+rails, one register at least as known as the other or the two never showing
+opposite known values, and the rule is added to the engines' queries as
+clauses. An output whose two functions agree in binary semantics once the
+proved pairs are read as one is discharged like a structurally identical one
+(section 9). Each step, and the article behind it, is in
+[sec-dual-rail-binary-passes.md](sec-dual-rail-binary-passes.md). Every
 other pair and output stays with the dual-rail engines unchanged.
 
 The round is on by default and switched by `binary_relation_round`
 (`--binary-relation-round <bool>`). It needs learning, the dual-rail encoding
 and an engine that keeps the lazy transition store (k-induction or PDR). The
-summary line `SEC summary: binary_relation_round candidates=... proved_rail_equalities=... discharged_outputs=...`
-reports the pairs it retried, the rail equalities it proved and the outputs it
-discharged.
+summary line `SEC summary: binary_relation_round candidates=... binary_pairs=... covering_clauses=... compatible_clauses=... discharged_outputs=...`
+reports the pairs it retried, the pairs it proved, the clauses of the rules
+proved for them and the outputs it discharged. The same switch covers the run of section 11 on the binary
+functions. The common initial state matters only for state that is unknown
+when the comparison starts: a run whose reset leaves such state says so in the
+log, and says that these passes are on (see
+[sec-reset-bootstrap.md](sec-reset-bootstrap.md)).
+
+## 11. Signal correspondence
+
+Sections 1 to 10 relate registers. That is not enough when one design keeps in
+a register a value the other recomputes, for example a register copy of a
+memory word that is read in place of the word while it is valid. The copy has
+no partner. The two memories are equal only while the outputs are, because
+what is written depends on the output, and the outputs only while the
+memories are. No register pair is inductive by itself, and an engine has to
+find the missing fact one state at a time.
+
+Outputs that sections 9 and 10 leave open are therefore tried by signal
+correspondence (van Eijk, TCAD 2000), decided with a SAT solver instead of
+BDDs (Bjesse and Claessen, FMCAD 2000). `proveSignalCorrespondence` in
+`src/sec/proof/SignalCorrespondence.cpp` works on the problem the engines
+receive, the rules of section 10 included:
+
+1. **Signals.** The set F of the paper: every register, both cones of every
+   open output (each rail in the dual-rail encoding) and every register's
+   next-state function. Any set is sound; this one is small.
+2. **Start state.** The boot state. With a reset bootstrap it is the state the
+   reset window leaves, found by propagating constants through the window
+   with the reset ports active and every other input unknown. A register
+   that stays unknown is left free, so every state the window can leave is
+   covered. After the window the reset ports are held inactive, as in the
+   engines.
+3. **First partition.** Sequential simulation with random inputs from the
+   start state groups the signals that never differ. Each signal is
+   normalised by its value in the first pattern, so signals that always hold
+   opposite values share a class. In the dual-rail encoding this is how
+   "this register is binary-defined" is stated: its two rails are
+   complements. A run goes on while the partition still refines, because a
+   memory behind an address counter is only reached after many frames.
+4. **Start (eq. 4 of the paper).** Members of a class must be equal in the
+   start state for every input.
+5. **Step (eq. 5).** With every class assumed in one time frame, the members
+   of each class must be equal in the next. The assumed equalities are plain
+   constraints of the current frame, the state compatibility condition of
+   the paper; nothing is merged before it is proved. No register holds the
+   empty rail value, the reset ports rest at their inactive value and the
+   equalities certified by sections 1 to 10 hold: these are constraints of
+   both frames.
+6. **Refinement.** A counterexample is replayed on the logic and splits every
+   class it separates. The step is repeated with a fresh solver until a round
+   splits nothing. The classes are then a signal correspondence relation:
+   their members are equal in every state reachable from the start state.
+
+Classes are asked in groups of 64, one query per group, so a round that changes
+nothing costs a query per group. A group the solver cannot decide in one query
+is halved, down to single classes, which are asked member by member. A class
+proved in a round may be used by the later queries of that round. A signal the
+solver leaves undecided is removed from its class, never assumed.
+
+A relation can fail to be inductive over one time frame although it holds. A
+design that reads a value in one phase and writes it back in a later one, a
+program counter read nibble by nibble and incremented three phases later for
+example, only shows in the reading phase whether a register copy of that value
+is right; in the other phases a state with a wrong copy passes for a state of
+the relation. The step is then taken over several frames (Sheeran, Singh and
+Stalmarck, FMCAD 2000; Bjesse and Claessen combine it with signal
+correspondence): the classes must hold in the first k frames from the start
+state, and, assumed in k consecutive frames, in the next. With k at least the
+length of the operation, the phase that exposes a wrong copy is always among
+the assumed frames. The pass tries k = 1, 2, 4 and 8 while outputs are open.
+
+If outputs are still open and the logic is small enough, the same is repeated
+with F set to every node of the next-state and output logic.
+
+An output whose two cones already take different values in a state the start
+state reaches, in simulation or in the check of the first frames, is not tried
+again: no larger set and no deeper induction proves it. A design that really
+differs therefore costs one run before the engine looks for the
+counterexample.
+
+### On the binary functions
+
+On the rails the relation inherits the weakness section 10 describes for
+register pairs: the lifting is shape dependent, so two shapes of one function
+can hold X and a defined value in the same state. One rewritten adder is
+enough. Every register behind it then differs between the designs in where it
+is unknown, few classes are left, and an output that is X on one side and
+defined on the other is in no class at any induction depth, although nothing
+is wrong with it: the obligation of an output is only that two defined values
+agree.
+
+The pass therefore runs first on the binary functions the lazy store keeps
+before lifting, the functions of the binary round: a register reads by its
+may-be-one rail, an input by its shared symbol, an output by the function of
+each design. The run differs from the one above in three points:
+
+1. **Start state.** The boot state, taken through the reset window. A
+   register is known there when its rails hold a binary value, and the two
+   registers of a candidate pair of section 1 that are both unknown hold one
+   value, the common initial state of section 10. The window is simulated,
+   and unrolled in the solver in front of the first compared frame, with the
+   reset ports active and every other input free. The start state is then
+   exactly what the window leaves, including what it loads from the inputs.
+2. **Signals.** Registers and outputs only, half as many as on the rails, and
+   with induction over 1, 2, 4, 8 and 16 frames: two machine cycles of eight
+   clock phases are what a value stored by one instruction and read by the
+   next one spans.
+3. **Result.** Outputs only. The register classes hold from the common boot
+   states and not from every boot state, so they are not handed to the
+   engines.
+
+An output proved this way is discharged like one proved on the rails. The
+argument is the one of ternary simulation (Seger and Bryant, Formal Methods in
+System Design 6(2), 1995): a rail value that is defined is the value the
+output takes for every binary completion of the unknown boot state. The run
+proves the two binary outputs equal for every completion in which the paired
+registers agree, and at least one such completion exists. Two outputs that
+are both defined on the rails therefore hold the value of that completion in
+both designs, and agree. Any choice of pairs is sound for this reason; the
+pairs of section 1 are the ones that make equivalent designs equal.
+
+The rail runs follow for the outputs that are left: those that are equal
+only because both sides are unknown, which no binary function shows.
+
+The result is used twice:
+
+- An output whose two cones are in one class with the same polarity, on both
+  rails in the dual-rail encoding, is discharged like a structurally
+  identical one (section 9).
+- Registers of one class are added to the same-frame equalities, and are then
+  merged like the pairs of sections 1 to 10. A pair is added only as a
+  complete value (both rails, plain or crosswise for a complement) and only
+  if the two registers are also known and equal in every frame before the
+  start state, because the engines read these equalities in the reset window
+  too.
+
+The pass is bounded by engineering limits (`SignalCorrespondenceLimits`), not
+techniques from the papers:
+16384 state symbols, about two million nodes counting every unrolled frame
+(262144 for all signals), 64 rounds, 8 induction frames on the rails and 16
+on the binary functions, and a solver budget of a couple of minutes shared by
+the runs of one kind, twice the ticks for the binary runs. A query is limited
+by its conflicts and decisions, not by its ticks, because propagation alone
+costs ticks in proportion to the design. When a limit is reached nothing is
+reported and the engines run as before.
+
+It is on by default and switched by `signal_correspondence`
+(`--signal-correspondence <bool>`). It needs learning and the dual-rail
+encoding. Its classes may relate signals that are unknown, X on both sides, so
+it is also left out with `allow_x_equality_in_internal_relations: false`. The
+runs on the binary functions need what the binary round needs as well:
+`binary_relation_round` and an engine that keeps the lazy transition store.
+The line `SEC summary: signal_correspondence scope=... frames=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=... semantics=... stopped_by=...`
+reports each run: `semantics` is `binary` or `rails`, and `stopped_by` names
+the limit that ended a run with `completed=0` (`model` for a size limit or an
+operator the pass does not read, `rounds`, or the part of the solver budget
+that ran out: `conflicts`, `decisions` or `ticks`).
 
 ## What it does and does not help
 
@@ -279,9 +433,19 @@ discharged.
   versus final netlist) can prove few pairs: one pair the solver leaves
   undecided is dropped, and so is every pair that reads it. One such pair
   keeps only a few percent of its rail equalities this way, while another
-  proves all of them structurally. Mishchenko et
-  al. address the general case with signal correspondence from random
-  simulation, which also relates internal nodes. That is not implemented:
-  sections 8 and 9 merge proved registers and recognize outputs whose cones
-  become identical, and section 10 proves registers and outputs whose
-  functions are equal, but internal nodes whose cones differ are not related.
+  proves all of them structurally. Section 11 relates internal signals found
+  by random simulation, but only within its size limits; a design above them
+  keeps the behavior of sections 8 to 10, which merge proved registers,
+  recognize outputs whose cones become identical and prove registers and
+  outputs whose functions are equal.
+- A design that keeps a register copy of a value the other recomputes, such
+  as a shadow of a memory word, has outputs and registers that only hold
+  together. Section 11 proves them in one induction from the state after
+  reset. Without a reset bootstrap the start state is the boot state, where
+  every register may still be unknown, and less is proved.
+- The same with logic rebuilt beside it, a processor core whose program
+  counter gained a shadow and whose adder became carry-lookahead for example,
+  differs on the rails in where values are unknown, and the rail runs of
+  section 11 prove nothing at any depth. The binary runs prove it, with
+  enough frames for the longest path from a value stored to the same value
+  read.

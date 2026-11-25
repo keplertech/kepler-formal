@@ -33,3 +33,8 @@ void writeMultiClockDomainSkippedOutputsReport(
 void writeOpaqueCellSkippedOutputsReport(
     const std::filesystem::path& reportPath,
     const std::vector<std::string>& skippedOutputs);
+
+// The warning lines for a dual-rail SEC run whose reset does not initialise
+// every state bit, so that X stays in the proof. Empty when it does.
+std::vector<std::string> secIncompleteResetWarnings(
+    const KEPLER_FORMAL::SEC::SequentialEquivalenceResetReport& report);

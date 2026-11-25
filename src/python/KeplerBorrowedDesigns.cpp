@@ -310,6 +310,9 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
       strategy.setBoundaryPairs(options.setAsBoundary);
       const auto proof = strategy.run(options.maxK);
       assignSecResult(proof, result);
+      for (const auto& warning : secIncompleteResetWarnings(proof.resetReport)) {
+        SPDLOG_WARN("{}", warning);
+      }
       if (result.status == RunStatus::Exported) {
         SPDLOG_INFO("SEC BTOR2 exported to {}; proof not run", options.btor2Export.path);
       }

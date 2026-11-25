@@ -3,6 +3,8 @@
 
 #include "kinduction/SatEncoding.h"
 
+#include "kinduction/KInductionProblem.h"
+
 #include <algorithm>
 #include <memory>
 #include <stdexcept>
@@ -616,6 +618,28 @@ int FrameFormulaEncoder::encode(BoolExpr* expr,
     encodeReadyNode(node);
   }
   return cachedLiteral(expr);
+}
+
+void addSameFrameStateClauses(SATSolverWrapper& solver,
+                              const FrameVariableStore& variables,
+                              const KInductionProblem& problem,
+                              size_t numFrames) {
+  for (const auto& [first, second] : problem.sameFrameStateImplicationPairs) {
+    for (size_t frame = 0;
+         frame < numFrames && variables.hasSymbol(first) && variables.hasSymbol(second);
+         ++frame) {
+      solver.addClause({-variables.getLiteral(first, frame),
+                        variables.getLiteral(second, frame)});
+    }
+  }
+  for (const auto& [first, second] : problem.sameFrameStateDisjunctionPairs) {
+    for (size_t frame = 0;
+         frame < numFrames && variables.hasSymbol(first) && variables.hasSymbol(second);
+         ++frame) {
+      solver.addClause({variables.getLiteral(first, frame),
+                        variables.getLiteral(second, frame)});
+    }
+  }
 }
 
 void addLiteralEquivalence(SATSolverWrapper& solver, int lhs, int rhs) {

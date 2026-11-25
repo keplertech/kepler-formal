@@ -339,6 +339,10 @@ enum class IndexedStateRelationKind {
   Equality,
   Complement,
   DualRailValidity,
+  // Certified clauses weaker than an equality: first implies second, and
+  // first or second.
+  Implication,
+  Disjunction,
 };
 
 class OrderedStateRelationIndex {
@@ -445,7 +449,11 @@ class OrderedStateRelationIndex {
         addLiteralEquivalence(solver, rhsLiteral, -lhsLiteral);
         break;
       case IndexedStateRelationKind::DualRailValidity:
+      case IndexedStateRelationKind::Disjunction:
         solver.addClause({lhsLiteral, rhsLiteral});
+        break;
+      case IndexedStateRelationKind::Implication:
+        solver.addClause({-lhsLiteral, rhsLiteral});
         break;
     }
   }
@@ -522,7 +530,9 @@ struct ComplementPartnerIndex {
         complemented1(problem.complementedStatePairs1),
         sameFrameEqualities0(problem.sameFrameStateEqualityPairs0),
         sameFrameEqualities1(problem.sameFrameStateEqualityPairs1),
-        dualRailPairs(problem.dualRailStatePairs) {}
+        dualRailPairs(problem.dualRailStatePairs),
+        sameFrameImplications(problem.sameFrameStateImplicationPairs),
+        sameFrameDisjunctions(problem.sameFrameStateDisjunctionPairs) {}
 
   void addComplementedPartnerClosure(
       std::unordered_set<size_t>& symbols) const {
@@ -554,6 +564,12 @@ struct ComplementPartnerIndex {
                                     IndexedStateRelationKind::Equality);
     dualRailPairs.addClauses(solver, variables, solverSymbols, numFrames,
                              IndexedStateRelationKind::DualRailValidity);
+    // No partner closure for these: a clause is added when the solver holds
+    // both symbols and is left out otherwise, which only loses pruning.
+    sameFrameImplications.addClauses(solver, variables, solverSymbols, numFrames,
+                                     IndexedStateRelationKind::Implication);
+    sameFrameDisjunctions.addClauses(solver, variables, solverSymbols, numFrames,
+                                     IndexedStateRelationKind::Disjunction);
   }
 
   void addClausesForAddedSymbols(
@@ -576,6 +592,12 @@ struct ComplementPartnerIndex {
     dualRailPairs.addClausesForAddedSymbols(
         solver, variables, addedSymbols, frame,
         IndexedStateRelationKind::DualRailValidity);
+    sameFrameImplications.addClausesForAddedSymbols(
+        solver, variables, addedSymbols, frame,
+        IndexedStateRelationKind::Implication);
+    sameFrameDisjunctions.addClausesForAddedSymbols(
+        solver, variables, addedSymbols, frame,
+        IndexedStateRelationKind::Disjunction);
   }
 
   OrderedStateRelationIndex complemented0;
@@ -583,6 +605,8 @@ struct ComplementPartnerIndex {
   OrderedStateRelationIndex sameFrameEqualities0;
   OrderedStateRelationIndex sameFrameEqualities1;
   OrderedStateRelationIndex dualRailPairs;
+  OrderedStateRelationIndex sameFrameImplications;
+  OrderedStateRelationIndex sameFrameDisjunctions;
 };
 
 struct ProofObligation {

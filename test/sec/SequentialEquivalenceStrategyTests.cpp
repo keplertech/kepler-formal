@@ -14009,6 +14009,11 @@ TEST_F(SequentialEquivalenceStrategyTests,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       SecEngine::KInduction,
       SecEncoding::DualRailSteady);
+  // The outputs are X on both sides in every frame, which signal
+  // correspondence proves before any engine runs; this test is about what the
+  // engine reports when it proves nothing itself.
+  kiStrategy.setInternalRelationOptions(
+      {true, true, true, /*signalCorrespondence=*/false});
   const auto kiResult = kiStrategy.runExtractedModels(model0, model1, 1);
 
   // A dual-rail residual engine that proves no top output must report zero
@@ -14249,6 +14254,10 @@ TEST_F(SequentialEquivalenceStrategyTests,
         KEPLER_FORMAL::Config::SolverType::KISSAT,
         SecEngine::KInduction,
         SecEncoding::DualRailSteady);
+    // Signal correspondence would prove the two residual outputs, X on both
+    // sides, before the engine; this test is about the engine's own coverage.
+    strategy.setInternalRelationOptions(
+        {true, true, true, /*signalCorrespondence=*/false});
     const auto result = strategy.runExtractedModels(model0, model1, 1);
 
     // KI may report partial output coverage only for obligations it proved
@@ -14308,6 +14317,8 @@ TEST_F(SequentialEquivalenceStrategyTests,
         KEPLER_FORMAL::Config::SolverType::KISSAT,
         SecEngine::KInduction,
         SecEncoding::DualRailSteady);
+    strategy.setInternalRelationOptions(
+        {true, true, true, /*signalCorrespondence=*/false});
     const auto result = strategy.runExtractedModels(model0, model1, 1);
     const std::string stdoutOutput = testing::internal::GetCapturedStdout();
     const std::string stderrOutput = testing::internal::GetCapturedStderr();
@@ -21054,4 +21065,293 @@ TEST_F(SequentialEquivalenceStrategyTests,
   EXPECT_THROW(
       substituteBoolExprVariableExpressions(&invalid, {{2, BoolExpr::Var(9)}}),
       std::runtime_error);
+}
+
+namespace {
+
+// The reproducer of issue 317: a program counter kept on a call stack of 32
+// words. With `shadow` the design also keeps the word on top of the stack in a
+// register and reads the counter from it while it is valid. With
+// `staleAfterPop` that register stays valid across a pop, which is a bug.
+// With `reshaped` the register is read through logic that computes the same
+// value in another shape, around a register `scratch` no reset reaches: on
+// the rails that read is X wherever the copy holds a 1 and `scratch` is
+// unknown.
+std::string shadowStackSource(const std::string& moduleName, bool shadow,
+                              bool staleAfterPop, bool reshaped = false) {
+  const auto onlyShadow = [shadow](const char* text) { return shadow ? text : ""; };
+  return "module " + moduleName + R"( (
+  input  wire       clk,
+  input  wire       rst,
+  input  wire       push,
+  input  wire       pop,
+  input  wire [3:0] target,
+  output wire [3:0] pc
+);
+  reg [4:0] sp;
+  reg [3:0] mem [0:31];
+  reg       init;
+)" + (shadow ? R"(  reg [3:0] buf_pc;
+  reg       valid;
+)" : "") + (reshaped ? R"(  reg       scratch;
+  wire [3:0] copy = (buf_pc & {4{scratch}}) | (buf_pc & ~{4{scratch}});
+  always @(posedge clk) if (pop) scratch <= target[0];
+)" : shadow ? R"(  wire [3:0] copy = buf_pc;
+)" : "") + (shadow ? R"(  assign pc = init ? 4'b0 : (valid ? copy : mem[sp]);
+)" : R"(  assign pc = init ? 4'b0 : mem[sp];
+)") + R"(  wire [4:0] sp_up = sp + 1'b1;
+  wire [4:0] sp_dn = sp - 1'b1;
+  always @(posedge clk) begin
+    if (rst) begin
+      sp   <= 0;
+      init <= 1'b1;
+)" + onlyShadow("      valid <= 1'b0;\n") + R"(    end else begin
+      init <= 1'b0;
+      if (push) begin
+        mem[sp]    <= pc + 1'b1;
+        mem[sp_up] <= target;
+        sp         <= sp_up;
+)" + onlyShadow("        buf_pc <= target; valid <= 1'b1;\n") + R"(      end else if (pop) begin
+        sp <= sp_dn;
+)" + (shadow && !staleAfterPop ? "        valid <= 1'b0;\n" : "") + R"(      end else begin
+        mem[sp] <= pc + 1'b1;
+)" + onlyShadow("        buf_pc <= pc + 1'b1; valid <= 1'b1;\n") + R"(      end
+    end
+  end
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SignalCorrespondenceProvesRegisterCopyOfMemoryWord) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* reference = loadSystemVerilogTopFromSource(
+      library, "stack_pc", shadowStackSource("stack_pc", false, false));
+  auto* shadowed = loadSystemVerilogTopFromSource(
+      library, "stack_pc_shadow", shadowStackSource("stack_pc_shadow", true, false));
+  auto* stale = loadSystemVerilogTopFromSource(
+      library, "stack_pc_stale", shadowStackSource("stack_pc_stale", true, true));
+
+  const auto run = [&](SNLDesign* other, bool signalCorrespondence, size_t maxK) {
+    SequentialEquivalenceStrategy strategy(
+        reference, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady, SecResetSpec{3, {{"rst", true}}});
+    InternalRelationOptions options;
+    options.signalCorrespondence = signalCorrespondence;
+    strategy.setInternalRelationOptions(options);
+    return strategy.run(maxK);
+  };
+
+  // The memory words and the counter outputs are equal only together, and the
+  // register copy has no partner in the reference: register pairs prove
+  // nothing, signal correspondence proves every output before the engine.
+  const auto proved = run(shadowed, /*signalCorrespondence=*/true, 1);
+  EXPECT_EQ(proved.status, SequentialEquivalenceStatus::Equivalent) << proved.reason;
+  EXPECT_EQ(proved.coveredOutputs, 4u);
+
+  const auto registersOnly = run(shadowed, /*signalCorrespondence=*/false, 1);
+  EXPECT_NE(registersOnly.status, SequentialEquivalenceStatus::Equivalent)
+      << registersOnly.reason;
+
+  // A copy that goes stale is still reported, with the pass enabled.
+  const auto different = run(stale, /*signalCorrespondence=*/true, 4);
+  EXPECT_EQ(different.status, SequentialEquivalenceStatus::Different) << different.reason;
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       SignalCorrespondenceOnBinaryFunctionsProvesReshapedRegisterCopy) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* reference = loadSystemVerilogTopFromSource(
+      library, "stack_pc", shadowStackSource("stack_pc", false, false));
+  auto* reshaped = loadSystemVerilogTopFromSource(
+      library, "stack_pc_reshaped",
+      shadowStackSource("stack_pc_reshaped", true, false, /*reshaped=*/true));
+  auto* stale = loadSystemVerilogTopFromSource(
+      library, "stack_pc_reshaped_stale",
+      shadowStackSource("stack_pc_reshaped_stale", true, true, /*reshaped=*/true));
+
+  const auto run = [&](SNLDesign* other, bool binaryRelationRound, size_t maxK) {
+    SequentialEquivalenceStrategy strategy(
+        reference, other, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+        SecEncoding::DualRailSteady, SecResetSpec{3, {{"rst", true}}});
+    InternalRelationOptions options;
+    options.binaryRelationRound = binaryRelationRound;
+    strategy.setInternalRelationOptions(options);
+    return strategy.run(maxK);
+  };
+
+  // The counter of the reshaped design is X on the rails where the
+  // reference holds a value, so no class of rail values relates the two and
+  // the words written from it differ the same way. The binary functions are
+  // equal, and signal correspondence on them proves every output before the
+  // engine.
+  const auto proved = run(reshaped, /*binaryRelationRound=*/true, 1);
+  EXPECT_EQ(proved.status, SequentialEquivalenceStatus::Equivalent) << proved.reason;
+  EXPECT_EQ(proved.coveredOutputs, 4u);
+
+  const auto railsOnly = run(reshaped, /*binaryRelationRound=*/false, 1);
+  EXPECT_NE(railsOnly.status, SequentialEquivalenceStatus::Equivalent) << railsOnly.reason;
+
+  // A copy that goes stale is still reported.
+  const auto different = run(stale, /*binaryRelationRound=*/true, 4);
+  EXPECT_EQ(different.status, SequentialEquivalenceStatus::Different) << different.reason;
+}
+
+namespace {
+
+// `a` is cleared by the reset. `b` follows `a` one cycle later, or keeps a
+// value of its own that no reset reaches.
+std::string resetReachSource(const std::string& name, bool followsReset) {
+  return "module " + name + R"((input logic clk, input logic rst, input logic d,
+    output logic q, output logic r);
+  logic a;
+  logic b;
+  always_ff @(posedge clk) begin
+    if (rst) a <= 1'b0;
+    else a <= d;
+)" + (followsReset ? "    b <= a;\n" : "    b <= b ^ d;\n") + R"(  end
+  assign q = a;
+  assign r = b;
+endmodule
+)";
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       ResetReportCountsTheStateTheResetLeavesUnknown) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* kept0 = loadSystemVerilogTopFromSource(
+      library, "kept0", resetReachSource("kept0", /*followsReset=*/false));
+  auto* kept1 = loadSystemVerilogTopFromSource(
+      library, "kept1", resetReachSource("kept1", /*followsReset=*/false));
+  auto* chain0 = loadSystemVerilogTopFromSource(
+      library, "chain0", resetReachSource("chain0", /*followsReset=*/true));
+  auto* chain1 = loadSystemVerilogTopFromSource(
+      library, "chain1", resetReachSource("chain1", /*followsReset=*/true));
+
+  const auto run = [&](SNLDesign* design0, SNLDesign* design1, SecEncoding encoding,
+                       SecResetSpec reset, bool binaryRelationRound = true,
+                       SecEngine engine = SecEngine::Pdr) {
+    SequentialEquivalenceStrategy strategy(
+        design0, design1, KEPLER_FORMAL::Config::SolverType::KISSAT, engine,
+        encoding, std::move(reset));
+    InternalRelationOptions options;
+    options.binaryRelationRound = binaryRelationRound;
+    strategy.setInternalRelationOptions(options);
+    return strategy.run(2).resetReport;
+  };
+  const SecResetSpec oneCycle{1, {{"rst", true}}};
+  const SecResetSpec twoCycles{2, {{"rst", true}}};
+
+  // No reset reaches `b`: it is X after any window, in both designs.
+  const auto kept = run(kept0, kept1, SecEncoding::DualRailSteady, twoCycles);
+  EXPECT_TRUE(kept.leavesUnknownState());
+  EXPECT_EQ(kept.resetCycles, 2u);
+  EXPECT_TRUE(kept.binaryPasses);
+  for (const auto& unknown : kept.unknownState) {
+    EXPECT_EQ(unknown.unknownBits, 1u);
+    EXPECT_EQ(unknown.stateBits, 2u);
+    ASSERT_EQ(unknown.examples.size(), 1u);
+    EXPECT_FALSE(unknown.examples.front().empty());
+  }
+
+  // The switch of the binary passes and an engine without them are reported.
+  EXPECT_FALSE(run(kept0, kept1, SecEncoding::DualRailSteady, twoCycles,
+                   /*binaryRelationRound=*/false).binaryPasses);
+  EXPECT_FALSE(run(kept0, kept1, SecEncoding::DualRailSteady, twoCycles,
+                   /*binaryRelationRound=*/true, SecEngine::Imc).binaryPasses);
+
+  // `b` takes the reset value of `a` one cycle later: one cycle leaves it X,
+  // two cycles reach it.
+  const auto shortWindow = run(chain0, chain1, SecEncoding::DualRailSteady, oneCycle);
+  EXPECT_EQ(shortWindow.unknownState[0].unknownBits, 1u);
+  EXPECT_EQ(shortWindow.unknownState[1].unknownBits, 1u);
+  const auto fullWindow = run(chain0, chain1, SecEncoding::DualRailSteady, twoCycles);
+  EXPECT_FALSE(fullWindow.leavesUnknownState());
+  EXPECT_EQ(fullWindow.unknownState[0].stateBits, 2u);
+
+  // Without a reset window every register without a boot value is X.
+  const auto noReset = run(chain0, chain1, SecEncoding::DualRailSteady, {});
+  EXPECT_EQ(noReset.resetCycles, 0u);
+  EXPECT_EQ(noReset.unknownState[0].unknownBits, 2u);
+  EXPECT_EQ(noReset.unknownState[1].unknownBits, 2u);
+
+  // The binary encoding has no X: it skips the outputs reading such state.
+  const auto binary = run(kept0, kept1, SecEncoding::Binary, twoCycles);
+  EXPECT_FALSE(binary.leavesUnknownState());
+  EXPECT_FALSE(binary.binaryPasses);
+}
+
+namespace {
+
+// `r` is set to 1 by the reset and is 0 from the next cycle on. The redundant
+// design computes that 0 from `m`, which no reset reaches: the value does not
+// depend on `m`, but the rails of `r` show X. Its output `o` is the constant
+// 1. The plain design writes the 0 directly and drives `o` from `r`. The two
+// agree on the first cycle after the reset and differ on `o` from the second.
+std::string unknownReadSource(const std::string& name, bool redundant) {
+  return "module " + name + R"((input logic clk, input logic rst, input logic d,
+    output logic o, output logic p);
+  logic m;
+  logic r;
+  logic x;
+  assign x = (m & d) | (m & ~d);
+  always_ff @(posedge clk) begin
+    m <= m ^ d;
+    if (rst) r <= 1'b1;
+)" + (redundant ? "    else r <= x ^ m;\n" : "    else r <= 1'b0;\n") + R"(  end
+)" + (redundant ? "  assign o = 1'b1;\n" : "  assign o = r;\n") + R"(  assign p = r;
+endmodule
+)";
+}
+
+SequentialEquivalenceResult runUnknownReadPair(bool binaryRelationRound) {
+  NLUniverse::create();
+  auto* db = NLDB::create(NLUniverse::get());
+  auto* library =
+      NLLibrary::create(db, NLLibrary::Type::Standard, NLName("designs"));
+  auto* redundant = loadSystemVerilogTopFromSource(
+      library, "unknown_read_redundant",
+      unknownReadSource("unknown_read_redundant", /*redundant=*/true));
+  auto* plain = loadSystemVerilogTopFromSource(
+      library, "unknown_read_plain",
+      unknownReadSource("unknown_read_plain", /*redundant=*/false));
+  SequentialEquivalenceStrategy strategy(
+      redundant, plain, KEPLER_FORMAL::Config::SolverType::KISSAT, SecEngine::Pdr,
+      SecEncoding::DualRailSteady, SecResetSpec{2, {{"rst", true}}});
+  InternalRelationOptions options;
+  options.binaryRelationRound = binaryRelationRound;
+  strategy.setInternalRelationOptions(options);
+  return strategy.run(40);
+}
+
+}  // namespace
+
+TEST_F(SequentialEquivalenceStrategyTests,
+       RedundantUnknownReadDiffersWithoutTheBinaryPasses) {
+  // On the rails alone the plain `r` is a known 0 against the constant 1.
+  const auto result = runUnknownReadPair(/*binaryRelationRound=*/false);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
+}
+
+// The binary round proves the two `r` equal, which they are. Merging them
+// would put the X of the redundant `r` on the plain one, `o` would compare 1
+// against X and the difference would be lost; the pair is constrained on the
+// rails and never merged.
+TEST_F(SequentialEquivalenceStrategyTests,
+       BinaryRoundKeepsADifferenceVisible) {
+  const auto result = runUnknownReadPair(/*binaryRelationRound=*/true);
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
 }

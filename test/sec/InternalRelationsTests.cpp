@@ -389,7 +389,7 @@ TEST_F(InternalRelationsTests, SameNamesAndMatchingStartupXCannotHideBinaryMisma
   }
 }
 
-TEST_F(InternalRelationsTests, BinaryRoundSharesTransitionsThatDifferOnlyInShape) {
+TEST_F(InternalRelationsTests, BinaryRoundRelatesPairsThatDifferOnlyInShape) {
   // Both designs hold q <= in, but design 2 writes it as a mux of in by a
   // register that is never defined; the per-gate lifting makes that X
   // whenever in is 1, so the rail check refutes the pair.
@@ -459,16 +459,21 @@ TEST_F(InternalRelationsTests, BinaryRoundSharesTransitionsThatDifferOnlyInShape
     // sel is X in both designs and holds; the rail check proves it either way.
     const auto& pairs = problem.sameFrameStateEqualityPairs0;
     EXPECT_TRUE(std::find(pairs.begin(), pairs.end(), std::make_pair(12ul, 16ul)) != pairs.end());
-    EXPECT_EQ(std::find(pairs.begin(), pairs.end(), std::make_pair(10ul, 14ul)) != pairs.end(),
-              binaryRound) << "binary_relation_round=" << binaryRound;
-    EXPECT_EQ(problem.sharedTransitionPairs.size(), binaryRound ? 2u : 0u);
+    // q differs on the rails, so it is never merged: the binary round proves
+    // that design 1's q is at least as known as design 2's and constrains it.
+    EXPECT_TRUE(std::find(pairs.begin(), pairs.end(), std::make_pair(10ul, 14ul)) == pairs.end());
+    using Pairs = std::vector<std::pair<size_t, size_t>>;
+    const Pairs covering{{10, 14}, {11, 15}};
+    EXPECT_EQ(problem.sameFrameStateImplicationPairs, binaryRound ? covering : Pairs())
+        << "binary_relation_round=" << binaryRound;
+    EXPECT_TRUE(problem.sameFrameStateDisjunctionPairs.empty());
     EXPECT_EQ(problem.observedOutputExprs0[0] == BoolExpr::createTrue(), binaryRound);
     EXPECT_EQ(problem.property == BoolExpr::createTrue(), binaryRound);
   }
 }
 
 TEST_F(InternalRelationsTests, BinaryRoundKeepsPairsWhoseRegistersHaveRailPartners) {
-  // The designs of BinaryRoundSharesTransitionsThatDifferOnlyInShape, plus a
+  // The designs of BinaryRoundRelatesPairsThatDifferOnlyInShape, plus a
   // register q2 beside q with the very same next-state formula. The rail
   // round proves q ~ q2 inside each design, so every rail symbol of q appears
   // in a proved pair, yet q of design 1 and q of design 2 are still unrelated:
@@ -548,16 +553,17 @@ TEST_F(InternalRelationsTests, BinaryRoundKeepsPairsWhoseRegistersHaveRailPartne
   // The rail round relates q and q2 inside each design ...
   EXPECT_TRUE(has(10, 14));
   EXPECT_TRUE(has(16, 20));
-  // ... and the binary round still relates q across the designs.
-  EXPECT_TRUE(has(10, 16));
-  const auto& shared = problem.sharedTransitionPairs;
-  EXPECT_TRUE(std::find(shared.begin(), shared.end(), std::make_pair(10ul, 16ul)) != shared.end());
+  // ... and the binary round still relates q across the designs, by a rule
+  // on the rails and without merging the two.
+  EXPECT_FALSE(has(10, 16));
+  const auto& rules = problem.sameFrameStateImplicationPairs;
+  EXPECT_TRUE(std::find(rules.begin(), rules.end(), std::make_pair(10ul, 16ul)) != rules.end());
   EXPECT_EQ(problem.observedOutputExprs0[0], BoolExpr::createTrue());
   EXPECT_EQ(problem.property, BoolExpr::createTrue());
 }
 
 TEST_F(InternalRelationsTests, BinaryDischargeSkipsOutputsWithoutAFunctionOnBothSides) {
-  // Same designs as BinaryRoundSharesTransitionsThatDifferOnlyInShape, plus
+  // Same designs as BinaryRoundRelatesPairsThatDifferOnlyInShape, plus
   // two observed output names that have no function to compare: "w" is a
   // name design 1 knows without an expression, "z" is unknown to both.
   const SignalKey q{{1}, {1}};

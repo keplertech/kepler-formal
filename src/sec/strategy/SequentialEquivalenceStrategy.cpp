@@ -380,6 +380,7 @@ struct OutputCoverageSelection {
   std::vector<std::string> multiClockDomainSkippedOutputs;
   std::vector<std::string> opaqueCellSkippedOutputs;
   size_t totalOutputs = 0;
+  SequentialEquivalenceResetReport resetReport;
 };
 
 struct AlignedSecInterface {
@@ -1104,6 +1105,7 @@ SequentialEquivalenceResult makeSecResult(
       coverage.multiClockDomainSkippedOutputs;
   result.opaqueCellSkippedOutputs = coverage.opaqueCellSkippedOutputs;
   result.extractedBoundaryReports = std::move(extractedBoundaryReports);
+  result.resetReport = coverage.resetReport;
   return result;
 }
 
@@ -1509,6 +1511,72 @@ std::vector<std::pair<size_t, bool>> resolveResetBootstrapModelVars(
   return vars;
 }
 
+// One design's state bits with their next-state formulas, stepped over the
+// abstract values with the reset ports held at one level and every other input
+// a value the two copies share.
+class ResetWindowStepper {
+ public:
+  ResetWindowStepper(const SequentialDesignModel& model,
+                     const std::vector<std::pair<size_t, bool>>& resetVars)
+      : resetVars_(resetVars) {
+    for (const auto& key : model.stateBits) {
+      const auto varIt = model.inputVarByKey.find(key);
+      const auto exprIt = model.nextStateExprByStateKey.find(key);
+      if (varIt == model.inputVarByKey.end() ||
+          exprIt == model.nextStateExprByStateKey.end()) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      keys_.push_back(key);
+      stateVars_.push_back(varIt->second);
+      nextExprs_.push_back(exprIt->second);
+    }
+  }
+
+  const std::vector<SignalKey>& keys() const { return keys_; }
+
+  void holdResetPorts(bool active) {
+    for (const auto& [var, activeValue] : resetVars_) {
+      valueByVar_[var] = activeValue == active ? ResetAbstractValue::One
+                                               : ResetAbstractValue::Zero;
+    }
+  }
+
+  std::vector<ResetAbstractValue> step(
+      const std::vector<ResetAbstractValue>& current) {
+    for (size_t i = 0; i < stateVars_.size(); ++i) {
+      valueByVar_[stateVars_[i]] = current[i];
+    }
+    ResetAbstractEvaluator evaluator(valueByVar_);
+    std::vector<ResetAbstractValue> next(current.size());
+    for (size_t i = 0; i < nextExprs_.size(); ++i) {
+      next[i] = evaluator.evaluate(nextExprs_[i]);
+    }
+    return next;
+  }
+
+  // Holds the reset for `cycles` frames from `state`; a frame that changes
+  // nothing fixes the rest of the window.
+  std::vector<ResetAbstractValue> holdReset(
+      std::vector<ResetAbstractValue> state, size_t cycles) {
+    holdResetPorts(true);
+    for (size_t cycle = 0; cycle < cycles; ++cycle) {
+      auto next = step(state);
+      if (next == state) {
+        break;
+      }
+      state = std::move(next);
+    }
+    return state;
+  }
+
+ private:
+  const std::vector<std::pair<size_t, bool>>& resetVars_;
+  std::vector<SignalKey> keys_;
+  std::vector<size_t> stateVars_;
+  std::vector<BoolExpr*> nextExprs_;
+  std::unordered_map<size_t, ResetAbstractValue> valueByVar_;
+};
+
 // The state bits a reset bootstrap leaves free in one design: every bit the
 // window does not determine with the reset ports held active and every other
 // input unknown, and every bit that can read one of them once the ports are
@@ -1519,56 +1587,19 @@ std::unordered_set<SignalKey, SignalKeyHash> collectResetFreeStateKeys(
     const SequentialDesignModel& model,
     const std::vector<std::pair<size_t, bool>>& resetVars,
     size_t cycles) {
-  std::vector<SignalKey> keys;
-  std::vector<size_t> stateVars;
-  std::vector<BoolExpr*> nextExprs;
-  for (const auto& key : model.stateBits) {
-    const auto varIt = model.inputVarByKey.find(key);
-    const auto exprIt = model.nextStateExprByStateKey.find(key);
-    if (varIt == model.inputVarByKey.end() ||
-        exprIt == model.nextStateExprByStateKey.end()) {
-      continue;  // LCOV_EXCL_LINE
-    }
-    keys.push_back(key);
-    stateVars.push_back(varIt->second);
-    nextExprs.push_back(exprIt->second);
-  }
-
-  std::unordered_map<size_t, ResetAbstractValue> valueByVar;
-  const auto holdResetPorts = [&](bool active) {
-    for (const auto& [var, activeValue] : resetVars) {
-      valueByVar[var] = activeValue == active ? ResetAbstractValue::One
-                                              : ResetAbstractValue::Zero;
-    }
-  };
-  const auto step = [&](const std::vector<ResetAbstractValue>& current) {
-    for (size_t i = 0; i < stateVars.size(); ++i) {
-      valueByVar[stateVars[i]] = current[i];
-    }
-    ResetAbstractEvaluator evaluator(valueByVar);
-    std::vector<ResetAbstractValue> next(current.size());
-    for (size_t i = 0; i < nextExprs.size(); ++i) {
-      next[i] = evaluator.evaluate(nextExprs[i]);
-    }
-    return next;
-  };
+  ResetWindowStepper window(model, resetVars);
+  const auto& keys = window.keys();
 
   // The proof starts every state bit free, then holds the reset for `cycles`
-  // frames; a frame that changes nothing fixes the rest of the window.
-  std::vector<ResetAbstractValue> state(keys.size(), ResetAbstractValue::Free);
-  holdResetPorts(true);
-  for (size_t cycle = 0; cycle < cycles; ++cycle) {
-    auto next = step(state);
-    if (next == state) {
-      break;
-    }
-    state = std::move(next);
-  }
+  // frames.
+  auto state = window.holdReset(
+      std::vector<ResetAbstractValue>(keys.size(), ResetAbstractValue::Free),
+      cycles);
   // After the window the outputs are compared on every frame, so join each
   // later frame into the state until nothing can still change.
-  holdResetPorts(false);
+  window.holdResetPorts(false);
   for (size_t round = 0; round <= 2 * keys.size() + 1; ++round) {
-    const auto next = step(state);
+    const auto next = window.step(state);
     bool changed = false;
     for (size_t i = 0; i < state.size(); ++i) {
       const auto joined = joinResetAbstractValues(state[i], next[i]);
@@ -1589,6 +1620,43 @@ std::unordered_set<SignalKey, SignalKeyHash> collectResetFreeStateKeys(
     }
   }
   return freeKeys;
+}
+
+// The state bits of one design that a dual-rail proof may still hold as X when
+// the outputs are first compared. The proof starts every bit at its boot
+// value, X where the design gives none, and holds the reset ports active for
+// `cycles` frames. Every other input is a 0 or a 1 there, so a bit is X only
+// where X reaches it through the logic: the Free value of the evaluation.
+SequentialEquivalenceUnknownState collectUnknownStateAfterReset(
+    const SequentialDesignModel& model,
+    const std::vector<std::pair<size_t, bool>>& resetVars,
+    size_t cycles) {
+  constexpr size_t kExamples = 8;
+  ResetWindowStepper window(model, resetVars);
+  const auto& keys = window.keys();
+  std::vector<ResetAbstractValue> boot;
+  boot.reserve(keys.size());
+  for (const auto& key : keys) {
+    const auto valueIt = model.initialStateValueByKey.find(key);
+    boot.push_back(valueIt == model.initialStateValueByKey.end()
+                       ? ResetAbstractValue::Free
+                       : valueIt->second ? ResetAbstractValue::One
+                                         : ResetAbstractValue::Zero);
+  }
+  const auto state = window.holdReset(std::move(boot), cycles);
+
+  SequentialEquivalenceUnknownState unknown;
+  unknown.stateBits = model.stateBits.size();
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (state[i] != ResetAbstractValue::Free) {
+      continue;
+    }
+    ++unknown.unknownBits;
+    if (unknown.examples.size() < kExamples) {
+      unknown.examples.push_back(describeSecSignalKey(model, keys[i]));
+    }
+  }
+  return unknown;
 }
 
 std::unordered_set<SignalKey, SignalKeyHash> anchoredStateKeysExcept(
@@ -4125,6 +4193,27 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
         secDiagEnabled,
         "SEC diag: dual-rail mode keeps reset-unanchored outputs in the "
         "rail-encoded proof");
+    // The proof carries the state a reset does not reach as X. Report it: the
+    // binary passes start such registers of the two designs from one value.
+    const auto& problem = symbolSpace.problem;
+    auto& report = aligned.outputCoverage.resetReport;
+    report.resetCycles = problem.hasResetBootstrap() ? problem.resetBootstrapCycles : 0;
+    report.binaryPasses = internalRelationOptions_.learnInternalRelations &&
+                          internalRelationOptions_.binaryRelationRound &&
+                          (secEngine_ == SecEngine::KInduction || secEngine_ == SecEngine::Pdr);
+    report.unknownState[0] = collectUnknownStateAfterReset(
+        model0, resolveResetBootstrapModelVars(model0, aligned.inputs.keys0, problem),
+        report.resetCycles);
+    report.unknownState[1] = collectUnknownStateAfterReset(
+        model1, resolveResetBootstrapModelVars(model1, aligned.inputs.keys1, problem),
+        report.resetCycles);
+    if (secDiagEnabled || secSummaryStatsEnabled()) {
+      printf("SEC summary: reset_unknown_state reset_cycles=%zu design0=%zu/%zu design1=%zu/%zu\n",
+             report.resetCycles, report.unknownState[0].unknownBits,
+             report.unknownState[0].stateBits, report.unknownState[1].unknownBits,
+             report.unknownState[1].stateBits);
+      fflush(stdout);
+    }
   }
   symbolSpace.problem.observedOutputNames = aligned.outputs.names;
   if (aligned.outputs.names.empty()) {

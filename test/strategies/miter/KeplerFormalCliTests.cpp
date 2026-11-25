@@ -6789,6 +6789,82 @@ TEST_F(KeplerFormalCliTests, WriteBoundaryTermsReportSkipsEmptyReports) {
   std::filesystem::remove_all(tempDir);
 }
 
+TEST_F(KeplerFormalCliTests, SecIncompleteResetWarningsNameTheUnknownState) {
+  KEPLER_FORMAL::SEC::SequentialEquivalenceResetReport report;
+  EXPECT_TRUE(secIncompleteResetWarnings(report).empty());
+
+  report.resetCycles = 3;
+  report.binaryPasses = true;
+  report.unknownState[0] = {10, 12, {"u0.a[0]", "u0.b[0]"}};
+  report.unknownState[1] = {0, 14, {}};
+  auto warnings = secIncompleteResetWarnings(report);
+  ASSERT_EQ(warnings.size(), 2u);
+  EXPECT_NE(warnings[0].find("after the reset window of 3 cycle(s), 10 of 12 state bits of "
+                             "design 1 and 0 of 14 state bits of design 2 can still be "
+                             "unknown (X)."),
+            std::string::npos)
+      << warnings[0];
+  EXPECT_NE(warnings[0].find("Design 1: u0.a[0], u0.b[0], and 8 more."), std::string::npos)
+      << warnings[0];
+  EXPECT_EQ(warnings[0].find("Design 2:"), std::string::npos) << warnings[0];
+  EXPECT_NE(warnings[1].find("--binary-relation-round false"), std::string::npos);
+
+  report.resetCycles = 0;
+  report.binaryPasses = false;
+  report.unknownState[0] = {1, 1, {"q[0]"}};
+  warnings = secIncompleteResetWarnings(report);
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_NE(warnings[0].find("no reset window is given, and 1 of 1 state bits of design 1"),
+            std::string::npos)
+      << warnings[0];
+  EXPECT_NE(warnings[0].find("Design 1: q[0]."), std::string::npos) << warnings[0];
+}
+
+TEST_F(KeplerFormalCliTests, CliSecWarnsWhenTheResetLeavesUnknownState) {
+  const auto fixture = createEquivalentDesignFixture(
+      "sv",
+      "module top(input logic clk, input logic reset, input logic a, output logic y,\n"
+      "    output logic z);\n"
+      "  always_ff @(posedge clk) begin\n"
+      "    if (reset) y <= 1'b0;\n"
+      "    else y <= a;\n"
+      "    z <= z ^ a;\n"
+      "  end\n"
+      "endmodule\n");
+  const auto run = [&](const std::string& logName, const std::string& extra) {
+    const auto logPath = fixture.tmpDir / logName;
+    const auto cfgPath = writeTempConfig(
+        "format: systemverilog\n"
+        "verification: sec\n"
+        "max_k: 2\n" + extra +
+        "sec_reset:\n"
+        "  cycles: 1\n"
+        "  ports:\n"
+        "    - name: reset\n"
+        "      active_value: 1\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "log_file: " + logPath.string() + "\n");
+    EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
+    std::filesystem::remove(cfgPath);
+    return readFileContents(logPath);
+  };
+
+  // `z` has no reset: it stays X, and the run says so next to the verdict.
+  const auto withPasses = run("passes_on.log", "");
+  EXPECT_NE(withPasses.find("SEC reset is incomplete: after the reset window of 1 cycle(s), "
+                            "1 of 2 state bits of design 1 and 1 of 2 state bits of design 2"),
+            std::string::npos)
+      << withPasses;
+  EXPECT_NE(withPasses.find("SEC binary passes are on"), std::string::npos) << withPasses;
+
+  const auto withoutPasses = run("passes_off.log", "binary_relation_round: false\n");
+  EXPECT_NE(withoutPasses.find("SEC reset is incomplete"), std::string::npos) << withoutPasses;
+  EXPECT_EQ(withoutPasses.find("SEC binary passes are on"), std::string::npos) << withoutPasses;
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, WriteResetUnanchoredSkippedOutputsReportFormatsEntries) {
   const auto tempDir =
       makeUniqueTempDir("kepler_formal_cli_reset_unanchored_report");

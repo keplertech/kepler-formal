@@ -3,6 +3,7 @@
 
 add_executable(secStrategyTests
     InternalRelationsTests.cpp
+    SignalCorrespondenceTests.cpp
     SequentialEquivalenceStrategyTests.cpp
     Btor2ExportStrategyTests.cpp)
 set_target_properties(secStrategyTests PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)

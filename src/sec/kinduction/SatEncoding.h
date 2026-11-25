@@ -15,6 +15,8 @@
 
 namespace KEPLER_FORMAL::SEC {
 
+struct KInductionProblem;
+
 // Owns the SAT literals that represent each symbolic SEC variable in each time
 // frame of the unrolled problem.
 class FrameVariableStore {
@@ -115,6 +117,13 @@ class FrameFormulaEncoder {
 };
 
 void addLiteralEquivalence(SATSolverWrapper& solver, int lhs, int rhs);
+// The certified two-literal state clauses of the problem, in every frame and
+// for the pairs whose two symbols the solver holds. A clause only removes
+// states, so one that is left out costs nothing but pruning.
+void addSameFrameStateClauses(SATSolverWrapper& solver,
+                              const FrameVariableStore& variables,
+                              const KInductionProblem& problem,
+                              size_t numFrames);
 int createXorLiteral(SATSolverWrapper& solver, int lhs, int rhs);
 // Enforces the noncyclic-path refinement from k-induction by requiring every
 // pair of frames to differ in at least one state bit.
