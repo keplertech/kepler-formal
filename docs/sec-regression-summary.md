@@ -13,7 +13,9 @@ check that OpenROAD-flow-scripts runs in its final stage, one case per design
 and hardened sub-block that has the check enabled there. The cases live in
 `orfs_global_sec/` of the kepler-formal-regress repository. Each runs PDR with
 the dual-rail encoding, as ORFS does, and must prove equivalence with full
-checked-output coverage.
+checked-output coverage. Each case also has a negative job
+(`pdr-dual-rail / orfs_<case>_negative`), which inverts one primary output of
+the final netlist and must find a counterexample.
 
 Each row shows the case, flow (engine and encoding), CLI runtime, SEC verdict,
 checked-output coverage (percentage and covered/total counts), and CI status.
