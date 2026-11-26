@@ -811,9 +811,10 @@ jobs:
   # the final netlist), one case per design and hardened sub-block that has the
   # check enabled in ORFS CI. Each case runs the check the way ORFS does, PDR
   # with the dual-rail encoding, and must prove equivalence with full
-  # checked-output coverage.
+  # checked-output coverage. The negative variant of each case inverts one
+  # primary output of the final netlist and must yield a counterexample.
   run-orfs-global-sec-regress:
-    name: ${{ matrix.flow.name }} / orfs_${{ matrix.case }}
+    name: ${{ matrix.flow.name }} / orfs_${{ matrix.case }}${{ matrix.variant.suffix }}
     runs-on: ubuntu-22.04
     needs: build-sec-regress
     timeout-minutes: 120
@@ -824,6 +825,13 @@ jobs:
         - name: pdr-dual-rail
           engine: pdr
           sec_encoding: dual_rail_steady
+        variant:
+        - suffix: ""
+          subdir: ""
+          expectation: expect-full-coverage
+        - suffix: _negative
+          subdir: /negative
+          expectation: expect-different
         case:
         - asap7_aes
         - asap7_aes-block
@@ -904,21 +912,29 @@ jobs:
         git clone --depth 1 --filter=blob:none --sparse https://github.com/keplertech/kepler-formal-regress
         git -C kepler-formal-regress sparse-checkout set "orfs_global_sec/${CASE}"
 
+    - name: Apply negative edit
+      if: matrix.variant.suffix != ''
+      working-directory: ${{github.workspace}}/kepler-formal-regress/orfs_global_sec/${{ matrix.case }}/negative
+      run: patch -s -o 6_final_lec.v ../6_final_lec.v 6_final_lec.v.patch
+
     - name: Run SEC regression
       working-directory: ${{github.workspace}}
       env:
         CASE: ${{ matrix.case }}
+        SUFFIX: ${{ matrix.variant.suffix }}
+        SUBDIR: ${{ matrix.variant.subdir }}
+        EXPECTATION: ${{ matrix.variant.expectation }}
         SEC_ENGINE: ${{ matrix.flow.engine }}
         SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
       run: |
         set -euo pipefail
         export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
         bash regress/run_sec_strategies_regress.sh \
-          "orfs_${CASE}" \
-          "${{github.workspace}}/kepler-formal-regress/orfs_global_sec/${CASE}" \
+          "orfs_${CASE}${SUFFIX}" \
+          "${{github.workspace}}/kepler-formal-regress/orfs_global_sec/${CASE}${SUBDIR}" \
           "${{github.workspace}}/stage/bin/kepler-formal" \
           6_final_sec_test.yml \
-          expect-full-coverage \
+          "${EXPECTATION}" \
           "engine=${SEC_ENGINE}" \
           "sec-encoding=${SEC_ENCODING}"
 
@@ -926,10 +942,10 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sec-regress-results-${{ github.run_attempt }}-${{ matrix.flow.name }}-orfs_${{ matrix.case }}
+        name: sec-regress-results-${{ github.run_attempt }}-${{ matrix.flow.name }}-orfs_${{ matrix.case }}${{ matrix.variant.suffix }}
         path: |
-          ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}/sec/*.stdout
-          ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}/sec/*.seconds
+          ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}${{ matrix.variant.suffix }}/sec/*.stdout
+          ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}${{ matrix.variant.suffix }}/sec/*.seconds
         retention-days: 7
         if-no-files-found: ignore
 
@@ -937,8 +953,8 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: sec-regress-logs-${{ matrix.flow.name }}-orfs_${{ matrix.case }}
-        path: ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}/sec
+        name: sec-regress-logs-${{ matrix.flow.name }}-orfs_${{ matrix.case }}${{ matrix.variant.suffix }}
+        path: ${{github.workspace}}/regress-output/orfs_${{ matrix.case }}${{ matrix.variant.suffix }}/sec
         retention-days: 7
         if-no-files-found: ignore
 

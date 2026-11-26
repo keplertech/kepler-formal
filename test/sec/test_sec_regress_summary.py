@@ -132,6 +132,13 @@ SEC partially proved equivalence at k = 2: 2/4 outputs proved.
         self.assertIn("| orfs\\_asap7\\_aes-block\\_aes\\_rcon | pdr-dual-rail | 1.23 s | Proved "
                       "| 100.00% (18/18) | success |", report)
 
+    def test_orfs_global_sec_negative_job_reads_its_artifact(self):
+        job = self.job("pdr-dual-rail / orfs_asap7_gcd_negative")
+        self.artifact(job, "SEC found a counterexample at k = 1.")
+        report = SUMMARY.summarize([job], self.root)
+        self.assertIn("| orfs\\_asap7\\_gcd\\_negative | pdr-dual-rail | 1.23 s | Counterexample "
+                      "| — | success |", report)
+
     def test_invalid_and_missing_runtime_are_not_zero(self):
         job = self.job()
         for seconds in (None, "garbage", "nan", "inf", "-1"):
