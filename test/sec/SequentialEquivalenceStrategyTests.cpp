@@ -5852,6 +5852,103 @@ TEST_F(SequentialEquivalenceStrategyTests,
 }
 
 TEST_F(SequentialEquivalenceStrategyTests,
+       SequentialDesignModelExtractGatesMemoryWritesByTheirClock) {
+  // A two-word memory whose write clock is `clk & en_q`, `!clk & en_q` or
+  // plain `clk`; `en_q` is a register, so it is state and not a clock.
+  enum class WriteClock { Plain, GatedHigh, GatedLow };
+  for (const auto writeClock :
+       {WriteClock::Plain, WriteClock::GatedHigh, WriteClock::GatedLow}) {
+    SCOPED_TRACE(static_cast<int>(writeClock));
+    NLUniverse::create();
+    auto* db = NLDB::create(NLUniverse::get());
+    auto* primitives =
+        NLLibrary::create(db, NLLibrary::Type::Primitives, NLName("prims"));
+    auto* library = NLLibrary::create(db, NLName("LIB"));
+    auto* and2Model = createAnd2Model(primitives);
+    auto* invModel = createInvModel(primitives);
+    // One bit wide, two words, one read port and one write port.
+    auto* memoryModel = NLDB0::getOrCreateMemory({1, 2, 1, 1, 1});
+    auto* top =
+        SNLDesign::create(library, SNLDesign::Type::Standard, NLName("top"));
+    auto* memory = SNLInstance::create(top, memoryModel, NLName("mem0"));
+    for (auto* modelTerm : memoryModel->getBusTerms()) {
+      auto* topTerm = SNLBusTerm::create(
+          top, modelTerm->getDirection(), modelTerm->getMSB(),
+          modelTerm->getLSB(), modelTerm->getName());
+      auto* net = SNLBusNet::create(
+          top, modelTerm->getMSB(), modelTerm->getLSB(),
+          NLName(modelTerm->getName().getString() + "_net"));
+      for (int bit = modelTerm->getLSB(); bit <= modelTerm->getMSB(); ++bit) {
+        topTerm->getBit(bit)->setNet(net->getBit(bit));
+        memory->getInstTerm(modelTerm->getBit(bit))->setNet(net->getBit(bit));
+      }
+    }
+    auto* netClock = SNLScalarNet::create(top, NLName("net_clk"));
+    auto* netEnable = SNLScalarNet::create(top, NLName("net_en"));
+    auto* netEnableQ = SNLScalarNet::create(top, NLName("net_en_q"));
+    auto* netGated = SNLScalarNet::create(top, NLName("net_gclk"));
+    SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("clk"))
+        ->setNet(netClock);
+    SNLScalarTerm::create(top, SNLTerm::Direction::Input, NLName("en"))
+        ->setNet(netEnable);
+    auto* enableFlop = SNLInstance::create(top, NLDB0::getDFF(), NLName("ff_en"));
+    enableFlop->getInstTerm(NLDB0::getDFFClock())->setNet(netClock);
+    enableFlop->getInstTerm(NLDB0::getDFFData())->setNet(netEnable);
+    enableFlop->getInstTerm(NLDB0::getDFFOutput())->setNet(netEnableQ);
+    SNLScalarNet* gateClock = netClock;
+    if (writeClock == WriteClock::GatedLow) {
+      gateClock = SNLScalarNet::create(top, NLName("net_clk_n"));
+      auto* inverter = SNLInstance::create(top, invModel, NLName("clock_inv"));
+      inverter->getInstTerm(invModel->getScalarTerm(NLName("A")))->setNet(netClock);
+      inverter->getInstTerm(invModel->getScalarTerm(NLName("Y")))->setNet(gateClock);
+    }
+    auto* gate = SNLInstance::create(top, and2Model, NLName("clock_gate_and"));
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("A")))->setNet(gateClock);
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("B")))->setNet(netEnableQ);
+    gate->getInstTerm(and2Model->getScalarTerm(NLName("Y")))->setNet(netGated);
+    memory->getInstTerm(NLDB0::getMemoryClock(memoryModel))
+        ->setNet(writeClock == WriteClock::Plain ? netClock : netGated);
+
+    const auto model = SequentialDesignModel::extract(top, {}, 0);
+    EXPECT_FALSE(model.hasUnsupportedFeatures());
+    std::optional<size_t> enableVar;
+    std::optional<SignalKey> writtenCell;
+    for (const auto& stateKey : model.stateBits) {
+      const auto& name = model.displayNameByKey.at(stateKey);
+      if (name.find("ff_en") != std::string::npos) {
+        enableVar = model.inputVarByKey.at(stateKey);
+      } else if (name.find(".__MEM_CELL[1][0]") != std::string::npos) {
+        writtenCell = stateKey;
+      }
+    }
+    ASSERT_TRUE(enableVar.has_value());
+    ASSERT_TRUE(writtenCell.has_value());
+    const size_t cellVar = model.inputVarByKey.at(*writtenCell);
+    const auto* next = model.nextStateExprByStateKey.at(*writtenCell);
+    const auto support = next->getSupportVars();
+    // The clock itself never reaches a transition.
+    for (const auto carrierVar : model.clockCarrierVarIDs) {
+      EXPECT_EQ(support.count(carrierVar), 0u);
+    }
+    EXPECT_EQ(support.count(*enableVar),
+              writeClock == WriteClock::Plain ? 0u : 1u);
+    // A write of 1 to word 1, which holds 0: every other signal is 1.
+    std::unordered_map<size_t, bool> write;
+    for (const auto varID : support) {
+      write[varID] = true;
+    }
+    write[cellVar] = false;
+    write[*enableVar] = true;
+    EXPECT_TRUE(next->evaluate(write));
+    // Without a clock edge the word holds.
+    write[*enableVar] = false;
+    EXPECT_EQ(next->evaluate(write), writeClock == WriteClock::Plain);
+    // The next netlist starts from nothing, as the next test does.
+    TearDown();
+  }
+}
+
+TEST_F(SequentialEquivalenceStrategyTests,
        SequentialDesignModelExtractRecordsOutputNetNamesOnlyForNamedNets) {
   NLUniverse::create();
   auto* db = NLDB::create(NLUniverse::get());
