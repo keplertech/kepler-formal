@@ -37,6 +37,11 @@ target_link_libraries(BoundaryEquivalenceTests
     kepler_sec kepler_formal_utils GTest::gtest_main)
 GTEST_DISCOVER_TESTS(BoundaryEquivalenceTests)
 
+add_executable(PropertyCheckTests PropertyCheckTests.cpp)
+target_link_libraries(PropertyCheckTests
+    kepler_sva GTest::gtest_main)
+GTEST_DISCOVER_TESTS(PropertyCheckTests)
+
 add_executable(SecBtor2ExporterTests
     SecBtor2ExporterTests.cpp
     SecBtor2ExportValidationTests.cpp)

@@ -52,6 +52,8 @@
 #include "Tree2BoolExpr.h"
 #include "DnlLifetime.h"
 #include "model/SequentialDesignModel.h"
+#include "property/PropertyCheckStrategy.h"
+#include "property/SvaPropertyTranslator.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
 static const char* kBoundaryTermsReport = "boundary_terms.txt";
@@ -88,7 +90,10 @@ static void print_usage(const char* prog) {
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] "
-      "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC)",
+      "[--dump-btor2 <file>] [--dump-only] (BTOR2 export requires SEC) | "
+      "-systemverilog/-sv -v fpv [--top <name>] [-f <flist>] [-k <max-k>] "
+      "[--sec-engine <k_induction|imc|pdr>] [--sec-reset-cycles <n>] "
+      "[--sec-reset-port <name=0|1>...] <file...>",
       prog);
 // LCOV_EXCL_START
 }
@@ -3786,6 +3791,277 @@ static int KeplerFormalMainImpl(
   // LCOV_EXCL_STOP
 }
 
+// ----------------------------------------------------------------------------
+// Property verification (`-v fpv`): one SystemVerilog design whose assert,
+// assume and cover statements are proved with the sequential engines.
+// ----------------------------------------------------------------------------
+static bool isPropertyVerificationRequest(int argc, char** argv) {
+  for (int i = 1; i + 1 < argc; ++i) {
+    const std::string_view arg(argv[i]);
+    if ((arg == "-v" || arg == "--verification") &&
+        std::string_view(argv[i + 1]) == "fpv") {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int runPropertyVerification(int argc, char** argv,
+                                   KEPLER_FORMAL::RunResult& runResult) {
+  using KEPLER_FORMAL::RunStatus;
+  using KEPLER_FORMAL::SEC::PropertyKind;
+  using KEPLER_FORMAL::SEC::PropertyStatus;
+
+  runResult = KEPLER_FORMAL::RunResult{};
+  runResult.verification = "fpv";
+  runResult.inputFormat = "SYSTEMVERILOG";
+  configureMainLogger("info", false, "");
+  // The SystemVerilog frontend installs its own logger while it runs.
+  const auto mainLogger = spdlog::default_logger();
+  const auto fail = [&](const std::string& message) {
+    spdlog::set_default_logger(mainLogger);
+    SPDLOG_CRITICAL("{}", message);
+    runResult.status = RunStatus::Error;
+    runResult.reason = message;
+    runResult.exitCode = EXIT_FAILURE;
+    return EXIT_FAILURE;
+  };
+
+  size_t maxK = 32;
+  auto engine = KEPLER_FORMAL::SEC::SecEngine::Pdr;
+  KEPLER_FORMAL::SEC::SecResetSpec resetSpec;
+  bool resetExplicit = false;
+  std::optional<std::string> topName;
+  std::vector<std::filesystem::path> sources;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    const auto value = [&](std::string& out) {
+      if (i + 1 >= argc) {
+        return false;
+      }
+      out = argv[++i];
+      return true;
+    };
+    std::string token;
+    std::string error;
+    if (arg == "-sv" || arg == "-systemverilog") {
+      continue;
+    }
+    if (arg == "-v" || arg == "--verification") {
+      ++i;
+      continue;
+    }
+    if (arg == "--top") {
+      if (!value(token) || token.empty()) {
+        return fail("--top requires a module name");
+      }
+      topName = token;
+      continue;
+    }
+    if (arg == "-k" || arg == "--max-k") {
+      if (!value(token) || !parseMaxKToken(token, maxK, error)) {
+        return fail("Invalid " + arg + ": " +
+                    (error.empty() ? "missing value" : error));
+      }
+      continue;
+    }
+    if (arg == "--sec-engine") {
+      if (!value(token) || !parseSecEngineToken(token, engine, error)) {
+        return fail("Invalid --sec-engine: " +
+                    (error.empty() ? "missing value" : error));
+      }
+      continue;
+    }
+    if (arg == "--sec-reset-cycles") {
+      if (!value(token) ||
+          !parseNonNegativeSizeToken(token, "--sec-reset-cycles",
+                                     resetSpec.cycles, error)) {
+        return fail("Invalid --sec-reset-cycles: " +
+                    (error.empty() ? "missing value" : error));
+      }
+      resetExplicit = true;
+      continue;
+    }
+    if (arg == "--sec-reset-port") {
+      if (!value(token) || !parseSecResetPortToken(token, resetSpec, error)) {
+        return fail("Invalid --sec-reset-port: " +
+                    (error.empty() ? "missing value" : error));
+      }
+      resetExplicit = true;
+      continue;
+    }
+    if (arg == "-f") {
+      if (!value(token)) {
+        return fail("-f requires a file list");
+      }
+      sources.emplace_back("-f");
+      sources.emplace_back(token);
+      continue;
+    }
+    if (!arg.empty() && arg.front() == '-') {
+      return fail("Option " + arg + " is not available with -v fpv");
+    }
+    sources.emplace_back(arg);
+  }
+  if (sources.empty()) {
+    return fail("Property verification needs SystemVerilog source files");
+  }
+  if (resetExplicit) {
+    std::string error;
+    if (!validateSecResetSpec(resetSpec, error)) {
+      return fail("Invalid reset specification: " + error);
+    }
+  }
+
+  SPDLOG_INFO("KEPLER FORMAL: Run.");
+  SPDLOG_INFO("Input format: SYSTEMVERILOG");
+  SPDLOG_INFO("Verification: fpv");
+  SPDLOG_INFO("FPV max_k: {}", maxK);
+  SPDLOG_INFO("FPV engine: {}", secEngineName(engine));
+  if (resetSpec.enabled()) {
+    SPDLOG_INFO("FPV reset: {} cycle(s)", resetSpec.cycles);
+    for (const auto& port : resetSpec.ports) {
+      SPDLOG_INFO("FPV reset port: {} active={}", port.name,
+                  port.activeValue ? 1 : 0);
+    }
+  }
+
+  const auto cleanupNajaState = []() {
+    KEPLER_FORMAL::destroyDnl();
+    if (NLUniverse::get()) {
+      NLUniverse::get()->destroy();
+    }
+  };
+  cleanupNajaState();
+  struct CleanupGuard {
+    decltype(cleanupNajaState) cleanup;
+    ~CleanupGuard() { cleanup(); }
+  } cleanupGuard{cleanupNajaState};
+
+  KEPLER_FORMAL::SEC::PropertyCheckResult result;
+  try {
+    NLUniverse::create();
+    auto* db = NLDB::create(NLUniverse::get());
+    auto* designLibrary = NLLibrary::create(db, NLName("DESIGN"));
+    SNLSVConstructor constructor(designLibrary);
+    SNLSVConstructor::ConstructOptions options;
+    // Assertions are captured as source, and their parsed form is kept for
+    // the translator.
+    options.preserveAssertions = true;
+    options.keepASTLink = true;
+    std::vector<std::filesystem::path> inputs;
+    if (topName) {
+      inputs.emplace_back("--top");
+      inputs.emplace_back(*topName);
+    }
+    inputs.insert(inputs.end(), sources.begin(), sources.end());
+    constructor.construct(inputs, options);
+    spdlog::set_default_logger(mainLogger);
+    auto* top = SNLUtils::findTop(designLibrary);
+    if (top == nullptr) {
+      return fail("No top design was found after parsing input");
+    }
+    db->setTopDesign(top);
+    SPDLOG_INFO("Found top design: {}", top->getString());
+
+    KEPLER_FORMAL::SEC::PropertyCheckStrategy strategy(
+        top, KEPLER_FORMAL::SEC::makeSvaPropertyTranslator(),
+        KEPLER_FORMAL::Config::getSolverType(), engine, resetSpec);
+    result = strategy.run(maxK);
+  } catch (const std::exception& e) {
+    return fail(std::string("Property verification failed: ") + e.what());
+  }
+  spdlog::set_default_logger(mainLogger);
+  if (!result.error.empty()) {
+    SPDLOG_ERROR("The design could not be modelled: {}", result.error);
+    runResult.status = RunStatus::Unsupported;
+    runResult.reason = result.error;
+    runResult.exitCode = 2;
+    return runResult.exitCode;
+  }
+  if (result.properties.empty()) {
+    SPDLOG_WARN("No assert, assume or cover statement was found.");
+    runResult.status = RunStatus::Unsupported;
+    runResult.reason = "no properties found";
+    runResult.exitCode = 2;
+    return runResult.exitCode;
+  }
+
+  for (const auto& property : result.properties) {
+    std::string line = std::string("Property ") + property.name + " [" +
+                       KEPLER_FORMAL::SEC::propertyKindName(property.kind) + "]";
+    if (!property.source.empty()) {
+      line += " " + property.source;
+    }
+    line += std::string(": ") +
+            KEPLER_FORMAL::SEC::propertyStatusName(property.status);
+    switch (property.status) {
+      case PropertyStatus::Proved:
+      case PropertyStatus::Unreachable:
+        line += " (k = " + std::to_string(property.bound) + ")";
+        break;
+      case PropertyStatus::Failed:
+      case PropertyStatus::Covered:
+        line += " at cycle " + std::to_string(property.bound);
+        break;
+      default:
+        break;
+    }
+    if (!property.detail.empty()) {
+      line += (property.status == PropertyStatus::Failed ||
+               property.status == PropertyStatus::Covered)
+                  ? "\n" + property.detail
+                  : ": " + property.detail;
+    }
+    SPDLOG_INFO("{}", line);
+  }
+
+  const size_t proved = result.count(PropertyStatus::Proved);
+  const size_t failed = result.count(PropertyStatus::Failed);
+  const size_t covered = result.count(PropertyStatus::Covered);
+  const size_t unreachable = result.count(PropertyStatus::Unreachable);
+  const size_t assumed = result.count(PropertyStatus::Assumed);
+  const size_t inconclusive = result.count(PropertyStatus::Inconclusive);
+  const size_t unsupported = result.count(PropertyStatus::Unsupported);
+  const std::string summary =
+      std::to_string(result.properties.size()) + " properties: " +
+      std::to_string(proved) + " proved, " + std::to_string(failed) +
+      " failed, " + std::to_string(covered) + " covered, " +
+      std::to_string(unreachable) + " unreachable, " + std::to_string(assumed) +
+      " assumed, " + std::to_string(inconclusive) + " inconclusive, " +
+      std::to_string(unsupported) + " unsupported";
+  SPDLOG_INFO("FPV summary: {}", summary);
+
+  runResult.reason = summary;
+  runResult.totalOutputs = result.properties.size() - assumed;
+  runResult.provenOutputs = proved + covered;
+  runResult.coveredOutputs = runResult.totalOutputs - unsupported;
+  for (const auto& property : result.properties) {
+    if (property.status == PropertyStatus::Failed ||
+        property.status == PropertyStatus::Unreachable ||
+        property.status == PropertyStatus::Inconclusive ||
+        property.status == PropertyStatus::Unsupported) {
+      runResult.unprovenOutputs.push_back(property.name);
+    }
+  }
+  // Same exit codes as SEC: 0 proved, 1 partly proved, 2 inconclusive or
+  // unsupported, 3 a definitive failure. An unreachable cover is a failure.
+  if (failed != 0 || unreachable != 0) {
+    runResult.status = RunStatus::Different;
+    runResult.exitCode = 3;
+  } else if (inconclusive != 0 || unsupported != 0) {
+    const bool anyResult = proved + covered != 0;
+    runResult.status = anyResult ? RunStatus::PartiallyProved
+                                 : (inconclusive != 0 ? RunStatus::Inconclusive
+                                                      : RunStatus::Unsupported);
+    runResult.exitCode = anyResult ? 1 : 2;
+  } else {
+    runResult.status = RunStatus::Equivalent;
+    runResult.exitCode = EXIT_SUCCESS;
+  }
+  return runResult.exitCode;
+}
+
 namespace KEPLER_FORMAL {
 
 void cleanupKeplerFormalState() {
@@ -3806,6 +4082,9 @@ int runKeplerFormalWorkflow(int argc, char** argv, RunResult& result,
     result.status = RunStatus::NoResult;
     result.exitCode = EXIT_SUCCESS;
     return result.exitCode;
+  }
+  if (isPropertyVerificationRequest(argc, argv)) {
+    return runPropertyVerification(argc, argv, result);
   }
   result.exitCode = KeplerFormalMainImpl(argc, argv, &result, primitiveLoader);
   return result.exitCode;

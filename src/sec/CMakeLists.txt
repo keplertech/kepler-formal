@@ -21,6 +21,8 @@ add_library(kepler_sec STATIC
     kinduction/InductionStepSolver.cpp
     kinduction/SatEncoding.cpp
     strategy/SequentialEquivalenceStrategy.cpp
+    property/PropertyCheckStrategy.cpp
+    property/PropertyExpression.cpp
 )
 
 target_include_directories(kepler_sec PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -35,3 +37,10 @@ target_link_libraries(kepler_sec
       kissat
       cadical
 )
+
+if(NOT BUILD_KEPLER_PYTHON)
+  # Reads the assertions the SystemVerilog frontend captured. It needs the
+  # frontend and its parser, which the core proof library must not depend on.
+  add_library(kepler_sva STATIC property/SvaPropertyTranslator.cpp)
+  target_link_libraries(kepler_sva PUBLIC kepler_sec naja_snl_systemverilog)
+endif()

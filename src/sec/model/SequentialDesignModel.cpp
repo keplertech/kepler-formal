@@ -5833,4 +5833,12 @@ SequentialDesignModel SequentialDesignModel::extract(
   return model;
 }
 
+SignalKey SequentialDesignModel::boundarySignalKey(const BoundaryPort& port) {
+  return boundaryPortKey(port);
+}
+
+size_t SequentialDesignModel::nextSyntheticVarID() const {
+  return getNextSyntheticVarID(*this);
+}
+
 }  // namespace KEPLER_FORMAL::SEC

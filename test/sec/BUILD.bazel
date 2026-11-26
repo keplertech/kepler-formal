@@ -14,6 +14,21 @@ cc_test(
 )
 
 cc_test(
+    name = "PropertyCheckTests",
+    srcs = ["PropertyCheckTests.cpp"],
+    deps = [
+        "//src/sec:kepler_sec",
+        "//src/sec:kepler_sva",
+        "//src/formal:formal_structures",
+        "//src/clauses:kepler_clauses",
+        "@naja//src/nl/netlist:naja_nl",
+        "@naja//src/dnl:naja_dnl",
+        "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "SecBtor2ExporterTests",
     srcs = [
         "SecBtor2ExporterTests.cpp",

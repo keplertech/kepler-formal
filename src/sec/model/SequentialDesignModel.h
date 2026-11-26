@@ -89,6 +89,13 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
 
   size_t coveredObservedOutputCount() const { return observedOutputs.size(); }
   size_t totalObservedOutputCount() const { return allObservedOutputs.size(); }
+
+  // Key under which extract() publishes a selected leaf pin: an input pin as
+  // an observed output, an output pin as an environment input.
+  static SignalKey boundarySignalKey(const BoundaryPort& port);
+
+  // First variable ID that no formula of this model uses.
+  size_t nextSyntheticVarID() const;
 };
 
 }  // namespace KEPLER_FORMAL::SEC
