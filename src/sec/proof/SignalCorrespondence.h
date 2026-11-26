@@ -83,6 +83,9 @@ struct BinarySignalCorrespondenceInput {
   std::vector<std::pair<BoolExpr*, BoolExpr*>> outputs;
   // Register pairs that hold one value at boot when both are unknown there.
   std::vector<std::pair<size_t, size_t>> commonStart;
+  // Clock cycles one time frame of the run spans, see
+  // proveSignalCorrespondence.
+  size_t stepCycles = 1;
 };
 
 struct SignalCorrespondenceResult {
@@ -158,6 +161,19 @@ struct SignalCorrespondenceResult {
 // Bryant, Formal Methods in System Design 6(2), 1995), the run covers at
 // least one completion, so two defined outputs agree. State equalities are
 // not reported: they hold from the common boot states only.
+//
+// With a binary `stepCycles` above 1 the run reads the product machine
+// unfolded that many clock cycles: one time frame computes that many cycles,
+// each with inputs of its own, and the outputs of every cycle are compared.
+// Registers are then compared at every `stepCycles`-th cycle only, which is
+// what two designs that order the work of one multi-cycle operation
+// differently have in common. Any count gives a sound result: the unfolded
+// machine is safe only if the original is (Froleyks, Yu, Biere and Heljanko,
+// "Certifying phase abstraction", IJCAR 2024, definition 3 and theorems 5.1
+// and 5.4), and IBM's SEC flow folds cycles this way, its MOD engine, before
+// induction (Baumgartner, Mony, Paruthi, Kanzelman and Janssen, ICCD 2006,
+// section IV and table I). The reset window is unrolled one cycle at a time, so the first
+// compared frame is the state the window leaves.
 SignalCorrespondenceResult proveSignalCorrespondence(
     const KInductionProblem& problem,
     SignalCorrespondenceScope scope,

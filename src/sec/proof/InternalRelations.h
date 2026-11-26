@@ -23,6 +23,11 @@ struct InternalRelationOptions {
   // from the state the reset window leaves (van Eijk, TCAD 2000). Dual rail
   // only, and only while X equality is allowed.
   bool signalCorrespondence = true;
+  // Clock cycles one induction step of the binary signal correspondence
+  // runs spans. Above 1, registers are compared only every that many cycles
+  // and outputs at every cycle, for designs that order the work of one
+  // multi-cycle operation differently; see SignalCorrespondence.h.
+  size_t signalCorrespondenceStep = 1;
 };
 
 struct SequentialDesignModel;

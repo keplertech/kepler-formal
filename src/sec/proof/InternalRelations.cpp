@@ -1337,7 +1337,8 @@ void learnInternalStateRelations(
     // logic is half the size. The rail run then takes what is left, outputs
     // that are equal only because both sides are unknown.
     if (options.binaryRelationRound && problem.lazyTransitions != nullptr) {
-      const auto input = binarySignalCorrespondenceInput(model0, model1, candidates, problem);
+      auto input = binarySignalCorrespondenceInput(model0, model1, candidates, problem);
+      input.stepCycles = options.signalCorrespondenceStep;
       discharge(learnSignalCorrespondence(problem, solverType, diagnostics, {}, &input)
                     .provedOutputs);
     }

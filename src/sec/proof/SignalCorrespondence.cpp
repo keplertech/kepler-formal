@@ -13,6 +13,7 @@
 #include <map>
 #include <random>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "kinduction/SatEncoding.h"
 #include "proof/TransitionExprResolver.h"
@@ -180,8 +181,10 @@ struct Register {
   uint32_t slot = 0;
   // The register read as a signal.
   uint32_t node = 0;
-  // Its next-state function.
+  // Its value one time frame later.
   uint32_t next = 0;
+  // Its value one clock cycle later, `next` unless a frame spans more.
+  uint32_t step = 0;
 };
 
 // The product machine of van Eijk, section III.
@@ -253,6 +256,7 @@ bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLi
           !circuit.add(transitions.at(symbol), added.next)) {
         return false;
       }
+      added.step = added.next;
       added.slot = circuit.slotOf(symbol);
       machine.registerBySymbol.emplace(symbol, static_cast<uint32_t>(machine.registers.size()));
       machine.registers.push_back(added);
@@ -290,6 +294,115 @@ bool buildMachine(const KInductionProblem& problem, const SignalCorrespondenceLi
   return true;
 }
 
+// `root` with every leaf replaced by what `leaf` gives for its symbol; `memo`
+// keeps what earlier calls with the same `leaf` built. `root` is a cone the
+// circuit has read, so it holds the operators the circuit reads only.
+template <typename Leaf>
+BoolExpr* substitute(BoolExpr* root, const Leaf& leaf,
+                     std::unordered_map<BoolExpr*, BoolExpr*>& memo) {
+  std::vector<BoolExpr*> stack{root};
+  while (!stack.empty()) {
+    BoolExpr* expr = stack.back();
+    if (memo.contains(expr)) {
+      stack.pop_back();
+      continue;
+    }
+    const Op op = expr->getOp();
+    if (op == Op::VAR) {
+      memo.emplace(expr, leaf(expr->getId()));
+      stack.pop_back();
+      continue;
+    }
+    BoolExpr* left = expr->getLeft();
+    BoolExpr* right = op == Op::NOT ? nullptr : expr->getRight();
+    const auto leftIt = memo.find(left);
+    const bool rightReady = right == nullptr || memo.contains(right);
+    if (leftIt == memo.end() || !rightReady) {
+      if (leftIt == memo.end()) stack.push_back(left);
+      if (!rightReady) stack.push_back(right);
+      continue;
+    }
+    BoolExpr* a = leftIt->second;
+    BoolExpr* b = right == nullptr ? nullptr : memo.at(right);
+    memo.emplace(expr, op == Op::NOT ? BoolExpr::Not(a) : op == Op::AND ? BoolExpr::And(a, b)
+                     : op == Op::OR ? BoolExpr::Or(a, b) : BoolExpr::Xor(a, b));
+    stack.pop_back();
+  }
+  return memo.at(root);
+}
+
+// The machine unfolded `cycles` clock cycles, so that one time frame computes
+// that many: copy c of the logic reads the registers copy c - 1 computes and
+// inputs of its own. The reset ports are shared, as they rest at one value in
+// every compared frame. A register's `next` becomes its value after the last
+// copy; every output gets the pair of every copy. `step`, the first copy,
+// stays for the reset window.
+bool unfoldCycles(const KInductionProblem& problem, size_t cycles, Machine& machine) {
+  Circuit& circuit = machine.circuit;
+  std::unordered_set<size_t> shared{0, 1};
+  if (problem.hasResetBootstrap() && problem.resetBootstrapCycles != 0) {
+    for (const auto& [symbol, active] : problem.resetBootstrapInputs) {
+      shared.insert(symbol);
+    }
+  }
+  // The inputs of the copies get symbols no frame encodes already.
+  size_t nextSymbol = 2;
+  for (const auto* symbols : {&problem.allSymbols, &circuit.symbols()}) {
+    for (const size_t symbol : *symbols) {
+      nextSymbol = std::max(nextSymbol, symbol + 1);
+    }
+  }
+  for (const size_t symbol : shared) {
+    nextSymbol = std::max(nextSymbol, symbol + 1);
+  }
+  std::vector<BoolExpr*> current(machine.registers.size());
+  for (size_t i = 0; i < current.size(); ++i) {
+    current[i] = circuit.expr(machine.registers[i].step);
+  }
+  std::vector<std::vector<std::pair<BoolExpr*, BoolExpr*>>> firstOutputs(machine.outputs.size());
+  for (size_t i = 0; i < machine.outputs.size(); ++i) {
+    for (const auto& [node0, node1] : machine.outputs[i]) {
+      firstOutputs[i].emplace_back(circuit.expr(node0), circuit.expr(node1));
+    }
+  }
+  for (size_t copy = 1; copy < cycles; ++copy) {
+    const std::vector<BoolExpr*> previous = current;
+    std::unordered_map<size_t, size_t> inputs;
+    std::unordered_map<BoolExpr*, BoolExpr*> memo;
+    const auto leaf = [&](size_t symbol) {
+      if (const auto it = machine.registerBySymbol.find(symbol);
+          it != machine.registerBySymbol.end()) {
+        return previous[it->second];
+      }
+      if (shared.contains(symbol)) {
+        return BoolExpr::Var(symbol);
+      }
+      const auto [it, added] = inputs.emplace(symbol, nextSymbol);
+      nextSymbol += added ? 1 : 0;
+      return BoolExpr::Var(it->second);
+    };
+    for (size_t i = 0; i < current.size(); ++i) {
+      current[i] = substitute(circuit.expr(machine.registers[i].step), leaf, memo);
+    }
+    for (size_t i = 0; i < firstOutputs.size(); ++i) {
+      for (const auto& [function0, function1] : firstOutputs[i]) {
+        std::pair<uint32_t, uint32_t> nodes;
+        if (!circuit.add(substitute(function0, leaf, memo), nodes.first) ||
+            !circuit.add(substitute(function1, leaf, memo), nodes.second)) {
+          return false;
+        }
+        machine.outputs[i].push_back(nodes);
+      }
+    }
+  }
+  for (size_t i = 0; i < current.size(); ++i) {
+    if (!circuit.add(current[i], machine.registers[i].next)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // The product machine of the binary functions. A register the input gives no
 // function for is an input of the machine, which only weakens what it proves.
 bool buildBinaryMachine(const KInductionProblem& problem,
@@ -310,6 +423,7 @@ bool buildBinaryMachine(const KInductionProblem& problem,
     if (!circuit.add(BoolExpr::Var(symbol), added.node) || !circuit.add(next, added.next)) {
       return false;
     }
+    added.step = added.next;
     added.slot = circuit.slotOf(symbol);
     machine.registerBySymbol.emplace(symbol, static_cast<uint32_t>(machine.registers.size()));
     machine.registers.push_back(added);
@@ -327,6 +441,9 @@ bool buildBinaryMachine(const KInductionProblem& problem,
       return false;
     }
     machine.outputs[i].push_back(nodes);
+  }
+  if (input.stepCycles > 1 && !unfoldCycles(problem, input.stepCycles, machine)) {
+    return false;
   }
   indexLeaves(problem, machine);
   // A register is known at boot when its rails hold a binary value there.
@@ -559,7 +676,7 @@ Classes simulate(const Machine& machine, const KInductionProblem& problem,
       evaluate(machine.circuit, leaves, values);
       work += machine.circuit.size();
       for (size_t i = 0; i < state.size(); ++i) {
-        state[i] = values[machine.registers[i].next];
+        state[i] = values[machine.registers[i].step];
       }
     }
     size_t classesAtLastLook = 0;
@@ -844,7 +961,8 @@ void readModel(const SATSolverWrapper& solver, const FrameFormulaEncoder& frame,
 
 // Consecutive time frames of the machine in one solver. Frame 0 is free; a
 // register of every later frame is its next-state function in the frame
-// before it. The first `resetFrames` frames are frames of the reset window.
+// before it. The first `resetFrames` frames are frames of the reset window,
+// one clock cycle each.
 struct Unrolling {
   std::deque<FrameFormulaEncoder> frames;
   // Per frame, the literal of every signal of the relation.
@@ -872,9 +990,10 @@ void unroll(SATSolverWrapper& solver, const Machine& machine, const KInductionPr
     for (const auto& [symbol, literal] : leaves) {
       if (const auto it = machine.registerBySymbol.find(symbol);
           it != machine.registerBySymbol.end()) {
+        const Register& entry = machine.registers[it->second];
         addLiteralEquivalence(solver, literal,
-                              unrolling.frames[f - 1].encode(
-                                  machine.circuit.expr(machine.registers[it->second].next)));
+                              unrolling.frames[f - 1].encode(machine.circuit.expr(
+                                  f - 1 < resetFrames ? entry.step : entry.next)));
       }
     }
   }
@@ -885,7 +1004,8 @@ void unroll(SATSolverWrapper& solver, const Machine& machine, const KInductionPr
 // encoded keeps the value it has in `leaves`. A later frame takes its
 // registers from the frame before it and its inputs from the model.
 void replay(const SATSolverWrapper& solver, const Machine& machine, const Unrolling& unrolling,
-            size_t last, std::vector<uint64_t>& leaves, std::vector<uint64_t>& values) {
+            size_t last, std::vector<uint64_t>& leaves, std::vector<uint64_t>& values,
+            size_t resetFrames = 0) {
   readModel(solver, unrolling.frames[0], machine.circuit, leaves);
   evaluate(machine.circuit, leaves, values);
   for (size_t f = 1; f <= last; ++f) {
@@ -895,7 +1015,8 @@ void replay(const SATSolverWrapper& solver, const Machine& machine, const Unroll
     readModel(solver, unrolling.frames[f], machine.circuit, leaves);
     for (uint32_t slot = 0; slot < leaves.size(); ++slot) {
       if (const uint32_t owner = machine.registerOfSlot[slot]; owner != kNone) {
-        leaves[slot] = values[machine.registers[owner].next];
+        const Register& entry = machine.registers[owner];
+        leaves[slot] = values[f - 1 < resetFrames ? entry.step : entry.next];
       }
     }
     evaluate(machine.circuit, leaves, values);
@@ -941,7 +1062,7 @@ bool refineAtStart(const Machine& machine, const KInductionProblem& problem,
         const uint32_t owner = machine.registerOfSlot[slot];
         leaves[slot] = owner != kNone && start[owner] != 0 ? kAllPatterns : 0;
       }
-      replay(solver, machine, unrolling, window + f, leaves, values);
+      replay(solver, machine, unrolling, window + f, leaves, values, window);
     };
     bool changed = false;
     if (!refineClasses(solver, unrolling.literals[window + f], limits, budget, relation, changed,
@@ -1256,7 +1377,7 @@ SignalCorrespondenceLearning learnSignalCorrespondence(
       if (diagnostics) {
         printf("SEC summary: signal_correspondence scope=%s frames=%zu completed=%d signals=%zu "
                "classes=%zu rounds=%zu solver_calls=%zu proved_outputs=%zu/%zu "
-               "state_equalities=%zu seconds=%.1f semantics=%s stopped_by=%s\n",
+               "state_equalities=%zu seconds=%.1f semantics=%s stopped_by=%s step_cycles=%zu\n",
                scope == SignalCorrespondenceScope::AllSignals ? "all_signals"
                                                               : "registers_and_outputs",
                frames, result.completed, result.signals, result.classes, result.rounds,
@@ -1266,7 +1387,8 @@ SignalCorrespondenceLearning learnSignalCorrespondence(
                openBefore,
                result.stateEqualities.size(),
                std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(),
-               binary != nullptr ? "binary" : "rails", stopName(result.stoppedBy));
+               binary != nullptr ? "binary" : "rails", stopName(result.stoppedBy),
+               binary != nullptr ? std::max<size_t>(binary->stepCycles, 1) : size_t{1});
         fflush(stdout);
       }
       if (!result.completed) {
