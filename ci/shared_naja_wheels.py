@@ -24,11 +24,11 @@ import tempfile
 # version number as the NajaEDA release it is based on, so the version alone
 # cannot tell the two providers apart.
 USE_PUBLISHED_PROVIDER = os.environ.get("KEPLER_USE_PUBLISHED_NAJAEDA") == "1"
-# Both providers pin the same NajaEDA release: the published path downloads
-# PyPI's wheel, the development path builds the same version from
-# thirdparty/naja. Keep in sync with ci/prepare_python_release.py.
+# The published path downloads PyPI's wheel of the pinned release; the
+# development path builds the version thirdparty/naja carries. Keep in sync
+# with ci/prepare_python_release.py.
 PUBLISHED_REQUIREMENT = "najaeda==0.7.33"
-DEVELOPMENT_REQUIREMENT = "najaeda==0.7.33"
+DEVELOPMENT_REQUIREMENT = "najaeda==0.8.2"
 PROVIDER_REQUIREMENT = PUBLISHED_REQUIREMENT if USE_PUBLISHED_PROVIDER else DEVELOPMENT_REQUIREMENT
 
 

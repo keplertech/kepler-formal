@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 
 _SOURCE = Path(__file__).resolve().parents[2] / "src/python"
-_VERSION = "0.7.33"
+_VERSION = "0.8.2"
 _GIT_HASH = "abc1234"
 
 
