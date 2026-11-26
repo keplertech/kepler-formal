@@ -27,6 +27,13 @@ Every dependency is a `bazel_dep` from BCR: `naja`, `onetbb`, `spdlog`,
 `naja-if`, `naja-verilog`, `capnp-cpp`, `boost.*`, `fmt`, `bison`,
 `flex`, `sv-lang`, `rules_python`, and others.
 
+One exception, to be dropped once a naja that captures concurrent assertions
+is published: `naja` comes from a `git_override` on upstream
+`keplertech/naja` (commit `e353a83`, naja#566), with `naja-if` and
+`naja-verilog` pinned to the versions that naja builds with. A downstream
+module has to repeat the override, as `.github/consumer-test` does, because
+overrides only take effect in the root module.
+
 ## Depending on kepler-formal
 
 Until kepler-formal is on BCR, a downstream module pins it to a commit:

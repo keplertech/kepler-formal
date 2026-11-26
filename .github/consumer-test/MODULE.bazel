@@ -17,6 +17,14 @@ local_path_override(
     path = "../..",
 )
 
+# Overrides do not propagate from kepler-formal: a consumer repeats its naja
+# override (see the root MODULE.bazel) until that naja is on BCR.
+git_override(
+    module_name = "naja",
+    remote = "https://github.com/keplertech/naja.git",
+    commit = "e353a8356a510cfe6501fe4125e7ecd11b7e06e4",
+)
+
 bazel_dep(name = "llvm", version = "0.8.26")
 
 llvm_toolchains = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
