@@ -67,7 +67,7 @@ static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
       "Usage: {} --version | [--config <file>] | [-naja_if/-verilog/-systemverilog/-sv/-sv2v/-vhdl/-python] "
-      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--signal-correspondence <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--signal-correspondence <true|false>] [--signal-correspondence-step <n>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "[--vhdl_design1_top <name>] [--vhdl_design2_top <name>] "
       "[--python_design1_top <name>] [--python_design2_top <name>] "
@@ -78,12 +78,12 @@ static void print_usage(const char* prog) {
       "[--design2_format <verilog|systemverilog|vhdl|python|naja_if>] "
       "(without a format flag; default verilog) "
       "--design1 <file...> --design2 "
-      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--signal-correspondence <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "<file...> [--verilog_design1_top <name>] [--verilog_design2_top <name>] [--vhdl_design1_top <name>] [--vhdl_design2_top <name>] [--python_design1_top <name>] [--python_design2_top <name>] [--liberty <library-file>...] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--signal-correspondence <true|false>] [--signal-correspondence-step <n>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
       "[--report-skipped-pos] [--latch-abstraction <true|false>] [--data-latch-model <true|false>] | "
       "-systemverilog/-sv [--sv_design1_flist <file>] [--sv_design1_top <name>] "
-      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--signal-correspondence <true|false>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
+      "[--sv_design2_flist <file>] [--sv_design2_top <name>] [--sv_single_unit] [-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] [--learn-internal-relations <true|false>] [--allow-x-equality-in-internal-relations <true|false>] [--binary-relation-round <true|false>] [--signal-correspondence <true|false>] [--signal-correspondence-step <n>] [--sec-reset-cycles <n>] [--sec-reset-port <name=0|1>...] "
       "[--design1 <file...>] [--design2 <file...>] "
       "[--allow-boundary-mismatch] [--compact] "
       "[--set-as-boundary <design1-path> <design2-path>]... "
@@ -329,6 +329,21 @@ static bool parseNonNegativeSizeToken(const std::string& token,
   return true;
 }
 
+// The clock cycles one signal correspondence step spans: at least one.
+static bool parseSignalCorrespondenceStepToken(const std::string& token,
+                                               const char* optionName,
+                                               size_t& value,
+                                               std::string& error) {
+  if (!parseNonNegativeSizeToken(token, optionName, value, error)) {
+    return false;
+  }
+  if (value == 0) {
+    error = std::string(optionName) + " must be at least 1";
+    return false;
+  }
+  return true;
+}
+
 // LCOV_EXCL_START
 static bool parseMaxKToken(const std::string& token,
 // LCOV_EXCL_STOP
@@ -495,6 +510,7 @@ static bool validateConfigKeys(const YAML::Node& cfg) {
       "allow_x_equality_in_internal_relations",
       "binary_relation_round",
       "signal_correspondence",
+      "signal_correspondence_step",
       "sec_reset",
       "btor2_export",
       "btor2_export_path",
@@ -1565,6 +1581,18 @@ static int KeplerFormalMainImpl(
           }
           internalRelationOptionsExplicit = true;
         }
+        if (cfg["signal_correspondence_step"]) {
+          std::string error;
+          if (!cfg["signal_correspondence_step"].IsScalar() ||
+              !parseSignalCorrespondenceStepToken(
+                  cfg["signal_correspondence_step"].as<std::string>(),
+                  "signal_correspondence_step",
+                  internalRelationOptions.signalCorrespondenceStep, error)) {
+            SPDLOG_CRITICAL("Invalid signal_correspondence_step: {}", error);
+            return EXIT_FAILURE;
+          }
+          internalRelationOptionsExplicit = true;
+        }
 
         if (cfg["sec_reset"]) {
           std::string secResetError;
@@ -1881,6 +1909,22 @@ static int KeplerFormalMainImpl(
         parseStart += 2;
         continue;
       }
+      if (arg == "--signal-correspondence-step") {
+        if (parseStart + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing cycle count after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string error;
+        if (!parseSignalCorrespondenceStepToken(
+                argv[parseStart + 1], "--signal-correspondence-step",
+                internalRelationOptions.signalCorrespondenceStep, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        internalRelationOptionsExplicit = true;
+        parseStart += 2;
+        continue;
+      }
       if (arg == "--latch-abstraction" || arg == "--data-latch-model") {
         if (parseStart + 1 >= argc) {
           SPDLOG_CRITICAL("Missing boolean value after {}", arg);
@@ -2103,6 +2147,22 @@ static int KeplerFormalMainImpl(
                     : internalRelationOptions.allowXEqualityInInternalRelations;
         std::string error;
         if (!parseBooleanToken(argv[i + 1], arg, value, error)) {
+          SPDLOG_CRITICAL("{}", error);
+          return EXIT_FAILURE;
+        }
+        internalRelationOptionsExplicit = true;
+        ++i;
+        continue;
+      }
+      if (arg == "--signal-correspondence-step") {
+        if (i + 1 >= argc) {
+          SPDLOG_CRITICAL("Missing cycle count after {}", arg);
+          return EXIT_FAILURE;
+        }
+        std::string error;
+        if (!parseSignalCorrespondenceStepToken(
+                argv[i + 1], "--signal-correspondence-step",
+                internalRelationOptions.signalCorrespondenceStep, error)) {
           SPDLOG_CRITICAL("{}", error);
           return EXIT_FAILURE;
         }
@@ -2698,11 +2758,12 @@ static int KeplerFormalMainImpl(
     SPDLOG_INFO("SEC engine: {}", secEngineName(secEngine));
     SPDLOG_INFO("SEC encoding: {}", secEncodingName(secEncoding));
     SPDLOG_INFO("SEC internal relations: learn={} allow_x_equality={} binary_relation_round={} "
-                "signal_correspondence={}",
+                "signal_correspondence={} signal_correspondence_step={}",
                 internalRelationOptions.learnInternalRelations,
                 internalRelationOptions.allowXEqualityInInternalRelations,
                 internalRelationOptions.binaryRelationRound,
-                internalRelationOptions.signalCorrespondence);
+                internalRelationOptions.signalCorrespondence,
+                internalRelationOptions.signalCorrespondenceStep);
     if (secResetSpec.enabled()) {
       SPDLOG_INFO("SEC reset bootstrap: {} cycle(s)", secResetSpec.cycles);
       for (const auto& port : secResetSpec.ports) {

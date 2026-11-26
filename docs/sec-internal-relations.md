@@ -404,11 +404,33 @@ encoding. Its classes may relate signals that are unknown, X on both sides, so
 it is also left out with `allow_x_equality_in_internal_relations: false`. The
 runs on the binary functions need what the binary round needs as well:
 `binary_relation_round` and an engine that keeps the lazy transition store.
-The line `SEC summary: signal_correspondence scope=... frames=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=... semantics=... stopped_by=...`
-reports each run: `semantics` is `binary` or `rails`, and `stopped_by` names
+The line `SEC summary: signal_correspondence scope=... frames=... completed=... signals=... classes=... rounds=... solver_calls=... proved_outputs=... state_equalities=... seconds=... semantics=... stopped_by=... step_cycles=...`
+reports each run: `semantics` is `binary` or `rails`, `stopped_by` names
 the limit that ended a run with `completed=0` (`model` for a size limit or an
 operator the pass does not read, `rounds`, or the part of the solver budget
-that ran out: `conflicts`, `decisions` or `ticks`).
+that ran out: `conflicts`, `decisions` or `ticks`), and `step_cycles` is the
+number of clock cycles one time frame spans.
+
+Two designs may do the work of one multi-cycle operation in another order,
+for example a processor instruction whose register read and stack write trade
+places for some opcodes. A register then differs between the designs inside
+the operation and agrees again at its end, so no relation holds in every
+cycle, and a value read back many cycles later is beyond any induction depth.
+`signal_correspondence_step` (`--signal-correspondence-step <n>`) lets the
+runs on the binary functions read the product machine unfolded `n` cycles:
+one time frame computes `n` cycles, each with inputs of its own, the outputs
+of every cycle are compared, and registers only every `n`-th cycle. The reset
+window is still taken one cycle at a time, so frames start where it ends.
+Unfolding keeps the verdict sound for any `n`: the unfolded machine is safe
+only if the original is (Froleyks, Yu, Biere and Heljanko, "Certifying phase
+abstraction", IJCAR 2024, definition 3 and theorems 5.1 and 5.4). IBM's SEC
+flow folds cycles this way, its MOD engine, before induction-based
+redundancy removal (Baumgartner, Mony, Paruthi, Kanzelman and Janssen,
+"Scalable sequential equivalence checking across arbitrary design
+transformations", ICCD 2006, section IV and table I). `n` is given by the
+user and not detected; a wrong `n` only proves less. The rail runs keep one
+cycle per frame, so the register pairs they hand to the engines hold in every
+cycle.
 
 ## What it does and does not help
 

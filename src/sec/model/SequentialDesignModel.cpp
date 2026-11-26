@@ -127,6 +127,11 @@ struct PendingMemoryInstance {
   std::vector<PendingMemoryReadOutput> readOutputs;
   // A DB0 memory reads asynchronously; a memory macro's read output is clocked.
   bool asynchronousRead = false;
+  // The clock pin the write ports share, when a gate on that clock is modeled:
+  // see gateStructuredMemoryWritesByClock.
+  std::optional<naja::DNL::DNLID> writeClockTermID;
+  // Per cell state, its update before that gate.
+  std::vector<BoolExpr*> ungatedCellNextExprs;
 };
 
 struct SequentialInstanceScan {
@@ -3216,6 +3221,26 @@ void appendPendingMemoryInstance(
     pending.writePorts.push_back(std::move(pendingWritePort));
   }
 
+  // A gate on the write clock is modeled where the cell update is the writes
+  // alone, all on one clock: no memory reset, and a read that is not clocked
+  // with the cells.
+  if (pending.asynchronousRead &&
+      pending.resetMode == naja::NL::SNLDesignModeling::MemoryResetMode::None) {
+    const naja::NL::SNLBitTerm* sharedClock = nullptr;
+    bool oneClock = !interface.writePorts.empty();
+    for (const auto& writePort : interface.writePorts) {
+      const naja::NL::SNLBitTerm* clock =
+          writePort.clock != nullptr ? writePort.clock : interface.clock;
+      oneClock = oneClock && clock != nullptr &&
+                 (sharedClock == nullptr || sharedClock == clock);
+      sharedClock = clock;
+    }
+    if (const auto termIt = termIDsByBitTerm.find(sharedClock);
+        oneClock && termIt != termIDsByBitTerm.end()) {
+      pending.writeClockTermID = termIt->second;
+    }
+  }
+
   ctx.pendingMemoryInstances.push_back(std::move(pending));
 }
 
@@ -3726,6 +3751,10 @@ std::vector<naja::DNL::DNLID> collectStructuredMemoryDependencyTerms(
         seen.insert(*pendingMemory.resetTermID).second) {
       termIDs.push_back(*pendingMemory.resetTermID);
     }
+    if (pendingMemory.writeClockTermID.has_value() &&
+        seen.insert(*pendingMemory.writeClockTermID).second) {
+      termIDs.push_back(*pendingMemory.writeClockTermID);
+    }
     for (const auto& readPort : pendingMemory.readPorts) {
       for (const auto termID : readPort.addressTermIDs) {
         if (seen.insert(termID).second) {
@@ -3855,7 +3884,7 @@ bool isDisabledMemoryWriteEnable(
 }
 
 void buildStructuredMemoryTransitions(
-    const ExtractContext& ctx,
+    ExtractContext& ctx,
     SequentialDesignModel& model,
     const std::vector<naja::DNL::DNLID>& builderInputs,
     const std::vector<naja::DNL::DNLID>& builderOutputs,
@@ -3863,7 +3892,7 @@ void buildStructuredMemoryTransitions(
     std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
     const std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>&
         skippedOutputsByTerm) {
-  for (const auto& pendingMemory : ctx.pendingMemoryInstances) {
+  for (auto& pendingMemory : ctx.pendingMemoryInstances) {
     auto markConnectivitySkipped = [&](const SignalKey& key,
                                        const ConnectivitySkipInfo& info) {
       model.connectivitySkipInfoByKey.emplace(key, info);
@@ -4057,6 +4086,22 @@ void buildStructuredMemoryTransitions(
       }
     }();
 
+    // The write clock as built, its carrier still in it: until the clock
+    // carriers are known it stands in for the gate, so that the state the gate
+    // reads is kept with the cells. gateStructuredMemoryWritesByClock then
+    // replaces it.
+    BoolExpr* writeClockExpr = nullptr;
+    if (pendingMemory.writeClockTermID.has_value()) {
+      const auto clockIt = outputExprByTerm.find(*pendingMemory.writeClockTermID);
+      if (clockIt != outputExprByTerm.end() && clockIt->second != nullptr &&
+          clockIt->second->isValid()) {
+        writeClockExpr = clockIt->second;
+        pendingMemory.ungatedCellNextExprs.reserve(pendingMemory.cellStates.size());
+      } else {
+        pendingMemory.writeClockTermID.reset();
+      }
+    }
+
     std::vector<std::vector<BoolExpr*>> cellCurrentExprs(
         pendingMemory.depth,
         std::vector<BoolExpr*>(pendingMemory.width, nullptr));
@@ -4097,6 +4142,10 @@ void buildStructuredMemoryTransitions(
       }
       if (resetAssertedExpr != nullptr) {
         next = makeIte(resetAssertedExpr, BoolExpr::createFalse(), next);
+      }
+      if (writeClockExpr != nullptr) {
+        pendingMemory.ungatedCellNextExprs.push_back(next);
+        next = makeIte(writeClockExpr, next, BoolExpr::Var(varIt->second));
       }
       model.nextStateExprByStateKey.emplace(cellState.key, next);
       cellNextExprs[cellState.cellIndex][cellState.bitIndex] = next;
@@ -4143,6 +4192,49 @@ void buildStructuredMemoryTransitions(
 
 
 // LCOV_EXCL_STOP
+// A memory cell is written at an edge of its write clock. When that clock is
+// gated, `clk & enable` or `!clk & enable`, no edge comes while the enable is
+// low and the cell holds, exactly as a register on that clock does through
+// getLocalClockEnableExpr. A clock that is no recognized clock event stays
+// ungated, as there. The edge itself is not modeled: a cell keeps taking its
+// writes on the step, whichever edge its clock uses.
+void gateStructuredMemoryWritesByClock(
+    const ExtractContext& ctx,
+    const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
+    const std::unordered_set<naja::DNL::DNLID>& pureClockCarrierTermIDs,
+    const std::unordered_set<size_t>& topClockCarrierVarIDs,
+    const std::unordered_map<size_t, ClockEvent>& clockEventByCarrierVarID,
+    std::unordered_map<BoolExpr*, BoolExpr*>& clockCarrierStripMemo,
+    SequentialDesignModel& model) {
+  for (const auto& pendingMemory : ctx.pendingMemoryInstances) {
+    if (!pendingMemory.writeClockTermID.has_value() ||
+        pendingMemory.ungatedCellNextExprs.size() != pendingMemory.cellStates.size()) {
+      continue;
+    }
+    BoolExpr* enable = nullptr;
+    if (!pureClockCarrierTermIDs.contains(*pendingMemory.writeClockTermID)) {
+      const auto event = classifyClockEventExpression(
+          outputExprByTerm.at(*pendingMemory.writeClockTermID),
+          clockEventByCarrierVarID);
+      if (event.has_value() && !clockEventIsUngated(*event)) {
+        enable = stripClockCarriersFromSequentialUpdate(
+            event->enable, topClockCarrierVarIDs, clockCarrierStripMemo);
+      }
+    }
+    for (size_t i = 0; i < pendingMemory.cellStates.size(); ++i) {
+      const auto& key = pendingMemory.cellStates[i].key;
+      const auto nextIt = model.nextStateExprByStateKey.find(key);
+      if (nextIt == model.nextStateExprByStateKey.end()) {
+        continue;  // LCOV_EXCL_LINE
+      }
+      BoolExpr* ungated = pendingMemory.ungatedCellNextExprs[i];
+      nextIt->second = enable == nullptr
+          ? ungated
+          : makeIte(enable, ungated, BoolExpr::Var(model.inputVarByKey.at(key)));
+    }
+  }
+}
+
 void materializeTopObservedOutputs(
     const std::unordered_map<naja::DNL::DNLID, SignalKey>& topOutputKeyByTerm,
     // LCOV_EXCL_STOP
@@ -5012,6 +5104,10 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
             artifacts.dataLatchExprByKey.size());
     fflush(stderr);
   }
+
+  gateStructuredMemoryWritesByClock(
+      ctx, outputExprByTerm, pureClockCarrierTermIDs, topClockCarrierVarIDs,
+      clockEventByCarrierVarID, transitionClockStripMemo, model);
 
   model.clockCarrierVarIDs.assign(topClockCarrierVarIDs.begin(),
                                   topClockCarrierVarIDs.end());

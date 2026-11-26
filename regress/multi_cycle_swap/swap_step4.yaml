@@ -1,0 +1,17 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+# A memory write and a memory read of one four-cycle step trade places when
+# the mode bit of the step is set. Equivalent; the memories agree every fourth
+# cycle only.
+format: systemverilog
+input_paths:
+  - ./regress/multi_cycle_swap/fixed_order.v
+  - ./regress/multi_cycle_swap/mode_swapped_order.v
+sec_reset:
+  cycles: 3
+  ports:
+    - name: rst
+      active_value: 1
+signal_correspondence_step: 4
+log_level: info

@@ -1,0 +1,15 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+# As rtl_01_vs_02.yaml, with one instruction of eight clock cycles per step.
+format: systemverilog
+input_paths:
+  - ./regress/c4004_rtl/rtl_01.v
+  - ./regress/c4004_rtl/rtl_02.v
+sec_reset:
+  cycles: 3
+  ports:
+    - name: rst
+      active_value: 1
+signal_correspondence_step: 8
+log_level: info

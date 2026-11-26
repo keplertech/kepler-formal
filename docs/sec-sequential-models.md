@@ -101,6 +101,19 @@ constant table lookup over the address bits, as described in
 [sec-primitive-expansion.md](sec-primitive-expansion.md). Memories with write
 ports keep the structured-memory model.
 
+## Gated Memory Write Clocks
+
+A memory cell takes a write on the step when the write enable is set and the
+address selects it. When the write clock is gated, such as
+`!clk & rst_n & chip_enable`, no edge comes while the gate is low, so the cell
+holds: the gate is read from the clock as a register's clock enable is, and a
+clock that is no recognized clock event stays ungated. Without it a write that
+the design blocks, during reset for example, would still change the modeled
+memory. This applies to memory primitives with an asynchronous read, no memory
+reset and one clock for all write ports; other memories keep writing on every
+step. The edge of the clock is not modeled for the cells: a memory on the
+falling edge takes its writes from the registers as they are before the step.
+
 ## X Constant Literals
 
 An RTL `x` literal, typically a `case` default such as `default: y = 'x;`, is

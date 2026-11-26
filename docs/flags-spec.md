@@ -45,6 +45,7 @@ SAT solver finished: UNSAT in <s> s
 | `--allow-x-equality-in-internal-relations <bool>` | Permit X/X in internal relations only. Defaults to `true`; SEC only. |
 | `--binary-relation-round <bool>` | Switch for the binary passes of dual-rail SEC: retry unproved internal relations in binary semantics and constrain the proved pairs on the rails, and run signal correspondence on the binary functions. Defaults to `true`; SEC only. |
 | `--signal-correspondence <bool>` | Try outputs the register relations leave open by signal correspondence. Defaults to `true`; SEC only. |
+| `--signal-correspondence-step <n>` | Clock cycles one induction step of the binary signal correspondence runs spans; registers are compared every `n` cycles, outputs every cycle. Defaults to `1`; SEC only. |
 | `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
 | `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
 | `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
@@ -90,6 +91,7 @@ SAT solver finished: UNSAT in <s> s
 | `allow_x_equality_in_internal_relations` | bool | Permit X/X in internal relations only. Defaults to `true`; never relaxes final output equality. |
 | `binary_relation_round` | bool | Switch for the binary passes of dual-rail SEC: retry unproved internal relations in binary semantics and constrain the proved pairs on the rails, and run signal correspondence on the binary functions. Defaults to `true`. |
 | `signal_correspondence` | bool | Try outputs the register relations leave open by signal correspondence. Defaults to `true`. |
+| `signal_correspondence_step` | integer | Clock cycles one induction step of the binary signal correspondence runs spans. Defaults to `1`. |
 | `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
 | `btor2_export` | bool | Enable SEC BTOR2 export before solving. Defaults to `false`. |
 | `btor2_export_path` | string | Non-empty BTOR2 output path. Defaults to `miter.btor2` when enabled; requires `btor2_export: true`. |

@@ -1,0 +1,14 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+# RTL 02 with its register copy left valid after INC: not equivalent.
+format: systemverilog
+input_paths:
+  - ./regress/c4004_rtl/rtl_01.v
+  - ./regress/c4004_rtl/rtl_02_bug.v
+sec_reset:
+  cycles: 3
+  ports:
+    - name: rst
+      active_value: 1
+log_level: info

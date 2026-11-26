@@ -1,0 +1,17 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+# Issue 317: RTL 03 reads the index register one cycle early and writes the
+# stack one cycle late, for register instructions only. The memories agree at
+# the end of every instruction, eight clock cycles, and not in every cycle.
+format: systemverilog
+input_paths:
+  - ./regress/c4004_rtl/rtl_01.v
+  - ./regress/c4004_rtl/rtl_03.v
+sec_reset:
+  cycles: 3
+  ports:
+    - name: rst
+      active_value: 1
+signal_correspondence_step: 8
+log_level: info

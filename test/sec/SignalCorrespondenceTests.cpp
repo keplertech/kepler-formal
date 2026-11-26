@@ -762,6 +762,91 @@ TEST_F(SignalCorrespondenceTests, BinaryRunGoesThroughTheResetWindowBeforeItComp
                                         &activeLow.input)
                   .provedOutputs,
               testing::ElementsAre(true));
+
+  // With frames of several cycles the window is still taken one cycle at a
+  // time: three cycles of reset, then frames of two.
+  plain.resetBootstrapCycles = 3;
+  auto unfolded = binaryView(plain);
+  unfolded.input.stepCycles = 2;
+  for (const size_t frames : {1, 2}) {
+    const auto afterOddWindow = proveSignalCorrespondence(unfolded.problem, kRegisters, solver,
+                                                          {}, frames, &unfolded.input);
+    ASSERT_TRUE(afterOddWindow.completed);
+    EXPECT_THAT(afterOddWindow.provedOutputs, testing::ElementsAre(true));
+  }
+}
+
+// An operation of two cycles that stores a value in a word `w`, read back at
+// any later even cycle. Design 1 stores it in the second cycle; design 2, when
+// the mode input asks, in the first. At odd cycles the two words then differ,
+// so no relation holds in every cycle, while at every even cycle they agree.
+//   2: p, 3: a, 4: e, 5: w (design 1)   6: p, 7: a, 8: e, 9: m, 10: w (design 2)
+//   11: data, 12: write, 13: read, 14: mode
+BinaryView twoCycleStore(bool wrongEarlyValue) {
+  const auto v = [](size_t symbol) { return BoolExpr::Var(symbol); };
+  BoolExpr* data = v(11);
+  BoolExpr* write = v(12);
+  BoolExpr* read = v(13);
+  BoolExpr* mode = v(14);
+  KInductionProblem plain;
+  plain.initialStateAssignments = {{2, false}, {6, false}};
+  plain.transitions0 = {{2, BoolExpr::Not(v(2))},
+                        {3, mux(v(2), v(3), data)},
+                        {4, mux(v(2), v(4), write)},
+                        {5, mux(BoolExpr::And(v(2), v(4)), v(3), v(5))}};
+  BoolExpr* early = BoolExpr::And(BoolExpr::Not(v(6)), BoolExpr::And(write, mode));
+  BoolExpr* late = BoolExpr::And(v(6), BoolExpr::And(v(8), BoolExpr::Not(v(9))));
+  plain.transitions1 = {
+      {6, BoolExpr::Not(v(6))},
+      {7, mux(v(6), v(7), data)},
+      {8, mux(v(6), v(8), write)},
+      {9, mux(v(6), v(9), mode)},
+      {10, mux(early, wrongEarlyValue ? BoolExpr::Not(data) : data, mux(late, v(7), v(10)))}};
+  plain.observedOutputExprs0 = {BoolExpr::And(BoolExpr::Not(v(2)), BoolExpr::And(read, v(5)))};
+  plain.observedOutputExprs1 = {BoolExpr::And(BoolExpr::Not(v(6)), BoolExpr::And(read, v(10)))};
+  auto view = binaryView(plain);
+  view.input.commonStart = {{3, 7}, {4, 8}, {5, 10}};
+  return view;
+}
+
+TEST_F(SignalCorrespondenceTests, FramesOfSeveralCyclesCompareRegistersOnlyAtTheirEnds) {
+  const auto solver = Config::SolverType::KISSAT;
+  auto view = twoCycleStore(/*wrongEarlyValue=*/false);
+  // One cycle per frame: no depth proves it, as the word can be read any
+  // number of cycles after it was stored.
+  const auto perCycle =
+      learnSignalCorrespondence(view.problem, solver, /*diagnostics=*/false, {}, &view.input);
+  EXPECT_THAT(perCycle.provedOutputs, testing::ElementsAre(false));
+
+  // Two cycles per frame: the words are equal at every frame, and the
+  // outputs of both cycles of a frame are compared.
+  view.input.stepCycles = 2;
+  testing::internal::CaptureStdout();
+  const auto perOperation =
+      learnSignalCorrespondence(view.problem, solver, /*diagnostics=*/true, {}, &view.input);
+  const std::string log = testing::internal::GetCapturedStdout();
+  EXPECT_THAT(perOperation.provedOutputs, testing::ElementsAre(true));
+  EXPECT_THAT(perOperation.stateEqualities, IsEmpty());
+  EXPECT_NE(log.find("frames=1 completed=1"), std::string::npos) << log;
+  EXPECT_NE(log.find("step_cycles=2"), std::string::npos) << log;
+
+  // A wrong value stored early is a difference at the next read.
+  auto wrong = twoCycleStore(/*wrongEarlyValue=*/true);
+  wrong.input.stepCycles = 2;
+  const auto refuted =
+      proveSignalCorrespondence(wrong.problem, kRegisters, solver, {}, 1, &wrong.input);
+  ASSERT_TRUE(refuted.completed);
+  EXPECT_THAT(refuted.provedOutputs, testing::ElementsAre(false));
+
+  // The copies count against the node limit.
+  SignalCorrespondenceLimits limits;
+  limits.nodes = 256;
+  EXPECT_TRUE(proveSignalCorrespondence(view.problem, kRegisters, solver, limits, 1, &view.input)
+                  .completed);
+  view.input.stepCycles = 16;
+  EXPECT_EQ(proveSignalCorrespondence(view.problem, kRegisters, solver, limits, 1, &view.input)
+                .stoppedBy,
+            SignalCorrespondenceStop::Model);
 }
 
 TEST_F(SignalCorrespondenceTests, BinaryLearnerDeepensTheInductionWithinItsOwnLimits) {
