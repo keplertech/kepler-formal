@@ -4657,6 +4657,12 @@ PredecessorAssumptionSolver& getOrCreatePredecessorAssumptionSolver(
     solver->extendSymbolSurface(stateRelations, key.solverSymbols);
     const bool surfaceWidened =
         solver->key.solverSymbols.size() != previousSymbolCount;
+    if (surfaceWidened) {
+      // A reset control that enters the solver with the wider surface is held
+      // at its deasserted value like the ones the solver was created with.
+      addPostBootstrapResetInputConstraints(
+          *solver->solver, *solver->variables, problem, 0);
+    }
     if (surfaceWidened && shouldEmitFrequentPdrStats()) {
       emitSecDiag(
           "SEC PDR stats: predecessor cached solver surface extended added=",
