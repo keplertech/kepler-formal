@@ -1,0 +1,15 @@
+# Copyright 2026 keplertech.io
+# SPDX-License-Identifier: Apache-2.0
+
+# As swap_step4.yaml with a wrong value saved to word 0: not equivalent.
+format: systemverilog
+input_paths:
+  - ./regress/multi_cycle_swap/fixed_order.v
+  - ./regress/multi_cycle_swap/mode_swapped_order_bug.v
+sec_reset:
+  cycles: 3
+  ports:
+    - name: rst
+      active_value: 1
+signal_correspondence_step: 4
+log_level: info

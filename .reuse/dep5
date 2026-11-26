@@ -40,3 +40,10 @@ Copyright: 2026 keplertech.io
 License: GPL-3.0-only
 Comment: Generated benchmark artifacts retain their existing licensing; they
  are not included in the Apache-2.0 relicensing of Kepler Formal's own code.
+
+Files: regress/c4004_rtl/*.v
+Copyright: 2026 TR-1um_C4004_Clone2Build authors
+License: Apache-2.0
+Comment: Copies of keplertech/cfg/rtl_0N.v from
+ https://github.com/xtofalex/TR-1um_C4004_Clone2Build at commit e8e387e, and
+ one-line mutations of them; see regress/c4004_rtl/README.md.

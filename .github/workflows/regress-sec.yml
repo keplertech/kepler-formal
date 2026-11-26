@@ -942,6 +942,102 @@ jobs:
         retention-days: 7
         if-no-files-found: ignore
 
+  # RTL pairs that do the work of one multi-cycle operation in another order,
+  # so their memories agree at the end of the operation and not in every cycle
+  # (signal_correspondence_step), with the RTL trials of issue 317, whose
+  # memory clock is gated by reset. PDR with the dual-rail encoding only: the
+  # proofs come from signal correspondence, which the other flows do not run.
+  run-multi-cycle-sec-regress:
+    name: ${{ matrix.flow.name }} / ${{ matrix.case.name }}
+    runs-on: ubuntu-22.04
+    needs: build-sec-regress
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        flow:
+        - name: pdr-dual-rail
+          engine: pdr
+          sec_encoding: dual_rail_steady
+        case:
+        - name: multi_cycle_swap_step4
+          config: regress/multi_cycle_swap/swap_step4.yaml
+          expectation: expect-equivalent
+        - name: multi_cycle_swap_bug_step4
+          config: regress/multi_cycle_swap/swap_bug_step4.yaml
+          expectation: expect-different
+        - name: c4004_rtl_01_vs_02
+          config: regress/c4004_rtl/rtl_01_vs_02.yaml
+          expectation: expect-equivalent
+        - name: c4004_rtl_01_vs_02_step8
+          config: regress/c4004_rtl/rtl_01_vs_02_step8.yaml
+          expectation: expect-equivalent
+        - name: c4004_rtl_01_vs_02_bug
+          config: regress/c4004_rtl/rtl_01_vs_02_bug.yaml
+          expectation: expect-different
+        - name: c4004_rtl_01_vs_03_step8
+          config: regress/c4004_rtl/rtl_01_vs_03_step8.yaml
+          expectation: expect-equivalent
+        - name: c4004_rtl_01_vs_03_bug_step8
+          config: regress/c4004_rtl/rtl_01_vs_03_bug_step8.yaml
+          expectation: expect-different
+        - name: c4004_rtl_01_vs_04_step8
+          config: regress/c4004_rtl/rtl_01_vs_04_step8.yaml
+          expectation: expect-equivalent
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download SEC runtime
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.SEC_RUNTIME_ARTIFACT }}
+        path: ${{github.workspace}}/stage
+
+    - name: Restore executable bit
+      run: chmod +x ${{github.workspace}}/stage/bin/kepler-formal
+
+    - name: Run SEC regression
+      working-directory: ${{github.workspace}}
+      env:
+        CASE_NAME: ${{ matrix.case.name }}
+        CASE_CONFIG: ${{ matrix.case.config }}
+        CASE_EXPECTATION: ${{ matrix.case.expectation }}
+        SEC_ENGINE: ${{ matrix.flow.engine }}
+        SEC_ENCODING: ${{ matrix.flow.sec_encoding }}
+      run: |
+        set -euo pipefail
+        export LD_LIBRARY_PATH="${{github.workspace}}/stage/lib:${LD_LIBRARY_PATH:-}"
+
+        bash regress/run_sec_strategies_regress.sh \
+          "${CASE_NAME}" \
+          "${{github.workspace}}" \
+          "${{github.workspace}}/stage/bin/kepler-formal" \
+          "${CASE_CONFIG}" \
+          "${CASE_EXPECTATION}" \
+          "engine=${SEC_ENGINE}" \
+          "sec-encoding=${SEC_ENCODING}"
+
+    - name: Upload regression results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-results-${{ github.run_attempt }}-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: |
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.stdout
+          ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec/*.seconds
+        retention-days: 7
+        if-no-files-found: ignore
+
+    - name: Upload regression logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sec-regress-logs-${{ matrix.flow.name }}-${{ matrix.case.name }}
+        path: ${{github.workspace}}/regress-output/${{ matrix.case.name }}/sec
+        retention-days: 7
+        if-no-files-found: ignore
+
   # Runs inside the triggering run, so a pull request gets the table for its
   # own regression: in its checks, on this run's summary page, and as an
   # artifact. Results and the main baseline are read as data, never executed.
@@ -954,6 +1050,7 @@ jobs:
     - run-sv2v-sec-regress
     - run-sv2v-sec-negative-regress
     - run-orfs-global-sec-regress
+    - run-multi-cycle-sec-regress
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
