@@ -172,8 +172,67 @@ module top(input logic clk, input logic rst_n, input logic req,
   a_goto:       assert property (start ##1 done[->1] |=> (state == 2'd0));   // true
   c_txn:        cover property (start ##1 busy ##1 busy ##1 done);           // covered
   c_double:     cover property (done ##1 done);                              // unreachable
-  a_live:       assert property (req |-> s_eventually done);                 // unsupported: liveness
+  a_live:       assert property (req |-> s_eventually done);                 // true (liveness)
   a_rose:       assert property ($rose(busy) |-> ##2 done);                  // true (sampled value)
+endmodule
+)sv";
+
+const char* kLiveness = R"sv(
+// A divider that never stops, and a job that advances only while its
+// environment does not hold it.
+module top(input logic clk, input logic rst, input logic go, input logic hold,
+           output logic tick, output logic done);
+  logic [1:0] div;
+  logic [1:0] left;
+  logic busy;
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      div <= 2'd0;
+      left <= 2'd0;
+      busy <= 1'b0;
+    end else begin
+      div <= div + 2'd1;
+      if (!busy) begin
+        if (go) begin
+          busy <= 1'b1;
+          left <= 2'd2;
+        end
+      end else if (!hold) begin
+        if (left == 2'd0) busy <= 1'b0;
+        else left <= left - 2'd1;
+      end
+    end
+  end
+  assign tick = (div == 2'd3);
+  assign done = busy && !hold && (left == 2'd0);
+
+  default clocking cb @(posedge clk); endclocking
+  default disable iff (rst);
+
+  l_tick:       assert property (s_eventually tick);                 // true: the divider never stops
+  l_tick_after: assert property (go |=> s_eventually tick);          // true
+  l_seq:        assert property (go ##1 !go |-> s_eventually tick);  // true, sequence on the left
+  l_go_bad:     assert property (s_eventually go);                   // false: go may stay low
+  l_both_bad:   assert property (go |-> s_eventually (tick && go));  // false: go may drop for good
+  m_release:    assume property (hold |-> s_eventually !hold);       // a hold is always released
+  l_done:       assert property (go |-> s_eventually done);          // true only under m_release
+  l_idle:       assert property (busy |-> s_eventually !busy);       // true only under m_release
+  l_disable:    assert property (disable iff (rst || hold) busy |-> s_eventually !busy);  // true: a hold drops the attempt
+  a_left:       assert property (left <= 2'd2);                      // safety, true
+  a_done_bad:   assert property (!done);                             // safety, false
+endmodule
+)sv";
+
+const char* kLivenessForms = R"sv(
+module top(input logic clk, input logic rst, input logic a, output logic q);
+  always_ff @(posedge clk) q <= rst ? 1'b0 : a;
+  default clocking cb @(posedge clk); endclocking
+  default disable iff (rst);
+  m_next:  assume property (a |=> s_eventually !a);        // liveness assumption behind a delay
+  l_range: assert property (s_eventually [1:3] q);         // range
+  l_seq:   assert property (a |-> s_eventually (q ##1 q)); // not a Boolean
+  l_until: assert property (a |-> q s_until a);            // another liveness operator
+  l_q:     assert property (a |=> s_eventually q);         // true
 endmodule
 )sv";
 
@@ -565,9 +624,39 @@ TEST_F(PropertyExpressionTests, CoverReportsSequenceMatches) {
             unsupportedReason("(implies (leaf 0) (leaf 1))", 2, true).find("sequences only"));
 }
 
+TEST_F(PropertyExpressionTests, StrongEventuallyBecomesAnObligation) {
+  // a |-> s_eventually b: no finite trace violates it.
+  auto compiled = compile("(implies (leaf 0) (s_eventually (leaf 1)))", 2);
+  ASSERT_TRUE(compiled.supported()) << compiled.unsupportedReason;
+  EXPECT_EQ("0000", simulate(compiled, {"1100", "0000"}));
+  EXPECT_TRUE(compiled.monitor.empty());
+  ASSERT_EQ(1u, compiled.obligations.size());
+  EXPECT_EQ(BoolExpr::Var(kLeafVarBase), compiled.obligations[0].trigger);
+  EXPECT_EQ(BoolExpr::Var(kLeafVarBase + 1), compiled.obligations[0].target);
+  // a |=> s_eventually b: the obligation starts one step later.
+  compiled = compile("(implies_next (leaf 0) (s_eventually (leaf 1)))", 2);
+  ASSERT_EQ(1u, compiled.obligations.size());
+  ASSERT_EQ(1u, compiled.monitor.size());
+  EXPECT_EQ(BoolExpr::Var(compiled.monitor[0].var), compiled.obligations[0].trigger);
+  // A safety part next to it is still reported step by step.
+  compiled = compile("(implies (leaf 0) (and (leaf 1) (s_eventually (leaf 1))))", 2);
+  EXPECT_EQ("0100", simulate(compiled, {"1100", "1011"}));
+  EXPECT_EQ(1u, compiled.obligations.size());
+  EXPECT_TRUE(compile("(implies (leaf 0) (leaf 1))", 2).obligations.empty());
+
+  EXPECT_NE(std::string::npos,
+            unsupportedReason("(s_eventually 1 3 (leaf 0))", 1).find("range"));
+  EXPECT_NE(std::string::npos,
+            unsupportedReason("(s_eventually (concat (0 0 (leaf 0)) (1 1 (leaf 1))))", 2)
+                .find("Boolean operand"));
+  EXPECT_NE(std::string::npos,
+            unsupportedReason("(s_eventually (leaf 0))", 1, true).find("sequences only"));
+}
+
 TEST_F(PropertyExpressionTests, ReportsWhatItCannotCompile) {
   EXPECT_NE(std::string::npos,
-            unsupportedReason("(implies (leaf 0) (s_eventually (leaf 1)))", 2).find("liveness"));
+            unsupportedReason("(implies (leaf 0) (s_until (leaf 1) (leaf 0)))", 2)
+                .find("liveness"));
   EXPECT_NE(std::string::npos,
             unsupportedReason("(implies (leaf 0) (strong (concat (1 1 (leaf 1)))))", 2)
                 .find("liveness"));
@@ -708,7 +797,7 @@ TEST_F(PropertyCheckTests, SequencesWindowsAndSampledValues) {
                   {"a_goto", kProved},
                   {"c_txn", kCovered},
                   {"c_double", kUnreachable},
-                  {"a_live", kUnsupported},
+                  {"a_live", kProved},
                   {"a_rose", kProved}});
 }
 
@@ -777,6 +866,73 @@ TEST_F(PropertyCheckTests, AssumptionsConstrainEveryTrace) {
   EXPECT_EQ(kFailed, free.at("a_acc").status);
   EXPECT_EQ(kFailed, free.at("a_stable").status);
   EXPECT_EQ(kCovered, free.at("c_big").status);
+}
+
+TEST_F(PropertyCheckTests, LivenessObligationsAndAssumptions) {
+  const auto outcomes = check(kLiveness, resetBy("rst", true, 1));
+  expectStatuses(outcomes, {{"l_tick", kProved},
+                            {"l_tick_after", kProved},
+                            {"l_seq", kProved},
+                            {"l_go_bad", kFailed},
+                            {"l_both_bad", kFailed},
+                            {"m_release", kAssumed},
+                            {"l_done", kProved},
+                            {"l_idle", kProved},
+                            {"l_disable", kProved},
+                            {"a_left", kProved},
+                            {"a_done_bad", kFailed}});
+  // A liveness failure is a trace that ends in a loop where go stays low.
+  const auto& loop = outcomes.at("l_go_bad").detail;
+  EXPECT_NE(std::string::npos, loop.find("Loop: cycle ")) << loop;
+  EXPECT_NE(std::string::npos, loop.find("go[0]=0")) << loop;
+  // The variables added for the check are not part of the trace.
+  EXPECT_EQ(std::string::npos, loop.find("__kepler")) << loop;
+  EXPECT_GE(outcomes.at("l_go_bad").bound, 1u);
+  // A liveness assumption says nothing about a finite trace.
+  EXPECT_NE(std::string::npos,
+            outcomes.at("a_done_bad").detail.find("liveness assumption"));
+  EXPECT_EQ(std::string::npos, outcomes.at("a_done_bad").detail.find("Loop:"));
+
+  // Without the assumption the job may be held forever.
+  std::string unconstrained = kLiveness;
+  const std::string keyword = "m_release:    assume";
+  const auto position = unconstrained.find(keyword);
+  ASSERT_NE(std::string::npos, position);
+  unconstrained.replace(position, keyword.size(), "m_release:    cover ");
+  const auto free = check(unconstrained, resetBy("rst", true, 1));
+  EXPECT_EQ(kFailed, free.at("l_done").status);
+  EXPECT_EQ(kFailed, free.at("l_idle").status);
+  EXPECT_NE(std::string::npos, free.at("l_done").detail.find("hold[0]=1"));
+  EXPECT_EQ(kProved, free.at("l_disable").status);
+  EXPECT_EQ(kProved, free.at("l_tick").status);
+  EXPECT_EQ(kUnsupported, free.at("m_release").status);
+}
+
+TEST_F(PropertyCheckTests, InterpolationEngineFindsLivenessFailures) {
+  const auto outcomes = check(kLiveness, resetBy("rst", true, 1), SecEngine::Imc);
+  EXPECT_EQ(kFailed, outcomes.at("l_go_bad").status);
+  EXPECT_EQ(kFailed, outcomes.at("l_both_bad").status);
+  EXPECT_NE(std::string::npos, outcomes.at("l_go_bad").detail.find("Loop: cycle "));
+  // A true liveness property is proved or left open, never failed.
+  for (const char* name :
+       {"l_tick", "l_tick_after", "l_seq", "l_done", "l_idle", "l_disable"}) {
+    const auto actual = outcomes.at(name).status;
+    EXPECT_TRUE(actual == kProved || actual == PropertyStatus::Inconclusive)
+        << name << ": " << propertyStatusName(actual);
+  }
+}
+
+TEST_F(PropertyCheckTests, LivenessFormsOutsideTheSubset) {
+  const auto outcomes = check(kLivenessForms, resetBy("rst", true, 1));
+  expectStatuses(outcomes, {{"m_next", kUnsupported},
+                            {"l_range", kUnsupported},
+                            {"l_seq", kUnsupported},
+                            {"l_until", kUnsupported},
+                            {"l_q", kProved}});
+  EXPECT_NE(std::string::npos, outcomes.at("m_next").detail.find("liveness assumption"));
+  EXPECT_NE(std::string::npos, outcomes.at("l_range").detail.find("range"));
+  EXPECT_NE(std::string::npos, outcomes.at("l_seq").detail.find("Boolean operand"));
+  EXPECT_NE(std::string::npos, outcomes.at("l_until").detail.find("s_until"));
 }
 
 TEST_F(PropertyCheckTests, HierarchyAndUnsupportedForms) {

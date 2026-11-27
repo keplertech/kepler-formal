@@ -183,6 +183,9 @@ struct PreparedProperty {
   std::vector<MonitorState> monitor;
   // Past values the property reads: these registers always run.
   std::vector<MonitorState> history;
+  // Liveness part, already restricted to the steps where the property is
+  // active.
+  std::vector<PropertyObligation> obligations;
 };
 
 // Every state bit of a checked model has an initial value: the engines then
@@ -338,6 +341,41 @@ std::string formatInputTrace(const std::string& reason,
     formatted.pop_back();
   }
   return formatted;
+}
+
+// The first cycle of the engines' input trace in which input `name` is 1.
+std::optional<size_t> firstCycleWith(const std::string& reason,
+                                     const std::string& name) {
+  const std::string prefix = "  cycle ";
+  size_t position = reason.find("Input trace:");
+  while (position != std::string::npos && position < reason.size()) {
+    auto lineEnd = reason.find('\n', position);
+    if (lineEnd == std::string::npos) {
+      lineEnd = reason.size();
+    }
+    const std::string line = reason.substr(position, lineEnd - position);
+    position = lineEnd + 1;
+    const auto colon = line.find(':');
+    if (line.compare(0, prefix.size(), prefix) != 0 ||
+        colon == std::string::npos) {
+      continue;
+    }
+    const auto token = line.find(" " + name + "=1", colon);
+    if (token == std::string::npos) {
+      continue;
+    }
+    const auto tokenEnd = token + name.size() + 3;
+    if (tokenEnd != line.size() && line[tokenEnd] != ',') {
+      continue;  // LCOV_EXCL_LINE
+    }
+    try {
+      return static_cast<size_t>(
+          std::stoull(line.substr(prefix.size(), colon - prefix.size())));
+    } catch (const std::exception&) {  // LCOV_EXCL_LINE
+      return std::nullopt;  // LCOV_EXCL_LINE
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -695,10 +733,25 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
               translated.expression.c_str());
       fflush(stderr);
     }
+    if (property.result.kind == PropertyKind::Assume &&
+        !compiled.obligations.empty() && !compiled.monitor.empty()) {
+      unsupported("a liveness assumption is supported in the forms "
+                  "`s_eventually b` and `a |-> s_eventually b` only");
+      continue;
+    }
     // A property makes no claim during the reset window or while disabled,
     // and drops its pending attempts then.
     BoolExpr* active = andExpr(notExpr(inReset), notExpr(translated.disable));
     property.signal = BoolExpr::simplify(andExpr(compiled.signal, active));
+    for (const auto& obligation : compiled.obligations) {
+      BoolExpr* trigger = BoolExpr::simplify(andExpr(obligation.trigger, active));
+      BoolExpr* target =
+          BoolExpr::simplify(orExpr(obligation.target, notExpr(active)));
+      // Never started, or met at once: nothing to check.
+      if (trigger != constFalse() && target != constTrue()) {
+        property.obligations.push_back({trigger, target});
+      }
+    }
     for (const auto& bit : compiled.monitor) {
       MonitorState state;
       state.key = propertyStateKey(syntheticStateCount);
@@ -766,6 +819,10 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
 
   BoolExpr* assumptionViolated = constFalse();
   size_t unsupportedAssumptions = 0;
+  // Liveness assumptions restrict the infinite traces, so they bear on the
+  // liveness part of an assertion only.
+  std::vector<PropertyObligation> assumedObligations;
+  size_t livenessAssumptions = 0;
   for (auto& property : prepared) {
     if (property.result.kind != PropertyKind::Assume) {
       continue;
@@ -775,6 +832,12 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
       continue;
     }
     property.result.status = PropertyStatus::Assumed;
+    if (!property.obligations.empty()) {
+      ++livenessAssumptions;
+      assumedObligations.insert(assumedObligations.end(),
+                                property.obligations.begin(),
+                                property.obligations.end());
+    }
     assumptionViolated = orExpr(assumptionViolated, property.signal);
     for (const auto& state : property.monitor) {
       addState(base, state, false);
@@ -792,23 +855,27 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
     addState(base, sticky, false);
   }
 
-  for (size_t index = 0; index < prepared.size(); ++index) {
-    auto& property = prepared[index];
-    if (!property.usable || property.result.kind == PropertyKind::Assume) {
-      continue;
+  const std::string unsupportedAssumptionNote =
+      unsupportedAssumptions == 0
+          ? std::string()
+          : "\nNote: " + std::to_string(unsupportedAssumptions) +
+                " unsupported assumption(s) were not applied, so this trace "
+                "may break them.";
+  const auto engineReasons = [](const SequentialEquivalenceResult& sec) {
+    std::vector<std::string> reasons = sec.skippedObservedOutputs;
+    if (reasons.empty()) {
+      reasons.push_back(sec.reason);
     }
-    SequentialDesignModel candidate = base;
-    for (const auto& state : property.monitor) {
-      addState(candidate, state, false);
-    }
-    for (const auto& state : property.history) {
-      addState(candidate, state, false);
-    }
-    // The checked signal is 1 in a legal step: no violation (or no cover hit)
-    // on a trace that kept every assumption so far.
+    return joinReasons(reasons);
+  };
+
+  // Proves with the selected engine that `bad` is 0 in every step of
+  // `candidate`. Returns the reason when the engine gives up.
+  const auto proveNever = [&](SequentialDesignModel candidate, BoolExpr* bad,
+                              size_t index, SequentialEquivalenceResult& sec)
+      -> std::optional<std::string> {
     const SignalKey outputKey = propertyOutputKey(index);
-    BoolExpr* bad = andExpr(property.signal, notExpr(constraintBroken));
-    const std::string outputName = property.result.name + "[0]";
+    const std::string outputName = prepared[index].result.name + "[0]";
     candidate.observedOutputs.push_back(outputKey);
     candidate.allObservedOutputs.push_back(outputKey);
     candidate.topOutputKeys.push_back(outputKey);
@@ -835,7 +902,6 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
     reference.displayNameByKey[outputKey] = outputName;
     reference.observedOutputExprByKey[outputKey] = constTrue();
 
-    SequentialEquivalenceResult sec;
     try {
       // No reset specification here: the reset sequence is already in the
       // model, and every state bit has an initial value.
@@ -848,8 +914,174 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
       strategy.setInternalRelationOptions(relationOptions);
       sec = strategy.runExtractedModels(candidate, reference, maxK);
     } catch (const std::exception& error) {
+      return std::string(error.what());
+    }
+    return std::nullopt;
+  };
+
+  // Liveness part of an assertion. The claim "every obligation is met, on
+  // every trace that meets the assumed obligations" is false exactly when the
+  // model has an infinite trace of the negated claim. Such a trace is made a
+  // reachable bad step, so the engine can prove that there is none:
+  //
+  // 1. Tableau of the negated claim, after Clarke, Grumberg and Hamaguchi,
+  //    "Another Look at LTL Model Checking" (1994). The one temporal operator
+  //    needed is F h = true U h. Each subformula F h gets the variable of its
+  //    elementary formula X F h, free in every step, and holds where
+  //    sat(F h) = sat(h) | variable. The transition relation makes the
+  //    variable of a step equal sat(F h) of the next step, and the fairness
+  //    constraint of F h is !sat(F h) | sat(h).
+  // 2. A fair infinite trace is a loop, found as in Biere, Artho and Schuppan,
+  //    "Liveness Checking as Safety Checking" (2002): a free `save` input
+  //    records the state once, one bit per fairness constraint remembers that
+  //    it held since then, and the step is bad when the state equals the
+  //    record and every bit is set. The state is every variable of the model,
+  //    inputs included.
+  struct LivenessCheck {
+    BoolExpr* bad = nullptr;
+    // Input that marks the first cycle of the loop in a trace.
+    std::string loopStartName;
+    std::vector<std::string> hiddenNames;
+  };
+  const auto addLivenessCheck =
+      [&](SequentialDesignModel& candidate,
+          const std::vector<PropertyObligation>& claimed) {
+        LivenessCheck check;
+        size_t inputCount = initialInputs.size();
+        const auto newInput = [&](const std::string& displayName) {
+          const SignalKey key = propertyInitialKey(inputCount++);
+          const size_t var = nextVar++;
+          candidate.environmentInputs.push_back(key);
+          candidate.topInputKeys.push_back(key);
+          candidate.inputVarByKey.emplace(key, var);
+          candidate.displayNameByKey.emplace(key, displayName);
+          check.hiddenNames.push_back(displayName);
+          return BoolExpr::Var(var);
+        };
+
+        struct Eventuality {
+          BoolExpr* operand = nullptr;   // sat(h)
+          BoolExpr* variable = nullptr;  // variable of X F h
+          BoolExpr* holds = nullptr;     // sat(F h)
+        };
+        std::vector<Eventuality> eventualities;
+        std::unordered_map<BoolExpr*, BoolExpr*> holdsByOperand;
+        // sat(F operand); one variable per distinct subformula.
+        const auto eventually = [&](BoolExpr* operand) {
+          if (const auto found = holdsByOperand.find(operand);
+              found != holdsByOperand.end()) {
+            return found->second;
+          }
+          Eventuality eventuality;
+          eventuality.operand = operand;
+          eventuality.variable = newInput(
+              "__kepler_tableau_" + std::to_string(eventualities.size()) + "[0]");
+          eventuality.holds = orExpr(operand, eventuality.variable);
+          eventualities.push_back(eventuality);
+          holdsByOperand.emplace(operand, eventuality.holds);
+          return eventuality.holds;
+        };
+        // sat(F (trigger & !F target)): the obligation is left unmet.
+        const auto unmet = [&](const PropertyObligation& obligation) {
+          BoolExpr* targetLater = eventually(obligation.target);
+          return eventually(andExpr(obligation.trigger, notExpr(targetLater)));
+        };
+        BoolExpr* negatedClaim = constFalse();
+        for (const auto& obligation : claimed) {
+          negatedClaim = orExpr(negatedClaim, unmet(obligation));
+        }
+        for (const auto& obligation : assumedObligations) {
+          negatedClaim = andExpr(negatedClaim, notExpr(unmet(obligation)));
+        }
+
+        // The tableau starts in sat(negated claim) at the first checked step
+        // and follows its transition relation afterwards.
+        MonitorState running =
+            newState("__kepler_tableau_running[0]", notExpr(inReset));
+        BoolExpr* isRunning = BoolExpr::Var(running.var);
+        BoolExpr* mismatch = constFalse();
+        for (size_t i = 0; i < eventualities.size(); ++i) {
+          const MonitorState previous =
+              newState("__kepler_tableau_previous_" + std::to_string(i) + "[0]",
+                       eventualities[i].variable);
+          mismatch = orExpr(mismatch, xorExpr(BoolExpr::Var(previous.var),
+                                              eventualities[i].holds));
+          addState(candidate, previous, false);
+        }
+        BoolExpr* tableauViolated =
+            orExpr(andExpr(isRunning, mismatch),
+                   andExpr(andExpr(notExpr(inReset), notExpr(isRunning)),
+                           notExpr(negatedClaim)));
+        MonitorState tableauBroken =
+            newState("__kepler_tableau_broken[0]", nullptr);
+        BoolExpr* tableauBrokenNow =
+            orExpr(BoolExpr::Var(tableauBroken.var), tableauViolated);
+        tableauBroken.next = tableauBrokenNow;
+        addState(candidate, running, false);
+        addState(candidate, tableauBroken, false);
+
+        // Loop check over every variable of the model built so far.
+        std::vector<BoolExpr*> recorded;
+        for (const auto& key : candidate.stateBits) {
+          recorded.push_back(BoolExpr::Var(candidate.inputVarByKey.at(key)));
+        }
+        for (const auto& key : candidate.environmentInputs) {
+          recorded.push_back(BoolExpr::Var(candidate.inputVarByKey.at(key)));
+        }
+        check.loopStartName = "__kepler_loop_start[0]";
+        BoolExpr* save = newInput(check.loopStartName);
+        MonitorState saved = newState("__kepler_loop_saved[0]", nullptr);
+        BoolExpr* isSaved = BoolExpr::Var(saved.var);
+        saved.next = orExpr(isSaved, save);
+        BoolExpr* record = andExpr(save, notExpr(isSaved));
+        BoolExpr* looped = isSaved;
+        for (size_t i = 0; i < recorded.size(); ++i) {
+          MonitorState copy = newState(
+              "__kepler_loop_copy_" + std::to_string(i) + "[0]", nullptr);
+          BoolExpr* held = BoolExpr::Var(copy.var);
+          copy.next = orExpr(andExpr(record, recorded[i]),
+                             andExpr(notExpr(record), held));
+          looped = andExpr(looped, notExpr(xorExpr(recorded[i], held)));
+          addState(candidate, copy, false);
+        }
+        check.bad = andExpr(
+            looped, notExpr(orExpr(constraintBroken, tableauBrokenNow)));
+        for (size_t i = 0; i < eventualities.size(); ++i) {
+          MonitorState seen = newState(
+              "__kepler_loop_fair_" + std::to_string(i) + "[0]", nullptr);
+          BoolExpr* isSeen = BoolExpr::Var(seen.var);
+          BoolExpr* fair = orExpr(notExpr(eventualities[i].holds),
+                                  eventualities[i].operand);
+          seen.next = orExpr(isSeen, andExpr(fair, orExpr(save, isSaved)));
+          check.bad = andExpr(check.bad, isSeen);
+          addState(candidate, seen, false);
+        }
+        addState(candidate, saved, false);
+        return check;
+      };
+
+  for (size_t index = 0; index < prepared.size(); ++index) {
+    auto& property = prepared[index];
+    if (!property.usable || property.result.kind == PropertyKind::Assume) {
+      continue;
+    }
+    SequentialDesignModel candidate = base;
+    for (const auto& state : property.monitor) {
+      addState(candidate, state, false);
+    }
+    for (const auto& state : property.history) {
+      addState(candidate, state, false);
+    }
+    // The checked signal is 1 in a legal step: no violation (or no cover hit)
+    // on a trace that kept every assumption so far.
+    BoolExpr* bad = andExpr(property.signal, notExpr(constraintBroken));
+    SequentialEquivalenceResult sec;
+    if (bad == constFalse() && !property.obligations.empty()) {
+      // Liveness only: no step can violate the property.
+      sec.status = SequentialEquivalenceStatus::Equivalent;
+    } else if (const auto error = proveNever(candidate, bad, index, sec)) {
       property.result.status = PropertyStatus::Inconclusive;
-      property.result.detail = error.what();
+      property.result.detail = *error;
       continue;
     }
 
@@ -867,26 +1099,70 @@ PropertyCheckResult PropertyCheckStrategy::run(size_t maxK) const {
         property.result.bound =
             sec.bound >= resetCycles ? sec.bound - resetCycles : 0;
         property.result.detail =
-            formatInputTrace(sec.reason, resetCycles, hiddenInputNames);
-        if (unsupportedAssumptions != 0) {
+            formatInputTrace(sec.reason, resetCycles, hiddenInputNames) +
+            unsupportedAssumptionNote;
+        if (livenessAssumptions != 0) {
           property.result.detail +=
-              "\nNote: " + std::to_string(unsupportedAssumptions) +
-              " unsupported assumption(s) were not applied, so this trace may "
-              "break them.";
+              "\nNote: " + std::to_string(livenessAssumptions) +
+              " liveness assumption(s) apply to liveness assertions only, so "
+              "this trace may break them.";
         }
         break;
-      case SequentialEquivalenceStatus::Unsupported: {
+      case SequentialEquivalenceStatus::Unsupported:
         property.result.status = PropertyStatus::Unsupported;
-        std::vector<std::string> reasons = sec.skippedObservedOutputs;
-        if (reasons.empty()) {
-          reasons.push_back(sec.reason);
-        }
-        property.result.detail = joinReasons(reasons);
+        property.result.detail = engineReasons(sec);
         break;
-      }
       default:
         property.result.status = PropertyStatus::Inconclusive;
         property.result.detail = sec.reason;
+        break;
+    }
+    if (property.obligations.empty() ||
+        property.result.status != PropertyStatus::Proved) {
+      continue;
+    }
+
+    const LivenessCheck check =
+        addLivenessCheck(candidate, property.obligations);
+    SequentialEquivalenceResult live;
+    if (const auto error = proveNever(candidate, check.bad, index, live)) {
+      property.result.status = PropertyStatus::Inconclusive;
+      property.result.detail = *error;
+      continue;
+    }
+    switch (live.status) {
+      case SequentialEquivalenceStatus::Equivalent:
+        property.result.bound = live.bound;
+        break;
+      case SequentialEquivalenceStatus::Different: {
+        property.result.status = PropertyStatus::Failed;
+        // The trace ends in the step that repeats the first step of its loop.
+        const size_t last =
+            live.bound >= resetCycles ? live.bound - resetCycles : 0;
+        property.result.bound = last;
+        std::vector<std::string> hidden = hiddenInputNames;
+        hidden.insert(hidden.end(), check.hiddenNames.begin(),
+                      check.hiddenNames.end());
+        property.result.detail =
+            formatInputTrace(live.reason, resetCycles, hidden);
+        if (const auto start = firstCycleWith(live.reason, check.loopStartName);
+            start && *start >= resetCycles && *start - resetCycles < last) {
+          const size_t first = *start - resetCycles;
+          property.result.detail +=
+              "\nLoop: cycle " + std::to_string(last) + " repeats cycle " +
+              std::to_string(first) + ", so cycles " + std::to_string(first) +
+              " to " + std::to_string(last - 1) + " go on forever.";
+        }
+        property.result.detail += unsupportedAssumptionNote;
+        break;
+      }
+      case SequentialEquivalenceStatus::Unsupported:
+        property.result.status = PropertyStatus::Unsupported;
+        property.result.detail = engineReasons(live);
+        break;
+      default:
+        property.result.status = PropertyStatus::Inconclusive;
+        property.result.detail = live.reason;
         break;
     }
   }

@@ -597,9 +597,19 @@ BoolExpr* PropertyCompiler::failProperty(const PropertyTerm& property,
     requireBooleans(op == "or" ? "a disjunction of properties"
                                : "this property operator");
   }
-  if (op == "s_until" || op == "s_until_with" || op == "s_eventually" ||
-      op == "eventually" || op == "s_always" || op == "s_nexttime" ||
-      op == "strong") {
+  if (op == "s_eventually") {
+    if (operandCount != 1) {
+      throw Unsupported{"s_eventually with a range is not supported yet"};
+    }
+    if (!isBoolean(property.items[1])) {
+      throw Unsupported{"s_eventually is supported on a Boolean operand only"};
+    }
+    // No finite trace violates it: the caller gets an obligation instead.
+    obligations_.push_back({start, boolean(property.items[1])});
+    return constFalse();
+  }
+  if (op == "s_until" || op == "s_until_with" || op == "eventually" ||
+      op == "s_always" || op == "s_nexttime" || op == "strong") {
     throw Unsupported{"`" + op + "` is a liveness obligation, which is not "
                       "supported yet"};
   }
@@ -616,11 +626,14 @@ CompiledProperty PropertyCompiler::finish(BoolExpr* signal) {
   result.signal = signal;
   result.monitor = std::move(monitor_);
   monitor_.clear();
+  result.obligations = std::move(obligations_);
+  obligations_.clear();
   return result;
 }
 
 CompiledProperty PropertyCompiler::compileViolation(const PropertyTerm& property) {
   monitor_.clear();
+  obligations_.clear();
   try {
     return finish(failProperty(property, constTrue()));
   } catch (const Unsupported& unsupported) {
@@ -636,6 +649,7 @@ CompiledProperty PropertyCompiler::compileViolation(const PropertyTerm& property
 
 CompiledProperty PropertyCompiler::compileCover(const PropertyTerm& property) {
   monitor_.clear();
+  obligations_.clear();
   try {
     // A cover counts matches of a sequence. An implication also holds when
     // its left side never matches, which a cover must not report as a hit.

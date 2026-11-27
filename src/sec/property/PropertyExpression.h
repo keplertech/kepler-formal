@@ -35,11 +35,21 @@ struct PropertyMonitorBit {
   BoolExpr* next = nullptr;
 };
 
+// Liveness part of a property: after a step where `trigger` is 1, `target`
+// must be 1 in that step or in a later one.
+struct PropertyObligation {
+  BoolExpr* trigger = nullptr;
+  BoolExpr* target = nullptr;
+};
+
 struct CompiledProperty {
   // Assertion and assumption view: 1 in a step where a violation is detected.
   // Cover view: 1 in a step where a match completes.
   BoolExpr* signal = nullptr;
   std::vector<PropertyMonitorBit> monitor;
+  // Empty for a safety property. No finite trace violates an obligation, so
+  // `signal` does not cover it: the caller checks it on infinite traces.
+  std::vector<PropertyObligation> obligations;
   // Non-empty when the property is outside the supported subset; signal and
   // monitor are then meaningless.
   std::string unsupportedReason;
@@ -56,8 +66,9 @@ struct CompiledProperty {
 // monitor bit per delay stage, so overlapping attempts share the bits. A
 // sequence on the right of an implication is supported when its failure is
 // decided without tracking alternatives: exact delays, plus a final bounded
-// delay window. Everything else is reported through unsupportedReason, never
-// approximated.
+// delay window. The one liveness form is `s_eventually` of a Boolean, returned
+// as an obligation. Everything else is reported through unsupportedReason,
+// never approximated.
 class PropertyCompiler {
  public:
   using VarAllocator = std::function<size_t()>;
@@ -91,6 +102,7 @@ class PropertyCompiler {
   std::vector<BoolExpr*> leaves_;
   VarAllocator allocateVar_;
   std::vector<PropertyMonitorBit> monitor_;
+  std::vector<PropertyObligation> obligations_;
 };
 
 }  // namespace KEPLER_FORMAL::SEC

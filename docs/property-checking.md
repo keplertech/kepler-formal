@@ -38,9 +38,9 @@ Without reset flags, `imc` finds failures but leaves every other property
 
 ## Supported properties
 
-A property is supported when it is a safety property on one clock. Anything
-else is reported as `unsupported` with the reason; it is never dropped and
-never counted as proved.
+A property is supported when it is a safety property on one clock, or uses
+`s_eventually` as described below. Anything else is reported as `unsupported`
+with the reason; it is never dropped and never counted as proved.
 
 | Part | Supported |
 | --- | --- |
@@ -51,9 +51,11 @@ never counted as proved.
 | Sequences on the left of `\|->` or `\|=>` | Boolean, `##N`, `##[M:N]`, `##[M:$]`, `[*N]`, `[*M:N]`, `[*M:$]`, `[->N]`, `[->M:N]`, `or`. |
 | Sequences on the right | Boolean, `##N`, `[*N]`, and one final delay window `##[M:N] expr`. |
 | Properties | Boolean, `seq \|-> prop`, `seq \|=> prop`, `not seq`, `and`, `if`/`else`, `nexttime`, `nexttime [N]`, `always`, weak `until` and `until_with` on Boolean operands. Named `property` and `sequence` declarations with arguments. |
+| Liveness | `s_eventually expr` on a Boolean, alone or on the right of an implication, in an `assert`. In an `assume`, the forms `s_eventually expr` and `expr \|-> s_eventually expr`. |
 | Covers | Sequences. |
 
-Not supported yet: liveness (`s_eventually`, `s_until`, `strong`), negedge
+Not supported yet: the other liveness forms (`s_eventually` with a range or
+on a sequence, `s_until`, `s_always`, `s_nexttime`, `strong`), negedge
 clocks, clocks with `iff`, more than one clock in a property, local
 variables, `intersect`, `within`, `throughout`, `first_match`, nonconsecutive
 repetition, a delay range that is not the last element of a consequent,
@@ -90,6 +92,13 @@ unpacked array). Immediate assertions are ignored.
   at any earlier step is not a counterexample.
 - **`disable iff`** removes the claim in that step and drops the attempts in
   progress.
+- **Liveness.** `a |-> s_eventually b` fails when some trace runs forever
+  with `b` never coming after an `a`. An assumption with `s_eventually`
+  removes the infinite traces that break it, so it is used for the liveness
+  part of assertions only. Safety assertions and covers are checked without
+  it: their proofs stay valid, and a `failed` or `covered` trace carries a
+  note. Use the `pdr` engine for liveness: `k_induction` and `imc` find the
+  failures but often leave a true property `inconclusive`.
 
 ## Results
 
@@ -104,13 +113,23 @@ Input trace:
   cycle 1: en[0]=1
   cycle 2: en[0]=0
 Property c_limit [cover] counter.sv:19: covered at cycle 5
-Property u_fifo/a_live [assert] fifo.sv:40: unsupported: `s_eventually` is a liveness obligation, which is not supported yet
+Property l_go_bad [assert] job.sv:35: failed at cycle 5
+Input trace:
+  reset cycle 0: go[0]=1, hold[0]=0, initial div[0]=1, initial div[1]=0, initial left[0]=0, initial left[1]=0, initial busy=0
+  cycle 0: go[0]=0, hold[0]=0
+  cycle 1: go[0]=0, hold[0]=1
+  cycle 2: go[0]=0, hold[0]=0
+  cycle 3: go[0]=0, hold[0]=0
+  cycle 4: go[0]=0, hold[0]=1
+  cycle 5: go[0]=0, hold[0]=1
+Loop: cycle 5 repeats cycle 1, so cycles 1 to 4 go on forever.
+Property l_until [assert] forms.sv:8: unsupported: `s_until` is a liveness obligation, which is not supported yet
 ```
 
 | Status | Meaning |
 | --- | --- |
-| `proved` | The assertion holds in every reachable step. |
-| `failed` | A trace violates the assertion. |
+| `proved` | The assertion holds in every reachable step, and on every infinite trace for its liveness part. |
+| `failed` | A trace violates the assertion. For a liveness part the trace ends in a loop, named in its last line. |
 | `covered` | A trace reaches the cover. |
 | `unreachable` | The cover is proved impossible. |
 | `assumed` | The assumption was applied to every other property. |
@@ -157,6 +176,19 @@ that it may break that assumption.
    ordinary logic, so every state bit has an initial value.
 6. Each assertion and each cover is proved separately by the selected engine,
    as "this signal is always 1".
+7. The liveness part of an assertion is checked in two published steps, and
+   then proved by the same engine:
+   - The claim "the assumed obligations imply the asserted ones" is negated
+     and turned into a tableau, as in E. Clarke, O. Grumberg and K. Hamaguchi,
+     "Another Look at LTL Model Checking" (CAV 1994). Each `F h` in that
+     formula gets one free variable per step, a rule that links the variable
+     of one step to the next step, and a fairness condition.
+   - A trace that satisfies every fairness condition forever is a loop. It
+     is found as a safety property, as in A. Biere, C. Artho and V. Schuppan,
+     "Liveness Checking as Safety Checking" (FMICS 2002): a free input saves
+     a copy of all registers and inputs once, one bit per fairness condition
+     records that it held since then, and the check fails in the step where
+     the model is back at the copy with every bit set.
 
 Set `KEPLER_FPV_DIAG=1` to print the transcribed expression and the monitor
 size of every property.
