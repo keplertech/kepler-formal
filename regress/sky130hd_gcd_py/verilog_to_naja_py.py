@@ -16,7 +16,7 @@ liberty, verilog, out_path = sys.argv[1:4]
 universe = naja.NLUniverse.create()
 db = naja.NLDB.create(universe)
 db.loadLibertyPrimitives([liberty])
-db.loadVerilog([verilog])
+db.loadGateLevelVerilog([verilog])
 top = db.getTopDesign()
 if top is None:
     raise SystemExit("no top design")
