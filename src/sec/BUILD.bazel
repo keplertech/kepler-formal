@@ -37,6 +37,8 @@ cc_library(
         "proof/SignalCorrespondence.cpp",
         "proof/ProofEngineShared.cpp",
         "proof/TransitionExprResolver.cpp",
+        "property/PropertyCheckStrategy.cpp",
+        "property/PropertyExpression.cpp",
         "strategy/SequentialEquivalenceStrategy.cpp",
     ],
     hdrs = [
@@ -64,6 +66,9 @@ cc_library(
         "proof/SignalCorrespondence.h",
         "proof/ProofEngineShared.h",
         "proof/TransitionExprResolver.h",
+        "property/BoolExprOps.h",
+        "property/PropertyCheckStrategy.h",
+        "property/PropertyExpression.h",
         "strategy/SequentialEquivalenceStrategy.h",
     ],
     includes = [
@@ -83,5 +88,22 @@ cc_library(
         "@naja//src/nl/netlist:naja_nl",
         "@naja//src/dnl:naja_dnl",
         "@kissat",
+    ],
+)
+
+# Reads the assertions the SystemVerilog frontend captured. It needs the
+# frontend and its parser, which kepler_sec must not depend on.
+cc_library(
+    name = "kepler_sva",
+    srcs = ["property/SvaPropertyTranslator.cpp"],
+    hdrs = ["property/SvaPropertyTranslator.h"],
+    includes = [
+        ".",
+        "..",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":kepler_sec",
+        "@naja//src/nl/formats/systemverilog:naja_snl_systemverilog",
     ],
 )

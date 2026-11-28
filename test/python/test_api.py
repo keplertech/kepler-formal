@@ -41,7 +41,7 @@ class PythonApiTest(unittest.TestCase):
             encoding="utf-8",
         )
         database = najaeda.naja.NLDB.create(self.universe)
-        database.loadVerilog([str(source)])
+        database.loadGateLevelVerilog([str(source)])
         return database.getTopDesign()
 
     def tearDown(self):

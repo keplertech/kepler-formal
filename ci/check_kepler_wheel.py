@@ -425,7 +425,7 @@ def _check_live_verification(root: Path) -> None:
             # Separate databases let both designs keep their original top
             # module name. All file parsing and parser cleanup stays in NajaEDA.
             database = naja.NLDB.create(universe)
-            design = database.loadVerilog([str(source)])
+            design = database.loadGateLevelVerilog([str(source)])
             loaded.append((database, design))
 
         reference, equivalent, different = (design for _, design in loaded)

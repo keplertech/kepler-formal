@@ -26,7 +26,7 @@ def load_design(universe, path):
     # Separate databases allow both netlists to use the same module names.
     database = naja.NLDB.create(universe)
     database.loadLibertyPrimitives([str(path) for path in LIBERTY_FILES])
-    database.loadVerilog([str(path)])
+    database.loadGateLevelVerilog([str(path)])
     design = database.getTopDesign()
     if design is None:
         raise RuntimeError(f"NajaEDA did not find a top design in {path}")

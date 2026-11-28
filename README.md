@@ -137,6 +137,8 @@ module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 
+Proving the `assert`, `assume` and `cover` statements of one SystemVerilog design (`-v fpv`) is described in [docs/property-checking.md](docs/property-checking.md).
+
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md). Latch handling is described in [docs/sec-latch-support.md](docs/sec-latch-support.md) and the expansion of word-level primitives and read-only memories in [docs/sec-primitive-expansion.md](docs/sec-primitive-expansion.md).
 
 ## Custom Python Primitives

@@ -3168,7 +3168,7 @@ TEST_F(KeplerFormalCliTests, ConfigSv2vSystemVerilogDesign1UsesLoadedPrimitive) 
 
 TEST_F(
     KeplerFormalCliTests,
-    ConfigSv2vDesignDefinedModuleOverridesGeneratedPrimitiveStub) {
+    ConfigSv2vRejectsDesignDefinedModuleNamedLikePrimitive) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v_owned_prim");
   fixture.design0Path = fixture.tmpDir / "design0.sv";
@@ -3217,16 +3217,20 @@ TEST_F(
         "  - " + libertyPath.string() + "\n"
         "log_file: " + logPath.string() + "\n");
 
+    std::string output;
     {
       CurrentPathGuard currentPathGuard;
       std::filesystem::current_path(runDir);
-      EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_SUCCESS) << mode;
+      testing::internal::CaptureStdout();
+      EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE) << mode;
+      output = testing::internal::GetCapturedStdout();
     }
     ASSERT_TRUE(std::filesystem::exists(logPath)) << mode;
     const auto logContents = readFileContents(logPath);
+    // Naja refuses a module with a body that has the name of a loaded cell.
     EXPECT_NE(
-        logContents.find(
-            "SEC checked-output coverage: 100.00% (1/1 covered/existing outputs)."),
+        output.find(
+            "behavioral HDL definition conflicts with primitive: INV_X1"),
         std::string::npos)
         << mode;
     const auto compactMarker =

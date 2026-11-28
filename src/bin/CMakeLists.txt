@@ -32,6 +32,7 @@ set(KEPLER_FORMAL_DRIVER_LIBRARIES
     kepler_version
     kepler_config
     kepler_sec
+    kepler_sva
     naja_dnl
     naja_nl_dump
     naja_opt

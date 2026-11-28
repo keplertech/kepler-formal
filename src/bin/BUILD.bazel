@@ -51,6 +51,7 @@ cc_binary(
         ":kepler_version",
         "//src/config:kepler_config",
         "//src/sec:kepler_sec",
+        "//src/sec:kepler_sva",
         "//src/scope:scope_extraction",
         "//src/strategies:formal_strategies",
         "//src/utils:kepler_formal_utils",

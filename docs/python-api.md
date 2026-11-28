@@ -18,7 +18,7 @@ For local regression without wheels or publishing, use the
 packages from this checkout and tests their shared runtime.
 
 The default development build links the NajaEDA wheel built from
-`thirdparty/naja` (version `0.7.33`), which ships the headers matching its
+`thirdparty/naja` (version `0.8.2`), which ships the headers matching its
 libraries under `najaeda/sdk/include`. Build both packages from this
 recursive checkout in one virtual environment, with the native build
 dependencies installed:
@@ -100,11 +100,11 @@ from kepler_formal import VerificationOptions, verify_designs
 
 universe = naja.NLUniverse.create()
 reference_db = naja.NLDB.create(universe)
-reference_db.loadVerilog(["reference.v"])
+reference_db.loadGateLevelVerilog(["reference.v"])
 reference = reference_db.getTopDesign()
 
 implementation_db = naja.NLDB.create(universe)
-implementation_db.loadVerilog(["implementation.v"])
+implementation_db.loadGateLevelVerilog(["implementation.v"])
 implementation = implementation_db.getTopDesign()
 
 result = verify_designs(

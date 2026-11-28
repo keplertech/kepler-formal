@@ -18,11 +18,11 @@ Load both designs through NajaEDA in one universe, then verify them:
 
    universe = naja.NLUniverse.create()
    reference_db = naja.NLDB.create(universe)
-   reference_db.loadVerilog(["reference.v"])
+   reference_db.loadGateLevelVerilog(["reference.v"])
    reference = reference_db.getTopDesign()
 
    implementation_db = naja.NLDB.create(universe)
-   implementation_db.loadVerilog(["implementation.v"])
+   implementation_db.loadGateLevelVerilog(["implementation.v"])
    implementation = implementation_db.getTopDesign()
 
    result = verify_designs(
